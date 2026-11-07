@@ -150,8 +150,10 @@ class H3RefinerTest(unittest.TestCase):
             refiner.root, refiner.python, refiner.url = temp, "python", "http://127.0.0.1:42/v1"
             refiner.model_id = "gemma-4-12b"
             captured = []
+            guided = []
 
             def invoke(args, **kwargs):
+                guided.append(kwargs["env"].get("H3IR_GUIDED_DECODING"))
                 request = json.loads(kwargs["input"])
                 captured.append(request)
                 return SimpleNamespace(returncode=0, stderr="", stdout=json.dumps({
@@ -159,11 +161,17 @@ class H3RefinerTest(unittest.TestCase):
                     "wiring": [{"wiring": "ref_image_1", "sha256": h3_refiner.digest(image)}],
                 }))
 
-            with mock.patch.object(h3_refiner.subprocess, "run", side_effect=invoke):
+            with mock.patch.dict(os.environ), \
+                 mock.patch.object(h3_refiner.subprocess, "run", side_effect=invoke):
+                os.environ.pop("H3IR_GUIDED_DECODING", None)
                 for creativity in h3_refiner.CREATIVITY:
                     self.assertEqual(refiner.compile("a scene", 5, 1280, 736, creativity, [image]), "enhanced")
                 self.assertEqual([x["brief"]["creativity"] for x in captured], list(h3_refiner.CREATIVITY))
                 self.assertEqual(captured[0]["brief"]["assets"][0]["role"], "subject")
+                self.assertEqual(guided, ["1"] * len(h3_refiner.CREATIVITY))
+                os.environ["H3IR_GUIDED_DECODING"] = "0"
+                refiner.compile("a scene", 5, 1280, 736, "balanced", [image])
+                self.assertEqual(guided[-1], "0")
 
             def wrong(*args, **kwargs):
                 return SimpleNamespace(returncode=0, stderr="", stdout=json.dumps({

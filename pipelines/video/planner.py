@@ -40,8 +40,6 @@ CLIP_SECONDS = {
     wan_prompt.MODEL: (3, 5, 5),
 }
 MIN_SHOT_SECONDS, MAX_SHOT_SECONDS, AVERAGE_SHOT_SECONDS = CLIP_SECONDS[None]
-# Too few clips to tell a story with: they show one moment instead.
-MIN_SHOTS_FOR_A_STORY = 3
 PLAN_ATTEMPTS = 3
 # What each image after the first is. EXTRA_CONTEXT leaves it to the LLM to tell by looking.
 EXTRA_CONTEXT, ANOTHER_CHARACTER, SAME_SUBJECT, PLACE = roles.CONTEXT, roles.CHARACTER, roles.VIEW, roles.PLACE
@@ -52,6 +50,8 @@ CONTINUITY = {
     "chain": """Each clip starts on the exact last frame of the clip before it, so this is one
     continuous take with no cuts. Every shot picks up exactly where the previous one ended. A new
     place can only be reached by moving there on screen: the subject walks, the camera travels.
+    Give each clip a different action that follows the preceding action, rather than restarting or
+    repeating it. Plan the end of each clip as the starting point for the next.
     End each shot on a clear, steady moment that the next one can continue from.""",
     "image": """Every clip starts again from the attached image, with a fade between clips. So each
     shot is its own moment growing out of that same opening frame: a different action, a different
@@ -261,24 +261,24 @@ def _more_images(image_roles, video_model):
 
 
 def _instructions(brief, seconds, start, images=1, video_model=None, image_2_role=EXTRA_CONTEXT, image_2_in_words=False,
-                  references=None, chosen=None):
+                  references=None, chosen=None, first_frame=False):
     """references: the reference videos and audio the clips get, as h3_prompt.References."""
     second_image = _second_image(images, image_2_role, image_2_in_words, start, video_model)
-    guide = _guide(brief, seconds, start, images, video_model, image_2_role, second_image, references, chosen)
+    guide = _guide(brief, seconds, start, images, video_model, image_2_role, second_image, references, chosen, first_frame)
     # Every guide speaks of one attached image, and now there are two.
     return guide.replace("attached image", "first attached image") if image_2_in_words else guide
 
 
-def _guide(brief, seconds, start, images, video_model, image_2_role, second_image, references=None, chosen=None):
+def _guide(brief, seconds, start, images, video_model, image_2_role, second_image, references=None, chosen=None, first_frame=False):
     count = shot_count(seconds, video_model, chosen)
     shortest, longest, _ = clip_seconds(video_model, chosen)
     if video_model == h3_prompt.MODEL:
         return h3_prompt.instructions(brief, seconds, count, images, shortest, longest,
-                                      second_image, roles.image_roles(image_2_role, images), references)
+                                      second_image, roles.image_roles(image_2_role, images), references, start, first_frame)
     clips = "one clip" if count == 1 else f"{count} consecutive clips"
     shots = "one shot" if count == 1 else f"{count} shots in order"
-    shape = (f"Give the film a beginning, a development and a real ending, rather than {count} versions of the same moment."
-             if count >= MIN_SHOTS_FOR_A_STORY else "This is too short for a story: show one clear moment that feels complete.")
+    shape = ("Show one clear moment that feels complete." if count == 1 else
+             f"Give the film a beginning, a development and a real ending, rather than {count} versions of the same moment.")
     together = f"Use {seconds}." if count == 1 else f"All of them together add up to {seconds}."
     continuity = "" if count == 1 else SEPARATE_CLIPS if start == "image" and images != 1 else CONTINUITY[start]
     if video_model == wan_prompt.MODEL:
@@ -383,7 +383,7 @@ def _ask(llm, prompt, model, schema, image_jpeg=None, refiner=None):
 # --- What the pipeline asks for ---
 
 def plan_film(image_jpeg, brief, seconds, start, llm="gemini", video_model=None, image_2_role=EXTRA_CONTEXT, image_2_in_words=None,
-              references=None, chosen=None, refiner=None):
+              references=None, chosen=None, refiner=None, first_frame=False):
     """
     Turns the image (several in a list, or none) and the short brief into a film's shot list. One request for the
     whole film rather than one per clip: the prompts have to know each other, and a
@@ -394,15 +394,14 @@ def plan_film(image_jpeg, brief, seconds, start, llm="gemini", video_model=None,
     """
     images = len(_image_list(image_jpeg))
     shortest, longest, _ = clip_seconds(video_model, chosen)
-    instructions = _instructions(brief, seconds, start, images, video_model, image_2_role, bool(image_2_in_words), references, chosen)
+    instructions = _instructions(brief, seconds, start, images, video_model, image_2_role, bool(image_2_in_words), references, chosen, first_frame)
     attached = _image_list(image_jpeg) + _image_list(image_2_in_words)
     image_roles = roles.image_roles(image_2_role, images)
     is_h3 = video_model == h3_prompt.MODEL
 
     problem = None
     for attempt in range(1, PLAN_ATTEMPTS + 1):
-        # H3's rules are strict enough that saying what went wrong is worth it.
-        correction = f"\n\n    Your last reply came back with {problem}. Fix that." if is_h3 and problem else ""
+        correction = f"\n\n    Your last reply came back with {problem}. Fix that." if problem else ""
         if llm == "local":
             reply = _ask(llm, instructions + correction, Plan, PLAN_SCHEMA, attached, refiner=refiner)
         else:
@@ -419,8 +418,18 @@ def plan_film(image_jpeg, brief, seconds, start, llm="gemini", video_model=None,
                     shot.prompt = prompt
             wrong_prompts = is_h3 and shots and h3_prompt.film_problem([shot.prompt for shot in shots], images, references)
             thin = is_h3 and shots and not wrong_prompts and h3_prompt.too_thin([shot.prompt for shot in shots], images)
+            seen = {}
+            duplicate = None
+            for number, shot in enumerate(shots, 1):
+                normalized = " ".join(shot.prompt.split()).casefold()
+                if normalized in seen:
+                    duplicate = f"the same prompt for clips {seen[normalized]} and {number}; write a different action for each clip"
+                    break
+                seen[normalized] = number
             if wrong_prompts:
                 problem = wrong_prompts
+            elif duplicate:
+                problem = duplicate
             # Worth asking once. A film of short prompts is better than no film.
             elif thin and attempt == 1:
                 problem = thin

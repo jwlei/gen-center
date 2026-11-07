@@ -595,6 +595,16 @@ class PanelTest(unittest.TestCase):
 
     # --- Never making anything twice ---
 
+    def test_continuation_matches_the_chosen_prompt_model(self):
+        state = RunState.new("idea", 1, False, 1024, 1024, llm="gemini")
+        state.shots = [{"title": "One", "prompt": "One"}]
+        state.inputs = "same"
+        with mock.patch.object(image_panel, "busy_runs", return_value=set()), \
+                mock.patch.object(image_panel.video_media, "inputs_fingerprint", return_value="same"), \
+                mock.patch.object(image_panel, "list_runs", return_value=[state]):
+            self.assertIs(image_panel.run_to_continue("idea", ["--count", "1", "--llm", "gemini"], {}, []), state)
+            self.assertIsNone(image_panel.run_to_continue("idea", ["--count", "1", "--llm", "claude"], {}, []))
+
     def test_generate_continues_a_stopped_set_without_new_prompts(self):
         self.comfy.script = ["fail", "fail"]
         self.make()
@@ -632,6 +642,10 @@ class PanelTest(unittest.TestCase):
         self.assertEqual(status["stopped_runs"], [], "a finished set isn't waiting for anything")
         self.assertEqual([s["id"] for s in status["image_sets"]], [run.id])
         self.assertEqual(status["image_sets"][0]["size"], "1024x1024")
+        self.assertEqual(status["image_sets"][0]["llm"], run.llm)
+        self.assertEqual(status["image_sets"][0]["size_bytes"], sum(os.path.getsize(run.image_path(shot)) for shot in run.shots))
+        self.assertEqual(status["image_sets"][0]["resolutions"], list(dict.fromkeys(
+            image["resolution"] for image in status["image_sets"][0]["images"])))
         self.assertEqual([image["position"] for image in status["image_sets"][0]["images"]], [1, 2, 3])
         self.assertEqual(self.client.get(f"/image-runs/{run.id}/files/1").status_code, 200)
         self.assertIn("attachment", self.client.get(f"/image-runs/{run.id}/files/1?download=1").headers["Content-Disposition"])

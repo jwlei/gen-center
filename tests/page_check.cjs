@@ -20,16 +20,17 @@ function element(id) {
     classList: { toggle() {}, add() {}, remove() {}, contains: () => false },
     listeners: {}, listenersAll: {}, addEventListener(name, fn) { this.listeners[name] = fn; (this.listenersAll[name] = this.listenersAll[name] || []).push(fn); }, querySelectorAll: selector => (selector === 'input' ? [element('low'), element('high')] : []), querySelector: () => element('part'), setAttribute() {},
     reportValidity() { return true; }, dispatchEvent() {},
-    getBoundingClientRect: () => ({ top: 0, bottom: 100 }), appendChild() {}, insertBefore() {}, offsetHeight: 90, insertAdjacentHTML() {}, showModal() { this.open = true; }, close() { this.open = false; }, scrollTo() {},
+    getBoundingClientRect: () => ({ top: 0, bottom: 100 }), appendChild() {}, insertBefore() {}, offsetHeight: 90, insertAdjacentHTML() {}, showModal() { this.open = true; }, close() { this.open = false; }, scrollTo() {}, scrollIntoView() {},
     pause() {}, play() { return Promise.resolve(); }, removeAttribute(name) { delete this[name]; },
   };
 }
 const els = {};
 const wide = { matches: false, addEventListener() {} };
+const documentListeners = {}, windowListeners = {};
 const context = {
-  document: { getElementById: id => (els[id] = els[id] || element(id)), querySelectorAll: () => [], documentElement: { style: { setProperty() {} } }, body: element('body'), addEventListener() {}, hidden: false },
+  document: { getElementById: id => (els[id] = els[id] || element(id)), querySelectorAll: () => [], documentElement: { style: { setProperty() {} } }, body: element('body'), addEventListener(name, fn) { (documentListeners[name] = documentListeners[name] || []).push(fn); }, hidden: false },
   history: { replaceState() {} },
-  window: { addEventListener() {}, innerHeight: 800, matchMedia: () => wide, scrollTo() {} },
+  window: { addEventListener(name, fn) { (windowListeners[name] = windowListeners[name] || []).push(fn); }, innerHeight: 800, matchMedia: () => wide, scrollTo() {} },
   localStorage: { getItem: () => null, setItem() {} },
   fetch: async () => { throw new Error('offline'); },
   FormData: class { delete() {} append() {} },
@@ -50,12 +51,51 @@ assert(html.includes('value="gemma-4-12b"') && html.includes('value="qwen3-14b"'
 assert(els.writeVideoPrompt.innerHTML === run('ICONS.enhanced') && els.writeImagePrompt.innerHTML === run('ICONS.enhanced'), 'prompt writers use the detailed prompt icon');
 assert(!html.includes('Local model uses the model in Settings.'), 'no local model hint');
 assert(html.includes('value="review">Enhance before review') && html.includes('value="render">Enhance before each clip'));
+for (const side of ['video', 'shorts']) {
+  const mode = els[side + 'H3Mode'], toggle = els[side + 'H3Enabled'], options = els[side + 'H3CreativityBox'];
+  mode.value = 'off';
+  run(`syncH3Controls('${side}', true)`);
+  assert(!toggle.checked && options.hidden && els[side + 'H3Creativity'].disabled, `${side} starts disabled`);
+  toggle.checked = true;
+  toggle.listeners.change({ target: toggle });
+  run(`syncH3Controls('${side}', true)`);
+  assert.strictEqual(mode.value, 'render');
+  assert(!options.hidden && !els[side + 'H3Creativity'].disabled, `${side} options appear when enabled`);
+  if (side === 'video') mode.value = 'review';
+  toggle.checked = false;
+  toggle.listeners.change({ target: toggle });
+  run(`syncH3Controls('${side}', true)`);
+  assert.strictEqual(mode.value, 'off');
+  assert(options.hidden, `${side} options hide when disabled`);
+  toggle.checked = true;
+  toggle.listeners.change({ target: toggle });
+  assert.strictEqual(mode.value, side === 'video' ? 'review' : 'render', 'restores the chosen timing');
+  run(`syncH3Controls('${side}', false)`);
+  assert(mode.disabled && toggle.disabled && options.hidden, 'unsupported workflow sends no enhancement');
+}
 
 // Remembered options never touch a file input, which throws if you set its value.
 for (const name of ['image', 'image_2', 'image_3']) assert(!run(`remembered({ name: '${name}', type: 'file' })`), name);
 assert(run(`remembered({ name: 'llm', type: 'select-one' })`));
 assert(!run(`remembered({ name: 'image_2_role', type: 'select-one' })`), 'each film starts from the default role');
 assert(!run(`remembered({ name: 'image_5_role', type: 'select-one' })`));
+{
+  const savedStorage = context.localStorage;
+  for (const [side, loader, key] of [['Video', 'loadVideoForm', 'comfyui-auto-gen.video.v1'],
+                                      ['Image', 'loadImageForm', 'comfyui-auto-gen.image.v1']]) {
+    const form = els[`form${side}`], original = form.elements;
+    const select = { name: 'llm', type: 'select-one', value: '', options: [{ value: 'gemini' }, { value: 'local' }] };
+    form.elements = [select];
+    context.localStorage = { getItem: () => null };
+    run(`${loader}()`);
+    assert.strictEqual(select.value, 'local', `${side} defaults to local`);
+    context.localStorage = { getItem: name => name === key ? JSON.stringify({ llm: 'gemini' }) : null };
+    run(`${loader}()`);
+    assert.strictEqual(select.value, 'gemini', `${side} preserves an explicit saved selection`);
+    form.elements = original;
+  }
+  context.localStorage = savedStorage;
+}
 
 // One box per image, built as a workflow needs them. The page's boxes, without a browser to parse them.
 function imageBox(number) {
@@ -107,8 +147,11 @@ assert(!els.imagesHint.hidden);
 assert(els.imagesHint.textContent.includes('never sees'), 'one input to fill: the LLM alone sees image 2');
 
 run(`workflowTakes = { r2v: { min_images: 0, max_images: 3 }, t2v: { min_images: 0, max_images: 0 }, ti2v: { min_images: 0, max_images: 1 } }`);
+els.start.value = 'chain';
 els.videoWorkflow.value = 'r2v';
 run('syncImageInput()');
+assert(els.start.disabled && els.start.hidden && !els.startUnavailable.hidden, 'reference workflow shows separate moments instead of a disabled continuous take');
+assert(els.startHint.textContent.includes('cannot start a clip'), 'explains the workflow limitation');
 assert.deepStrictEqual(labels(), ['Image 1: main character (optional)', 'Image 2 (optional)'], 'the boxes open stay open');
 assert.strictEqual(boxes[1].parts.input.value, 'chosen.png', 'a workflow with room for it keeps the image');
 pressPlus();
@@ -118,12 +161,15 @@ assert(els.imagesHint.textContent.includes('takes 3 at most'), 'it says why the 
 
 els.videoWorkflow.value = 'ti2v';
 run('syncImageInput()');
+assert(!els.start.disabled && !els.start.hidden && els.startUnavailable.hidden, 'single-image workflow restores the selectable mode');
+assert.strictEqual(els.start.value, 'chain', 'switching workflows keeps the original choice');
 assert.deepStrictEqual(labels(), ['Image 1: first frame (optional: without one it starts from text)', 'Image 2 (optional)']);
 assert(boxes[2].parts.input.disabled, 'a hidden box sends nothing');
 
 els.videoWorkflow.value = 't2v';
 boxes[1].parts.input.files = [];
 run('syncImageInput()');
+assert(els.start.disabled && !els.startUnavailable.hidden, 'text-only workflows also use separate moments');
 assert.deepStrictEqual(labels(), [], 'text alone has no image to ask for');
 assert.strictEqual(boxes[1].parts.input.value, '', 'and no image waiting in a hidden box');
 assert(els.imagesHint.hidden);
@@ -164,6 +210,61 @@ assert.strictEqual(boxes[0].parts.button.classList.on, true, 'an empty first box
 
 els.videoWorkflow.value = '';
 run('workflowTakes = {}; syncImageInput()');
+
+// H3 modes are enabled only by compatible workflows, and use their own controls.
+run(`workflowTakes = { ref: { min_images: 0, max_images: 9 }, director: { min_images: 0, max_images: 9 },
+                       other: { min_images: 0, max_images: 3 } };
+     workflowMultishot = { ref: true }; workflowDirector = { director: true };
+     workflowClips = { ref: [5, 15, 10], director: [5, 15, 10] };
+     pipeline = 'video'`);
+const clipRangeInputs = [element('low'), element('high')];
+els.videoClipRange.querySelectorAll = () => clipRangeInputs;
+els.videoWorkflow.value = 'ref';
+els.start.value = 'multishot';
+els.videoClipFixed.checked = false;
+els.previewRun.checked = true;
+run('syncVideoForm()');
+assert(!els.startMultishot.disabled && els.startDirector.disabled);
+assert(!els.multishotOptions.hidden && els.videoClipFixed.checked && els.videoClipFixedButton.disabled);
+assert(els.previewRun.disabled && els.previewRunLabel.hidden && els.videoH3Enabled.disabled);
+els.videoWorkflow.value = 'other';
+run('syncVideoForm()');
+assert(els.start.disabled && !els.previewRun.disabled && els.multishotOptions.hidden, 'unsupported workflow remains usable');
+els.videoWorkflow.value = 'director';
+els.start.value = 'director';
+run('syncVideoForm()');
+assert(!els.startDirector.disabled && els.startMultishot.disabled && !els.start.disabled);
+assert(els.startHint.textContent.includes('exactly one image'));
+assert(els.multishotOptions.hidden && !els.previewRun.disabled && !els.videoClipFixedButton.disabled);
+assert(html.indexOf('id="sizePreset"') < html.indexOf('id="duration"') &&
+       html.indexOf('id="videoClipFixedHint"') < html.indexOf('id="connectionBox"'), 'resolution precedes film length and connection follows clip length');
+assert(html.indexOf('id="imageSizeBox"') < html.indexOf('id="imageCount"'), 'image resolution precedes the image count');
+els.audioMode.value = 'none';
+els.duration.min = '5'; els.duration.max = '600';
+els.duration.value = '10';
+els.videoClipFixed.checked = false;
+els.videoClipSeconds.value = '5-15';
+run('syncVideoForm()');
+assert(els.connectionBox.hidden && els.start.disabled && !els.startSingle.disabled && /name="start" id="startSingle" value="image"/.test(html), 'single clip submits the separate-moment fallback');
+assert.strictEqual(els.start.value, 'director', 'single clip retains the previous choice for later');
+els.duration.value = '25';
+run('syncVideoForm()');
+assert(!els.connectionBox.hidden && !els.start.disabled && els.startSingle.disabled && els.start.value === 'director', 'multiple clips restore the chosen mode');
+els.duration.value = '10';
+els.audioMode.value = 'file';
+run('syncVideoForm()');
+assert(!els.connectionBox.hidden && els.startSingle.disabled, 'audio length is unknown, so connection remains selectable');
+els.audioMode.value = '';
+els.duration.value = '';
+els.duration.min = ''; els.duration.max = '';
+run('workflowTakes = {}; workflowMultishot = {}; workflowDirector = {}; workflowClips = {};');
+els.videoWorkflow.value = '';
+els.start.value = 'chain';
+els.previewRun.checked = false;
+els.videoClipFixed.checked = false;
+els.videoClipSeconds.value = '';
+run('syncVideoForm()');
+els.videoClipSeconds.value = '';
 
 // Resolution presets: both shapes from 360p up to the workflow's own size, and that's the highest.
 for (const size of ['640x352', '864x480', '960x544', '1280x736', '352x640', '480x864', '544x960', '736x1280']) {
@@ -207,6 +308,8 @@ run("workflowMost = {}");
 assert(/id="duration"[^>]*type="number"[^>]*min="5"[^>]*max="600"[^>]*step="1"/.test(html));
 assert.strictEqual(run('clipCount(1)'), '1 clip');
 assert.strictEqual(run('clipCount(75)'), '75 clips');
+assert.strictEqual(run('filmLengthEstimate(30, 32)'), '≈0:32 · 4 clips');
+assert.strictEqual(run('filmLengthEstimate(32, 32)'), '0:32 · 4 clips');
 
 // One ETA for the run, on its bar: the status line and the step line don't repeat it.
 assert(!script.includes('totalEta(') && !script.includes('Original ETA') && !script.includes('Adjusted ETA'));
@@ -215,12 +318,15 @@ run(`renderEtaDetail({ changes: [], original_total: 600, adjusted_total: 600 })`
 assert.strictEqual(els.etaDetail.hidden, true, 'on track: nothing to explain');
 run(`renderEtaDetail({ changes: [{ text: 'Clip <b>3</b> was slow', seconds: 120 }], original_total: 600, adjusted_total: 720 })`);
 assert(!els.etaDetail.hidden && els.etaDetail.innerHTML.includes('<details') && els.etaDetail.innerHTML.includes('+2 min') && !els.etaDetail.innerHTML.includes('<b>3'));
+assert(!els.etaDetail.innerHTML.includes(': why'), 'the ETA summary omits why');
 
 // Shorts in YouTube red; the phone addresses are in the settings box, with copy buttons; no voice hint.
 assert(/body\.on-shorts \{ --accent: #ff0033; \}/.test(html));
 assert(!html.includes('id="misc"') && /class="settings-row url-row"[^>]*>\s*<span class="url-name">Local<\/span><code>[^<]+<\/code><button type="button" class="copy-url"/.test(html));
 assert(!/<summary>More<\/summary>/.test(html), 'no More dropdown');
 assert(!/id="statusHead"[^>]*aria-controls/.test(status0()));
+assert(/class="section-title">Status<\/div>\s*<div class="status">\s*<span class="dot" id="dot"[\s\S]*?id="statusText"[\s\S]*?<\/div>\s*<span class="status-times"/.test(status0()), 'status light and text follow the heading, separately from the times');
+assert(/\.status-head \.status \{ margin: 0;/.test(html) && /\.status-times \{ display: flex; gap: 8px;/.test(html), 'status and times stay together beside the heading');
 assert(!html.includes('If both Gemini voice models fail'));
 
 // Times.
@@ -261,14 +367,16 @@ shots.finished = true;
 assert(!run('shotsHtml(shots)').includes('data-render'), 'a finished film has nothing left to render');
 
 // The Image side: a set's titles can hold anything, and its size is worked out as the pipeline does.
-const sets = [{ id: 'image_20261102_120000', label: 'A <b>set', total: 3, size: '1024x1024', when: '02 Nov', model: 'krea2_<SFW>',
+const sets = [{ id: 'image_20261102_120000', label: 'A <b>set', total: 3, size: '1024x1024', resolutions: ['1024x1024'], size_bytes: 2097152, llm: 'local', loras: ['one', '<two>'], generating: true, when: '02 Nov', model: 'krea2_<SFW>',
   images: [{ position: 1, title: '<i>Look', version: 5 }, { position: 3, title: 'Two', version: 6 }] }];
 context.sets = sets;
 const setHtml = run('imageSetHtml(sets[0])');
 assert(!setHtml.includes('<b>set') && !setHtml.includes('<i>Look'), 'titles are escaped');
 assert(setHtml.includes('/thumbnails/1?v=5') && setHtml.includes('/files/1?v=5') && setHtml.includes('loading="lazy"'), 'small pictures, that open full size');
 assert(setHtml.includes('data-delete-set=') && setHtml.includes('data-shots=') && setHtml.includes('data-download-set='));
-assert(setHtml.includes('krea2_&lt;SFW&gt; · 2 of 3'), 'the workflow by its short name, first');
+assert(setHtml.includes(`title="Prompts" aria-label="Prompts">${run('ICONS.enhanced')}</button>`), 'image Output prompts uses the star icon');
+assert(setHtml.includes('krea2_&lt;SFW&gt; · 1024x1024 · 2.0 MB · 2 of 3 images'), 'workflow, resolution, total size and progress');
+assert(run("outputCount({ total: 3, finished: true, images: [1, 2] })") === '2 images', 'finished sets show the current count');
 assert(!setHtml.includes('target="_blank"') && setHtml.includes('data-view-position="3"'), 'a picture opens in the viewer, not a new tab');
 const inRow = setHtml.slice(setHtml.indexOf('class="image-set-row'));
 assert(inRow.includes('<img') && inRow.indexOf('<img') < inRow.indexOf('data-download-set') && inRow.indexOf('data-shots') < inRow.indexOf('data-delete-set'), 'the pictures and their buttons share one line');
@@ -282,22 +390,110 @@ run("downloadImages('image_20261102_120000', [1, 3])");
 assert.deepStrictEqual(clicked, ['/image-runs/image_20261102_120000/files/1?download=1', '/image-runs/image_20261102_120000/files/3?download=1'], 'no zip');
 context.setTimeout = () => 0;
 assert(/<dialog id="imageViewer"[\s\S]*?id="viewerImage"[\s\S]*?id="viewerDownload"[\s\S]*?id="viewerClose"[\s\S]*?id="viewerDelete"[\s\S]*?<\/dialog>/.test(html), 'the picture, then Download, Close and Delete under it');
+assert(/id="viewerDownload"[^>]*>Download<\/a>/.test(html) && /id="viewerClose"[^>]*>Close<\/button>/.test(html) && /id="viewerDelete"[^>]*>Delete<\/button>/.test(html), 'viewer actions retain their text labels');
+assert.strictEqual(els.viewerPrompts.innerHTML, run('ICONS.enhanced'), 'viewer prompts uses the shared star icon');
+assert.strictEqual(els.viewerEdit.innerHTML, run('ICONS.prompts'), 'viewer Edit uses the pen icon');
+assert.strictEqual(els.viewerVariations.innerHTML, run('ICONS.config'), 'More like this uses the settings slider');
+assert.notStrictEqual(els.viewerEdit.innerHTML, els.viewerVariations.innerHTML, 'Edit and More like this have distinct icons');
 assert(/dialog\.viewer::backdrop \{ background: rgba\(0, 0, 0, \.55\)/.test(html), 'over a dimmed page');
 run('imageSets = sets');
+context.document.getElementById('viewerMetaDetails').hidden = true;
 run("openViewer('image_20261102_120000', 3)");
 assert.strictEqual(els.imageViewer.open, true);
 assert.strictEqual(els.viewerDownload.href, '/image-runs/image_20261102_120000/files/3?v=6&download=1');
-assert.strictEqual(els.viewerTitle.textContent, 'Two · 2 of 2', 'which one of the set it is');
+assert.strictEqual(els.viewerTitle.textContent, 'Two');
+assert.strictEqual(els.viewerCount.textContent, '2 of 2', 'which one of the set it is');
+assert.strictEqual(els.viewerMeta.textContent, 'krea2_<SFW> · local');
+assert(els.viewerMetaDetails.hidden && !els.viewerMeta.disabled, 'extra metadata starts collapsed');
+els.viewerMeta.listeners.click();
+assert(!els.viewerMetaDetails.hidden && els.viewerMetaDetails.textContent === 'LoRA: one\nLoRA: <two>', 'preview expands one LoRA per line as plain text');
+els.viewerMeta.listeners.click();
+assert(els.viewerMetaDetails.hidden, 'preview metadata collapses');
 // A swipe, or an arrow key, goes through the set, and stops at its ends.
 run("openViewer('image_20261102_120000', 1)");
-assert.strictEqual(els.viewerTitle.textContent, '<i>Look · 1 of 2');
+assert.strictEqual(els.viewerTitle.textContent, '<i>Look');
+assert.strictEqual(els.viewerCount.textContent, '1 of 2');
 assert.strictEqual(run('stepViewer(-1)'), false, 'nothing before the first');
 assert.strictEqual(run('stepViewer(1)'), true);
 assert.strictEqual(run('viewing.position'), 3, 'the next one in the set, wherever it was numbered');
-assert.strictEqual(els.viewerTitle.textContent, 'Two · 2 of 2');
+assert.strictEqual(els.viewerTitle.textContent, 'Two');
+assert.strictEqual(els.viewerCount.textContent, '2 of 2');
 assert.strictEqual(run('stepViewer(1)'), false, 'nothing after the last');
 assert(/touchend[\s\S]*?Math\.abs\(dx\) > 50 && Math\.abs\(dx\) > Math\.abs\(dy\)/.test(script) && /ArrowRight/.test(script), 'swipes, and arrow keys on a desktop');
 assert(/#viewerImage \{[^}]*touch-action: none;/.test(html), 'a swipe and a pinch are the page\'s, not the browser\'s');
+{
+  const image = els.viewerImage, video = els.viewerVideo, dialog = els.imageViewer;
+  const saved = [image, video].map(media => ({ add: media.addEventListener, remove: media.removeEventListener }));
+  const ghosts = [], events = new Map(), oldAppend = dialog.appendChild, oldCreate = context.document.createElement;
+  for (const media of [image, video]) {
+    events.set(media, {});
+    media.addEventListener = (name, fn) => { events.get(media)[name] = fn; };
+    media.removeEventListener = (name, fn) => { if (events.get(media)[name] === fn) delete events.get(media)[name]; };
+    media.getBoundingClientRect = () => ({ left: 20, top: 30, width: 200, height: 100 });
+  }
+  const ghost = () => {
+    const node = element('ghost');
+    node.classes = [];
+    node.classList.add = value => node.classes.push(value);
+    node.remove = () => { node.removed = true; };
+    node.getContext = () => ({ drawImage: () => { node.drawn = true; } });
+    return node;
+  };
+  image.cloneNode = ghost;
+  image.complete = true; image.naturalWidth = 100;
+  video.readyState = 2; video.videoWidth = 200; video.videoHeight = 100;
+  dialog.appendChild = node => ghosts.push(node);
+  context.document.createElement = ghost;
+  run("openViewer('image_20261102_120000', 1); stepViewer(1)");
+  assert.strictEqual(ghosts.length, 1, 'keeps the previous image until the next is loaded');
+  assert.strictEqual(ghosts[0].style.left, '20px');
+  assert.strictEqual(ghosts[0].style.transform, 'none', 'previous media remains stationary');
+  events.get(image).load();
+  assert.deepStrictEqual(ghosts[0].classes, ['to-right'], 'forward uses a rightward fade');
+  ghosts[0].listeners.animationend();
+  assert(ghosts[0].removed, 'removes the previous frame after the fade');
+  run('stepViewer(-1)');
+  events.get(image).load();
+  assert.deepStrictEqual(ghosts[1].classes, ['to-left'], 'backward uses a leftward fade');
+  run('stepViewer(1)');
+  assert(ghosts[1].removed, 'rapid navigation cleans up the previous transition');
+  events.get(image).error();
+  assert(ghosts[2].removed, 'a failed load does not leave an overlay');
+  sets.push({ id: 'image_next', images: [{ position: 1, title: 'Next set', version: 1 }] });
+  run("outputFilter = ''; stepSet(1)");
+  events.get(image).load();
+  assert.deepStrictEqual(ghosts[3].classes, ['to-down'], 'next set fades downward');
+  run('stepSet(-1)');
+  events.get(image).load();
+  assert.deepStrictEqual(ghosts[4].classes, ['to-up'], 'previous set fades upward');
+  run('clearViewerTransition()');
+  sets.pop();
+  run("lastVideos = { output: [], uploaded: [], video: [{ name: 'a.mp4' }, { name: 'b.mp4' }] }; folder = 'video'; openFilm('a.mp4'); stepViewer(1)");
+  assert(ghosts[5].drawn, 'video transitions retain the displayed frame');
+  events.get(video).loadeddata();
+  assert.deepStrictEqual(ghosts[5].classes, ['to-right'], 'forward video uses a rightward fade');
+  run('clearViewerTransition()');
+  assert(ghosts[5].removed && !events.get(video).loadeddata, 'cleanup removes the overlay and load listener');
+  run('stepSet(-1)');
+  events.get(video).loadeddata();
+  assert.deepStrictEqual(ghosts[6].classes, ['to-up'], 'previous video uses the vertical fade');
+  run('stepSet(1)');
+  events.get(video).loadeddata();
+  assert.deepStrictEqual(ghosts[7].classes, ['to-down'], 'next video uses the vertical fade');
+  run('clearViewerTransition()');
+  run("folder = 'output'");
+  wide.matches = true;
+  run("transitionViewer($('viewerImage'), 'to-up', () => {})");
+  assert.strictEqual(ghosts.length, 8, 'reduced motion skips the transition');
+  wide.matches = false;
+  for (const [i, media] of [image, video].entries()) {
+    media.addEventListener = saved[i].add; media.removeEventListener = saved[i].remove;
+  }
+  image.complete = false; video.readyState = 0;
+  dialog.appendChild = oldAppend; context.document.createElement = oldCreate;
+}
+assert(/\.viewer-out\.to-left \{ mask-image: linear-gradient/.test(html) && /@keyframes viewer-fade-y/.test(html), 'directional fades cover both axes');
+assert(!/viewer-from-(right|left|above|below)/.test(html), 'preview navigation no longer slides');
 run('closeViewer()');
 assert.strictEqual(els.imageViewer.open, false);
 assert(/\.image-set-row \{ display: flex/.test(html) && /\.image-grid img \{ width: 56px/.test(html), 'and small enough to');
@@ -308,7 +504,7 @@ const single = run("imageSetHtml({ id: 'image_9', label: 'One', total: 1, size: 
 assert(single.includes('class="album-cover"') && !single.includes('album-count') && !single.includes('album-strip'), 'one image: the same picture box, no count, no strip');
 assert(/class="icon-btn" data-download-set="image_9" title="Download" aria-label="Download"><svg/.test(single) && /class="icon-btn del" data-delete-set="image_9"[^>]*aria-label="Delete"><svg/.test(single), 'icons, named');
 assert(/data-download-set="image_9"[^>]*>[\s\S]*?<\/button><button type="button" class="icon-btn" data-again-set="image_9"[^>]*aria-label="The same again"><svg/.test(single), 'the same again, second');
-assert(single.includes(`aria-label="The same again">${run('ICONS.duplicate')}</button>`) && run('ICONS.duplicate !== ICONS.again'), 'same again is distinct from retry');
+assert(single.includes(`aria-label="The same again">${run('ICONS.config')}</button>`) && run('ICONS.config !== ICONS.again'), 'same again uses settings, distinct from retry');
 for (const side of ['shorts', 'video', 'image']) {
   assert(html.includes(`data-preset-delete="${side}" title="Delete this preset" aria-label="Delete this preset" hidden>${run('ICONS.trash')}</button>`), 'preset deletion uses the shared trash icon');
 }
@@ -448,7 +644,8 @@ const stoppedBox = els.stoppedRuns.innerHTML;
 assert(stoppedBox.includes('class="stopped-run"'), 'in a box of its own');
 assert(stoppedBox.indexOf('Wardrobe') < stoppedBox.indexOf('Image · 1 of 2 images') && stoppedBox.indexOf('Image · 1 of 2 images') < stoppedBox.indexOf('class="stopped-actions"'), 'in that order');
 assert(stoppedBox.includes('<div class="hint">02 Nov 23:46</div>') && stoppedBox.indexOf('Image · 1 of 2 images') < stoppedBox.indexOf('02 Nov 23:46') && stoppedBox.indexOf('02 Nov 23:46') < stoppedBox.indexOf('class="stopped-actions"'), 'the date on its own line, under the details');
-assert(stoppedBox.indexOf('class="stopped-actions"') < stoppedBox.indexOf('data-shots') && stoppedBox.indexOf('data-shots') < stoppedBox.indexOf('data-config') && stoppedBox.indexOf('data-config') < stoppedBox.indexOf('data-continue') && stoppedBox.indexOf('data-continue') < stoppedBox.indexOf('data-discard'), 'the buttons last');
+assert(stoppedBox.indexOf('class="stopped-actions"') < stoppedBox.indexOf('data-continue') && stoppedBox.indexOf('data-continue') < stoppedBox.indexOf('data-shots') && stoppedBox.indexOf('data-shots') < stoppedBox.indexOf('data-config') && stoppedBox.indexOf('data-config') < stoppedBox.indexOf('data-discard'), 'continue is left of the other actions');
+assert(stoppedBox.includes(`data-shots="image_1" aria-label="Prompts" title="View prompts">${run('ICONS.enhanced')}</button>`), 'failed and stopped runs use the star for prompts');
 assert(/class="icon-btn start-item continue-item" data-continue="image_1"/.test(stoppedBox) && stoppedBox.includes('aria-label="Continue"'), 'continuation has an accessible play icon');
 assert(/\.queue \.stopped-actions \.continue-item \{[^}]*color: var\(--ok\)/.test(html) && /\.queue \.stopped-actions \.icon-btn:not\(\.continue-item\) \{ color: var\(--muted\)/.test(html), 'only continuations have a green play icon');
 assert(/\.stopped-run \{[^}]*border: 1px solid/.test(html));
@@ -485,6 +682,7 @@ const card = run('filmHtml(film)');
 assert(!card.includes('<video') && card.includes('loading="lazy"'), 'a page of films must not hold the browser\'s connections: a poster, playing only when asked');
 assert(!card.includes('<i>film'), 'film titles are escaped');
 assert(card.includes('data-shots="run_20261101_120000"') && !card.includes('data-up=') && card.includes('data-download-film='), 'a film can be downloaded, not uploaded');
+assert(card.includes(`aria-label="Shots">${run('ICONS.enhanced')}</button>`), 'film Output prompts uses the star icon');
 film.run = null;
 const orphan = run('filmHtml(film)');
 assert(!orphan.includes('data-shots') && !orphan.includes('poster='), 'a film whose run is gone has no shots to open');
@@ -504,9 +702,13 @@ run(`renderStopped([{ id: 'run_1', pipeline: 'video', label: 'x', detail: 'y', c
 assert(box.innerHTML.includes('aria-label="Continue"'));
 run(`renderStopped([], [{ id: 7, pipeline: 'video', label: 'Continue', detail: '', resume: 'run_1', continuation: true }, { id: 8, pipeline: 'image', label: 'new', detail: '', continuation: false }, { id: 9, pipeline: 'image', label: 'upscale', detail: '', resume: 'image_1', continuation: false }])`);
 assert(box.innerHTML.includes('data-shots="run_1"') && box.innerHTML.includes('data-edit="7"') && box.innerHTML.includes('data-start="7"'), 'a parked continuation exposes prompts and its other controls');
+assert(box.innerHTML.indexOf('data-start="7"') < box.innerHTML.indexOf('data-shots="run_1"'), 'pending start is left of prompts');
+assert(box.innerHTML.includes(`data-shots="run_1" aria-label="Prompts" title="View prompts">${run('ICONS.enhanced')}</button>`), 'pending prompts use the star');
 assert(box.innerHTML.includes('class="icon-btn start-item continue-item" data-start="7"') && box.innerHTML.includes('class="icon-btn start-item" data-start="8"') && box.innerHTML.includes('class="icon-btn start-item" data-start="9"'), 'only the continued job is green');
 run('renderStopped([])');
 assert.strictEqual(box.hidden, true);
+run(`renderStopped([{ id: 'run_failed', pipeline: 'video', label: 'Failed', detail: 'Stopped', clips: 0, estimate: 60, outcome: { outcome: 'failed', why: 'Error' } }])`);
+assert(els.failedRuns.innerHTML.indexOf('data-continue="run_failed"') < els.failedRuns.innerHTML.indexOf('data-shots="run_failed"'), 'failed retry is left of prompts');
 run(`renderStopped([], [], [{ job_id: 7, pipeline: 'image', label: 'No plan', outcome: 'failed', note: 'Failed to start' }])`);
 assert(els.failedRuns.innerHTML.includes('data-job-id="7"') && els.failedRuns.innerHTML.includes('No saved run to retry'), 'failures without a saved run still appear under Failed');
 assert(els.failedRuns.innerHTML.includes('data-dismiss-job="7"') && els.failedRuns.innerHTML.includes('unsaved-actions'), 'a failure without a saved run has a delete button');
@@ -585,7 +787,7 @@ assert(!script.includes("'Finished ✔'") && !script.includes('Upload finished')
 const idle = { running: false, stopped: false, returncode: null, elapsed: 0, progress: {}, upload: { running: false, elapsed: 0 } };
 context.idle = idle;
 // The footer's Status is just that, with its dot: what is being made shows in Status and the bars.
-assert(/<a href="#runCard" data-page="status" class="run"><span class="dot" id="jumpDot"><\/span>Status<\/a>/.test(html) && !html.includes('jumpRun'));
+assert(/<a href="#runCard" data-page="status" class="run">Status<\/a>/.test(html) && !html.includes('jumpDot'));
 const rendering = { ...idle, running: true, elapsed: 400, progress: { stage: [2, 4, 'Clips'], detail: 'Clip 2 of 75: The harbour, 8s',
   eta: { total_left: 600, adjusted_total: 1000 } } };
 context.rendering = rendering;
@@ -772,7 +974,7 @@ assert(!queueEl.innerHTML.includes('data-id="1"') && queueEl.innerHTML.includes(
 context.setTimeout = () => 0;
 run("showWork('Video: First')");
 assert(els.currentWork.hidden === false && els.currentWork.textContent === 'Video: First');
-assert(/nextUp \? `\$\{SIDE_NAMES\[queue\.items\[0\]\.pipeline\]/.test(script), 'between two jobs, the next one already shows');
+assert(/nextUp \? workHeading\(ready\[0\], ready\[0\]\.pipeline\)/.test(script), 'between two jobs, the next ready one already shows');
 
 // Moving between sections changes both heights at once, including a disappearing section.
 {
@@ -824,16 +1026,32 @@ assert(/nextUp \? `\$\{SIDE_NAMES\[queue\.items\[0\]\.pipeline\]/.test(script), 
   for (const [id, el] of saved) els[id] = el;
 }
 assert(/<button type="button" class="current-work" id="currentWork" aria-haspopup="dialog"/.test(html) && /<dialog id="runFacts" class="panel-dialog run-facts"/.test(html), 'the run title opens what it renders with');
-assert(/workItem = running \? queue\.current : nextUp \? queue\.items\[0\] : null;/.test(script) && script.includes("[['Workflow', facts.workflow], ['Resolution', facts.resolution], ...(facts.prompt ? [['Prompt', facts.prompt]] : [])]"));
-assert(/id="viewerEdit"[^>]*>Edit<\/button>\s*<button type="button" id="viewerPrompts"[^>]*>Prompts<\/button>/.test(html) && script.includes('openShots(id, position);'), 'Prompts beside Edit, on the image it was opened from');
+assert(/workItem = running \? queue\.current : nextUp \? ready\[0\] : null;/.test(script) && script.includes("[['Workflow', facts.workflow], ['Resolution', facts.resolution], ...(facts.prompt ? [['Prompt', facts.prompt]] : [])]"));
+assert.strictEqual(run("workHeading({label: '1 video: A film'}, 'video')"), 'Video: A film');
+assert.strictEqual(run("workHeading({label: '1 video'}, 'video')"), 'Video:');
+assert.strictEqual(run("workHeading({label: '5 images: Cats', facts: {count: 5}}, 'image')"), 'Image(5): Cats');
+assert.strictEqual(run("workHeading({label: '1 image: Cat'}, 'image')"), 'Image: Cat');
+assert.strictEqual(run("workHeading({label: '3 videos', facts: {count: 3}}, 'shorts')"), 'Shorts(3):');
+assert.strictEqual(run("workHeading({label: 'Topic', facts: {count: 2}}, 'shorts')"), 'Shorts(2): Topic');
+assert.strictEqual(run("workHeading({label: 'Upscale: Film'}, 'video')"), 'Video: Upscale: Film');
+assert(/#stageDetail \{ text-align: center; \}/.test(html), 'stage status text is centered');
+assert(/id="viewerVariations"[^>]*><\/button>\s*<button type="button" class="icon-btn" id="viewerPrompts"[^>]*><\/button>/.test(html) && script.includes('openShots(id, position);'), 'More like this beside Prompts, on the image it was opened from');
 assert(/#currentWork\.arrive \{ animation: work-arrive/.test(html) && /\.queue-item\.leaving \{[^}]*animation: queue-leave/.test(html));
-assert(/dialog\.viewer \.viewer-actions > \* \{ flex: 1 1 0; min-width: 0; max-width: 120px; height: 32px; margin: 0;/.test(html), 'Download, Delete and Close are one size');
+assert(/dialog\.viewer \.viewer-actions > \* \{ flex: 1 1 0; min-width: 0; max-width: 120px; height: 32px;/.test(html), 'Download, Delete and Close share the available space');
 assert(/\.image-set-actions button\.armed, \.acts button\.armed[^{]*\{\s*background: var\(--err\) !important;/.test(html), 'Confirm is red in Output too');
 context.withLoras = { ...context.oneImage0 = { id: 'image_2', label: 'L', total: 1, size: '1x1', when: 'now', images: [] }, loras: ['KNPV3_1 (0.8)', '<b>x'] };
 const loraHtml = run('imageSetHtml(withLoras)');
 assert(/<\/div><div class="meta loras"[^>]*>LoRA: KNPV3_1 \(0\.8\), &lt;b&gt;x<\/div>/.test(loraHtml), 'LoRAs on a line of their own, escaped');
 assert(!run('imageSetHtml(oneImage0)').includes('LoRA'), 'none, no line');
 assert(run("filmHtml({ name: 'f.mp4', created: 'now', size_mb: 1, loras: ['a'] })").includes('>LoRA: a</div>'), 'films too');
+const filmWithH3 = run("filmHtml({ name: 'f.mp4', created: 'now', loras: ['a'], h3_mode: 'render', h3_creativity: 'balanced' })");
+assert(filmWithH3.includes('LoRA: a</div><div class="meta">OpenH3-IR: Before each clip · Balanced</div>'), 'OpenH3 follows LoRA');
+assert(!run("filmHtml({ name: 'f.mp4', created: 'now', h3_mode: 'off' })").includes('OpenH3-IR:'), 'disabled OpenH3 is omitted');
+run("viewerMetadata({ model: 'H3', llm: 'local', loras: ['x'], h3_mode: 'review', h3_creativity: 'bold' })");
+els.viewerMeta.listeners.click();
+assert.strictEqual(els.viewerMetaDetails.textContent, 'LoRA: x\nOpenH3-IR: Before review · Bold');
+run("viewerMetadata({ model: 'other' })");
+assert(els.viewerMetaDetails.hidden && els.viewerMeta.disabled, 'no metadata leaves nothing to expand');
 // A run that stopped short says so under Stopped runs: a small word on its title's line, and why under a fold.
 // Output is only what was made.
 run(`renderStopped([{ id: 'run_1', pipeline: 'video', label: 'Jungle Flight', detail: 'Plan ready', when: 'now', estimate: 60, clips: 0,
@@ -904,19 +1122,34 @@ assert(/xhr\.upload\.onprogress/.test(script) && /<div class="queue-pending" id=
 
 // A film has the same again too, beside Download, while its run is kept.
 // Films are laid out as image sets: the poster as the picture, which plays it, and the same icons, the same again second.
-const filmRow = run("filmHtml({ name: 'f.mp4', created: 'now', size_mb: 1, run: 'run_1', model: 'wan' })");
-assert(filmRow.includes(run('ICONS.duplicate')), 'film same-again uses the same duplicate icon');
+const filmRow = run("filmHtml({ name: 'f.mp4', created: 'now', size_mb: 1, run: 'run_1', model: 'wan', loras: ['example'], h3_mode: 'review', h3_creativity: 'bold' })");
+assert(filmRow.includes('LoRA: example') && filmRow.includes('OpenH3'), 'film output shows inherited LoRAs and OpenH3 settings');
+assert(run("filmHtml({ name: 'f.mp4', model: 'wan', resolution: '864x480', duration: 12, size_mb: 3 })").includes('wan · 864x480 · 0:12 · 3 MB'));
+assert(filmRow.includes(run('ICONS.config')), 'film same-again uses the settings slider');
 assert(/<div class="image-set film" data-name="f\.mp4">[\s\S]*?<div class="image-set-row album">\s*<a [^>]*class="album-cover film-cover" data-play-film="f\.mp4"/.test(filmRow));
 assert(/data-download-film="f\.mp4"[\s\S]*?<\/button><button type="button" class="icon-btn" data-again-film="run_1"[\s\S]*?data-shots="run_1"[\s\S]*?class="icon-btn del" data-del="f\.mp4"/.test(filmRow), 'download, the same again, shots, delete');
 assert(!run("filmHtml({ name: 'f.mp4', created: 'now', size_mb: 1 })").includes('data-again-film'), 'not once its run is gone');
 // It plays in the viewer, and a swipe goes to the next film.
-run(`lastVideos = { output: [], uploaded: [], video: [{ name: 'a.mp4', title: 'A' }, { name: 'b.mp4', title: 'B' }] }; folder = 'video'`);
+run(`lastVideos = { output: [], uploaded: [], video: [{ name: 'a.mp4', title: 'A' }, { name: 'b.mp4', title: 'B', model: 'wan', llm: 'local', loras: ['example'], h3_mode: 'review', h3_creativity: 'bold' }] }; folder = 'video'`);
 run("openFilm('a.mp4')");
 assert(els.viewerVideo.hidden === false && els.viewerImage.hidden === true && els.viewerVideo.src === '/videos/video/a.mp4');
-assert.strictEqual(els.viewerTitle.textContent, 'A · 1 of 2');
+assert.strictEqual(els.viewerTitle.textContent, 'A');
+assert.strictEqual(els.viewerCount.textContent, '1 of 2');
 assert.strictEqual(run('stepViewer(1)'), true);
 assert.strictEqual(els.viewerVideo.src, '/videos/video/b.mp4');
+assert.strictEqual(els.viewerMeta.textContent, 'wan · local');
+assert(els.viewerMetaDetails.textContent.includes('LoRA: example') && els.viewerMetaDetails.textContent.includes('OpenH3'), 'film preview exposes inherited metadata');
 assert.strictEqual(run('stepViewer(1)'), false, 'nothing after the last');
+assert.strictEqual(run('stepSet(1)'), false, 'no next video at the end');
+assert(/#viewerVideo \{[^}]*touch-action: none;/.test(html), 'video keeps swipe gestures from the browser');
+run('zoom.scale = 2');
+els.imageViewer.listeners.touchstart({ touches: [{ clientX: 20, clientY: 20 }] });
+els.imageViewer.listeners.touchend({ changedTouches: [{ clientX: 20, clientY: 100 }] });
+assert.strictEqual(els.viewerVideo.src, '/videos/video/a.mp4', 'swipe down opens the previous video even after zooming an image');
+els.imageViewer.listeners.touchstart({ touches: [{ clientX: 20, clientY: 100 }] });
+els.imageViewer.listeners.touchend({ changedTouches: [{ clientX: 20, clientY: 20 }] });
+assert.strictEqual(els.viewerVideo.src, '/videos/video/b.mp4', 'swipe up opens the next video');
+run('resetZoom()');
 run('closeViewer()');
 run(`folder = 'output'`);
 
@@ -951,7 +1184,10 @@ run('zoomAround(9, { x: 0, y: 0 }, 1, { x: 0, y: 0 }, { x: 0, y: 0 })');
 assert.strictEqual(run('zoom.scale'), 5, 'up to 5x');
 run('resetZoom()');
 assert.deepStrictEqual(JSON.parse(run('JSON.stringify(zoom)')), { scale: 1, x: 0, y: 0 });
-assert(/#viewerImage \{[^}]*touch-action: none;/.test(html) && /zoom\.scale === 1 \? \{ x: e\.touches\[0\]\.clientX/.test(script), 'zoomed in, a finger moves it rather than turning the page');
+run("viewing = { id: 'image_20261102_120000', position: 1 }; zoom.scale = 2");
+els.imageViewer.listeners.touchstart({ touches: [{ clientX: 20, clientY: 20 }] });
+assert.strictEqual(run('swipeFrom'), null, 'zoomed in, a finger moves the image rather than turning the page');
+run('resetZoom(); viewing = null');
 
 // Output, one workflow at a time: the filter offers what there is, and the list and the viewer follow it.
 run(`lastVideos = { output: [], uploaded: [], video: [{ name: 'a.mp4', model: 'wan', mtime: 1 }, { name: 'b.mp4', model: 'ltx', mtime: 2 }, { name: 'c.mp4', model: 'wan', mtime: 3 }] }; folder = 'video'; pipeline = 'video'`);
@@ -984,7 +1220,8 @@ run(`outputFilter = ''; folder = 'output'; pipeline = 'shorts'`);
 // The footer's bar says how many more are waiting.
 assert(/right: left \+ \(runsQueued \? ` · \+\$\{runsQueued\} queued` : ''\)/.test(script));
 // The viewer: more like this one, and upscale it, for an image only.
-assert(/<div class="viewer-tools" id="viewerTools" hidden>[\s\S]*?id="viewerVariations"[\s\S]*?id="viewerUpscale"/.test(html));
+assert(/<div class="viewer-tools" id="viewerTools" hidden>[\s\S]*?id="viewerUpscale"[\s\S]*?id="viewerEdit"[\s\S]*?id="viewerVariations"[\s\S]*?id="viewerPrompts"/.test(html));
+assert.strictEqual(run('VARIATIONS'), 5, 'selected-image variations default to five');
 assert(/if \(shot\) Object\.assign\(s, \{ prompt: shot\.prompt, direct: true, count: VARIATIONS \}\);/.test(script), 'its own prompt, word for word, on new seeds');
 
 // Presets: the picker where the workflow was, the workflow at the top of Generation; "Save as preset" only while what's set isn't one.
@@ -1001,7 +1238,7 @@ assert(/id="paintCancel">Close<\/button>\s*<button type="button" class="panel-cl
 assert(/const PRESET_SKIP = \['prompt', 'narration', 'seed', 'topic', 'output', 'review'\];/.test(script), 'what each run is about stays out of a preset');
 
 // Try one first; start later; no note when something ends.
-assert((html.match(/<input type="checkbox" name="try_first">/g) || []).length === 1, 'one Preview run, under the button, for whichever form it is in');
+assert((html.match(/<input type="checkbox" name="try_first" id="previewRun">/g) || []).length === 1, 'one Preview run, under the button, for whichever form it is in');
 assert(/<button type="button" class="start-later" id="goLater"[^>]*>Start later<\/button>/.test(html) && !html.includes('type="time"'), 'Start later: a quiet button, no clock');
 assert(!html.includes('id="toast"') && !script.includes('announceResults'), 'nothing pops up when something ends: Finished has it');
 assert(/class="icon-btn start-item\$\{item\.continuation/.test(script) && script.includes('ICONS.play'), 'one pending has a play button');
@@ -1134,7 +1371,7 @@ for (const [field, writer] of [['prompt', 'writeVideoPrompt'], ['imagePrompt', '
   assert(els[writer].disabled, 'writing keeps the writer disabled');
   els[field].readOnly = false; els[field].value = ''; els[field].listeners.input();
 }
-assert(/<div class="go-under">\s*<label class="check preview-run not-shorts"><input type="checkbox" name="try_first"><span>Preview run<\/span><\/label>\s*<button type="button" class="start-later" id="goLater"/.test(html) && (html.match(/name="try_first"/g) || []).length === 1, 'Preview run under the button, left of Start later');
+assert(/<div class="go-under">\s*<label class="check preview-run not-shorts" id="previewRunLabel"><input type="checkbox" name="try_first" id="previewRun"><span>Preview run<\/span><\/label>\s*<button type="button" class="start-later" id="goLater"/.test(html) && (html.match(/name="try_first"/g) || []).length === 1, 'Preview run under the button, left of Start later');
 assert(/<select id="avatarSize" name="avatar_size">/.test(html), 'Shorts has a resolution');
 assert(/<div id="imageToPromptSlot"><\/div>/.test(html) && /imageRole\(\) === 'image_to_prompt' \? \$\('imageToPromptSlot'\)/.test(script), "image to prompt's image right under the choice");
 for (const n of [1, 2, 20]) {
@@ -1226,6 +1463,7 @@ assert(status.indexOf('id="logBox"') < status.indexOf('id="finished"'), 'on a ph
 // The GPU line is right under the running line, on both.
 assert(status.indexOf('id="statusText"') < status.indexOf('id="gpuLine"') && status.indexOf('id="gpuLine"') < status.indexOf('id="runProgress"'));
 assert(/\.gpu \{[^}]*padding-bottom: 12px; border-bottom: 1px solid var\(--line\)/.test(html) && /\.gpu:empty, #stageDetail:empty \{ display: none; \}/.test(html), 'the GPU stats have a divider only when shown');
+assert(/\.gpu \{ margin: 10px 0 12px;/.test(html), 'GPU stats clear the ComfyUI status icon');
 
 // The clip being rendered is said quietly in ComfyUI's box, which no longer names ComfyUI.
 assert(!status.includes('<span>ComfyUI:</span>'));
@@ -1263,24 +1501,28 @@ assert(queue.innerHTML.includes('<b>Queue (1)</b>'));
 assert(queue.innerHTML.includes('<span class="when">On hold</span>'), 'held queue has a concise hint');
 assert(queue.innerHTML.includes('data-resume') && queue.innerHTML.includes('data-remove="3"') && queue.innerHTML.includes('a &lt;film&gt;'));
 assert(queue.innerHTML.indexOf('data-resume') > queue.innerHTML.indexOf('data-remove="3"'), 'Resume sits under what it lets go');
-assert(!queue.innerHTML.includes('data-grip'), 'one job alone has nothing to be moved past');
+assert(!queue.innerHTML.includes('selected'), 'one job alone cannot be reordered');
 run(`renderQueue(queue, { items: [], results: [{ label: 'x', outcome: 'done', at: '17:00' }, { label: 'y', outcome: 'done', at: '17:01' }], held: false, current: null }, 0)`);
 assert.strictEqual(queue.hidden, true, 'what finished is under Finished, not in the queue');
 assert.strictEqual(queue.innerHTML, '', 'and nothing stale, with its Resume, is left in it');
 run(`renderQueue(queue, { items: [{ id: 3, label: 'a', detail: 'd' }, { id: 4, label: 'b', detail: 'd' }], results: [], held: false, current: null }, 0)`);
-assert(queue.innerHTML.includes('data-grip="3" hidden disabled') && queue.innerHTML.includes('data-grip="4" hidden disabled'), 'grips cannot be used until a row is selected');
+assert(!queue.innerHTML.includes('data-grip') && !queue.innerHTML.includes('queue-item selected'), 'no drag handle or selection initially');
 run('dragQueue(queue)');
 const selectedRow = { dataset: { id: '3' }, querySelector: () => ({}) };
 const selectedTarget = { closest: selector => selector === '.queue-item' ? selectedRow : null };
 queue.listeners.click({ target: selectedTarget });
-assert(queue.innerHTML.includes('data-grip="3" aria-label=') && queue.innerHTML.includes('data-grip="4" hidden disabled'), 'selecting an entry enables only its grip');
+assert(queue.innerHTML.includes('class="queue-item selected" data-id="3"'), 'selecting an entry outlines it');
+const otherRow = { dataset: { id: '4' }, querySelector: () => ({}) };
+queue.listeners.click({ target: { closest: selector => selector === '.queue-item' ? otherRow : null } });
+assert(queue.innerHTML.includes('class="queue-item selected" data-id="4"') && !queue.innerHTML.includes('class="queue-item selected" data-id="3"'), 'selecting another entry moves the outline');
 queue.listeners.click({ target: selectedTarget });
-assert(queue.innerHTML.includes('data-grip="3" hidden disabled'), 'selecting it again hides its grip');
+queue.listeners.click({ target: selectedTarget });
+assert(!queue.innerHTML.includes('queue-item selected'), 'selecting it again clears the outline');
 queue.listeners.click({ target: selectedTarget });
 run(`queue._dragging = true; renderQueue(queue, { items: [{ id: 4, label: 'b', detail: 'd' }], results: [], held: false, current: null }, 0); queue._dragging = false`);
-assert(queue.innerHTML.includes('data-grip="3"'), 'nothing is drawn over a job being dragged');
+assert(queue.innerHTML.includes('class="queue-item selected" data-id="3"'), 'nothing is drawn over a job being dragged');
 run(`renderQueue(queue, { items: [{ id: 4, label: 'b', detail: 'd' }, { id: 5, label: 'c', detail: 'd' }], held: false, current: null }, 0)`);
-assert.strictEqual(queue._selected, null, 'a departed selected entry cannot leave another grip enabled');
+assert.strictEqual(queue._selected, null, 'a departed selected entry cannot leave another selected');
 queue.dataset.lane = 'run';
 run(`renderQueue(queue, { items: [], held: false, running: true, pipeline: 'image', stopAfter: false }, 0)`);
 assert(!queue.hidden && queue.innerHTML.includes('aria-label="Pause after current"'), 'a running batch can be paused even with an empty queue');
@@ -1288,6 +1530,7 @@ run(`renderQueue(queue, { items: [{ id: 3, label: 'a', detail: 'd' }], held: tru
 assert(queue.innerHTML.includes('aria-label="Resume queue"') && !queue.innerHTML.includes('data-resume'), 'play is in the queue header, not a second Resume button');
 run(`renderQueue(queue, { items: [{ id: 4, label: 'continue', detail: 'd', pipeline: 'video', resume: 'run_1' }], held: true }, 0)`);
 assert(queue.innerHTML.includes('data-shots="run_1"'), 'continued jobs in the queue expose their prompts');
+assert(queue.innerHTML.includes(`data-shots="run_1" aria-label="Prompts" title="View prompts">${run('ICONS.enhanced')}</button>`), 'queued prompts use the star');
 assert(/class="queue-item run-card"[^>]*>[\s\S]*class="queue-item-top"[\s\S]*class="what"[\s\S]*class="hint"[\s\S]*<\/div><\/div><div class="queue-item-actions">[\s\S]*data-shots="run_1"[\s\S]*data-edit="4"[\s\S]*data-pause="4"[\s\S]*data-remove="4"/.test(queue.innerHTML), 'run details and actions occupy separate rows in a card');
 assert(/\.queue-item\.run-card \{[^}]*background: var\(--panel-2\); border: 1px solid var\(--line\); border-radius: 10px/.test(html) && /\.queue-item\.run-card \.queue-item-actions \{ display: flex; flex-wrap: wrap/.test(html), 'run cards match Pending and their controls can wrap');
 assert(/\.queue \.queue-item-actions button, \.queue \.stopped-actions button \{\s*flex: none; width: 34px; height: 28px; padding: 0;/.test(html), 'queue and pending action buttons use the same remove-button dimensions');
@@ -1296,15 +1539,15 @@ assert(queue.innerHTML.includes(`data-remove="4" aria-label="Remove from the que
 run(`renderQueue(queue, { items: [{ id: 1, label: 'new', detail: '', pipeline: 'image', continuation: false },
   { id: 2, label: 'continue', detail: '', pipeline: 'image', resume: 'image_1', continuation: true }], held: true }, 0, false, true)`);
 assert(queue.innerHTML.includes('class="run-item" data-run="1"') && queue.innerHTML.includes('class="run-item continue-item" data-run="2"'), 'only the continued queued job has a green play control');
-assert(queue.innerHTML.indexOf('data-shots="image_1"') < queue.innerHTML.indexOf('data-run="2"'), 'prompts precede play');
+assert(queue.innerHTML.indexOf('data-run="2"') < queue.innerHTML.indexOf('data-shots="image_1"'), 'queued play precedes prompts');
 assert(/\.queue \.run-item \{[^}]*color: var\(--text\)/.test(html) && /\.queue \.queue-item-actions \.continue-item \{ color: var\(--ok\)/.test(html), 'new jobs use the ordinary button colour and continuations use green');
 assert(!/class="queue-item run-card"/.test(written), 'Pending remains separate from the queue');
 assert(!/id="stopAfter"/.test(html), 'pause moved out of the run actions');
 assert(!script.includes('ComfyUI is making each image.'), 'the redundant image stage hint is not shown');
 assert(/\.queue \.queue-head button\[data-queue-toggle\] \{ width: 30px; height: 30px;/.test(html), 'the queue header control is smaller');
 assert(queue.innerHTML.includes('data-fold-queue="1" aria-expanded="true"') && queue.innerHTML.includes('class="queue-list" tabindex="0"'), 'run queue has a separate collapsible scrollable list');
-assert(/class="queue-head run-queue-head"[\s\S]*class="queue-fold-toggle queue-fold-title"[\s\S]*data-queue-toggle="1"[\s\S]*class="queue-fold-toggle queue-fold-arrow" data-fold-queue="1" aria-expanded="true" aria-label="Collapse queue"/.test(queue.innerHTML), 'queue controls precede the rightmost collapse button');
-assert(/\.queue-head\.run-queue-head \{ display: grid; grid-template-columns: minmax\(0, 1fr\) auto 30px 20px; \}/.test(html), 'queue header keeps the chevron in the last column');
+assert(/class="queue-head run-queue-head"[\s\S]*class="queue-fold-toggle queue-fold-title"[\s\S]*data-queue-toggle="1"[\s\S]*class="queue-fold-toggle queue-fold-arrow" data-fold-queue="1" aria-expanded="true" aria-label="Collapse queue"/.test(queue.innerHTML), 'queue-wide control stays on the right');
+assert(/\.queue-head\.run-queue-head \{ display: grid; grid-template-columns: minmax\(0, 1fr\) auto 30px 20px; \}/.test(html) && /\.run-queue-head \[data-queue-toggle\] \{ grid-column: 3; \}/.test(html), 'queue-wide control and chevron stay right of the title');
 assert(/\.queue-head \.queue-fold-arrow \{[^}]*justify-content: flex-end/.test(html) && /\.queue-fold-toggle \.chev \{[^}]*transition: transform \.25s ease; margin-right: 4px/.test(html), 'queue chevron aligns and turns like Pending and Failed');
 queue._open = false;
 run(`renderQueue(queue, { items: [{ id: 1, label: 'new', detail: '', pipeline: 'image' }] }, 0)`);
@@ -1325,6 +1568,20 @@ assert(queue.innerHTML.includes('aria-label="Expand queue"'), 'the chevron refle
   liveQueue.listeners.click({ target: { closest: selector => selector === 'button[data-fold-queue]' ? controls[0] : null } });
   assert(list.hidden && attrs.every(a => a['aria-expanded'] === 'false') && attrs[1]['aria-label'] === 'Expand queue', 'clicking the title updates the chevron and its accessible state');
   assert(liveQueue.dataset.html.includes('aria-label="Expand queue"') && liveQueue.dataset.html.includes('tabindex="0" hidden'), 'polling retains the animated controls instead of replacing them');
+  let reveal;
+  liveQueue.scrollIntoView = options => { reveal = options; };
+  liveQueue.listeners.click({ target: { closest: selector => selector === 'button[data-fold-queue]' ? controls[0] : null } });
+  assert(reveal && reveal.behavior === 'smooth', 'opening the queue reveals it smoothly');
+  for (const id of ['stoppedRuns', 'failedRuns']) {
+    let options;
+    els[id]._open = false;
+    const fold = { open: true, matches: selector => selector === '.stopped-fold', scrollIntoView: value => { options = value; } };
+    els[id].listeners.toggle({ target: fold });
+    assert(options && options.behavior === 'smooth', `${id} scrolls into view when opened`);
+    options = null;
+    els[id].listeners.toggle({ target: fold });
+    assert.strictEqual(options, null, `${id} does not scroll again after a redraw`);
+  }
 }
 {
   const rows = [0, 60, 170, 265].map((top, index) => ({ offsetTop: top, offsetHeight: [54, 104, 89, 80][index], getClientRects: () => [1] }));
@@ -1336,6 +1593,7 @@ assert(queue.innerHTML.includes('aria-label="Expand queue"'), 'the chevron refle
   assert.strictEqual(list.scrollTop, 40, 'redraw restores the scroll position');
 }
 assert(html.includes('.queue-list, .stopped-body') && html.includes('max-height: min(var(--three-rows, 55dvh), 55dvh)'), 'queue, pending and failed scroll rather than growing past the viewport');
+assert(!/\.queue-list, \.stopped-body \{[^}]*overscroll-behavior:\s*contain/.test(html), 'scrolling at a list boundary can continue on the page');
 
 // ComfyUI's status, a tap on its icon away: one that's up but doesn't answer, on a PC out of memory, says why.
 run(`renderComfy({ online: false, listening: true, can_start: true, ram: { free: 2.1, total: 31.9 }, gpu: { util: 7, mem_used: 5.8, mem_total: 12, power: 26, temp: 40 } })`);
@@ -1346,6 +1604,106 @@ assert(els.comfyFacts.innerHTML.includes('Generating the image · 3/8') && els.c
 
 // The status recovers by itself.
 (async () => {
+  {
+    const section = element('drag-test'), order = [], sent = [], frames = [];
+    section.dataset.lane = 'run';
+    section._selected = '1';
+    section.setPointerCapture = id => { section.captured = id; };
+    section.querySelectorAll = selector => selector === '.queue-item[data-id]' ? order : [];
+    section._last = [{ items: [] }, 0];
+    const list = { classList: { contains: name => name === 'queue-list' }, scrollTop: 50,
+      getBoundingClientRect: () => ({ top: 0, bottom: 200, height: 200 }),
+      appendChild(row) { order.splice(order.indexOf(row), 1); order.push(row); } };
+    for (let i = 1; i <= 3; i++) {
+      const active = new Set();
+      const row = { dataset: { id: String(i) }, parentElement: list, style: {}, animations: 0,
+        classList: { add: c => active.add(c), remove: c => active.delete(c), contains: c => active.has(c) },
+        getBoundingClientRect() { const top = order.indexOf(this) * 100 - list.scrollTop + (parseFloat(this.style.transform?.match(/-?[\d.]+/)?.[0]) || 0); return { top, height: 100 }; },
+        animate() { this.animations++; },
+        before(node) { order.splice(order.indexOf(node), 1); order.splice(order.indexOf(this), 0, node); },
+        after(node) { order.splice(order.indexOf(node), 1); order.splice(order.indexOf(this) + 1, 0, node); },
+      };
+      Object.defineProperty(row, 'nextElementSibling', { get() { return order[order.indexOf(this) + 1] || null; } });
+      Object.defineProperty(row, 'previousElementSibling', { get() { return order[order.indexOf(this) - 1] || null; } });
+      row.classList.contains = c => c === 'queue-item' || active.has(c);
+      order.push(row);
+    }
+    const target = { closest: selector => selector === '.queue-item' ? order.find(row => row.dataset.id === '1') : null };
+    context.dragTest = section;
+    const oldRaf = context.requestAnimationFrame, oldCancel = context.cancelAnimationFrame;
+    context.requestAnimationFrame = fn => { frames.push(fn); return frames.length; };
+    context.cancelAnimationFrame = () => {};
+    run('var savedSendOrder = sendOrder; sendOrder = el => { testSent.push(queueOrder(el)); }; dragQueue(dragTest)');
+    context.testSent = sent;
+    section.listeners.pointerdown({ target, button: 0, pointerId: 7, clientX: 0, clientY: 0 });
+    section.listeners.pointermove({ pointerId: 7, clientX: 0, clientY: 210 });
+    assert.deepStrictEqual(order.map(row => row.dataset.id), ['2', '3', '1'], 'dragging pushes crossed items upward');
+    assert(order[2].style.transform.startsWith('translateY('), 'dragged item follows the pointer');
+    assert(order[0].animations > 0, 'displaced items animate');
+    frames.shift()(16);
+    assert(list.scrollTop > 50, 'holding near the bottom scrolls the list');
+    section.listeners.pointerup({ type: 'pointerup', pointerId: 7 });
+    assert.strictEqual(section._selected, null, 'dropping deactivates the handle');
+    assert.deepStrictEqual(Array.from(sent[0]), [2, 3, 1], 'drop sends the new order');
+    frames.length = 0;
+    section._selected = '1';
+    section.listeners.pointerdown({ target, button: 0, pointerId: 8, clientX: 0, clientY: 160 });
+    section.listeners.pointermove({ pointerId: 8, clientX: 0, clientY: -10 });
+    assert.deepStrictEqual(order.map(row => row.dataset.id), ['1', '2', '3'], 'dragging upward pushes crossed items down');
+    frames.shift()(16);
+    assert(list.scrollTop < 50 + 8, 'holding near the top scrolls upward');
+    section.listeners.pointercancel({ type: 'pointercancel', pointerId: 8 });
+    assert.deepStrictEqual(order.map(row => row.dataset.id), ['2', '3', '1'], 'cancel restores the original order');
+    assert.strictEqual(sent.length, 1, 'cancel does not submit an order');
+    section._selected = '1';
+    const title = { closest: selector => selector === '.queue-item' ? order[2] : null, focus() {} };
+    section.listeners.keydown({ key: 'ArrowUp', target: { closest: selector => selector === '.what[role="button"]' ? title : null }, preventDefault() {} });
+    assert.deepStrictEqual(order.map(row => row.dataset.id), ['2', '1', '3'], 'keyboard arrows reorder the selected entry');
+    assert.deepStrictEqual(Array.from(sent[1]), [2, 1, 3], 'keyboard reorder is submitted');
+    run('sendOrder = savedSendOrder');
+    context.requestAnimationFrame = oldRaf; context.cancelAnimationFrame = oldCancel;
+  }
+  {
+    const savedFetch = context.fetch, savedAlert = context.alert;
+    let message = '';
+    context.alert = text => { message = text; };
+    context.fetch = async () => ({ json: async () => ({ ok: true }) });
+    run(`queueEdit = { id: 7, token: 'token', pipeline: 'video', ready: true }; queueEditLabel()`);
+    await run("removeQueued('run', '8')");
+    assert(run('queueEdit !== null'), 'removing another job keeps the active edit');
+    await run("removeQueued('run', '7')");
+    assert(run('queueEdit === null') && els.cancelQueueEdit.hidden && !els.goLater.hidden, 'removing the edited job releases the form');
+    run(`queueEdit = { id: 9, token: 'token', pipeline: 'video', ready: true }; queueEditLabel()`);
+    context.fetch = async () => ({ json: async () => ({ ok: false }) });
+    await run("removeQueued('run', '9')");
+    assert(run('queueEdit !== null') && message, 'failed removal retains the edit and reports an error');
+    run(`const staleEdit = queueEdit; queueEdit = { id: 10, token: 'new', pipeline: 'image', ready: true };
+         reconcileQueueEdits({ items: [] }, staleEdit, null)`);
+    assert(run('queueEdit.id === 10'), 'a stale status cannot close a newer edit');
+    run(`reconcileQueueEdits({ items: [{ id: 10, editing: true }] }, queueEdit, null)`);
+    assert(run('queueEdit.id === 10'), 'an active edit survives status reconciliation');
+    run(`reconcileQueueEdits({ items: [] }, queueEdit, null)`);
+    assert(run('queueEdit === null'), 'removal in another tab releases the form');
+    run(`queueUpscaleEdit = { id: 12, token: 'token', kind: 'video_upscale' }; $('queueUpscaleSettings').showModal();
+         reconcileQueueEdits({ items: [] }, null, queueUpscaleEdit)`);
+    assert(run('queueUpscaleEdit === null') && !els.queueUpscaleSettings.open, 'removal closes an upscale edit');
+    let finishFile;
+    context.savedEditQueueRequest = run('queueRequest');
+    context.savedEditPoll = run('poll');
+    context.testQueuedEdit = { id: 13, token: 'token', pipeline: 'video', files: ['image'], filenames: { image: 'image.png' } };
+    run('queueRequest = async () => testQueuedEdit; poll = () => {}');
+    context.fetch = async url => String(url).includes('/file/')
+      ? { ok: true, blob: () => new Promise(resolve => { finishFile = resolve; }) }
+      : { json: async () => ({ ok: true }) };
+    const opening = run("editQueued('13', {})");
+    await new Promise(resolve => setImmediate(resolve));
+    await run("removeQueued('run', '13')");
+    finishFile({});
+    await opening;
+    assert(run('queueEdit === null'), 'an in-flight file restore cannot resurrect a removed edit');
+    run('queueRequest = savedEditQueueRequest; poll = savedEditPoll');
+    context.fetch = savedFetch; context.alert = savedAlert;
+  }
   {
     const savedFetch = context.fetch;
     const savedInterval = context.setInterval, savedClear = context.clearInterval, savedNow = context.performance.now;
@@ -1363,6 +1721,7 @@ assert(els.comfyFacts.innerHTML.includes('Generating the image · 3/8') && els.c
       return new Promise(done => { resolve = done; });
     };
     els.prompt.value = 'a harbour';
+    els.videoPromptMode.value = 'llm';
     const writing = run("writePrompt('video')");
     assert(els.prompt.readOnly && els.writeVideoPrompt.disabled, 'prompt locked while writing');
     await postStarted;
@@ -1378,9 +1737,14 @@ assert(els.comfyFacts.innerHTML.includes('Generating the image · 3/8') && els.c
     resolve({ ok: true, json: async () => ({ ok: true, prompt: 'A cinematic harbour.' }) });
     await writing;
     assert.strictEqual(els.prompt.value, 'A cinematic harbour.');
-    assert.strictEqual(els.videoPromptMode.value, 'direct');
+    assert.strictEqual(els.videoPromptMode.value, 'llm', 'writing a video brief keeps LLM planning selected');
     assert(!els.prompt.readOnly && !els.writeVideoPrompt.disabled);
     assert(cleared && els.videoPromptEta.hidden && els.videoPromptProgress.hidden, 'progress timer and UI are cleared');
+    context.fetch = async url => String(url).includes('?') ? { ok: true, json: async () => ({ ok: true, seconds: 100, model: 'gemma-4-12b' }) }
+      : { ok: true, json: async () => ({ ok: true, prompt: 'A rewritten prompt.' }) };
+    els.videoPromptMode.value = 'direct';
+    await run("writePrompt('video')");
+    assert.strictEqual(els.videoPromptMode.value, 'direct', 'writing an exact video prompt keeps exact mode');
     context.fetch = async url => String(url).includes('?') ? { ok: true, json: async () => ({ ok: true, seconds: 100, model: 'gemma-4-12b' }) }
       : { ok: false, json: async () => ({ ok: false, error: 'model failed' }) };
     els.imagePrompt.value = 'a tree';
@@ -1486,7 +1850,7 @@ assert(els.comfyFacts.innerHTML.includes('Generating the image · 3/8') && els.c
     prepare();
     run("openViewer('image_delete', 2)");
     await remove(2, [image(1, 'First'), image(2, 'Third')]);
-    assert(els.imageViewer.open && els.viewerTitle.textContent === 'Third · 2 of 2', 'deletion opens the renumbered next image');
+    assert(els.imageViewer.open && els.viewerTitle.textContent === 'Third' && els.viewerCount.textContent === '2 of 2', 'deletion opens the renumbered next image');
     assert(els.viewerDownload.href.includes('/files/2?v=Third'), 'download points to the surviving image');
     await remove(2, [image(1, 'First')]);
     assert(els.imageViewer.open && els.viewerTitle.textContent === 'First', 'deleting the last visible image opens the previous one');
@@ -1502,14 +1866,14 @@ assert(els.comfyFacts.innerHTML.includes('Generating the image · 3/8') && els.c
     run('stepViewer(1)');
     finishDelete({ json: async () => ({ ok: true, images: [image(1, 'Second'), image(2, 'Third')] }) });
     await pendingDelete;
-    assert(els.imageViewer.open && els.viewerTitle.textContent === 'Second · 1 of 2', 'navigation during deletion keeps the selected image after renumbering');
+    assert(els.imageViewer.open && els.viewerTitle.textContent === 'Second' && els.viewerCount.textContent === '1 of 2', 'navigation during deletion keeps the selected image after renumbering');
     let error = '';
     const savedAlert = context.alert;
     context.alert = text => { error = text; };
     context.fetch = async () => ({ json: async () => ({ ok: false, error: 'Run is busy' }) });
     await els.viewerDelete.listeners.click();
     await els.viewerDelete.listeners.click();
-    assert(els.imageViewer.open && els.viewerTitle.textContent === 'Second · 1 of 2' && error === 'Run is busy', 'a failed deletion leaves the preview intact and reports the error');
+    assert(els.imageViewer.open && els.viewerTitle.textContent === 'Second' && els.viewerCount.textContent === '1 of 2' && error === 'Run is busy', 'a failed deletion leaves the preview intact and reports the error');
     context.alert = savedAlert;
     context.fetch = savedFetch;
     context.savedPoll = savedPoll;
@@ -1770,13 +2134,34 @@ assert(els.comfyFacts.innerHTML.includes('Generating the image · 3/8') && els.c
     : new Promise(resolve => { release = () => resolve({ json: async () => ({ ...quiet, server_started: 1 }), redirected: false }); });
   const first = run('poll()');
   run('poll()');  // Waits for the first instead of making it count for nothing
-  context.fetch = answer({ ...quiet, server_started: 1, running: true, started_at: '13:12', elapsed: 3, pipeline: 'shorts', progress: {} });
+  context.fetch = answer({ ...quiet, server_started: 1, running: true, started_at: '13:12:59', elapsed: 3, pipeline: 'shorts', progress: {} });
   release();
   await first;
   await new Promise(resolve => setImmediate(resolve));
   await new Promise(resolve => setImmediate(resolve));
-  assert(els.statusText.textContent.startsWith('Running'), 'the poll asked for while one was out runs after it, and is shown');
+  assert(!els.statusTimes.hidden, 'the poll asked for while one was out runs after it, and is shown');
+  assert.strictEqual(els.statusStarted.textContent, '13:12');
+  assert.strictEqual(els.statusDuration.textContent, run('fmt(3)'), 'running duration is shown separately');
+  assert.strictEqual(els.statusText.textContent, '', 'running label is not displayed');
   run('wasRunning = false');  // Or the next idle answer reads as that run ending, and asks the stub for an estimate
+
+  // A restored tab must not wait for a request whose timeout was suspended in the background.
+  let releaseOld, oldSignal;
+  context.fetch = (url, options) => {
+    oldSignal = options.signal;
+    return new Promise(resolve => { releaseOld = resolve; });
+  };
+  const stale = run('poll()');
+  context.fetch = answer({ ...quiet, server_started: 1, running: true, started_at: '13:12', elapsed: 3, pipeline: 'shorts', progress: {} });
+  windowListeners.focus.forEach(fn => fn());
+  await new Promise(resolve => setImmediate(resolve));
+  assert(oldSignal.aborted, 'focus aborts the old status request');
+  assert(!els.statusTimes.hidden, 'focus starts a fresh status request immediately');
+  releaseOld({ redirected: false, json: async () => ({ ...quiet, server_started: 1 }) });
+  await stale;
+  assert(!els.statusTimes.hidden, 'a late stale response cannot overwrite the fresh status');
+  run('wasRunning = false');
+  assert(windowListeners.pageshow.length && windowListeners.online.length && documentListeners.visibilitychange.length, 'restored, reconnected and visible tabs refresh');
 
   // A new server means new code, unless that would lose what is being typed.
   context.reloads = 0;
@@ -1784,10 +2169,34 @@ assert(els.comfyFacts.innerHTML.includes('Generating the image · 3/8') && els.c
   context.fetch = answer({ ...quiet, server_started: 2 });
   await run('poll()');
   assert.strictEqual(context.reloads, 0, 'a typed topic is not lost');
-  run("serverStarted = 1");
   context.document.getElementById('topic').value = '';
   await run('poll()');
-  assert.strictEqual(context.reloads, 1);
+  assert.strictEqual(context.reloads, 1, 'a deferred reload happens once editing is no longer in progress');
+
+  // Reopening older content must not replace the chosen prompt model with its historical model.
+  run(`pipeline = 'video'; loadVideoWorkflows = async () => { $('llm').value = 'gemini'; }; syncVideoForm = () => {};
+       syncSize = () => {}; syncImageInput = () => {}; syncMediaInput = () => {};
+       syncPromptWriter = () => {}; saveVideoForm = () => {}; applyOptions = () => {};
+       showFormError = () => {}; showPage = () => {}`);
+  context.document.getElementById('llm').value = 'local';
+  els.llm.options = [{ value: 'local' }, { value: 'gemini' }];
+  els.videoWorkflow.options = [];
+  context.fetch = async () => ({ json: async () => ({ ok: true, settings: {
+    prompt: 'old', llm: 'gemini', start: 'image', size: '864x480', seconds: 10,
+    images: 0, references: [], options: {}, track: false
+  } }) });
+  await run("sameAgainFilm('old')");
+  assert.strictEqual(els.llm.value, 'local', 'reopening a film preserves the selected prompt model');
+  run(`pipeline = 'image'; loadImageWorkflows = async () => { $('imageLlm').value = 'gemini'; }; syncImageForm = () => {};
+       syncImageSources = () => {}; saveImageForm = () => {}; imageTakes = () => ({ options: [] })`);
+  els.imageLlm.value = 'local';
+  els.imageLlm.options = [{ value: 'local' }, { value: 'gemini' }];
+  els.imageWorkflow.options = [];
+  context.fetch = async () => ({ json: async () => ({ ok: true, shots: [], settings: {
+    prompt: 'old', llm: 'gemini', size: '1024x1024', count: 1, inputs: 0, options: {}
+  } }) });
+  await run("sameAgain('old')");
+  assert.strictEqual(els.imageLlm.value, 'local', 'reopening images preserves the selected prompt model');
 
   console.log('all page checks passed');
 })().catch(e => { console.error(e); process.exit(1); });

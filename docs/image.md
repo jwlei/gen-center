@@ -29,10 +29,13 @@ temporarily unloads its models; queued panel generations wait. Your text is kept
 The progress bar and remaining time are estimates, learned separately for each model and for video and image prompts.
 The writer receives only the text in the prompt box, not attached images. Its image instructions focus on a
 single composition, spatial relationships, lighting and other visible details.
-Alternatively, select **LLM** under **Prompt source** and **Local model** under **Model** to write a separate prompt for each image
+Select **LLM** under **Prompt source** and **Local model** under **Model** to write a separate prompt for each image
 with the workflow's existing planning instructions. Gemma can analyze attached images; Qwen rejects them because
 it is text-only. ComfyUI must be reachable and idle while the local model plans; it unloads before rendering.
 Large sets may exceed the local model's context or output limits.
+The panel defaults to Local model. A selected prompt model is remembered in this browser, and a default preset can
+override it; opening a previous generation keeps that selection when the model is available for the chosen workflow.
+The CLI still follows `LLM_PROVIDER`.
 
 | Choice | What each image gets |
 |---|---|
@@ -53,6 +56,11 @@ Output instead. This includes additional reference images and the image-to-promp
 
 When you delete an image in the preview, it stays open on the next image in that batch, or the previous
 one if there is no next image. Deleting the only remaining image closes the preview.
+Output cards show the workflow, actual image resolution(s), combined file size and image count, plus any LoRAs.
+While a batch is generating the count includes its planned total. The preview shows its position, resolution,
+workflow and prompt model where known. Its tools use icons; Download, Close and Delete have text labels.
+Tap the workflow and prompt-model line in the preview to expand any LoRAs.
+**More like this** opens the selected image's prompt and settings in Generate, with five variations on new seeds.
 
 In Output, tap the three-dot button twice at the top of an image batch or Video card to mark it NSFW. It disappears
 from normal output and Finished. Choose **NSFW**, just below **All workflows**, to see tagged Image

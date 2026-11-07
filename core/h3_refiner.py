@@ -282,10 +282,13 @@ class Refiner:
                        "model_id": self.model_id, "timeout": TIMEOUT}
             worker = os.path.join(PROJECT_ROOT, "core", "h3_refiner_worker.py")
             print(f"🧠 OpenH3-IR: writing a brief ({creativity})...", flush=True)
+            env = {**os.environ, "PYTHONIOENCODING": "utf-8"}
+            if self.model_id == "gemma-4-12b":
+                env.setdefault("H3IR_GUIDED_DECODING", "1")
             try:
                 result = subprocess.run([self.python, worker], input=json.dumps(request), encoding="utf-8",
                                         capture_output=True, timeout=TIMEOUT,
-                                        env={**os.environ, "PYTHONIOENCODING": "utf-8"},
+                                        env=env,
                                         creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
             except subprocess.TimeoutExpired as e:
                 raise RuntimeError("OpenH3-IR timed out while writing the brief.") from e

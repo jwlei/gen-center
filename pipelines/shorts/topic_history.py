@@ -74,7 +74,7 @@ def find_exact_repeat(topic, used_topics):
     return next((used for used in used_topics if key and _topic_key(used) == key), None)
 
 
-def record_successful_topic(topic, video_path, narration="", model=None):
+def record_successful_topic(topic, video_path, narration="", model=None, h3_mode=None, h3_creativity=None):
     """
     Append a topic only after its video has been successfully created. The
     narration lets a later upload write the title and description from it, and
@@ -92,5 +92,8 @@ def record_successful_topic(topic, video_path, narration="", model=None):
         entry["model"] = model
     if narration:
         entry["narration"] = narration
+    if h3_mode and h3_mode != "off":
+        entry["h3_mode"] = h3_mode
+        entry["h3_creativity"] = h3_creativity
     with open(TOPIC_HISTORY_PATH, "a", encoding="utf-8") as history:
         history.write(json.dumps(entry, ensure_ascii=False) + "\n")

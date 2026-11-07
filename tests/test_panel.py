@@ -31,7 +31,9 @@ from panel import image as image_panel, shorts as shorts_panel
 from panel import server as webapp
 from panel import video as video_panel
 from pipelines.shorts.paths import OUTPUT_DIR as SHORTS_READY, UPLOADED_DIR as SHORTS_UPLOADED
+from pipelines.shorts import topic_history
 from pipelines.video import media, paths
+from pipelines.video import output_metadata, upscale as video_upscale
 from pipelines.video.run_state import RunState, list_runs
 
 
@@ -47,6 +49,178 @@ def png_bytes(color=(10, 200, 30)):
 
 SAVED_OPTIONS = [{"id": "steps", "kind": "number", "label": "Steps", "default": "20", "min": 1, "max": 150, "step": 1, "advanced": True},
                  {"id": "negative", "kind": "text", "label": "Negative prompt", "default": "saved negative", "advanced": True}]
+
+
+class VideoMetadataTest(unittest.TestCase):
+    def test_probe_is_nonblocking_and_invalidates_changed_files(self):
+        started = threading.Event()
+        release = threading.Event()
+        metadata = {"resolution": "640x360", "duration": 3.0}
+
+        def probe(path):
+            started.set()
+            if not release.wait(5):
+                raise TimeoutError("test probe was not released")
+            return metadata
+
+        webapp._video_metadata_task.cache_clear()
+        with mock.patch.object(webapp, "_read_video_file_metadata", side_effect=probe) as reader:
+            try:
+                self.assertEqual(webapp.video_file_metadata("film.mp4", 1, 10),
+                                 {"resolution": None, "duration": None})
+                self.assertTrue(started.wait(2))
+                self.assertEqual(webapp.video_file_metadata("film.mp4", 1, 10),
+                                 {"resolution": None, "duration": None})
+                release.set()
+                webapp._video_metadata_task("film.mp4", 1, 10).result(timeout=5)
+                self.assertEqual(webapp.video_file_metadata("film.mp4", 1, 10), metadata)
+                webapp.video_file_metadata("film.mp4", 2, 10)
+                webapp._video_metadata_task("film.mp4", 2, 10).result(timeout=5)
+                self.assertEqual(reader.call_count, 2)
+            finally:
+                release.set()
+                webapp._video_metadata_task.cache_clear()
+
+    def test_probe_failure_is_logged(self):
+        with mock.patch.object(webapp.subprocess, "run", side_effect=subprocess.TimeoutExpired("ffprobe", 10)):
+            with self.assertLogs(webapp.app.logger, level="WARNING") as logs:
+                metadata = webapp._read_video_file_metadata("broken.mp4")
+        self.assertEqual(metadata, {"resolution": None, "duration": None})
+        self.assertIn("broken.mp4", logs.output[0])
+
+
+class OutputH3MetadataTest(unittest.TestCase):
+    def test_video_captions_include_saved_openh3_settings(self):
+        state = types.SimpleNamespace(id="run_1", workflow="h3.json", options={}, llm="local",
+                                      h3_mode="review", h3_creativity="bold")
+        with mock.patch.object(video_panel, "saved_runs", return_value=[{"id": "run_1", "label": "Film", "pipeline": "video"}]), \
+             mock.patch.object(video_panel, "films_of_runs", return_value={"film.mp4": state}), \
+             mock.patch.object(video_panel, "run_of_film", return_value="run_1"), \
+             mock.patch.object(video_panel.workflow_options, "loras_used", return_value=[]):
+            caption = video_panel.captions()("film.mp4")
+        self.assertEqual((caption["h3_mode"], caption["h3_creativity"]), ("review", "bold"))
+
+    def test_upscaled_video_inherits_source_run_metadata(self):
+        state = types.SimpleNamespace(id="run_20261107_120000", title="Film", brief="Brief", workflow="h3.json", options={"lora": "1"}, llm="local",
+                                      h3_mode="review", h3_creativity="bold")
+        with tempfile.TemporaryDirectory() as temp, \
+             mock.patch.object(video_panel, "saved_runs", return_value=[{"id": state.id, "label": "Film", "pipeline": "video"}]), \
+             mock.patch.object(video_panel, "films_of_runs", return_value={"film.mp4": state}), \
+             mock.patch.object(video_panel.workflow_options, "loras_used", return_value=["LoRA A"]), \
+             mock.patch.dict(webapp.FOLDERS, {"video": temp}), \
+             mock.patch.object(paths, "OUTPUT_DIR", temp), \
+             mock.patch.object(webapp, "video_file_metadata", side_effect=lambda path, *_: {
+                 "resolution": "2048x1024" if "upscaled" in path else "1024x512", "duration": 12}):
+            for name in ("film.mp4", "film_upscaled.mp4", "film_upscaled_2.mp4", "film_upscaled_upscaled.mp4", "unknown.mp4"):
+                with open(os.path.join(temp, name), "wb") as file:
+                    file.write(b"video")
+            listed = {item["name"]: item for item in webapp.list_videos("video")}
+        original = listed["film.mp4"]
+        for name in ("film_upscaled.mp4", "film_upscaled_2.mp4", "film_upscaled_upscaled.mp4"):
+            item = listed[name]
+            for key in ("run", "title", "model", "llm", "loras", "h3_mode", "h3_creativity"):
+                self.assertEqual(item[key], original[key], (name, key))
+            self.assertEqual(item["resolution"], "2048x1024")
+        self.assertIsNone(listed["unknown.mp4"]["model"])
+
+    def test_upscale_metadata_survives_original_deletion_and_repeat_upscale(self):
+        state = types.SimpleNamespace(id="run_20261107_120000", title="Film", brief="Brief", workflow="h3.json", options={},
+                                      llm="local", h3_mode="render", h3_creativity="bold")
+        with tempfile.TemporaryDirectory() as temp, \
+             mock.patch.object(paths, "OUTPUT_DIR", temp), \
+             mock.patch.dict(webapp.FOLDERS, {"video": temp}), \
+             mock.patch.object(video_panel, "films_of_runs", return_value={"film.mp4": state}) as films, \
+             mock.patch.object(video_panel, "saved_runs", return_value=[{"id": state.id, "label": "Film", "pipeline": "video"}]) as runs, \
+             mock.patch.object(video_panel.workflow_options, "loras_used", return_value=["LoRA A"]), \
+             mock.patch.object(video_panel, "busy_runs", return_value=set()), \
+             mock.patch.object(video_panel.RunState, "load", return_value=None), \
+             mock.patch.object(webapp, "video_file_metadata", return_value={"resolution": "2048x1024", "duration": 12}):
+            source = os.path.join(temp, "film.mp4")
+            upscale = os.path.join(temp, "film_upscaled.mp4")
+            for path in (source, upscale):
+                with open(path, "wb") as file:
+                    file.write(b"video")
+            self.assertTrue(video_panel.delete_video("video", source)["ok"])
+            self.assertTrue(os.path.isfile(output_metadata.sidecar(upscale)), "deletion backfills an old upscale")
+            films.return_value = {}
+            runs.return_value = []
+            listed = webapp.list_videos("video")[0]
+            self.assertEqual((listed["title"], listed["model"], listed["llm"], listed["loras"]),
+                             ("Film", "h3", "local", ["LoRA A"]))
+            self.assertEqual((listed["h3_mode"], listed["h3_creativity"], listed["run"]), ("render", "bold", None))
+
+            client = mock.Mock()
+            client.upload.return_value = "input.mp4"
+            client._run.return_value = {"outputs": {}}
+            def download(entry, stem, extensions, description):
+                path = stem + ".mp4"
+                with open(path, "wb") as file:
+                    file.write(b"new video")
+                return path
+            client._download.side_effect = download
+            with mock.patch.object(video_upscale, "probe", return_value=(1024, 512, 12)):
+                new_path = video_upscale.upscale(upscale, client)
+            self.assertEqual(output_metadata.read(new_path), output_metadata.read(upscale))
+            self.assertTrue(video_panel.delete_video("video", upscale)["ok"])
+            self.assertFalse(os.path.exists(output_metadata.sidecar(upscale)))
+            remaining = webapp.list_videos("video")[0]
+            self.assertEqual((remaining["title"], remaining["llm"], remaining["loras"]), ("Film", "local", ["LoRA A"]))
+
+    def test_upscale_metadata_error_prevents_original_deletion(self):
+        state = types.SimpleNamespace(id="run_20261107_120000", title="Film", brief="Brief", workflow=None, options={},
+                                      llm="local", h3_mode="off", h3_creativity="balanced")
+        with tempfile.TemporaryDirectory() as temp, \
+             mock.patch.object(paths, "OUTPUT_DIR", temp), \
+             mock.patch.object(video_panel, "films_of_runs", return_value={"film.mp4": state}), \
+             mock.patch.object(video_panel, "busy_runs", return_value=set()), \
+             mock.patch.object(output_metadata, "write", side_effect=OSError("disk full")):
+            source = os.path.join(temp, "film.mp4")
+            for path in (source, os.path.join(temp, "film_upscaled.mp4")):
+                with open(path, "wb") as file:
+                    file.write(b"video")
+            with self.assertRaisesRegex(OSError, "disk full"):
+                video_panel.delete_video("video", source)
+            self.assertTrue(os.path.exists(source))
+
+    def test_new_upscale_saves_snapshot_before_original_run_is_removed(self):
+        state = types.SimpleNamespace(id="run_20261107_120000", title="Film", brief="Brief", workflow="h3.json",
+                                      options={}, llm="local", h3_mode="review", h3_creativity="bold")
+        with tempfile.TemporaryDirectory() as temp, \
+             mock.patch.object(output_metadata, "films_of_runs", return_value={"film.mp4": state}) as films, \
+             mock.patch.object(output_metadata.workflow_options, "loras_used", return_value=["LoRA A"]), \
+             mock.patch.object(video_upscale, "probe", return_value=(1024, 512, 12)):
+            source = os.path.join(temp, "film.mp4")
+            with open(source, "wb") as file:
+                file.write(b"video")
+            client = mock.Mock()
+            client.upload.return_value = "input.mp4"
+            client._run.return_value = {"outputs": {}}
+            def download(entry, stem, extensions, description):
+                path = stem + ".mp4"
+                with open(path, "wb") as file:
+                    file.write(b"upscaled")
+                return path
+            client._download.side_effect = download
+            made = video_upscale.upscale(source, client)
+            films.return_value = {}
+            os.remove(source)
+            metadata = output_metadata.resolve(made)
+            self.assertEqual((metadata["title"], metadata["model"], metadata["llm"], metadata["loras"]),
+                             ("Film", "h3", "local", ["LoRA A"]))
+            self.assertEqual((metadata["h3_mode"], metadata["h3_creativity"]), ("review", "bold"))
+
+    def test_shorts_history_keeps_openh3_only_when_enabled(self):
+        with tempfile.TemporaryDirectory() as temp, \
+             mock.patch.object(topic_history, "TOPIC_HISTORY_PATH", os.path.join(temp, "history.jsonl")):
+            topic_history.record_successful_topic("Topic", "film.mp4", h3_mode="render", h3_creativity="extreme")
+            topic_history.record_successful_topic("Other", "plain.mp4", h3_mode="off", h3_creativity="balanced")
+            history = topic_history.read_history()
+            self.assertEqual((history[0]["h3_mode"], history[0]["h3_creativity"]), ("render", "extreme"))
+            self.assertNotIn("h3_mode", history[1])
+            caption = shorts_panel.captions()
+            self.assertEqual((caption("film.mp4")["h3_mode"], caption("film.mp4")["h3_creativity"]), ("render", "extreme"))
+            self.assertIsNone(caption("plain.mp4")["h3_mode"])
+
 
 class PanelTest(unittest.TestCase):
     def setUp(self):
@@ -132,13 +306,16 @@ class PanelTest(unittest.TestCase):
     def test_fixed_clip_only_continues_matching_plan(self):
         state = types.SimpleNamespace(id="old", shots=[{"seconds": 8}] * 4, final=None, inputs="same", brief="idea",
                                       seconds=32, workflow=None, llm="gemini", h3_mode="off",
-                                      h3_creativity="balanced", start="chain", fixed_clip=True)
+                                      h3_creativity="balanced", start="chain", connection_mode=None, fixed_clip=True)
         flags = ["--duration", "30", "--start", "chain", "--clip-seconds", "8-8", "--fixed-clips"]
         with mock.patch.object(video_panel, "busy_runs", return_value=set()), \
                 mock.patch.object(video_panel.media, "inputs_fingerprint", return_value="same"), \
                 mock.patch.object(video_panel, "list_runs", return_value=[state]):
             find = lambda chosen: video_panel.run_to_continue("idea", chosen, {}, {"max_images": 1}, [])
             self.assertIs(find(flags), state)
+            self.assertIsNone(find(["--duration", "30", "--start", "director", "--clip-seconds", "8-8", "--fixed-clips"]))
+            self.assertIs(find(flags + ["--llm", "gemini"]), state)
+            self.assertIsNone(find(flags + ["--llm", "claude"]), "a different prompt model needs a new plan")
             self.assertIsNone(find(["--duration", "32", "--start", "chain"]))
             self.assertIsNone(find(["--duration", "30", "--start", "chain", "--clip-seconds", "10-10", "--fixed-clips"]))
 
@@ -249,16 +426,17 @@ class PanelTest(unittest.TestCase):
         self.assertTrue(any("disk full" in entry for entry in logs.output))
 
     def test_prompt_writer_choices_exclude_claude_and_use_valid_default(self):
-        with mock.patch.dict(os.environ, {"LLM_PROVIDER": "claude", "GEMINI_API_KEY": ""}):
-            html = self.client.get("/").get_data(as_text=True)
-            for name in ("llm", "imageLlm"):
-                select = html.split(f'id="{name}"', 1)[1].split("</select>", 1)[0]
-                self.assertNotIn('value="claude"', select)
-                self.assertIn('value="local"', select)
-                self.assertIn(">Local model</option>", select)
-            self.assertIn('const IMAGE_DEFAULTS = { llm: "local"', html)
-            self.assertIn('const VIDEO_DEFAULTS = { llm: "local"', html)
-            self.assertIn("claude", dict(video_panel.planner.LLMS))
+        for provider, key in (("gemini", "key"), ("claude", ""), ("", "key")):
+            with self.subTest(provider=provider), mock.patch.dict(os.environ, {"LLM_PROVIDER": provider, "GEMINI_API_KEY": key}):
+                html = self.client.get("/").get_data(as_text=True)
+                for name in ("llm", "imageLlm"):
+                    select = html.split(f'id="{name}"', 1)[1].split("</select>", 1)[0]
+                    self.assertNotIn('value="claude"', select)
+                    self.assertIn('value="local"', select)
+                    self.assertIn(">Local model</option>", select)
+                self.assertIn('const IMAGE_DEFAULTS = { llm: "local"', html)
+                self.assertIn('const VIDEO_DEFAULTS = { llm: "local"', html)
+        self.assertIn("claude", dict(video_panel.planner.LLMS))
 
     def test_local_qwen_rejects_attached_images_before_queuing(self):
         with mock.patch.object(video_panel.h3_refiner, "selected_model", return_value="qwen3-14b"):
@@ -311,7 +489,7 @@ class PanelTest(unittest.TestCase):
         status = self.status()
         self.assertEqual(status["returncode"], 0, status["lines"])
         self.assertEqual(len(self.comfy.prompts), 8)
-        self.assertEqual(self.texts_rendered()[3], "My better fourth prompt.")
+        self.assertEqual(self.texts_rendered(), prompts, "each planned or edited prompt reaches its own clip")
         self.assertEqual(status["stopped_runs"], [], "a finished run isn't waiting for anything")
         self.assertEqual(status["progress"]["stage"][:2], [3, 3])
 
@@ -622,11 +800,11 @@ class PanelTest(unittest.TestCase):
     def test_a_runs_title_opens_its_workflow_and_resolution(self):
         image = {"pipeline": "image", "argv": ["--count", "3", "--size", "1272x2772"],
                  "env": {"COMFYUI_WORKFLOW": "C:/x/logs/workflows/image_krea2_SFW_NSFW.json"}}
-        self.assertEqual(webapp.run_facts(image), {"workflow": "krea2_SFW_NSFW", "resolution": "1272x2772"})
+        self.assertEqual(webapp.run_facts(image), {"workflow": "krea2_SFW_NSFW", "resolution": "1272x2772", "count": 3})
         by_aspect = {"pipeline": "image", "argv": ["--aspect", "16:9", "--megapixels", "2"], "env": {}}
         self.assertEqual(webapp.run_facts(by_aspect), {"workflow": "Built-in", "resolution": "16:9 at 2 MP"})
         shorts = {"pipeline": "shorts", "argv": ["--runs", "3"], "env": {"AVATAR_SIZE": "576x1024", "COMFYUI_WORKFLOW": "w/avatar_lipsync.json"}}
-        self.assertEqual(webapp.run_facts(shorts), {"workflow": "avatar_lipsync", "resolution": "576x1024"})
+        self.assertEqual(webapp.run_facts(shorts), {"workflow": "avatar_lipsync", "resolution": "576x1024", "count": 3})
         self.assertEqual(webapp.run_facts({"pipeline": "video", "argv": ["--resume", "r1"], "env": {}})["resolution"], "As the run was set up")
 
     def test_a_side_has_one_default_preset_at_most(self):
@@ -703,6 +881,19 @@ class PanelTest(unittest.TestCase):
         self.assertTrue(self.client.post(f"/queue/run/edit/{item['id']}/cancel", json={"token": result["token"]}).get_json()["ok"])
         self.assertTrue(item["later"])
         self.assertNotIn("edit_token", item)
+
+    def test_removing_an_edited_pending_job_invalidates_its_session(self):
+        self.assertTrue(self.generate(prompt="editing", start_later="1").get_json()["ok"])
+        self.assertTrue(self.generate(prompt="keep", start_later="1").get_json()["ok"])
+        first, other = self.status()["queue"]["items"]
+        edit = self.client.post(f"/queue/run/edit/{first['id']}").get_json()
+        self.assertTrue(edit["ok"])
+        self.assertTrue(self.client.post(f"/queue/run/remove/{first['id']}").get_json()["ok"])
+        self.assertEqual(self.client.post(f"/queue/run/edit/{first['id']}/cancel", json={"token": edit["token"]}).status_code, 409)
+        self.assertEqual(self.generate(prompt="stale", queue_edit_id=str(first["id"]), queue_edit_token=edit["token"]).status_code, 409)
+        self.assertEqual([item["id"] for item in self.status()["queue"]["items"]], [other["id"]])
+        self.assertTrue(self.generate(prompt="new", start_later="1").get_json()["ok"])
+        self.assertEqual(len(self.status()["queue"]["items"]), 2)
 
     def test_a_paused_queue_can_run_one_generation_without_resuming_the_rest(self):
         self.comfy.script = ["ok"] * 16
@@ -857,9 +1048,9 @@ class PanelTest(unittest.TestCase):
             self.assertEqual(json.load(f), {"broken": "Needs gone.safetensors, which isn't installed."})
         self.assertEqual(self.client.get("/api/workflows?pipeline=shorts").get_json()["workflows"], [], "none are tuned for Shorts")
         self.assertEqual(reply["workflows"], [
-            {"name": "r2v.json", "label": "r2v", "takes": {"min_images": 0, "max_images": 20}, "clip_seconds": [5, 10, 8]},
-            {"name": "t2v.json", "label": "t2v", "takes": {"min_images": 0, "max_images": 0, "options": SAVED_OPTIONS}, "clip_seconds": [5, 10, 8]},
-            {"name": "wan.json", "label": "wan", "takes": {"min_images": 0, "max_images": 1, "options": SAVED_OPTIONS}, "clip_seconds": [5, 10, 8]}],
+            {"name": "r2v.json", "label": "r2v", "takes": {"min_images": 0, "max_images": 20}, "clip_seconds": [5, 10, 8], "openh3": False, "h3_multishot": False, "h3_director": False},
+            {"name": "t2v.json", "label": "t2v", "takes": {"min_images": 0, "max_images": 0, "options": SAVED_OPTIONS}, "clip_seconds": [5, 10, 8], "openh3": False, "h3_multishot": False, "h3_director": False},
+            {"name": "wan.json", "label": "wan", "takes": {"min_images": 0, "max_images": 1, "options": SAVED_OPTIONS}, "clip_seconds": [5, 10, 8], "openh3": False, "h3_multishot": False, "h3_director": False}],
             "each with the workflow's own options: a KSampler's steps here")
 
     def test_a_films_workflow_options_are_used_and_kept(self):
@@ -873,7 +1064,11 @@ class PanelTest(unittest.TestCase):
         clips = len(self.comfy.prompts)
         film = os.path.basename(run.final)
         self.assertTrue(film.endswith("_wan.mp4") and run.id not in film, "<title>_<workflow>.mp4")
+        self.wait_until(lambda: next(v for v in webapp.list_videos("video") if v["name"] == film)["resolution"] is not None, "video metadata")
         listed = next(v for v in webapp.list_videos("video") if v["name"] == film)
+        self.assertEqual(listed["resolution"], "64x64")
+        self.assertGreater(listed["duration"], 0)
+        self.assertEqual(listed["llm"], run.llm)
         # The same again: what it was made with, and the image it was given.
         settings = self.client.get(f"/runs/{run.id}").get_json()["settings"]
         self.assertEqual((settings["workflow"], settings["options"], settings["images"]), ("wan.json", {"steps": "12"}, 1))
@@ -1022,9 +1217,9 @@ class PanelTest(unittest.TestCase):
             reply = self.client.get("/api/workflows").get_json()
             self.assertFalse(reply["online"])
             self.assertEqual(reply["workflows"], [
-                {"name": "r2v.json", "label": "r2v", "takes": {"min_images": 0, "max_images": 20}, "clip_seconds": [5, 10, 8]},
-                {"name": "t2v.json", "label": "t2v", "takes": {"min_images": 0, "max_images": 0, "options": SAVED_OPTIONS}, "clip_seconds": [5, 10, 8]},
-                {"name": "wan.json", "label": "wan", "takes": {"min_images": 0, "max_images": 1, "options": SAVED_OPTIONS}, "clip_seconds": [5, 10, 8]}])
+                {"name": "r2v.json", "label": "r2v", "takes": {"min_images": 0, "max_images": 20}, "clip_seconds": [5, 10, 8], "openh3": False, "h3_multishot": False, "h3_director": False},
+                {"name": "t2v.json", "label": "t2v", "takes": {"min_images": 0, "max_images": 0, "options": SAVED_OPTIONS}, "clip_seconds": [5, 10, 8], "openh3": False, "h3_multishot": False, "h3_director": False},
+                {"name": "wan.json", "label": "wan", "takes": {"min_images": 0, "max_images": 1, "options": SAVED_OPTIONS}, "clip_seconds": [5, 10, 8], "openh3": False, "h3_multishot": False, "h3_director": False}])
             self.assertEqual(os.path.basename(video_panel.chosen_workflow({"workflow": "wan.json"})[0]["COMFYUI_WORKFLOW"]), "wan.json")
         webapp._comfyui_cache.update(at=0.0)
 

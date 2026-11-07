@@ -16,7 +16,7 @@ from core import paths as core_paths
 from core.lora_check import comfyui_folders
 from core.saved_workflows import unique_name
 from pipelines.image.upscale import UpscaleClient
-from pipelines.video import paths
+from pipelines.video import output_metadata, paths
 
 SUFFIX = "_upscaled"
 SCALES = (1.5, 2.0, 3.0, 4.0)
@@ -56,6 +56,7 @@ def upscale_workflow(video, scale, quality, strength, encoder):
 
 def upscale(path, comfy, scale=2.0, quality=DEFAULT_QUALITY, strength=1.0):
     """Makes the film at path again, bigger, next to it. Returns the new file's path."""
+    metadata = output_metadata.resolve(path)
     size = probe(path)
     width, height = (size[0], size[1]) if size else (0, 0)
     encoder = encoder_for(width, height, scale)
@@ -63,8 +64,17 @@ def upscale(path, comfy, scale=2.0, quality=DEFAULT_QUALITY, strength=1.0):
     uploaded = comfy.upload(path, f"autocomfyui_upscale_{os.path.basename(path)}")
     entry = comfy._run(upscale_workflow(uploaded, scale, quality, strength, encoder), 777)
     folder = os.path.dirname(path)
-    stem = unique_name(folder, os.path.splitext(os.path.basename(path))[0] + SUFFIX, ".mp4")
+    base = os.path.splitext(os.path.basename(path))[0] + SUFFIX
+    stem = unique_name(folder, base, ".mp4")
+    number = 2
+    while os.path.exists(output_metadata.sidecar(os.path.join(folder, stem + ".mp4"))):
+        stem = unique_name(folder, f"{base}_{number}", ".mp4")
+        number += 1
     made = comfy._download(entry, os.path.join(folder, stem), (".mp4",), "a video")
+    if metadata is not None:
+        output_metadata.write(made, metadata)
+    else:
+        print(f"⚠️ No saved source metadata was available for {os.path.basename(path)}.")
     remove_comfyui_copies(entry)
     print(f"✅ Upscaled: {made}")
     return made
@@ -105,7 +115,7 @@ def main(argv=None):
         return 1
     try:
         upscale(path, comfy, min(4.0, max(1.0, args.scale)), args.quality, min(1.0, max(0.0, args.strength)))
-    except (RuntimeError, OSError) as e:
+    except (RuntimeError, OSError, ValueError) as e:
         print(f"❌ Could not upscale it: {e}")
         return 1
     return 0

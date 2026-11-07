@@ -349,7 +349,9 @@ async def generate_one(args, state):
 
     if final_path:
         try:
-            record_successful_topic(topic, final_path, narration, model)
+            record_successful_topic(topic, final_path, narration, model,
+                                    state.env.get("H3IR_ENHANCE") if state.avatar_clips else None,
+                                    state.env.get("H3IR_CREATIVITY", "balanced"))
         except OSError as e:
             raise RuntimeError(f"Video was created at {final_path}, but its topic could not be recorded: {e}") from e
         state.remove(keep_files=args.keep_cache)

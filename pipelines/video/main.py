@@ -12,12 +12,12 @@ import ffmpeg
 import requests
 from dotenv import load_dotenv
 
-from core import h3_refiner, seeds
+from core import director, h3_refiner, seeds
 from core import workflow_options
 from core.audio import AudioEngine
 from core.paths import LOGS_DIR
 from core.saved_workflows import shorthand, title_words, unique_name
-from pipelines.video import media, paths, planner, roles
+from pipelines.video import h3_multishot, h3_prompt, media, paths, planner, roles
 from pipelines.video.comfy import ComfyClient
 from pipelines.video.run_state import STAGES, RunState, list_runs
 
@@ -77,8 +77,11 @@ def parse_args(argv=None):
     parser.add_argument("--duration", type=parse_duration, default="2m",
                         help="Film length: 90, 3m or 2m30 (default 2m, from 5 seconds to 10 minutes). Each clip is as long as "
                              "the video model makes them: 5-10 s on LTX, 5-15 s on MiniMax H3, 3-5 s on Wan.")
-    parser.add_argument("--start", choices=("chain", "image"), default="chain",
+    parser.add_argument("--start", choices=("chain", "image", "multishot", "director"), default="chain",
                         help="Start each clip on the last frame of the one before (chain, default), or on the input image.")
+    parser.add_argument("--h3-first-frame", action="store_true", help="Use image 1 as the Multishot first frame as well as a reference.")
+    parser.add_argument("--h3-multishot-steps", type=int, default=20, choices=range(1, 51), metavar="1-50",
+                        help="Sampling steps for H3 Multishot (default: 20).")
     parser.add_argument("--llm", choices=[name for name, _ in planner.LLMS], default=None,
                         help="Who writes the prompts (default: LLM_PROVIDER in .env, else gemini).")
     parser.add_argument("--size", type=parse_size, help="Render size such as 1280x736 (default: the image's shape).")
@@ -112,6 +115,10 @@ def parse_args(argv=None):
         parser.error("--audio and --narration both give the film its audio: choose one.")
     if args.fixed_clips and (not args.clip_seconds or args.clip_seconds[0] != args.clip_seconds[1]):
         parser.error("--fixed-clips needs --clip-seconds N-N.")
+    if args.start == "multishot" and not args.fixed_clips:
+        parser.error("H3 Multishot needs --fixed-clips and a fixed --clip-seconds N-N.")
+    if args.start == "multishot" and (args.first_only or args.h3_enhance != "off" or args.ref_video or args.ref_audio):
+        parser.error("H3 Multishot does not support first-clip-only, OpenH3-IR, reference video or reference audio.")
     if len(args.ref_video_role) > len(args.ref_video) or len(args.ref_audio_role) > len(args.ref_audio):
         parser.error("--ref-video-role and --ref-audio-role go with a --ref-video or --ref-audio each.")
     if args.no_image and args.reference:
@@ -247,7 +254,19 @@ def plan_run(args, stages):
     if args.h3_enhance != "off" and not h3_refiner.supports(comfy.workflow):
         raise RuntimeError("OpenH3-IR requires a supported MiniMax H3 workflow.")
     # A clip can only start on the last one's final frame if an image is all it takes.
-    start = args.start if takes["max_images"] == 1 else "image"
+    if args.start == "multishot":
+        if not h3_multishot.supports(comfy.workflow):
+            raise RuntimeError("H3 Multishot needs a supported H3 reference-to-video workflow.")
+        if args.h3_first_frame and not images:
+            raise RuntimeError("Choose image 1 to use it as the first frame.")
+        start = "multishot"
+    elif args.start == "director":
+        adapted = comfy.workflow.get(director.INPUTS_ID, {}).get("class_type") == director.INPUTS
+        if not adapted or not any(node.get("class_type") == director.DIRECTOR for node in comfy.workflow.values()) or len(images) != 1:
+            raise RuntimeError("Motion Director continuous takes require an adapted H3 Director workflow and exactly one image.")
+        start = "chain"
+    else:
+        start = args.start if takes["max_images"] == 1 else "image"
     if args.size and media.size_problem(video_model, *args.size):
         raise RuntimeError(media.size_problem(video_model, *args.size))
     width, height = args.size or media.render_size(*(images[0].size if images else media.DEFAULT_SHAPE),
@@ -262,6 +281,8 @@ def plan_run(args, stages):
     state.inputs = inputs
     state.options = workflow_options.chosen_in_env() or None
     state.h3_mode, state.h3_creativity, state.image_roles = args.h3_enhance, args.h3_creativity, args.image_roles
+    state.h3_first_frame, state.h3_multishot_steps = args.h3_first_frame, args.h3_multishot_steps
+    state.connection_mode = args.start if args.start in ("director", "multishot") else start
     print_stage("Plan", stages)
     keep_references(state, videos, audios)
     audio = args.audio or (voiced_narration(args) if args.narration else None)
@@ -306,9 +327,11 @@ def plan_run(args, stages):
                  state.references())
     if llm == "local":
         with h3_refiner.Refiner(comfy.url, require_compiler=False) as refiner:
-            title, shots = planner.plan_film(*plan_args, chosen=args.clip_seconds, refiner=refiner)
+            title, shots = planner.plan_film(*plan_args, chosen=args.clip_seconds, refiner=refiner,
+                                             first_frame=state.start == "multishot" and state.h3_first_frame)
     else:
-        title, shots = planner.plan_film(*plan_args, chosen=args.clip_seconds)
+        title, shots = planner.plan_film(*plan_args, chosen=args.clip_seconds,
+                                         first_frame=state.start == "multishot" and state.h3_first_frame)
     for image, path in zip(images, state.image_paths):
         media.save_input(image, path)
     for index, shot in enumerate(shots):
@@ -461,16 +484,49 @@ def render_clips(state, comfy, most=None):
 
 def stitch_film(state):
     print("🧵 Stitching the film...")
-    clips = [state.clip_path(i) for i in range(len(state.shots))]
     # Made again (a shot redone), it keeps its name; a new film never takes another's.
     if not state.film_name:
         state.update(film_name=unique_name(paths.OUTPUT_DIR, f"{title_words(state.title, 'film')}_{shorthand(state.workflow, BUILT_IN)}", ".mp4"))
     output = os.path.join(paths.OUTPUT_DIR, f"{state.film_name}.mp4")
-    media.stitch(clips, state.parts_dir, output, state.width, state.height, state.start == "chain")
+    if state.start == "multishot":
+        shutil.copyfile(os.path.join(state.parts_dir, state.take_file), output)
+    else:
+        clips = [state.clip_path(i) for i in range(len(state.shots))]
+        media.stitch(clips, state.parts_dir, output, state.width, state.height, state.start == "chain")
     if state.has_audio:
         media.with_audio(output, state.audio_path, pad=state.fixed_clip)
     state.update(final=output)
     return output
+
+
+def render_take(state, comfy):
+    if len({shot["seconds"] for shot in state.shots}) != 1:
+        raise RuntimeError("H3 Multishot requires every shot to have the same duration.")
+    try:
+        response = requests.get(f"{comfy.url}/object_info/H3MultishotSampler", timeout=10)
+        response.raise_for_status()
+        if "H3MultishotSampler" not in response.json():
+            raise RuntimeError("Install the H3 Multishot custom nodes in ComfyUI and restart ComfyUI.")
+        images = [comfy.upload(path, f"autocomfyui_{state.id}_{number}.png")
+                  for number, path in enumerate(state.image_paths, 1)]
+    except requests.RequestException as e:
+        raise RuntimeError(f"Could not prepare H3 Multishot: {e}") from e
+    seed = seeds.pick(state.shots[0].get("seed"), 1)
+    print(f"   🎬 Rendering the whole H3 Multishot take ({len(state.shots)} shots).")
+    print(f"      🌱 Seed {seed}")
+    path = comfy.render_take([shot["prompt"] for shot in state.shots], images, state.shots[0]["seconds"],
+                             state.width, state.height, os.path.join(state.parts_dir, "multishot"),
+                             seed, state.h3_first_frame, state.h3_multishot_steps)
+    problem = media.clip_problem(path, state.seconds)
+    if problem:
+        raise RuntimeError(f"H3 Multishot output was rejected: {problem}.")
+    frames = h3_prompt.clip_frames(state.shots[0]["seconds"]) * len(state.shots) - (len(state.shots) - 1)
+    expected = frames / h3_prompt.FPS
+    actual = media.duration(path)
+    if actual < expected - 2 / h3_prompt.FPS:
+        raise RuntimeError(f"H3 Multishot output was rejected: it is {actual:.2f}s long, expected about {expected:.2f}s.")
+    state.shots[0]["used_seed"] = seed
+    state.update(take_file=os.path.basename(path))
 
 
 def run(args):
@@ -484,6 +540,10 @@ def run(args):
         state = RunState.load(args.resume)
         if not state or not state.shots:
             raise RuntimeError(f"No saved run called '{args.resume}'. --list shows them.")
+        if state.start == "multishot" and args.first_only:
+            raise RuntimeError("H3 Multishot cannot render only the first clip.")
+        if state.start == "multishot" and args.redo not in (None, 1):
+            raise RuntimeError("H3 Multishot can only render the whole take again.")
         # The rest of the film has to match the clips already made.
         if state.workflow:
             os.environ["COMFYUI_WORKFLOW"] = state.workflow
@@ -521,7 +581,9 @@ def run(args):
         if args.resume:
             # A run that was killed outright leaves its last clip rendering.
             comfy.cancel()
-        if not render_clips(state, comfy, most=1 if args.first_only else None):
+        if state.start == "multishot":
+            render_take(state, comfy)
+        elif not render_clips(state, comfy, most=1 if args.first_only else None):
             print(f"💾 Kept what's done. Continue with: python -m pipelines.video.main --resume {state.id}")
             return 1
         if args.first_only and state.next_stage() == "Clips":

@@ -27,8 +27,9 @@ import sys
 import threading
 import time
 from datetime import datetime
+from concurrent.futures import ThreadPoolExecutor
 from urllib.parse import urlparse
-from functools import wraps
+from functools import lru_cache, wraps
 
 import requests
 import websocket
@@ -668,6 +669,7 @@ def run_facts(item):
     """What a run's title opens on: the workflow it renders with and the size it makes, as its options say."""
     argv, env = item.get("argv") or [], item.get("env") or {}
     flag = lambda name: argv[argv.index(name) + 1] if name in argv[:-1] else None
+    count = flag("--count" if item.get("pipeline") == "image" else "--runs" if item.get("pipeline") == "shorts" else "")
     workflow = env.get("COMFYUI_WORKFLOW")
     size = item.get("resolution") or flag("--size") or env.get("AVATAR_SIZE")
     if not size and item.get("resume") and item.get("pipeline") in ("image", "video") and not upscale_queue_settings(item):
@@ -683,6 +685,7 @@ def run_facts(item):
         size = (os.getenv("AVATAR_SIZE") or "736x1280").lower()
     return {"workflow": display_label(os.path.basename(workflow)) if workflow else "Built-in",
             "resolution": size or ("As the run was set up" if "--resume" in argv else "The workflow's own"),
+            **({"count": int(count)} if count and count.isdigit() and int(count) > 0 else {}),
             **({"prompt": item["prompt"]} if item.get("prompt") else {})}
 
 
@@ -741,6 +744,37 @@ def password_required(view):
     return wrapper
 
 
+def _read_video_file_metadata(path):
+    try:
+        result = subprocess.run(
+            ["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries",
+             "stream=width,height:format=duration", "-of", "json", path],
+            capture_output=True, text=True, timeout=10, check=True,
+        )
+        data = json.loads(result.stdout)
+        stream = (data.get("streams") or [{}])[0]
+        width, height = stream.get("width"), stream.get("height")
+        duration = data.get("format", {}).get("duration")
+        return {"resolution": f"{width}x{height}" if width and height else None,
+                "duration": float(duration) if duration is not None else None}
+    except (OSError, subprocess.SubprocessError, ValueError, TypeError) as error:
+        app.logger.warning("Could not read video metadata for %s: %s", path, error)
+        return {"resolution": None, "duration": None}
+
+
+_video_metadata_pool = ThreadPoolExecutor(max_workers=2, thread_name_prefix="video-metadata")
+
+
+@lru_cache(maxsize=1024)
+def _video_metadata_task(path, modified_ns, size):
+    return _video_metadata_pool.submit(_read_video_file_metadata, path)
+
+
+def video_file_metadata(path, modified_ns, size):
+    task = _video_metadata_task(path, modified_ns, size)
+    return task.result() if task.done() else {"resolution": None, "duration": None}
+
+
 def list_videos(folder):
     directory = FOLDERS[folder]
     if not os.path.isdir(directory):
@@ -755,6 +789,7 @@ def list_videos(folder):
         videos.append({
             "name": name,
             **captions(name),
+            **video_file_metadata(os.path.join(directory, name), stat.st_mtime_ns, stat.st_size),
             "size_mb": round(stat.st_size / (1024 * 1024), 1),
             "created": datetime.fromtimestamp(stat.st_mtime).strftime("%d/%m %H:%M"),
             "mtime": stat.st_mtime,
@@ -2365,7 +2400,9 @@ def status():
     payload["upload"] = uploads.snapshot()
     payload["upload"]["queue"] = upload_queue.snapshot()
     payload["videos"] = {folder: list_videos(folder) for folder in FOLDERS}
-    payload["image_sets"] = [dict(run) for run in saved_runs() if run["pipeline"] == "image" and run["images"]]
+    payload["image_sets"] = [{**run, "generating": bool(payload["running"] and payload.get("pipeline") == "image"
+                                                        and run["id"] == run_id)}
+                             for run in saved_runs() if run["pipeline"] == "image" and run["images"]]
     with _nsfw_lock:
         tags = _read_nsfw()
     _apply_nsfw(payload, tags, films_of_runs())
@@ -2510,7 +2547,17 @@ def workflows():
             model = workflow_model(paths.get(w["name"]))
             w["clip_seconds"] = video_planner.clip_seconds(model)
             from core import h3_refiner
+            from pipelines.video import h3_multishot
+            from core import director
             w["openh3"] = h3_refiner.supports_path(paths.get(w["name"]))
+            w["h3_multishot"] = h3_multishot.supports_path(paths.get(w["name"]))
+            try:
+                with open(paths.get(w["name"]) or "", encoding="utf-8") as file:
+                    graph = json.load(file)
+                w["h3_director"] = (director.INPUTS_ID in graph and
+                                     graph[director.INPUTS_ID].get("class_type") == director.INPUTS)
+            except (OSError, ValueError, AttributeError):
+                w["h3_director"] = False
             if video_media.most_pixels(model):
                 w["most_pixels"] = video_media.most_pixels(model)
     elif pipeline == "shorts":

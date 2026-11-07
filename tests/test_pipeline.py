@@ -387,7 +387,7 @@ class PlanTest(unittest.TestCase):
         self.assertEqual(planner.fixed_film_seconds(30, None, (5, 10)), 30)
         self.assertEqual(planner.fixed_film_seconds(30, None, (15, 15)), 30)
         seconds = planner.fixed_film_seconds(30, None, (8, 8))
-        shots = [{"title": f"S{i}", "seconds": 8, "prompt": "p"} for i in range(4)]
+        shots = [{"title": f"S{i}", "seconds": 8, "prompt": f"p{i}"} for i in range(4)]
         with mock.patch.object(planner, "_ask", return_value=self.reply(shots)):
             _, result = planner.plan_film(b"jpeg", "brief", seconds, "image", "gemini", chosen=(8, 8))
         self.assertEqual([shot["seconds"] for shot in result], [8, 8, 8, 8])
@@ -434,7 +434,7 @@ class PlanTest(unittest.TestCase):
         self.assertIn("a whole number from 3 to 5", planner._instructions("x", 60, "chain", 1, wan_prompt.MODEL))
 
     def test_an_h3_plan_can_have_fifteen_second_clips(self):
-        shots = [{"title": f"S{i}", "seconds": 15, "prompt": self.h3_prompt_text()} for i in range(4)]
+        shots = [{"title": f"S{i}", "seconds": 15, "prompt": self.h3_prompt_text() + f" Action {i}."} for i in range(4)]
         with mock.patch.object(planner, "_ask", return_value=self.reply(shots)):
             _, planned = planner.plan_film(b"jpeg", "brief", 60, "image", "gemini", h3_prompt.MODEL)
         self.assertEqual([shot["seconds"] for shot in planned], [15] * 4)
@@ -480,6 +480,37 @@ class PlanTest(unittest.TestCase):
         self.assertIn("15 consecutive clips", chain)
         self.assertIn("last frame", chain)
         self.assertIn("starts again from the attached image", planner._instructions("x", 120, "image"))
+
+    def test_two_clip_instructions_advance_the_action_for_each_model(self):
+        for model, seconds in ((None, 20), (wan_prompt.MODEL, 10), (h3_prompt.MODEL, 30)):
+            with self.subTest(model=model):
+                guide = planner._instructions("brief", seconds, "chain", 1, model)
+                self.assertIn("different action", guide)
+                self.assertNotIn("too short for a story", guide)
+
+    def test_repeated_llm_prompts_are_retried_and_never_accepted(self):
+        repeated = self.reply([{"title": f"S{i}", "seconds": 10, "prompt": "Same action" if i == 0 else " same  action "}
+                               for i in range(2)])
+        distinct = self.reply([{"title": "First", "seconds": 10, "prompt": "The door opens."},
+                               {"title": "Next", "seconds": 10, "prompt": "She walks through."}])
+        for llm in ("gemini", "claude", "local"):
+            with self.subTest(llm=llm), mock.patch.object(planner, "_ask", side_effect=[repeated, distinct]) as call:
+                _, shots = planner.plan_film(b"jpeg", "brief", 20, "chain", llm, refiner=object())
+                self.assertEqual([shot["prompt"] for shot in shots], ["The door opens.", "She walks through."])
+                self.assertIn("same prompt", call.call_args_list[1].args[1])
+        with mock.patch.object(planner, "_ask", return_value=repeated):
+            with self.assertRaisesRegex(RuntimeError, "same prompt"):
+                planner.plan_film(b"jpeg", "brief", 20, "chain")
+
+    def test_h3_also_retries_repeated_prompts_after_normalizing_them(self):
+        prompt = self.h3_prompt_text()
+        repeated = self.reply([{"title": f"S{i}", "seconds": 15, "prompt": prompt} for i in range(2)])
+        distinct = self.reply([{"title": "First", "seconds": 15, "prompt": prompt},
+                               {"title": "Next", "seconds": 15, "prompt": prompt.replace("She walks.", "She stops.")}])
+        with mock.patch.object(planner, "_ask", side_effect=[repeated, distinct]) as call:
+            _, shots = planner.plan_film(b"jpeg", "brief", 30, "image", "gemini", h3_prompt.MODEL)
+        self.assertIn("same prompt", call.call_args_list[1].args[1])
+        self.assertNotEqual(shots[0]["prompt"], shots[1]["prompt"])
 
     # --- MiniMax H3 ---
 
@@ -537,8 +568,8 @@ class PlanTest(unittest.TestCase):
         text_only = "integrated_multimodal_description: [Shot 1] " + "Rain falls. " * 100 + "\n\noverall_soundscape: Rain.\n\nnon_diegetic_music: N/A"
         self.assertIsNone(h3_prompt.problem(text_only, 0))
 
-        paragraph = self.reply([{"title": f"S{i}", "seconds": 8, "prompt": "A woman walks."} for i in range(8)])
-        good = self.reply([{"title": f"S{i}", "seconds": 8, "prompt": self.h3_prompt_text()} for i in range(8)])
+        paragraph = self.reply([{"title": f"S{i}", "seconds": 8, "prompt": f"A woman walks, step {i}."} for i in range(8)])
+        good = self.reply([{"title": f"S{i}", "seconds": 8, "prompt": self.h3_prompt_text() + (f" Action {i}." if i else "")} for i in range(8)])
         with mock.patch.object(planner, "_ask", side_effect=[paragraph, good]) as call:
             _, planned = planner.plan_film(b"jpeg", "brief", 60, "image", "gemini", h3_prompt.MODEL)
         self.assertEqual(call.call_count, 2)
@@ -546,7 +577,7 @@ class PlanTest(unittest.TestCase):
         self.assertIn("Your last reply came back with a prompt without subject_definitions", call.call_args_list[1].args[1])
         self.assertEqual(planned[0]["prompt"], self.h3_prompt_text())
 
-        thin = self.reply([{"title": f"S{i}", "seconds": 8, "prompt": sketch} for i in range(8)])
+        thin = self.reply([{"title": f"S{i}", "seconds": 8, "prompt": sketch + f" Action {i}."} for i in range(8)])
         with mock.patch.object(planner, "_ask", return_value=thin) as call:
             _, planned = planner.plan_film(b"jpeg", "brief", 60, "image", "gemini", h3_prompt.MODEL)
         self.assertEqual(call.call_count, 2, "asked once more, then a film of short prompts beats no film")
@@ -775,7 +806,7 @@ class PlanTest(unittest.TestCase):
                          "a queue saved before still runs")
 
     def test_plan_film_attaches_image_2_after_the_others(self):
-        reply = self.reply([{"title": f"S{i}", "seconds": 8, "prompt": "A walk."} for i in range(8)])
+        reply = self.reply([{"title": f"S{i}", "seconds": 8, "prompt": f"Walk {i}."} for i in range(8)])
         with mock.patch.object(planner, "_ask", return_value=reply) as call:
             planner.plan_film([b"one"], "brief", 60, "chain", "gemini", None, planner.EXTRA_CONTEXT, b"two")
         self.assertEqual(call.call_args.args[4], [b"one", b"two"])
@@ -805,7 +836,7 @@ class PlanTest(unittest.TestCase):
             main.parse_args(["--no-image", "--reference", "b.png", "a prompt"])
 
     def test_wan_prompts_arent_held_to_h3s_shape(self):
-        reply = self.reply([{"title": f"S{i}", "seconds": 5, "prompt": "A woman walks into the rain."} for i in range(12)])
+        reply = self.reply([{"title": f"S{i}", "seconds": 5, "prompt": "A woman walks into the rain." + (f" Step {i}." if i else "")} for i in range(12)])
         with mock.patch.object(planner, "_ask", return_value=reply) as call:
             _, planned = planner.plan_film(b"jpeg", "brief", 60, "chain", "gemini", wan_prompt.MODEL)
         self.assertEqual(call.call_count, 1)

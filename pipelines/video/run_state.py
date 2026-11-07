@@ -49,6 +49,10 @@ class RunState:
     h3_mode: str = "off"
     h3_creativity: str = "balanced"
     image_roles: list = field(default_factory=list)
+    h3_first_frame: bool = False
+    h3_multishot_steps: int = 20
+    take_file: str = None
+    connection_mode: str = None
 
     @classmethod
     def new(cls, brief, seconds, start, width, height, llm="gemini", workflow=None, image_count=1):
@@ -164,21 +168,30 @@ class RunState:
 
     def redo(self, index):
         """A chained clip starts on the last frame of the one before, so everything after it has to go too."""
-        if self.start == "chain":
+        if self.start == "multishot":
+            self.take_file = None
+            self.clips = {}
+        elif self.start == "chain":
             self.clips = {i: name for i, name in self.clips.items() if i < index}
         else:
             self.clips.pop(index, None)
         self.final = None
 
     def kept_seconds(self):
+        if self.start == "multishot":
+            return self.seconds if self.take_file else 0
         return sum(shot["seconds"] for i, shot in enumerate(self.shots or []) if i in self.clips)
 
     def next_stage(self):
+        if self.start == "multishot":
+            return "Stitching" if self.take_file else "Clips"
         if len(self.clips) < len(self.shots or []):
             return "Clips"
         return "Stitching"
 
     def _forget_missing(self):
+        if self.take_file and not os.path.exists(os.path.join(self.parts_dir, self.take_file)):
+            self.take_file = None
         for index in [i for i in sorted(self.clips) if not os.path.exists(self.clip_path(i))]:
             self.redo(index)
         if self.final and not os.path.exists(self.final):

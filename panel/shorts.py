@@ -398,7 +398,9 @@ def captions():
         history = {entry.get("video"): entry for entry in read_history()}
     except (OSError, ValueError):
         history = {}  # A broken history only costs the captions
-    return lambda name: {"topic": history.get(name, {}).get("topic"), "model": history.get(name, {}).get("model")}
+    return lambda name: {"topic": history.get(name, {}).get("topic"), "model": history.get(name, {}).get("model"),
+                         "h3_mode": history.get(name, {}).get("h3_mode"),
+                         "h3_creativity": history.get(name, {}).get("h3_creativity")}
 
 
 # The avatar clips' size: the finished Short is always 1080x1920, cropped and scaled from them.

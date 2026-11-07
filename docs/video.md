@@ -54,22 +54,29 @@ the prompts are written and opens them for you. Change any of them, then press *
 "Let me read the prompts" to go straight through.
 
 **Write prompt:** enter an idea and press the button beside the prompt field to rewrite it locally using the model
-selected in Settings. On success it replaces your text and selects Exact prompt. It needs an idle, reachable ComfyUI
+selected in Settings. On success it replaces your text and keeps your selected prompt source. In LLM mode the rewritten
+text is the brief for the clip planner; in Exact prompt mode it is repeated for every clip. It needs an idle, reachable ComfyUI
 and temporarily unloads its models; queued panel generations wait until the writer finishes. The text is kept if it fails.
 The progress bar and remaining time are estimates, learned separately for each model and for video and image prompts.
 The writer receives only the text in the prompt box, not attached references or the selected duration. Its video
 instructions describe shot composition, motion, sound and user-supplied dialogue and text; it cannot inspect references.
 
-Alternatively, select **LLM** under **Prompt source** and **Local model** under **Model** to plan a separate prompt per clip using
+Select **LLM** under **Prompt source** and **Local model** under **Model** to plan a separate prompt per clip using
 the existing workflow-specific planner. Gemma can analyze attached images; Qwen rejects them because it is text-only.
 The local model unloads before rendering and needs an idle, reachable ComfyUI. Large plans can take substantial
 time and may exceed the local model's context or output limits.
+The panel defaults to Local model. A selected prompt model is remembered in this browser, and a default preset can
+override it; opening a previous generation keeps the selected model. The CLI still follows `LLM_PROVIDER`.
 
 **OpenH3-IR (MiniMax H3).** The Prompt section offers this optional compiler on supported H3 workflows. It is off
-by default. Choose **before review** to compile each planned prompt before editing it (using the original reference
+by default; enable it to show its settings. Choose **before review** to compile each planned prompt before editing it (using the original reference
 images), or **before each clip** to compile with the actual start frame, including a frame from the previous clip.
 The latter happens after prompt review; its resulting brief is saved with the shot. Pick **Restrained**, **Balanced**
 (default), **Bold**, or **Extreme** for how much the compiler may introduce. Your written constraints still apply.
+
+The LLM plans the clips together, with a different action in each. If it returns identical prompts, the planner asks
+again and reports an error if it cannot get a usable plan. It cannot guarantee that different wording describes different
+actions, so review the prompts before rendering. Exact prompt mode intentionally repeats your text in every clip.
 
 The compiler runs locally through the installed [ComfyUI-OpenH3-IR](https://github.com/ruashots/ComfyUI-OpenH3-IR)
 pack and its `open-h3-ir` dependency in ComfyUI's Python. It starts llama.cpp for the compile and stops it before
@@ -83,6 +90,8 @@ Choose the OpenH3-IR model in Settings: **Gemma 4 12B** is the default and suppo
 **Qwen3 14B** is text-only and rejects visual references. This selection applies to subsequent compilations.
 The GGUF models live in the project's ignored `models/gemma-4-12b-heretic` and `models/qwen3-14b-abliterated`
 directories. Gemma also requires its `mmproj.gguf`.
+For Gemma, the compiler uses guided JSON decoding by default to avoid malformed structured replies;
+set `H3IR_GUIDED_DECODING=0` in `.env` to use the compiler's unguided mode instead.
 
 For the portable Windows ComfyUI layout, the defaults locate `python_embeded/python.exe` and
 `ComfyUI/custom_nodes/ComfyUI-OpenH3-IR` beside `COMFYUI_LAUNCHER`, and expect the Vulkan llama.cpp
@@ -164,14 +173,17 @@ its edges. The ETA scales with the pixel count.
 **While it runs:** you see each step with its ETA, which clip is rendering, ComfyUI's own progress, GPU use and the
 log. Generate adds more films to a queue, and each keeps the options it was queued with.
 The setup button on a queued generation moves it to Pending while you edit its settings and inputs.
-To reorder queued jobs, select an entry to reveal its drag handle; drag it or use the arrow keys.
+To reorder queued jobs, select an entry to outline it in green, then drag it or use the arrow keys.
+The list scrolls when a dragged item is held near an edge. Dropping clears the selection; selecting the
+same entry again clears it, and selecting another moves it there.
 Tap the Queue heading to collapse or expand it. Queue, Pending and Failed scroll internally when their
-lists exceed three cards or the available screen height.
+lists exceed three cards or the available screen height; scrolling past an end continues on the page.
 Queue and Pending entries show their resolution and a shortened prompt. Finished items open their output when available;
 failed items open and highlight their entry under Failed. A failure before a run was saved has no saved run to retry.
 Generate keeps the prompt after queuing so you can make variants. Use **Clear** beside Prompt to empty it, or leave
 Generate or switch sides to clear it automatically; the other settings stay in place.
 **Save to queue** replaces it at the front of the queue; **Cancel editing** leaves the original in Pending.
+Removing the pending job ends its editing session; the form can then be used for a new generation.
 Upscale jobs use their own settings dialog and follow the same Pending and queue replacement behavior.
 Continued runs cannot currently be edited this way.
 For a saved run in Pending, the settings icon opens its setup in Generate for a new or matching run;
@@ -185,25 +197,52 @@ It still reserves the saved run so it cannot be queued twice or discarded while 
 to confirm. **Continue** brings the cancelled run back behind whatever is queued by then.
 
 **Waiting to be rendered** lists plans not rendered yet and runs that were stopped, failed or cut off by a crash.
-**Continue** picks up from the last finished clip, and only the clip that was cut off starts again.
+**Continue** picks up from the last finished clip, and only the clip that was cut off starts again. H3 Multishot is
+an exception: it renders one whole take, so a stopped or failed take starts again from the beginning.
 
 **Fixing a shot:** press **Shots** on a film to watch each clip. Change a prompt if you like and press **Render
 again**. In a continuous take every shot after it renders again too, because each starts on the last frame of the
-one before.
+one before. H3 Multishot's **Render take again** instead replaces the entire take.
 
 **Open folder** shows the tab's folder in File Explorer. It's only there on this PC, not on your phone.
 
 **Delete** removes the film along with its clips and prompts. **Shut down** force-stops everything and closes
 ComfyUI if the panel started it. Queued jobs come back on hold next time.
 
-### Two ways to connect clips
+### How clips connect
+
+The connection selector appears below Clip length when the estimated film has more than one clip. A single clip
+uses separate-moment behavior. If an audio track determines the length, the selector stays available because its
+length is not yet known in the form. Changing back to multiple clips restores your previous connection choice.
 
 | | What each clip starts on | Between clips | Redoing a shot |
 |---|---|---|---|
 | **One continuous take** (default) | The last frame of the clip before | Nothing: it flows | Also redoes every shot after it |
 | **Separate moments** | Your image | A short fade | Leaves the others alone |
+| **H3 Motion Director** | The previous clip's last frame | Nothing: it flows | Also redoes every shot after it |
+| **H3 Multishot** | The previous shot's last frame | The sampler joins the shots | Renders the entire take again |
 
 If a continuous take drifts away from how your image looks, try separate moments.
+Ordinary multi-image workflows use separate moments. The H3 choices appear only for compatible saved workflows:
+select the adapted **`video_Minimax_H3_T2V_I2V_R2V`** workflow for Motion Director, or a supported H3
+reference-to-video workflow for Multishot.
+
+**H3 Motion Director** continuous takes require exactly one image. It is the first frame of the first clip;
+the last frame of each clip becomes the next clip's first frame. Clips remain individually saved and resumable.
+
+**H3 Multishot** requires the installed `H3MultishotSampler` node from the
+[H3 Multishot workflow](https://huggingface.co/joeygambino/MiniMax-H3-Multishot-Workflow), plus the
+video-combine nodes. It plans and optionally reviews a separate prompt for each shot, then renders them in one
+ComfyUI job with one take seed and one fixed shot length. The sampler generates and joins video and audio; continuity
+is not guaranteed. H3 rounds each shot to its 17-frame grid at 24 fps and removes duplicate boundary frames, so the
+actual duration can differ slightly from the estimated duration. The step count under the mode controls Multishot's
+sampler; the original workflow's sampler settings do not apply, though its model, text encoder and VAEs are used.
+
+Images are subject references by default. Optionally use image 1 as the first frame **and** a subject reference;
+reference images are resized and centre-cropped to the output dimensions. Reference videos and audio, OpenH3-IR and
+the first-clip preview are unavailable in this mode. Stopping, retrying or changing a shot requires rendering the
+whole take again; individual shots cannot be resumed. Exact-prompt mode deliberately repeats the same prompt for
+every shot; choose an LLM prompt source for distinct planned actions.
 
 **Workflow options**, under Generation, are the chosen workflow's own switches and settings, such as a sampler's steps
 or a switched group, as the [Image side](image.md#workflow-options) has them. A run keeps them, so the rest of its clips and
@@ -222,6 +261,14 @@ calls ComfyUI's reference node with its arguments in an older order, until that 
 (the [RTX VSR Long Video](https://github.com/tritant/ComfyUI_NVIDIA_RTX_VSR_Long_Video) custom node; needs an RTX GPU). Pick a
 scale (1.5 to 4×) and a mode. The result is saved beside it as `<name>_upscaled.mp4`, with the sound kept; ComfyUI's own copy of it
 is removed. **Prompts** in the same viewer opens the shots of the run that made the film.
+Output cards show the workflow, actual resolution, duration, file size, LoRAs and enabled OpenH3-IR settings where recorded.
+Upscaled films keep their original metadata independently, with the upscale's own resolution and size. Existing upscales
+are given a metadata copy when listed or before their original run is removed, if that run still exists. Each upscale's
+`<filename>.metadata.json` accompanies it; keep that file with the video if moving it.
+The preview shows its position among visible films, resolution, workflow and prompt model where known. Tap the workflow
+and prompt-model line to expand any LoRAs and OpenH3-IR settings. Swipe up or down (or use the up and down arrow keys)
+to move between visible films. Older Shorts do not have OpenH3-IR settings recorded.
+Its tools use icons; Download, Close and Delete have text labels.
 
 ## Time and cost
 
@@ -242,7 +289,8 @@ python -m pipelines.video.main harbour.jpg "a storm rolls in over the harbour" -
 |---|---|
 | `--duration` | Film length: `90`, `3m` or `2m30`. From 5 seconds to 10 minutes, default `2m`. It's split into clips as long as the video model makes them. |
 | `--llm` | `gemini` or `claude`. Default: `LLM_PROVIDER`, else `gemini`. |
-| `--start` | `chain` for one continuous take (default), `image` for separate moments. |
+| `--start` | `chain` for a normal continuous take (default), `image` for separate moments, `director` for H3 Motion Director chaining, or `multishot` for an H3 Multishot take. |
+| `--h3-first-frame`, `--h3-multishot-steps N` | For Multishot: use image 1 as the first frame and a reference; set sampling steps (default 20). Multishot also requires `--fixed-clips --clip-seconds N-N`. |
 | `--reference IMAGE` | Another image, repeatable. The first one is image 2. |
 | `--ref-video FILE`, `--ref-audio FILE` | A reference video or audio clip every clip gets, repeatable, on a workflow that takes them such as MiniMax H3. |
 | `--ref-video-role`, `--ref-audio-role` | What each one is for, in order: `motion`, `character` or `place` for a video, `voice`, `music` or `sound` for audio. |
@@ -252,7 +300,7 @@ python -m pipelines.video.main harbour.jpg "a storm rolls in over the harbour" -
 | `--plan-only` | Writes the prompts and stops, so you can read them before spending the GPU time. |
 | `--upload`, `--privacy` | Uploads when the film is done. Private by default. |
 | `--resume RUN` | Continues a saved run. |
-| `--redo SHOT` | With `--resume`: renders that shot again. In a chain, every shot after it too. |
+| `--redo SHOT` | With `--resume`: renders that shot again. In a chain, every shot after it too; Multishot only accepts `1` and rerenders the entire take. |
 | `--list` | Lists saved runs. |
 | `--check` | Checks ffmpeg, the LLM key and ComfyUI, and makes nothing. |
 

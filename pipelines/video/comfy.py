@@ -7,7 +7,7 @@ import time
 import requests
 from PIL import Image
 
-from pipelines.video import h3_prompt, wan_prompt
+from pipelines.video import h3_multishot, h3_prompt, wan_prompt
 from core import director, seeds, workflow_options
 from core.paths import WORKFLOWS_DIR, comfyui_client_id as client_id
 from core.saved_workflows import MOST_REFERENCES_FIELD, frames_for, image_slots, media_slots, takes
@@ -157,6 +157,10 @@ class ComfyClient:
 
     def takes_audio(self):
         return "audio" in self.fields
+
+    def render_take(self, prompts, images, seconds, width, height, save_as, seed, first_frame=False, steps=20):
+        workflow = h3_multishot.build(self.workflow, prompts, images, seconds, width, height, seed, first_frame, steps)
+        return self._download(self._run(workflow, seed), save_as)
 
     def render(self, prompt, images, seconds, width, height, save_as, audio=None, ref_videos=(), ref_audios=(), seed=None,
                h3_refined=False):

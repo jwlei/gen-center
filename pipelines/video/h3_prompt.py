@@ -51,11 +51,16 @@ def _picture_labels(images):
     return " and ".join(f"<Picture {number}>" for number in range(1, images + 1))
 
 
-def _what_you_get(images):
+def _what_you_get(images, first_frame=False):
     if not images:
         return """There are no images. Nothing shows H3 how anything looks, so you decide, in keeping with the
     brief, and every prompt has to say it all in full."""
     which = f"The attached image is {_picture_labels(images)}" if images == 1 else f"The attached images are, in order, {_picture_labels(images)}"
+    if first_frame:
+        return f"""{which}. H3 gets these as subject references for every clip. The first image also supplies
+    the opening frame of the first clip. Later clips continue from the preceding clip's last frame.
+    Look closely at what each image is for. Photos of one person are one subject, however many there are.
+    A place, an object or an outfit can be a subject too."""
     return f"""{which}. H3 gets the same reference{'' if images == 1 else 's'} with every clip. A reference says who
     or what appears. It is not a frame: no clip starts on it, and each clip shoots a new scene with that subject, so
     expect a recognisable likeness and invent the framing freely. Look closely at what each image is for. Photos
@@ -191,23 +196,28 @@ def _format(images, low, high, roles=()):
     {_what_to_describe(low, high)}"""
 
 
-def instructions(brief, seconds, count, images, shortest, longest, second_image="", roles=(), references=None):
+def instructions(brief, seconds, count, images, shortest, longest, second_image="", roles=(), references=None, start="image", first_frame=False):
     clips = "one clip" if count == 1 else f"{count} clips"
     shots = "one shot" if count == 1 else f"{count} shots in order"
     together = f"Use {seconds}." if count == 1 else f"All of them together add up to {seconds}."
     low, high = _detail_words(count)
-    shape = ("This is too short for a story: show one clear moment that feels complete." if count < 3 else
+    shape = ("Show one clear moment that feels complete." if count == 1 else
              f"Give the film a beginning, a development and a real ending, rather than {count} versions of the same moment.")
     separate = "" if count == 1 else """Every clip is a separate render that knows nothing of the others, joined to the next with a fade. So
     each is its own moment: a different action, a different camera move, a new development of the idea, in an order
-    that still builds. Keep clothes, place and time of day the same from clip to clip unless the story changes them."""
+    that still builds. Plan each action as the next development after the previous clip, rather than repeating or
+    restarting it. Keep clothes, place and time of day the same from clip to clip unless the story changes them."""
+    if count > 1 and start in ("chain", "multishot"):
+        separate = """The clips form one continuous take. Each clip starts from the previous clip's final frame,
+    without a cut or fade. Give each clip a different action that follows what just happened, and finish each action
+    at a clear point the next can continue from. Keep the subjects, place, lighting and camera position consistent."""
     return f"""
     You are a director and prompt engineer for MiniMax H3, an open-weight video model that makes picture and
     stereo sound together in one pass, at {FPS} frames per second. You are turning a short brief into a
     {seconds}-second film made of {clips}. Nobody can answer questions, so where the brief leaves something open,
     decide.
 
-    {_what_you_get(images)}
+    {_what_you_get(images, first_frame)}
 
     {second_image}
 

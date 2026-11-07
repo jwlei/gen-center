@@ -8,11 +8,11 @@ from types import SimpleNamespace
 
 from flask import abort, request, send_file
 
-from core import h3_refiner, seeds, workflow_options
+from core import director, h3_refiner, seeds, workflow_options
 from panel.server import (read_outcome, form_options, PIPELINES, VIDEO_TIMINGS, _runs_cache, active_runs, app, busy_runs, item_images, job,
                           password_required, safe_video_path, saved_at, run_queue, saved_runs, saved_workflows, queue_form_snapshot)
 from panel.shorts import VOICES
-from pipelines.video import media, paths, planner, roles
+from pipelines.video import h3_multishot, media, output_metadata, paths, planner, roles
 from pipelines.video.comfy import workflow_model
 from pipelines.video.main import BUILT_IN
 from pipelines.video.run_eta import RunEta
@@ -107,9 +107,21 @@ def build_options(form):
         flags.append("--fixed-clips")
 
     start = form.get("start") or "chain"
-    if start not in ("chain", "image"):
+    if start not in ("chain", "image", "director", "multishot"):
         return None, "Unknown start mode."
     flags += ["--start", start]
+    if start == "multishot":
+        if not form.get("clip_fixed"):
+            return None, "H3 Multishot needs a fixed clip length."
+        try:
+            steps = int(form.get("h3_multishot_steps") or 20)
+        except ValueError:
+            return None, "H3 Multishot steps must be a whole number from 1 to 50."
+        if not 1 <= steps <= 50:
+            return None, "H3 Multishot steps must be a whole number from 1 to 50."
+        flags += ["--h3-multishot-steps", str(steps)]
+        if form.get("h3_first_frame"):
+            flags.append("--h3-first-frame")
 
     # One role per image from image 2, in order. The form only sends one for an image that's chosen.
     for number in range(2, MOST_IMAGES + 1):
@@ -152,6 +164,8 @@ def build_options(form):
         return None, str(e)
     if mode != "off":
         flags += ["--h3-enhance", mode, "--h3-creativity", creativity]
+    if start == "multishot" and (form.get("try_first") or mode != "off"):
+        return None, "H3 Multishot renders the whole take and does not support preview runs or OpenH3-IR."
     return flags, None
 
 
@@ -238,6 +252,18 @@ def generate():
     env, takes, error = chosen_workflow(request.form)
     if error:
         return {"ok": False, "error": error}, 400
+    start = option(flags, "--start")
+    if start == "multishot" and not h3_multishot.supports_path(env.get("COMFYUI_WORKFLOW")):
+        return {"ok": False, "error": "H3 Multishot needs a supported H3 reference-to-video workflow."}, 400
+    if start == "director":
+        try:
+            with open(env.get("COMFYUI_WORKFLOW") or "", encoding="utf-8") as file:
+                graph = json.load(file)
+            adapted = graph.get(director.INPUTS_ID, {}).get("class_type") == director.INPUTS
+        except (OSError, ValueError, AttributeError):
+            adapted = False
+        if not adapted:
+            return {"ok": False, "error": "Motion Director chaining needs a supported H3 Director workflow."}, 400
     if option(flags, "--h3-enhance", "off") != "off" and not h3_refiner.supports_path(env.get("COMFYUI_WORKFLOW")):
         return {"ok": False, "error": "OpenH3-IR requires a supported MiniMax H3 workflow."}, 400
     size = option(flags, "--size")
@@ -274,6 +300,12 @@ def generate():
     uploads, error = form_uploads(request.files, takes)
     if error:
         return {"ok": False, "error": error}, 400
+    if start == "director" and len(uploads) != 1:
+        return {"ok": False, "error": "Motion Director continuous takes need exactly one image."}, 400
+    if start == "multishot" and "--h3-first-frame" in flags and not uploads:
+        return {"ok": False, "error": "Choose image 1 to use it as the first frame."}, 400
+    if start == "multishot" and any(name.startswith("ref_media") and upload.filename for name, upload in request.files.items()):
+        return {"ok": False, "error": "H3 Multishot does not yet support reference video or audio."}, 400
     if llm == "local" and uploads and h3_refiner.selected_model() == "qwen3-14b":
         return {"ok": False, "error": "Qwen3 14B is text-only and cannot analyze attached images. Choose Gemma 4 in Settings."}, 400
     try:
@@ -363,10 +395,12 @@ def run_to_continue(prompt, flags, env, takes, images, audio=None, references=()
                 and (audio or state.seconds == seconds) and state.workflow == env.get("COMFYUI_WORKFLOW")
                 and state.fixed_clip == fixed
                 and (not fixed or all(shot["seconds"] == fixed_seconds for shot in state.shots))
-                and (state.llm == "local") == (option(flags, "--llm") == "local")
+                and (not option(flags, "--llm") or state.llm == option(flags, "--llm"))
                 and state.h3_mode == option(flags, "--h3-enhance", "off")
                 and state.h3_creativity == option(flags, "--h3-creativity", "balanced")
-                and (state.start == start or takes["max_images"] != 1)):
+                and (state.connection_mode or state.start) == (start if start in ("director", "multishot") or takes["max_images"] == 1 else "image")
+                and (start != "multishot" or (state.h3_first_frame == ("--h3-first-frame" in flags)
+                     and state.h3_multishot_steps == int(option(flags, "--h3-multishot-steps", 20))))):
             return state
     return None
 
@@ -404,7 +438,8 @@ def run_detail(run_id):
         busy = run_id in active_runs()
         pending = not busy and run_id in busy_runs()
     return {"ok": True, "id": state.id, "title": state.title, "brief": state.brief, "start": state.start,
-            "llm": state.llm, "busy": busy, "pending": pending, "finished": bool(state.final), "settings": settings_of(state),
+            "llm": state.llm, "busy": busy, "pending": pending, "finished": bool(state.final),
+            "take_rendered": bool(state.take_file), "settings": settings_of(state),
             "shots": [{"title": shot["title"], "seconds": shot["seconds"], "prompt": shot["prompt"],
                        "enhanced_prompt": shot.get("enhanced_prompt"),
                        "seed": shot.get("seed"), "used_seed": shot.get("used_seed"),
@@ -423,9 +458,10 @@ def settings_of(state):
     """What a film was made with, as the form sets it: for "the same again", to change before pressing Generate."""
     workflow = next((w["name"] for w in saved_workflows() if state.workflow and w.get("path") and os.path.abspath(w["path"]) == os.path.abspath(state.workflow)), "")
     files = run_inputs(state)
-    return {"prompt": state.brief, "seconds": state.seconds, "start": state.start, "llm": state.llm, "workflow": workflow,
+    return {"prompt": state.brief, "seconds": state.seconds, "start": state.connection_mode or state.start, "llm": state.llm, "workflow": workflow,
             "size": f"{state.width}x{state.height}", "options": state.options or {}, "images": len(files["image"]),
             "h3_enhance": state.h3_mode, "h3_creativity": state.h3_creativity, "image_roles": state.image_roles,
+            "h3_first_frame": state.h3_first_frame, "h3_multishot_steps": state.h3_multishot_steps,
             "clip_fixed": state.fixed_clip, "clip_seconds": state.shots[0]["seconds"] if state.fixed_clip and state.shots else None,
             "references": [{"kind": "video", "role": video["role"]} for video in state.ref_videos]
                           + [{"kind": "audio", "role": audio["role"]} for audio in state.ref_audios],
@@ -514,6 +550,8 @@ def redo_shot(run_id, shot):
         return refused
     if not 1 <= shot <= len(state.shots):
         return {"ok": False, "error": "That shot isn't in this film."}, 400
+    if state.start == "multishot" and shot != 1:
+        return {"ok": False, "error": "H3 Multishot can only render the whole take again."}, 400
     return queue_saved_run(state, redo=shot)
 
 
@@ -522,6 +560,7 @@ def discard_run(run_id):
     state, refused = load_idle_run(run_id)
     if refused:
         return refused
+    preserve_upscales(run_id)
     state.remove()
     _runs_cache["at"] = 0.0
     return {"ok": True}
@@ -557,11 +596,16 @@ def upscale_film(name):
 def delete_video(folder, path):
     """Deletes a film and the run that made it, whose clips would otherwise sit on the disk unseen. An upscaled copy is only itself."""
     if UPSCALED.search(os.path.basename(path)):
+        preserve_upscales(source_name=os.path.basename(path))
         os.remove(path)
+        metadata_path = output_metadata.sidecar(path)
+        if os.path.exists(metadata_path):
+            os.remove(metadata_path)
         return {"ok": True}
     run_id = run_of_film(os.path.basename(path))
     if run_id and run_id in busy_runs():
         return {"ok": False, "error": "That film's run is going or queued. Stop it or take it out of the queue first."}, 409
+    preserve_upscales(run_id=run_id, source_name=os.path.basename(path))
     os.remove(path)
     state = RunState.load(run_id)
     if state:
@@ -570,27 +614,62 @@ def delete_video(folder, path):
     return {"ok": True}
 
 
+def preserve_upscales(run_id=None, source_name=None):
+    films = films_of_runs()
+    if not os.path.isdir(paths.OUTPUT_DIR):
+        return
+    for name in os.listdir(paths.OUTPUT_DIR):
+        ancestor = name
+        is_descendant = False
+        while UPSCALED.search(ancestor):
+            ancestor = UPSCALED.sub(".mp4", ancestor)
+            if ancestor == source_name:
+                is_descendant = True
+                break
+        if UPSCALED.search(name) and (is_descendant or (run_id and run_of_film(name, films) == run_id)):
+            path = os.path.join(paths.OUTPUT_DIR, name)
+            if output_metadata.read(path) is None:
+                metadata = output_metadata.resolve(path, films)
+                if metadata is not None:
+                    output_metadata.write(path, metadata)
+
+
 def captions():
     titles = {run["id"]: run["label"] for run in saved_runs() if run["pipeline"] == "video"}
     films = films_of_runs()
+    runs = {state.id: state for state in films.values()}
 
     def caption(name):
+        path = os.path.join(paths.OUTPUT_DIR, name)
+        if UPSCALED.search(name):
+            try:
+                metadata = output_metadata.read(path)
+                if metadata is None:
+                    metadata = output_metadata.resolve(path, films)
+                    if metadata is not None:
+                        output_metadata.write(path, metadata)
+                if metadata is not None:
+                    return {**{key: metadata.get(key) for key in ("title", "model", "llm", "h3_mode", "h3_creativity")},
+                            "loras": metadata.get("loras", []),
+                            "run": metadata.get("origin_run") if metadata.get("origin_run") in titles else None}
+            except (OSError, ValueError) as error:
+                app.logger.warning("Could not preserve video metadata for %s: %s", name, error)
         run = run_of_film(name, films)
-        made_by = films.get(name)
+        made_by = films.get(name) or runs.get(run)
         return {"run": run if run in titles else None, "title": titles.get(run),
                 "model": shorthand(made_by.workflow, BUILT_IN) if made_by else None,
+                "llm": made_by.llm if made_by else None,
+                "h3_mode": made_by.h3_mode if made_by else None,
+                "h3_creativity": made_by.h3_creativity if made_by else None,
                 "loras": workflow_options.loras_used(made_by.workflow, made_by.options, "video") if made_by else []}
     return caption
 
 
 def context():
-    default_llm = planner.default_llm()
-    if default_llm == "claude" or not planner.llm_configured(default_llm):
-        default_llm = "gemini" if planner.llm_configured("gemini") else "local"
     return {
         "stages": STAGES,
         "llms": [{"name": name, "label": label, "ready": planner.llm_configured(name)} for name, label in planner.LLMS if name != "claude"],
-        "default_llm": default_llm,
+        "default_llm": "local",
         "film_limits": [planner.MIN_FILM_SECONDS, planner.MAX_FILM_SECONDS, DEFAULT_FILM_SECONDS],
         "most_images": MOST_IMAGES,
         "most_media": MOST_MEDIA,

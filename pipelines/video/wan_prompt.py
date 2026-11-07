@@ -33,7 +33,7 @@ def instructions(brief, seconds, count, images, continuity, shortest, longest, s
     clips = "one clip" if count == 1 else f"{count} consecutive clips"
     shots = "one shot" if count == 1 else f"{count} shots in order"
     together = f"Use {seconds}." if count == 1 else f"All of them together add up to {seconds}."
-    shape = ("This is too short for a story: show one clear moment that feels complete." if count < 3 else
+    shape = ("Show one clear moment that feels complete." if count == 1 else
              f"Give the film a beginning, a development and a real ending, rather than {count} versions of the same moment.")
     return f"""
     You are directing a {seconds}-second film made of {clips} from Wan, an AI video model. {_what_it_opens_on(images)}

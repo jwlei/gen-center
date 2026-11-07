@@ -167,8 +167,17 @@ def image_files(state):
     files = []
     for position, shot in enumerate(state.shots or [], 1):
         if shot.get("file"):
-            version = f"{os.stat(state.image_path(shot)).st_mtime_ns}-{shot['number']}"
-            files.append({"position": position, "title": shot["title"], "version": version})
+            path = state.image_path(shot)
+            stat = os.stat(path)
+            version = f"{stat.st_mtime_ns}-{shot['number']}"
+            try:
+                with Image.open(path) as image:
+                    resolution = f"{image.width}x{image.height}"
+            except OSError as error:
+                app.logger.warning("Could not read image metadata for %s: %s", path, error)
+                resolution = None
+            files.append({"position": position, "title": shot["title"], "version": version,
+                          "resolution": resolution, "size_bytes": stat.st_size})
     return files
 
 
@@ -177,9 +186,13 @@ def describe_run(state):
     done, total = len(state.done), len(state.shots)
     parts = [f"{done} of {total} images" if done else f"Prompts ready, {total} {'image' if total == 1 else 'images'}", f"{state.width}x{state.height}"]
     env = {"COMFYUI_WORKFLOW": state.workflow} if state.workflow else {}
+    files = image_files(state)
+    size_bytes = sum(image["size_bytes"] for image in files)
+    resolutions = list(dict.fromkeys(image["resolution"] for image in files if image["resolution"]))
     return {"id": state.id, "pipeline": "image", "label": state.title or state.brief, "detail": " · ".join(parts),
             "model": shorthand(state.workflow, "image"), "outcome": read_outcome(state.folder), "loras": workflow_options.loras_used(state.workflow, state.options, "image"),
-            "when": saved_at(state.path), "clips": done, "finished": state.finished, "total": total, "images": image_files(state),
+            "llm": state.llm, "size_bytes": size_bytes, "resolutions": resolutions,
+            "when": saved_at(state.path), "clips": done, "finished": state.finished, "total": total, "images": files,
             "size": f"{state.width}x{state.height}", "estimate": RunEta(resume_argv(state), env, IMAGE_TIMINGS).plan()["total"]}
 
 
@@ -411,7 +424,7 @@ def run_to_continue(prompt, flags, env, images):
     for state in reversed(list_runs()):
         if (state.id not in busy and state.shots and not state.finished and state.inputs == inputs and state.brief == prompt
                 and state.count == count and state.direct == direct and state.workflow == env.get("COMFYUI_WORKFLOW")
-                and (state.llm == "local") == (option(flags, "--llm") == "local")):
+                and (not option(flags, "--llm") or state.llm == option(flags, "--llm"))):
             return state
     return None
 
