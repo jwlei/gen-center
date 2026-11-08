@@ -242,6 +242,32 @@ class Fibo2PromptTest(unittest.TestCase):
         self.assertEqual(json.loads(versions[0]["prompt"])["edit_instruction"], "Change her outfit to look number 1.")
 
 
+    def test_a_local_model_writes_fibo2_captions_as_objects(self):
+        # Held to the caption's own shape, rather than JSON written inside a string, which it got wrong every time.
+        refiner = mock.Mock()
+        refiner.plan.return_value = json.dumps({"title": "Faces", "versions": [
+            {"title": f"Look {n}", "prompt": json.loads(caption(n))} for n in range(1, 6)]})
+        title, versions = planner.write_prompts([b"image", b"face"], "put the face of 2 on 1", 5, "local", models.FIBO2, refiner=refiner)
+        schema = refiner.plan.call_args.args[1]
+        prompt_shape = schema["properties"]["versions"]["items"]["properties"]["prompt"]
+        self.assertEqual(prompt_shape["type"], "object", "the caption is asked for as an object")
+        self.assertIn("edit_instruction", prompt_shape["required"], "an edit must say what it changes")
+        self.assertEqual((title, len(versions)), ("Faces", 5))
+        self.assertEqual(len({version["prompt"] for version in versions}), 5, "five different prompts, one per image")
+        self.assertEqual(json.loads(versions[0]["prompt"])["edit_instruction"], "Change her outfit to look number 1.")
+        # Any other model, or Gemini on Fibo 2.0, keeps writing them as text.
+        with mock.patch.object(planner.llm, "_ask", return_value=json.dumps({"title": "Set", "versions": [{"title": "One", "prompt": caption(1)}]})) as call:
+            planner.write_prompts([b"image"], "a red coat", 1, "gemini", models.FIBO2)
+        self.assertIs(call.call_args.args[3], planner.VERSIONS_SCHEMA)
+
+    def test_a_reply_that_is_not_json_is_asked_for_again(self):
+        refiner = mock.Mock()
+        good = json.dumps({"title": "Set", "versions": [{"title": "One", "prompt": json.loads(caption(1))}]})
+        refiner.plan.side_effect = ["not json at all", good]
+        _, versions = planner.write_prompts([b"image"], "a red coat", 1, "local", models.FIBO2, refiner=refiner)
+        self.assertEqual((refiner.plan.call_count, len(versions)), (2, 1))
+
+
 class EtaTest(unittest.TestCase):
     def workflow(self, folder, name, model):
         path = os.path.join(folder, name)

@@ -70,6 +70,53 @@ def rules(images):
     return _edit_rules(images) if images else _create_rules()
 
 
+def versions_schema(editing):
+    """
+    The reply as a local model has to write it: each version's prompt the caption itself, as an object with its keys.
+    Asked for a caption written out as text, a local model has to put a JSON object inside a JSON string, its every
+    quote escaped. One slip (a single quote, a quote left bare, a key left out) and the caption can't be read, so every
+    prompt came back empty and the set stopped. Held to the caption's own shape, it can't write one that isn't.
+    """
+    object_ = {"type": "object"}
+    caption = {
+        "type": "object",
+        "properties": {
+            "short_description": {"type": "string"},
+            **({"edit_instruction": {"type": "string"}} if editing else {}),
+            "objects": {"type": "array", "items": object_},
+            "background_setting": {"type": "string"},
+            "lighting": object_,
+            "aesthetics": object_,
+            "photographic_characteristics": object_,
+            "style_medium": {"type": "string"},
+            "artistic_style": {"type": "string"},
+            "context": {"type": "string"},
+            "text_render": {"type": "array", "items": object_},
+        },
+        "required": ["short_description", *(["edit_instruction"] if editing else []), "objects", "background_setting",
+                     "lighting", "aesthetics", "photographic_characteristics", "style_medium", "context"],
+    }
+    return {
+        "type": "object",
+        "properties": {
+            "title": {"type": "string"},
+            "versions": {"type": "array", "items": {
+                "type": "object", "properties": {"title": {"type": "string"}, "prompt": caption},
+                "required": ["title", "prompt"]}},
+        },
+        "required": ["title", "versions"],
+    }
+
+
+def as_text(reply):
+    """A reply written to versions_schema, with each caption object turned into the text Fibo 2.0 takes."""
+    data = json.loads(reply)
+    for version in data.get("versions") or []:
+        if isinstance(version, dict) and isinstance(version.get("prompt"), dict):
+            version["prompt"] = json.dumps(version["prompt"], ensure_ascii=False)
+    return json.dumps(data, ensure_ascii=False)
+
+
 def tidy(prompt, editing):
     """The prompt as Fibo 2.0 takes it, compact JSON, or None if it isn't a caption of the kind asked for."""
     text = re.sub(r"^```(?:json)?\s*|\s*```$", "", prompt.strip())

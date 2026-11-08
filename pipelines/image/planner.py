@@ -170,17 +170,22 @@ def write_prompts(image_jpegs, brief, count, llm_name, model=None, compose=False
     """
     instructions = _instructions(brief, count, len(image_jpegs), model, compose, transparent)
     tidy = _tidy(model, bool(image_jpegs))
+    # A local model writes Fibo 2.0's captions as objects, in their own shape: as JSON inside a string it got them wrong.
+    caption_objects = llm_name == "local" and model == models.FIBO2
+    schema = fibo2_prompt.versions_schema(bool(image_jpegs)) if caption_objects else VERSIONS_SCHEMA
     best, title, problem = [], None, None
     for attempt in range(1, PROMPT_ATTEMPTS + 1):
         correction = f"\n\n    Your last reply came back with {problem}. Fix that." if problem else ""
         if llm_name == "local":
-            reply = llm._ask(llm_name, instructions + correction, Versions, VERSIONS_SCHEMA, image_jpegs, refiner=refiner)
+            reply = llm._ask(llm_name, instructions + correction, Versions, schema, image_jpegs, refiner=refiner)
         else:
-            reply = llm._ask(llm_name, instructions + correction, Versions, VERSIONS_SCHEMA, image_jpegs)
+            reply = llm._ask(llm_name, instructions + correction, Versions, schema, image_jpegs)
         try:
-            versions = Versions.model_validate_json(reply)
+            versions = Versions.model_validate_json(fibo2_prompt.as_text(reply) if caption_objects else reply)
         except ValidationError as e:
             problem = f"an unreadable reply ({e.error_count()} errors)"
+        except ValueError:  # Not JSON at all, caught turning its captions into text
+            problem = "an unreadable reply (not JSON)"
         else:
             usable = _usable(versions.versions, tidy)
             # Extra ones were paid for and do no harm, so they're only left out.

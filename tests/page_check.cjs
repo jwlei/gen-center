@@ -1048,6 +1048,20 @@ assert(/nextUp \? workHeading\(ready\[0\], ready\[0\]\.pipeline\)/.test(script),
 }
 assert(/<button type="button" class="current-work" id="currentWork" aria-haspopup="dialog"/.test(html) && /<dialog id="runFacts" class="panel-dialog run-facts"/.test(html), 'the run title opens what it renders with');
 assert(!html.includes('.current-work::after'), 'the clickable run title has no chevron after it');
+{
+  // The detailed prompt closes on a tap outside it, not on one inside.
+  const dialog = els.promptDetail, savedClose = dialog.close, savedBox = dialog.getBoundingClientRect;
+  let closed = 0;
+  dialog.close = () => { closed++; };
+  dialog.getBoundingClientRect = () => ({ left: 100, right: 500, top: 100, bottom: 700 });
+  dialog.listeners.click({ target: dialog, clientX: 50, clientY: 300 });
+  assert.strictEqual(closed, 1, 'a tap outside closes it');
+  dialog.listeners.click({ target: dialog, clientX: 300, clientY: 300 });
+  dialog.listeners.click({ target: els.promptDetailText, clientX: 300, clientY: 300 });
+  assert.strictEqual(closed, 1, 'a tap inside does not');
+  dialog.close = savedClose;
+  dialog.getBoundingClientRect = savedBox;
+}
 assert(/<textarea id="promptEditorText"[^>]*><\/textarea>\s*<div class="prompt-progress" id="promptEditorProgress" hidden><\/div>/.test(html), 'the prompt editor has a progress bar inside the top of its box');
 assert(/#promptEditorEnhance\.working svg \{ animation: prompt-writing-icon/.test(html) && /\$\('promptEditorEnhance'\)\.classList\.toggle\('working', busy\)/.test(html), 'the write button animates while the LLM writes');
 assert(/button\.classList\.add\('working'\)/.test(html) && /button\.classList\.remove\('working'\)/.test(html), 'the form write button animates too');
@@ -1289,6 +1303,11 @@ run(`lastVideos.video.push({ name: 'restitched.mp4', model: 'wan', mtime: 9e9, r
   imageSets = [{ ...imageSets[0], id: 'image_20261108_010000' }, { ...imageSets[0], id: 'image_20261108_030000' }]; renderImageSets()`);
 const madeOrder = ['data-nsfw-image="image_20261108_030000"', 'data-nsfw-video="restitched.mp4"', 'data-nsfw-image="image_20261108_010000"'].map(s => els.imageSets.innerHTML.indexOf(s));
 assert(madeOrder.every(i => i >= 0) && madeOrder[0] < madeOrder[1] && madeOrder[1] < madeOrder[2], 'image, video, image made in that order stay in that order');
+// Swiped up and down in the NSFW view, the viewer goes through films and sets in that same order.
+assert.deepStrictEqual(JSON.parse(run(`JSON.stringify(nsfwItems().map(item => item.film ? item.film.name : item.set.id))`)).filter(id => ['image_20261108_030000', 'restitched.mp4', 'image_20261108_010000'].includes(id)),
+  ['image_20261108_030000', 'restitched.mp4', 'image_20261108_010000'], 'the viewer steps through them in the order shown');
+assert(/if \(outputFilter === NSFW_FILTER\) \{\s*const items = nsfwItems\(\);/.test(script) && script.includes("next.film ? openFilm(next.film.name, 'video') : openViewer(next.set.id, next.set.images[0].position)"),
+  'from a set to a film and back');
 run(`lastVideos.video = lastVideos.video.filter(v => v.name !== 'restitched.mp4'); imageSets = [imageSets[0]]`);
 context.document.body.classList.toggle = bodyToggle;
 run(`renderFinished([], [], []);`);
@@ -1625,7 +1644,12 @@ assert(/\.queue-item\.run-card \{[^}]*background: var\(--panel-2\); border: 1px 
 assert(/<div class="current-work-size" id="currentWorkSize" hidden><span id="currentWorkflow"><\/span><span id="currentResolution"><\/span><\/div>/.test(html)
   && /#currentWorkSize \{ display: flex; justify-content: space-between;/.test(html), 'workflow left, resolution right');
 assert(script.includes("$('currentWorkflow').textContent = facts.workflow || '';") && script.includes("$('currentResolution').textContent = facts.resolution || '';"));
-assert(/\.status-head #statusText:empty \{ display: none; \}/.test(html) && /\.status-head \.status \+ \.status-times \{ margin-left: -4px; \}/.test(html), 'the timers sit close to the status light');
+assert(/\.status-head #dot \{ display: none; \}/.test(html) && /\.status-head \.status:has\(#statusText:empty\) \{ display: none; \}/.test(html), 'no status light in the header');
+assert(/#runCard \{ --accent: var\(--neutral\); \}/.test(html) && /#runCard \.bar > div, \.stick #runStrip \.bar > div \{ background: var\(--job, var\(--neutral\)\); \}/.test(html)
+  && /#runCard \.step\.now \{ border-color: var\(--job, var\(--neutral\)\); \}/.test(html), 'Status is neutral, its bars the colour of the job');
+assert(script.includes("document.documentElement.style.setProperty('--job', running && SIDE_COLOURS[data.pipeline] || '');"), 'the job colour follows what is generating, and goes when idle');
+assert(/#runCard \.ln\.stage \.x, #runCard \.ln-more \{ color: var\(--job, var\(--side-accent\)\); \}/.test(html) && /\.jump a\.run\.active \{ border-color: var\(--job, var\(--accent\)\); \}/.test(html),
+  'the log and Status in the bottom bar keep the type colour');
 // Titles in the queues: two lines and "…", opened by a tap when cut, kept open when the list is drawn again.
 assert(queue.innerHTML.includes('<span class="queue-title" data-title-key="queue-4"><span class="queue-pos">1.</span> Video: continue</span>'), 'a queue title is cut to two lines, titled as the running one, its place greyed');
 assert(/\.queue-pos \{ color: var\(--muted\);/.test(html), 'the place in the queue is grey');
@@ -1759,26 +1783,35 @@ assert(els.comfyFacts.innerHTML.includes('Generating the image · 3/8') && els.c
     section.listeners.pointercancel({ type: 'pointercancel', pointerId: 8 });
     assert.deepStrictEqual(order.map(row => row.dataset.id), ['2', '3', '1'], 'cancel restores the original order');
     assert.strictEqual(sent.length, 1, 'cancel does not submit an order');
-    // A list with nothing left to scroll hands it to the page, faster the longer it is held there.
-    frames.length = 0;
-    const savedWindow = { scrollBy: context.window.scrollBy, scrollY: context.window.scrollY };
-    context.window.scrollY = 100000;
-    context.window.scrollBy = (x, y) => { context.window.scrollY = Math.max(0, context.window.scrollY + y); };
-    list.scrollTop = 0;
-    list.scrollHeight = list.clientHeight;  // All of it in view: nothing of its own to scroll
-    section._selected = '1';
-    section.listeners.pointerdown({ target, button: 0, pointerId: 9, clientX: 0, clientY: 160, preventDefault() {} });
-    section.listeners.pointermove({ pointerId: 9, clientX: 0, clientY: 5 });
-    const steps = [];
-    for (let t = 16, last = context.window.scrollY; t <= 16 * 120 && frames.length; t += 16) {
-      frames.shift()(t);
-      steps.push(last - context.window.scrollY);
-      last = context.window.scrollY;
+    // Held at the list's top, the list scrolls up, faster the longer it is held; at its end it stops, and the page stays.
+    {
+      const savedWindow = { scrollBy: context.window.scrollBy, scrollY: context.window.scrollY };
+      let listTop = 20000;
+      Object.defineProperty(list, 'scrollTop', { configurable: true, get: () => listTop, set: v => { listTop = Math.min(30000, Math.max(0, v)); } });
+      list.scrollHeight = 30200;
+      context.window.scrollY = 5000;
+      context.window.scrollBy = (x, y) => { context.window.scrollY += y; };
+      frames.length = 0;
+      section._selected = '1';
+      section.listeners.pointerdown({ target, button: 0, pointerId: 9, clientX: 0, clientY: 160, preventDefault() {} });
+      section.listeners.pointermove({ pointerId: 9, clientX: 0, clientY: 5 });
+      const steps = [];
+      for (let t = 16, last = listTop; t <= 16 * 4000 && frames.length; t += 16) {
+        frames.shift()(t);
+        steps.push(last - listTop);
+        last = listTop;
+      }
+      const moving = steps.filter(step => step > 0);
+      assert(moving[60] > moving[1] * 1.5, 'the list speeds up the longer it is held');
+      assert.strictEqual(listTop, 0, 'it scrolls to its own top');
+      assert.strictEqual(context.window.scrollY, 5000, 'and stops there: the page does not carry on');
+      assert.strictEqual(frames.length, 0, 'nothing more is scheduled');
+      section.listeners.pointercancel({ type: 'pointercancel', pointerId: 9 });
+      delete list.scrollTop;
+      list.scrollTop = 50;
+      list.scrollHeight = 300;
+      Object.assign(context.window, savedWindow);
     }
-    assert(context.window.scrollY < 100000 && list.scrollTop === 0, 'held at the top with the list at its top, the page scrolls up');
-    assert(steps[steps.length - 1] > steps[1] * 1.5, 'and speeds up the longer it is held');
-    section.listeners.pointercancel({ type: 'pointercancel', pointerId: 9 });
-    Object.assign(context.window, savedWindow);
     // A tap on the selected job, without dragging, lets it go.
     section._selected = '1';
     section.listeners.pointerdown({ target, button: 0, pointerId: 10, clientX: 0, clientY: 50, preventDefault() {} });

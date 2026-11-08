@@ -955,9 +955,22 @@
   .status-head .status { margin: 0; font-size: .78rem; gap: 6px; white-space: nowrap; }
   .status-times { display: flex; gap: 8px; font-size: .78rem; white-space: nowrap; font-variant-numeric: tabular-nums; color: var(--muted); }
   .status-times[hidden] { display: none; }
-  /* While it runs the light says it: no empty word holding the timers away from it. */
-  .status-head #statusText:empty { display: none; }
-  .status-head .status + .status-times { margin-left: -4px; }
+  /* No status light: idle says so in a word, running shows its times. */
+  .status-head #dot { display: none; }
+  .status-head .status:has(#statusText:empty) { display: none; }
+  /* Status is shared by every side, so it is neutral; only its bars take the colour of the job they show (--job,
+     set while one runs: Shorts red, Video blue, Image green). Uploads are Shorts'. */
+  #runCard { --accent: var(--neutral); }
+  #runCard .bar > div, .stick #runStrip .bar > div { background: var(--job, var(--neutral)); }
+  #uploadBox, .stick #uploadStrip { --job: #ff0033; }
+  #runCard .step.now { border-color: var(--job, var(--neutral)); }
+  #runCard .step.done { border-color: color-mix(in srgb, var(--job, var(--neutral)) 50%, transparent); }
+  /* The side's own colour, kept before Status makes its accent neutral. */
+  body { --side-accent: var(--accent); }
+  /* The log, and Status in the bottom bar, say what kind of job it is: its colour while one runs, else the side's. */
+  #runCard .log-chip[aria-pressed="true"] { color: var(--job, var(--side-accent)); border-color: var(--job, var(--side-accent)); }
+  #runCard .ln.stage .x, #runCard .ln-more { color: var(--job, var(--side-accent)); }
+  .jump a.run.active { border-color: var(--job, var(--accent)); }
   /* ComfyUI as an icon with a dot for its state; a tap shows the rest. */
   .comfy-status { position: relative; display: inline-flex; align-items: center; justify-content: center; width: 36px; height: 36px; padding: 0;
     margin: -6px -6px -6px auto; background: none; border: 0; border-radius: 8px; color: var(--muted); cursor: pointer; }
@@ -4698,9 +4711,27 @@ $('imageViewer').addEventListener('touchend', e => {
   if (Math.abs(dx) > 50 && Math.abs(dx) > Math.abs(dy) * 1.5) stepViewer(dx < 0 ? 1 : -1);
   else if (Math.abs(dy) > 60 && Math.abs(dy) > Math.abs(dx) * 1.5) stepSet(dy < 0 ? 1 : -1);
 });
-// The set after or before this one in Output (as filtered), from its first picture.
+// NSFW: films and image sets in one list, in the order they were made, as the view lists them.
+function nsfwItems() {
+  const sets = filtered(imageSets).filter(set => set.images.length).map(set => ({ set, t: madeAt(set.id, set.mtime) }));
+  const films = choosingFor ? [] : visibleFilms().map(film => ({ film, t: madeAt(film.run || film.name, film.mtime) }));
+  return [...sets, ...films].sort((a, b) => b.t - a.t);
+}
+// The set after or before this one in Output (as filtered), from its first picture. In the NSFW view, the film or
+// set after or before it there, whichever it is.
 function stepSet(by) {
   if (!viewing) return false;
+  if (outputFilter === NSFW_FILTER) {
+    const items = nsfwItems();
+    const at = items.findIndex(item => viewing.film ? item.film && item.film.name === viewing.name : item.set && item.set.id === viewing.id);
+    const next = at < 0 ? null : items[at + by];
+    if (!next) return false;
+    disarm($('viewerDelete'));
+    if (viewing.film && next.set) $('viewerVideo').pause();
+    transitionViewer($(viewing.film ? 'viewerVideo' : 'viewerImage'), by > 0 ? 'to-down' : 'to-up',
+      () => next.film ? openFilm(next.film.name, 'video') : openViewer(next.set.id, next.set.images[0].position));
+    return true;
+  }
   if (viewing.film) {
     const films = visibleFilms(), next = films[films.findIndex(v => v.name === viewing.name) + by];
     if (!next) return false;
@@ -5125,6 +5156,12 @@ $('promptDetailCopy').addEventListener('click', async () => {
   promptCopyTimer = setTimeout(() => { button.classList.remove('done'); button.innerHTML = ICONS.copy; }, 1500);
 });
 $('promptDetailClose').addEventListener('click', () => $('promptDetail').close());
+// A tap outside it closes it, as the other boxes over the page do; a tap on its own padding does not.
+$('promptDetail').addEventListener('click', e => {
+  if (e.target !== $('promptDetail')) return;
+  const box = $('promptDetail').getBoundingClientRect();
+  if (e.clientX < box.left || e.clientX > box.right || e.clientY < box.top || e.clientY > box.bottom) $('promptDetail').close();
+});
 // Esc would otherwise close it without asking about unsaved changes.
 $('shotsDialog').addEventListener('cancel', e => { e.preventDefault(); closeShots(); });
 
@@ -6116,17 +6153,17 @@ function dragQueue(el) {
     if (after) { if (drag.row.nextElementSibling !== after) glide(el, () => after.before(drag.row)); }
     else if (rows.length && rows[rows.length - 1].nextElementSibling !== drag.row) glide(el, () => rows[rows.length - 1].after(drag.row));
   };
-  // Held against the top or bottom, it scrolls: the queue's own list while it can, then the page. The deeper into
-  // the edge the faster, and the longer it is held there the faster still.
+  // Held against the top or bottom of the queue's list, the list scrolls: the deeper into the edge the faster, and
+  // the longer it is held there the faster still. At the list's end it stops: the page stays where it is.
   const scrollDrag = now => {
     if (!drag) return;
     drag.frame = 0;
     const list = drag.row.parentElement && drag.row.parentElement.classList.contains('queue-list') ? drag.row.parentElement : null;
-    const inner = list && list.scrollHeight > list.clientHeight + 1 ? list : null;
+    if (!list || list.scrollHeight <= list.clientHeight + 1) return;  // All of it in view: nothing to scroll
     const stick = $('stick'), footer = stick && stick.getBoundingClientRect ? stick.getBoundingClientRect() : null;
     const screenBottom = footer && footer.height && footer.top < window.innerHeight ? footer.top : window.innerHeight;
-    const box = inner ? inner.getBoundingClientRect() : null;
-    const top = Math.max(0, box ? box.top : 0), bottom = Math.min(screenBottom, box ? box.bottom : screenBottom);
+    const box = list.getBoundingClientRect();
+    const top = Math.max(0, box.top), bottom = Math.min(screenBottom, box.bottom);
     const edge = Math.max(24, Math.min(80, (bottom - top) / 3));
     const strength = drag.y < top + edge ? -Math.min(1, (top + edge - drag.y) / edge)
       : drag.y > bottom - edge ? Math.min(1, (drag.y - bottom + edge) / edge) : 0;
@@ -6139,10 +6176,11 @@ function dragQueue(el) {
     drag.carry += Math.sign(strength) * speed * elapsed / 1000;
     const step = Math.trunc(drag.carry);
     drag.carry -= step;
-    let moved = !step;
-    if (step && inner) { const before = inner.scrollTop; inner.scrollTop += step; moved = inner.scrollTop !== before; }
-    if (step && !moved) { const before = window.scrollY; window.scrollBy(0, step); moved = window.scrollY !== before; }
-    if (!moved) { drag.lastFrame = drag.edgeSince = null; drag.carry = 0; return; }
+    if (step) {
+      const before = list.scrollTop;
+      list.scrollTop += step;
+      if (list.scrollTop === before) { drag.lastFrame = drag.edgeSince = null; drag.carry = 0; return; }  // Its end
+    }
     moveRow(drag.y);
     drag.frame = requestAnimationFrame(scrollDrag);
   };
@@ -6583,6 +6621,8 @@ async function pollOnce(generation) {
   }));
   safely(() => renderFinished(data.finished_results || queue.results, upq.results, data.made_now || []));
   $('dot').className = 'dot' + (running || nextUp ? ' on' : '');
+  // Status's bars in the colour of what is generating.
+  document.documentElement.style.setProperty('--job', running && SIDE_COLOURS[data.pipeline] || '');
   $('dot').setAttribute('aria-label', running ? 'Running' : nextUp ? 'Starting' : 'Idle');
   safely(() => renderStrips(data));
   $('go').disabled = $('goStick').disabled = submitting;
