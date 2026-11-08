@@ -28,6 +28,8 @@ const els = {};
 const wide = { matches: false, addEventListener() {} };
 const documentListeners = {}, windowListeners = {};
 const context = {
+  // A picture loading in the background: it never finishes here, so the viewer keeps the small one it shows first.
+  Image: class { constructor() { this.onload = null; this.src = ''; } },
   document: { getElementById: id => (els[id] = els[id] || element(id)), querySelectorAll: () => [], documentElement: { style: { setProperty() {} } }, body: element('body'), addEventListener(name, fn) { (documentListeners[name] = documentListeners[name] || []).push(fn); }, hidden: false },
   history: { replaceState() {} },
   window: { addEventListener(name, fn) { (windowListeners[name] = windowListeners[name] || []).push(fn); }, innerHeight: 800, matchMedia: () => wide, scrollTo() {} },
@@ -349,8 +351,7 @@ const dialog = run('shotsHtml(shots)');
 assert(!dialog.includes('<b>storm'), 'titles are escaped');
 assert(!dialog.includes('<script>'), 'prompts are escaped');
 assert(!dialog.includes('</textarea><script'), 'a prompt can\'t close its own box');
-assert(dialog.includes('data-redo="1"'), 'a rendered shot can be rendered again');
-assert(!dialog.includes('data-redo="2"'), 'one not rendered yet has nothing to redo');
+assert(!dialog.includes('data-redo='), 'no generate-again button: an item is made again from Generate');
 assert(dialog.includes('preload="none"'), 'clips only load when played');
 assert(dialog.includes('Render the 1 left'));
 assert(dialog.includes('also renders every shot after it'));
@@ -362,7 +363,7 @@ assert(busy.includes('readonly') && !busy.includes('data-redo') && !busy.include
 shots.busy = false;
 
 shots.start = 'image';
-assert(run('shotsHtml(shots)').includes('leaves the others as they are'));
+assert(!run('shotsHtml(shots)').includes('Separate moments'), 'no hint for separate moments');
 shots.finished = true;
 assert(!run('shotsHtml(shots)').includes('data-render'), 'a finished film has nothing left to render');
 
@@ -389,8 +390,8 @@ context.setTimeout = fn => { fn(); return 0; };
 run("downloadImages('image_20261102_120000', [1, 3])");
 assert.deepStrictEqual(clicked, ['/image-runs/image_20261102_120000/files/1?download=1', '/image-runs/image_20261102_120000/files/3?download=1'], 'no zip');
 context.setTimeout = () => 0;
-assert(/<dialog id="imageViewer"[\s\S]*?id="viewerImage"[\s\S]*?id="viewerDownload"[\s\S]*?id="viewerClose"[\s\S]*?id="viewerDelete"[\s\S]*?<\/dialog>/.test(html), 'the picture, then Download, Close and Delete under it');
-assert(/id="viewerDownload"[^>]*>Download<\/a>/.test(html) && /id="viewerClose"[^>]*>Close<\/button>/.test(html) && /id="viewerDelete"[^>]*>Delete<\/button>/.test(html), 'viewer actions retain their text labels');
+assert(/<dialog id="imageViewer"[\s\S]*?id="viewerImage"[\s\S]*?class="viewer-tools-left">[\s\S]*?id="viewerVariations"[\s\S]*?id="viewerPrompts"[\s\S]*?id="viewerUpscale"[\s\S]*?class="viewer-tools-right">[\s\S]*?id="viewerDownload"[\s\S]*?id="viewerDelete"[\s\S]*?id="viewerClose"[\s\S]*?<\/dialog>/.test(html), 'more like this, prompt and upscale on the left; download and delete on the right; Close under them');
+assert(/<a class="icon-btn" id="viewerDownload"[^>]*><\/a>/.test(html) && /<button type="button" class="icon-btn del" id="viewerDelete"/.test(html) && /id="viewerClose"[^>]*>Close<\/button>/.test(html), 'download and delete are icons, Close says so');
 assert.strictEqual(els.viewerPrompts.innerHTML, run('ICONS.enhanced'), 'viewer prompts uses the shared star icon');
 assert.strictEqual(els.viewerEdit.innerHTML, run('ICONS.prompts'), 'viewer Edit uses the pen icon');
 assert.strictEqual(els.viewerVariations.innerHTML, run('ICONS.config'), 'More like this uses the settings slider');
@@ -503,7 +504,7 @@ assert(/<div class="image-set-row album">\s*<a [^>]*class="album-cover"[^>]*><im
 const single = run("imageSetHtml({ id: 'image_9', label: 'One', total: 1, size: '1x1', when: 'now', images: [{ position: 1, title: 'x', version: 1 }] })");
 assert(single.includes('class="album-cover"') && !single.includes('album-count') && !single.includes('album-strip'), 'one image: the same picture box, no count, no strip');
 assert(/class="icon-btn" data-download-set="image_9" title="Download" aria-label="Download"><svg/.test(single) && /class="icon-btn del" data-delete-set="image_9"[^>]*aria-label="Delete"><svg/.test(single), 'icons, named');
-assert(/data-download-set="image_9"[^>]*>[\s\S]*?<\/button><button type="button" class="icon-btn" data-again-set="image_9"[^>]*aria-label="The same again"><svg/.test(single), 'the same again, second');
+assert(/<div class="image-set-actions"><button type="button" class="icon-btn" data-again-set="image_9"[^>]*aria-label="The same again"><svg[\s\S]*?data-shots="image_9"[\s\S]*?data-download-set="image_9"[\s\S]*?data-delete-set="image_9"/.test(single), 'the same again first, then prompts, then download beside delete');
 assert(single.includes(`aria-label="The same again">${run('ICONS.config')}</button>`) && run('ICONS.config !== ICONS.again'), 'same again uses settings, distinct from retry');
 for (const side of ['shorts', 'video', 'image']) {
   assert(html.includes(`data-preset-delete="${side}" title="Delete this preset" aria-label="Delete this preset" hidden>${run('ICONS.trash')}</button>`), 'preset deletion uses the shared trash icon');
@@ -535,7 +536,7 @@ const imageRun = { id: 'image_1', is_image: true, title: 'T', brief: 'b', llm: '
 context.imageRun = imageRun;
 const imageDialog = run('shotsHtml(imageRun)');
 assert(!imageDialog.includes('<script>'), 'prompts are escaped');
-assert(imageDialog.includes('data-redo="1"') && !imageDialog.includes('data-redo="2"') && imageDialog.includes('Make the 1 left') && imageDialog.includes('data-delete-image="2"'));
+assert(!imageDialog.includes('data-redo=') && imageDialog.includes('Make the 1 left') && imageDialog.includes('data-delete-image="2"'));
 context.imageRun.pending = true;
 const pendingImageDialog = run('shotsHtml(imageRun)');
 assert(pendingImageDialog.includes('data-save="1"') && !pendingImageDialog.includes('readonly') && !pendingImageDialog.includes('data-redo=') && !pendingImageDialog.includes('data-delete-image=') && !pendingImageDialog.includes('data-render='), 'pending images allow prompt edits but not duplicate or destructive actions');
@@ -544,20 +545,23 @@ context.pendingFilm = { ...shots, busy: false, pending: true, finished: false };
 const pendingFilmDialog = run('shotsHtml(pendingFilm)');
 assert(pendingFilmDialog.includes('data-save="1"') && !pendingFilmDialog.includes('readonly') && !pendingFilmDialog.includes('data-redo=') && !pendingFilmDialog.includes('data-render='), 'pending films allow prompt edits without starting twice');
 // A set's prompts: a carousel, its count on the right of the title, the original prompt behind the title; small buttons under it.
-assert(/<div class="shots-list carousel" id="shotsCarousel">/.test(imageDialog) && /<button type="button" class="shots-title" data-fold="briefFold"[^>]*>T<\/button>\s*<span class="shots-count" id="shotsCount">1 of 2<\/span>/.test(imageDialog));
-assert(/<div class="seed-fold brief-fold" id="briefFold" hidden>\s*<div class="fold-text" id="briefText">"b"<\/div>/.test(imageDialog), 'the original prompt, a tap away');
-assert(/<div class="brief-foot">[\s\S]*?<button type="button" class="copy-btn" data-copy-brief="1"/.test(imageDialog), 'with a quiet copy button beside what wrote it');
-assert(/\.brief-fold \{[^}]*background: var\(--panel-2\);/.test(html) && script.includes("document.execCommand('copy')"), 'on a shade of its own; copying works over plain http on a phone too');
+assert(/<div class="shots-list carousel" id="shotsCarousel">/.test(imageDialog) && /<h2 class="shots-title">T<\/h2>\s*<span class="shots-count" id="shotsCount">1 of 2<\/span>/.test(imageDialog));
+assert(/<div class="shots-list carousel" id="shotsCarousel">/.test(dialog) && dialog.includes('<span class="shots-count" id="shotsCount">1 of 2</span>'), 'a film\'s shots swipe the same way');
+assert(script.includes("document.execCommand('copy')"), 'on a shade of its own; copying works over plain http on a phone too');
 assert(!imageDialog.includes('Making an image again leaves') && imageDialog.includes('<div class="shots-foot centred small">') && !/shots-foot[^>]*>[^<]*<button[^>]*data-save/.test(imageDialog));
 assert(/\.shots-foot button \{ flex: 0 1 auto; min-width: 96px; padding: 6px 18px; font-size: \.82rem;/.test(html), 'small buttons, as Quota\'s Close');
-assert(imageDialog.includes('<span class="finished">finished</span>') && !imageDialog.includes('>made<') && /\.shot-title \.finished \{ color: var\(--ok\); \}/.test(html), 'finished, in green');
-// Each image: make again, save, delete as icons on the left; its seed on the right, in line with them.
-assert(/<div class="shot-actions-left"><button type="button" class="icon-btn" data-redo="1"[^>]*aria-label="Make again"><svg[\s\S]*?data-save="1"[^>]*aria-label="Save the prompts"><svg[\s\S]*?class="icon-btn del" data-delete-image="1"/.test(imageDialog));
-assert(/<div class="shot-actions-right">\s*<button type="button" class="icon-btn" data-fold="seedFold_1"[^>]*aria-label="Seed"><svg[\s\S]*?<div class="seed-fold" id="seedFold_1" hidden>\s*<div class="seed-line">/.test(imageDialog));
-assert(!imageDialog.includes('data-enhanced='), 'nothing to show when no enhancer wrote it');
+assert(!imageDialog.includes('finished</span>') && !imageDialog.includes('not made yet') && !run('shotsHtml(shots)').includes('not rendered yet'), 'no rendered or finished text on the items');
+// Each item: more like this (and what an enhancer wrote) on the left; its seed, save and delete on the right.
+for (const [what, built] of [['image', imageDialog], ['film', dialog]]) {
+  assert(!built.includes('data-redo=') && /<div class="shot-actions-left"><button type="button" class="icon-btn" data-create="1"[^>]*aria-label="More like this[^"]*"><svg[^]*?<\/button><\/div>/.test(built) && !built.includes('data-prompt-open'), `${what}: more like this on the left; the prompt is its box`);
+  assert(/<div class="shot-actions-right"><input type="hidden" id="seed_1" data-seed value="[^"]*"><button type="button" class="icon-btn seed-icon"[^>]*data-seed-open="1"[\s\S]*?data-save="1"[^>]*aria-label="Save the prompts"><svg/.test(built), `${what}: its seed, then save, on the right`);
+}
+assert(/data-save="1"[\s\S]*?<\/button><button type="button" class="icon-btn del" data-delete-image="1"[\s\S]*?<\/div>\s*<\/div>/.test(imageDialog), 'save, then delete, last');
+assert(!/seed-icon pinned/.test(imageDialog) && !/\.seed-icon\.pinned/.test(html), 'a pinned seed is not lit');
+assert(!imageDialog.includes('data-enhanced=') && !imageDialog.includes('briefFold'), 'no detailed prompt button where no enhancer wrote one');
 context.imageRun.shots[0].enhanced_prompt = 'A <b>bright</b> lighthouse';
 const withEnhanced = run('shotsHtml(imageRun)');
-assert(/<div class="shot-actions-right">\s*<button type="button" class="icon-btn" data-enhanced="1" aria-haspopup="dialog"[\s\S]*?data-fold="seedFold_1"/.test(withEnhanced), 'the detailed prompt button is left of the seed');
+assert(/<div class="shot-actions-left"><button type="button" class="icon-btn" data-create="1"[\s\S]*?<\/button><button type="button" class="icon-btn" data-enhanced="1" aria-haspopup="dialog"/.test(withEnhanced), 'what the enhancer wrote, beside more like this on the left');
 assert(!withEnhanced.includes('A &lt;b&gt;bright') && /\.prompt-detail-text \{[^}]*overflow-y: auto/.test(html)
   && /\.prompt-detail-actions \{ flex: none;/.test(html), 'the prompt opens separately with a fixed footer');
 delete context.imageRun.shots[0].enhanced_prompt;
@@ -623,10 +627,9 @@ for (const size of ['1920x1080', '2560x1440', '3840x2160', '1272x2772']) assert(
 els.imageAspect.value = '1920x1080';
 els.imageMegapixels.value = '1';
 run('syncImageSize()');
-assert.strictEqual(els.imageSizeHint.textContent, '', 'nothing to say about an ordinary size');
-els.imageAspect.value = '3840x2160';
-run('syncImageSize()');
-assert(els.imageSizeHint.textContent.includes('far above'), 'it says what asking for 4K costs');
+assert.strictEqual(els.imagePixelSize.textContent, '1920×1080', 'the size it makes, beside the heading');
+assert(!html.includes('id="imageSizeHint"') && !/21:9/.test(html), 'no size hint, and no 21:9');
+assert(/<select id="sizePreset">[\s\S]*?<optgroup label="Aspect ratio">[\s\S]*?<optgroup label="Landscape 16:9">/.test(html), 'video: aspect ratios, then its presets');
 run("setPipeline('image', false)");
 assert.strictEqual(run('folder'), 'image');
 assert.strictEqual(els.jumpResults.textContent, 'Images');
@@ -1035,7 +1038,7 @@ assert.strictEqual(run("workHeading({label: '3 videos', facts: {count: 3}}, 'sho
 assert.strictEqual(run("workHeading({label: 'Topic', facts: {count: 2}}, 'shorts')"), 'Shorts(2): Topic');
 assert.strictEqual(run("workHeading({label: 'Upscale: Film'}, 'video')"), 'Video: Upscale: Film');
 assert(/#stageDetail \{ text-align: center; \}/.test(html), 'stage status text is centered');
-assert(/id="viewerVariations"[^>]*><\/button>\s*<button type="button" class="icon-btn" id="viewerPrompts"[^>]*><\/button>/.test(html) && script.includes('openShots(id, position);'), 'More like this beside Prompts, on the image it was opened from');
+assert(/id="viewerVariations"[^>]*><\/button>\s*<button type="button" class="icon-btn" id="viewerPrompts"[^>]*><\/button>/.test(html) && script.includes('openPromptDetail(detailed, data.brief);'), 'More like this beside Prompts, which opens its detailed prompt');
 assert(/#currentWork\.arrive \{ animation: work-arrive/.test(html) && /\.queue-item\.leaving \{[^}]*animation: queue-leave/.test(html));
 assert(/dialog\.viewer \.viewer-actions > \* \{ flex: 1 1 0; min-width: 0; max-width: 120px; height: 32px;/.test(html), 'Download, Delete and Close share the available space');
 assert(/\.image-set-actions button\.armed, \.acts button\.armed[^{]*\{\s*background: var\(--err\) !important;/.test(html), 'Confirm is red in Output too');
@@ -1127,7 +1130,7 @@ assert(filmRow.includes('LoRA: example') && filmRow.includes('OpenH3'), 'film ou
 assert(run("filmHtml({ name: 'f.mp4', model: 'wan', resolution: '864x480', duration: 12, size_mb: 3 })").includes('wan · 864x480 · 0:12 · 3 MB'));
 assert(filmRow.includes(run('ICONS.config')), 'film same-again uses the settings slider');
 assert(/<div class="image-set film" data-name="f\.mp4">[\s\S]*?<div class="image-set-row album">\s*<a [^>]*class="album-cover film-cover" data-play-film="f\.mp4"/.test(filmRow));
-assert(/data-download-film="f\.mp4"[\s\S]*?<\/button><button type="button" class="icon-btn" data-again-film="run_1"[\s\S]*?data-shots="run_1"[\s\S]*?class="icon-btn del" data-del="f\.mp4"/.test(filmRow), 'download, the same again, shots, delete');
+assert(/data-again-film="run_1"[\s\S]*?data-shots="run_1"[\s\S]*?<\/button><button type="button" class="icon-btn" data-download-film="f\.mp4"[\s\S]*?<\/button><button type="button" class="icon-btn del" data-del="f\.mp4"/.test(filmRow), 'the same again, shots, then download beside delete');
 assert(!run("filmHtml({ name: 'f.mp4', created: 'now', size_mb: 1 })").includes('data-again-film'), 'not once its run is gone');
 // It plays in the viewer, and a swipe goes to the next film.
 run(`lastVideos = { output: [], uploaded: [], video: [{ name: 'a.mp4', title: 'A' }, { name: 'b.mp4', title: 'B', model: 'wan', llm: 'local', loras: ['example'], h3_mode: 'review', h3_creativity: 'bold' }] }; folder = 'video'`);
@@ -1155,7 +1158,19 @@ run(`folder = 'output'`);
 
 // The viewer never shows both: [hidden] wins over each one's own display.
 assert(/#viewerImage\[hidden\], #viewerVideo\[hidden\] \{ display: none !important; \}/.test(html));
-assert(/\.viewer-title \{[^}]*-webkit-line-clamp: 2/.test(html), 'a long title stays on two lines, the buttons in view');
+assert(/\.viewer-title \{[^}]*white-space: nowrap;[^}]*text-overflow: ellipsis/.test(html), 'a long title stays on one line, cut with an ellipsis');
+const titleClasses = new Set();
+els.viewerTitle.classList = { add: c => titleClasses.add(c), remove: c => titleClasses.delete(c), contains: c => titleClasses.has(c), toggle() {} };
+run("setViewerTitle('A very long title')");
+const titleToggle = (c, on) => (on ?? !titleClasses.has(c)) ? titleClasses.add(c) : titleClasses.delete(c);
+els.viewerTitle.classList.toggle = titleToggle;
+els.viewerTitle.listeners.click();
+assert(els.viewerTitle.classList.contains('full'), 'a click shows the whole title');
+els.viewerTitle.listeners.click();
+assert(!els.viewerTitle.classList.contains('full'), 'and a second click cuts it again');
+run("setViewerTitle('Next')");
+assert(!els.viewerTitle.classList.contains('full'), 'the next title is cut again');
+assert(/#viewerImage, #viewerVideo \{ max-height:/.test(html), 'a portrait film fits like a picture, its buttons in view');
 // LoRAs on one line, cut short, the whole of it a tap away.
 assert(/class="meta loras" role="button" tabindex="0" title="LoRA: a, b">LoRA: a, b<\/div>/.test(run("lorasLine(['a', 'b'])")));
 assert(/\.meta\.loras \{ white-space: nowrap; overflow: hidden; text-overflow: ellipsis;/.test(html) && /\.meta\.loras\.open \{ white-space: normal;/.test(html));
@@ -1220,7 +1235,7 @@ run(`outputFilter = ''; folder = 'output'; pipeline = 'shorts'`);
 // The footer's bar says how many more are waiting.
 assert(/right: left \+ \(runsQueued \? ` · \+\$\{runsQueued\} queued` : ''\)/.test(script));
 // The viewer: more like this one, and upscale it, for an image only.
-assert(/<div class="viewer-tools" id="viewerTools" hidden>[\s\S]*?id="viewerUpscale"[\s\S]*?id="viewerEdit"[\s\S]*?id="viewerVariations"[\s\S]*?id="viewerPrompts"/.test(html));
+assert(/<div class="viewer-tools" id="viewerTools">/.test(html));
 assert.strictEqual(run('VARIATIONS'), 5, 'selected-image variations default to five');
 assert(/if \(shot\) Object\.assign\(s, \{ prompt: shot\.prompt, direct: true, count: VARIATIONS \}\);/.test(script), 'its own prompt, word for word, on new seeds');
 
@@ -1382,9 +1397,7 @@ for (const n of [1, 2, 20]) {
 }
 
 // Typing on a phone, the footer steps aside for the keyboard.
-assert(/body\.typing \.stick \{ opacity: 0; transform: translateY\(100%\);/.test(html));
-assert(run("typingIn({ tagName: 'TEXTAREA' })") === true && run("typingIn({ tagName: 'INPUT', type: 'text' })") === true
-  && run("typingIn({ tagName: 'INPUT', type: 'checkbox' })") === false && run("typingIn({ tagName: 'SELECT' })") === false);
+assert(!html.includes('body.typing .stick'), 'the footer never steps off the screen');
 
 const base = fs.readFileSync(require('path').join(__dirname, '..', 'panel', 'templates', 'base.html'), 'utf8');
 assert(/maximum-scale=1, user-scalable=no/.test(base) && /html \{ overflow-x: clip; touch-action: manipulation; \}/.test(base), 'no zooming the page out from under the footer');
@@ -1764,6 +1777,11 @@ assert(els.comfyFacts.innerHTML.includes('Generating the image · 3/8') && els.c
     const target = { dataset: { enhanced: '1' }, closest: () => null };
     await els.shotsBody.listenersAll.click[0]({ target });
     assert(els.promptDetail.open && els.promptDetailText.textContent === context.imageRun.shots[0].enhanced_prompt, 'the detailed text opens safely without disturbing the editor');
+    assert(!els.promptDetailYours.hidden, 'your own prompt a tap away');
+    els.promptDetailYours.getAttribute = () => 'false';
+    els.promptDetailYours.listeners.click();
+    assert.strictEqual(els.promptDetailText.textContent, 'b', 'it shows what you wrote');
+    run("showPromptDetail('detailed')");
     assert(run('shotsDirty') && els.shotsDialog.open, 'opening preserves unsaved edits and the editor');
     let copied = '';
     context.navigator = { clipboard: { writeText: async text => { copied = text; } } };
@@ -2173,7 +2191,7 @@ assert(els.comfyFacts.innerHTML.includes('Generating the image · 3/8') && els.c
   await run('poll()');
   assert.strictEqual(context.reloads, 1, 'a deferred reload happens once editing is no longer in progress');
 
-  // Reopening older content must not replace the chosen prompt model with its historical model.
+  // Reopening an output brings back the settings it was made with, its prompt model included.
   run(`pipeline = 'video'; loadVideoWorkflows = async () => { $('llm').value = 'gemini'; }; syncVideoForm = () => {};
        syncSize = () => {}; syncImageInput = () => {}; syncMediaInput = () => {};
        syncPromptWriter = () => {}; saveVideoForm = () => {}; applyOptions = () => {};
@@ -2186,7 +2204,7 @@ assert(els.comfyFacts.innerHTML.includes('Generating the image · 3/8') && els.c
     images: 0, references: [], options: {}, track: false
   } }) });
   await run("sameAgainFilm('old')");
-  assert.strictEqual(els.llm.value, 'local', 'reopening a film preserves the selected prompt model');
+  assert.strictEqual(els.llm.value, 'gemini', 'reopening a film restores the prompt model it was made with');
   run(`pipeline = 'image'; loadImageWorkflows = async () => { $('imageLlm').value = 'gemini'; }; syncImageForm = () => {};
        syncImageSources = () => {}; saveImageForm = () => {}; imageTakes = () => ({ options: [] })`);
   els.imageLlm.value = 'local';
@@ -2196,7 +2214,82 @@ assert(els.comfyFacts.innerHTML.includes('Generating the image · 3/8') && els.c
     prompt: 'old', llm: 'gemini', size: '1024x1024', count: 1, inputs: 0, options: {}
   } }) });
   await run("sameAgain('old')");
-  assert.strictEqual(els.imageLlm.value, 'local', 'reopening images preserves the selected prompt model');
+  assert.strictEqual(els.imageLlm.value, 'gemini', 'reopening images restores the prompt model they were made with');
+
+  // A shot's seed: its icon opens the seed dialog; Save writes it back for saving and rendering again.
+  {
+    ['seedDialog', 'seedDialogSave', 'seedDialogError', 'seedDialogValue'].forEach(id => context.document.getElementById(id));
+    Object.assign(els.seedDialog, { showModal() { this.open = true; }, close() { this.open = false; } });
+    context.document.getElementById('seed_1').value = '';
+    const classes = new Set(), button = { dataset: { seedOpen: '1', what: 'shot' }, title: '', setAttribute() {},
+      classList: { toggle: (c, on) => on ? classes.add(c) : classes.delete(c) } };
+    run('shotsDirty = false');
+    context.seedIcon = button;
+    run('openSeedDialog(seedIcon)');
+    assert(els.seedDialog.open && !els.seedDialogSave.hidden, 'the seed dialog opens with Save');
+    els.seedDialogValue.value = 'abc';
+    run('saveSeedDialog()');
+    assert(els.seedDialog.open && !els.seedDialogError.hidden, 'a seed that is not a number is refused');
+    els.seedDialogValue.value = '1234';
+    run('saveSeedDialog()');
+    assert.strictEqual(els.seed_1.value, '1234', 'Save writes the seed back');
+    assert(run('shotsDirty') && classes.has('pinned') && !els.seedDialog.open, 'marked as changed, its icon lit');
+  }
+
+  // A Generate seed shows in Other options: shuffle picks one to keep, ✕ goes back to random.
+  {
+    const field = context.document.getElementById('videoSeed'), sent = [];
+    Object.assign(field, { value: '', dispatchEvent: e => sent.push(e.type) });
+    for (const fn of documentListeners.click) fn({ target: { closest: sel => sel.includes('data-seed-pick') ? { dataset: { seedPick: 'videoSeed' } } : null } });
+    assert(/^\d+$/.test(String(field.value)) && sent.includes('change'), 'shuffle picks a seed to keep');
+    for (const fn of documentListeners.click) fn({ target: { closest: sel => sel.includes('data-seed-pick') ? { dataset: { seedClear: 'videoSeed' } } : null } });
+    assert.strictEqual(field.value, '', '✕ goes back to random');
+  }
+
+  // The prompt editor: two lines on the page, all of it in the editor; Cancel keeps what was there, Save writes it back.
+  {
+    const field = els.prompt, events = [];
+    const lookup = context.document.querySelector;
+    context.document.querySelector = selector => selector === 'label[for="prompt"]' ? { textContent: 'Prompt' } : lookup ? lookup(selector) : null;
+    Object.assign(field, { value: 'old idea', readOnly: false, disabled: false, placeholder: '', maxLength: -1,
+      closest: () => null, dispatchEvent: e => events.push(e.type) });
+    Object.assign(els.promptEditorText, { focus() {}, setSelectionRange() {} });
+    Object.assign(els.promptEditor, { showModal() { this.open = true; }, close() { this.open = false; } });
+    run("openPromptEditor($('prompt'))");
+    assert.strictEqual(els.promptEditorText.value, 'old idea', 'the editor opens with the whole prompt');
+    assert(!els.promptEditorEnhance.hidden && !els.promptEditorSave.hidden, 'the video prompt can be saved, or written by the LLM');
+    els.promptEditorText.value = 'new idea';
+    run('closePromptEditor(false)');
+    assert.strictEqual(field.value, 'old idea', 'Cancel keeps the prompt as it was');
+    assert(!events.length, 'and tells nothing it changed');
+    run("openPromptEditor($('prompt'))");
+    els.promptEditorText.value = 'new idea';
+    run('closePromptEditor(true)');
+    assert.strictEqual(field.value, 'new idea', 'Save writes the prompt back');
+    assert(events.includes('input') && events.includes('change'), 'as if typed, so the estimate and saved form hear of it');
+    // The LLM writes in the editor, the same in the prompts view: its prompt waits in the box for Save.
+    {
+      const shotBox = { value: 'a shot idea', readOnly: false, disabled: false, placeholder: '', maxLength: -1, getAttribute: () => 'Prompt for shot 1',
+        closest: sel => sel === '#shotsBody' ? {} : null, dispatchEvent() {}, classList: { toggle() {} } };
+      context.shotBox = shotBox;
+      run('shotsRun = { is_image: false, shots: [] }');
+      run('openPromptEditor(shotBox)');
+      assert(!els.promptEditorEnhance.hidden, 'the prompts view has the LLM button too');
+      const savedFetch = context.fetch;
+      context.fetch = async (url, options) => ({ ok: true, json: async () => options ? { ok: true, prompt: 'A full prompt' } : { ok: true, seconds: 30, model: 'm' } });
+      await run('enhanceInEditor()');
+      assert.strictEqual(els.promptEditorText.value, 'A full prompt', 'what it writes goes in the editor');
+      assert.strictEqual(shotBox.value, 'a shot idea', 'and the prompt stays as it was until Save');
+      run('closePromptEditor(true)');
+      assert.strictEqual(shotBox.value, 'A full prompt', 'Save keeps it');
+      context.fetch = savedFetch;
+    }
+    field.readOnly = true;
+    run("openPromptEditor($('prompt'))");
+    assert(els.promptEditorSave.hidden && els.promptEditorEnhance.hidden && els.promptEditorText.readOnly, 'a locked prompt can be read and copied, not changed');
+    run('closePromptEditor(false)');
+    field.readOnly = false;
+  }
 
   console.log('all page checks passed');
 })().catch(e => { console.error(e); process.exit(1); });

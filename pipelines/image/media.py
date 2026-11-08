@@ -16,7 +16,7 @@ MAX_MEGAPIXELS = 16.0
 FROM_IMAGE = "image"
 # What the panel offers, as (value, what it says). Any W:H works from the command line.
 ASPECTS = (("1:1", "1:1 square"), ("2:3", "2:3 portrait photo"), ("3:2", "3:2 photo"), ("3:4", "3:4 portrait"), ("4:3", "4:3 standard"),
-           ("9:16", "9:16 vertical"), ("16:9", "16:9 widescreen"), ("21:9", "21:9 ultrawide"))
+           ("9:16", "9:16 vertical"), ("16:9", "16:9 widescreen"))
 MEGAPIXELS = (0.5, 1, 1.5, 2, 3, 4, 6, 8)
 # Exact resolutions the panel offers, as (what it says, width, height): screens, to fill one pixel for pixel.
 DESKTOP_SIZES = (("1080p Full HD", 1920, 1080), ("1440p QHD", 2560, 1440), ("1440p ultrawide", 3440, 1440), ("4K UHD", 3840, 2160))

@@ -42,6 +42,27 @@ class MultishotTest(unittest.TestCase):
         self.assertNotIn("5", result)
         self.assertIn("5", source, "the saved workflow is not modified")
 
+    def test_structured_prompts_are_flattened_for_the_samplers_own_sections(self):
+        prompt = ("subject_definitions:\n<Subject 1> is a woman from <Picture 1>: short red hair.\n\n"
+                  "summary:\n[reference generation] She takes off the coat.\n\n"
+                  "retention_analysis:\n<Subject 1> (appears in [Shot 2]): fully_preserved - red hair, grey coat.\n\n"
+                  "detailed_description:\nLive-action. [Shot 2] She unbuttons the grey coat and drops it.\n\n"
+                  "overall_soundscape:\nRain on glass.\n\nnon_diegetic_music: N/A")
+        flat = h3_multishot.sampler_prompt(prompt, ["a.png"])
+        for section in ("subject_definitions:", "summary:", "retention_analysis:", "detailed_description:",
+                        "non_diegetic_music", "[reference generation]", "fully_preserved", "[Shot 2]"):
+            self.assertNotIn(section, flat)
+        for kept in ("Live-action. [Shot 1] She unbuttons", "She takes off the coat.", "<Picture 1>: short red hair",
+                     "Sound: Rain on glass."):
+            self.assertIn(kept, flat)
+        self.assertTrue(flat.startswith("Live-action."))
+        text = "integrated_multimodal_description: [Shot 3] A pan.\n\noverall_soundscape: Wind."
+        self.assertEqual(h3_multishot.sampler_prompt(text, []), text.replace("[Shot 3]", "[Shot 1]"),
+                         "without references the sampler adds no sections, so the prompt goes as it is")
+        result = h3_multishot.build(graph(), [prompt], ["a.png"], 10, 864, 480, 1)
+        sampler = next(node for node in result.values() if node["class_type"] == h3_multishot.SAMPLER)
+        self.assertEqual(json.loads(sampler["inputs"]["script"])["prompts"], [flat])
+
     def test_unsupported_graphs_and_missing_start_frame_are_refused(self):
         self.assertFalse(h3_multishot.supports({}))
         with self.assertRaisesRegex(RuntimeError, "first frame"):

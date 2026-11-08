@@ -1,6 +1,7 @@
 """Build a single-take H3 Multishot graph from an H3 reference workflow."""
 import copy
 import json
+import re
 
 from core.saved_workflows import _upstream
 from pipelines.video import h3_prompt
@@ -48,10 +49,37 @@ def supports_path(path):
         return False
 
 
+SECTION = re.compile(r"(?m)^(subject_definitions|summary|retention_analysis|detailed_description|"
+                     r"integrated_multimodal_description|overall_soundscape|non_diegetic_music):[ \t]*")
+
+
+def sampler_prompt(prompt, images):
+    """
+    The shot as the sampler needs it. Each shot is [Shot 1] to the sampler. With reference
+    images it writes its own subject_definitions, summary and retention_analysis ("keep the
+    face, room, light; continue from the last frame") and puts the prompt under
+    detailed_description. A whole six-section prompt there nests one structure inside another,
+    and H3 follows the sampler's clear "keep everything" over the buried action, so shot 2
+    came out as shot 1 again. So it gets one plain description: the action and look, without
+    our retention lines, which list the opening outfit as fully_preserved.
+    """
+    prompt = re.sub(r"\[Shot \d+\]", "[Shot 1]", prompt.strip())
+    if not images or not prompt.startswith("subject_definitions:"):
+        return prompt
+    parts = SECTION.split(prompt)
+    fields = {name: text.strip() for name, text in zip(parts[1::2], parts[2::2])}
+    summary = fields.get("summary", "").replace("[reference generation]", "").strip()
+    sound = fields.get("overall_soundscape", "")
+    return "\n\n".join(part for part in (
+        fields.get("detailed_description", ""), summary, fields.get("subject_definitions", ""),
+        f"Sound: {sound}" if sound else "") if part)
+
+
 def build(workflow, prompts, images, seconds, width, height, seed, first_frame=False, steps=20):
     """Return an independent graph rendering all shots and audio in one ComfyUI job."""
     if not prompts or any(not prompt.strip() for prompt in prompts):
         raise RuntimeError("Every H3 Multishot shot needs a prompt.")
+    prompts = [sampler_prompt(prompt, images) for prompt in prompts]
     if first_frame and not images:
         raise RuntimeError("H3 Multishot needs an image to use as its first frame.")
     links = sources(workflow)

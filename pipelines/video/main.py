@@ -12,7 +12,7 @@ import ffmpeg
 import requests
 from dotenv import load_dotenv
 
-from core import director, h3_refiner, seeds
+from core import director, h3_refiner, run_form, seeds
 from core import workflow_options
 from core.audio import AudioEngine
 from core.paths import LOGS_DIR
@@ -83,7 +83,7 @@ def parse_args(argv=None):
     parser.add_argument("--h3-multishot-steps", type=int, default=20, choices=range(1, 51), metavar="1-50",
                         help="Sampling steps for H3 Multishot (default: 20).")
     parser.add_argument("--llm", choices=[name for name, _ in planner.LLMS], default=None,
-                        help="Who writes the prompts (default: LLM_PROVIDER in .env, else gemini).")
+                        help="Who writes the prompts (default: LLM_PROVIDER in .env, else local).")
     parser.add_argument("--size", type=parse_size, help="Render size such as 1280x736 (default: the image's shape).")
     parser.add_argument("--audio", metavar="FILE", help="An audio file for the film: its length sets the film's, and a workflow with Load Audio gets it per clip.")
     parser.add_argument("--narration", metavar="TEXT", help="Text to voice with Gemini TTS, used the same way as --audio.")
@@ -270,7 +270,7 @@ def plan_run(args, stages):
     if args.size and media.size_problem(video_model, *args.size):
         raise RuntimeError(media.size_problem(video_model, *args.size))
     width, height = args.size or media.render_size(*(images[0].size if images else media.DEFAULT_SHAPE),
-                                                   media.most_pixels(video_model) or media.RENDER_AREA)
+                                                   media.default_area(video_model))
     llm = args.llm or planner.default_llm()
     if not args.direct and llm == "local" and h3_refiner.selected_model() == "qwen3-14b" and (images or image_2_in_words):
         raise RuntimeError("Qwen3 14B is text-only and cannot analyze attached images. Choose Gemma 4 in Settings.")
@@ -283,6 +283,11 @@ def plan_run(args, stages):
     state.h3_mode, state.h3_creativity, state.image_roles = args.h3_enhance, args.h3_creativity, args.image_roles
     state.h3_first_frame, state.h3_multishot_steps = args.h3_first_frame, args.h3_multishot_steps
     state.connection_mode = args.start if args.start in ("director", "multishot") else start
+    state.direct, state.seed, state.plan_only, state.first_only = args.direct, args.seed, args.plan_only, args.first_only
+    state.clip_seconds = list(args.clip_seconds) if args.clip_seconds else None
+    if (not args.direct and llm == "local") or args.h3_enhance != "off":
+        state.h3_model = h3_refiner.selected_model()
+    state.form = run_form.from_env()
     print_stage("Plan", stages)
     keep_references(state, videos, audios)
     audio = args.audio or (voiced_narration(args) if args.narration else None)

@@ -1,17 +1,22 @@
 import re
 import time
 
-from core.eta_keys import SEPARATOR, Timings, options_in_env, render_keys
-from pipelines.video.media import RENDER_AREA
+from core.eta_keys import SEPARATOR, LocalModelTimer, Timings, llm_keys, options_in_env, render_keys
+from pipelines.video.media import RENDER_AREA, default_area
 from pipelines.video.comfy import DEFAULT_WORKFLOW, workflow_model
-from pipelines.video.planner import clip_seconds, fixed_film_seconds, shot_count
+from pipelines.video.planner import clip_seconds, default_llm, fixed_film_seconds, shot_count
 from pipelines.video.run_state import STAGES, RunState
 
 # Used until a finished step has been timed.
 DEFAULT_TIMINGS = {
     "Plan": 60,
+    "Plan | direct": 1,
     "part": 6,  # One clip evened out for stitching
+    "part | multishot": 2,  # The take is already one file: copied, and given its audio if it has any
 }
+# An H3 Multishot take per second of film at full size and 20 steps, as measured on this card (2026-11-07).
+DEFAULT_TAKE_SECONDS = 176
+MULTISHOT_STEPS = 20
 # Render time per second of film at full size, measured on this GPU in yt-auto-shorts. Each model, workflow, set of
 # options and size learns its own (core/eta_keys.py).
 DEFAULT_RENDER_SECONDS = 31
@@ -23,10 +28,15 @@ def _option(argv, name, default):
     return argv[argv.index(name) + 1] if name in argv[:-1] else default
 
 
-def _size_share(argv):
-    """How much of a full-size render this size is. Render time follows the pixel count, near enough."""
+def _size_share(argv, video_model=None):
+    """
+    How much of a full-size render this size is. Render time follows the pixel count, near enough. With no size
+    chosen, a film is made at media.default_area(): 480p's pixel count, or the model's limit if that is lower.
+    """
     match = re.fullmatch(r"(\d+)x(\d+)", str(_option(argv, "--size", "")))
-    return int(match.group(1)) * int(match.group(2)) / RENDER_AREA if match else 1
+    if match:
+        return int(match.group(1)) * int(match.group(2)) / RENDER_AREA
+    return default_area(video_model) / RENDER_AREA
 
 
 class RunEta:
@@ -45,7 +55,16 @@ class RunEta:
         self.options = options_in_env(env)
         self.llm = _option(argv, "--llm", None)
         self.plan_only = "--plan-only" in argv
+        self.first_only = "--first-only" in argv
         self.direct = "--direct" in argv
+        self.start = _option(argv, "--start", "chain")
+        self.h3_mode = _option(argv, "--h3-enhance", "off")
+        self.creativity = _option(argv, "--h3-creativity", "balanced")
+        try:
+            self.take_steps = int(_option(argv, "--h3-multishot-steps", MULTISHOT_STEPS))
+        except ValueError:
+            self.take_steps = MULTISHOT_STEPS
+        self.local_model = None
         try:
             self.film_seconds = int(_option(argv, "--duration", 0))
         except ValueError:
@@ -55,7 +74,7 @@ class RunEta:
         if "--fixed-clips" in argv:
             self.film_seconds = fixed_film_seconds(self.film_seconds, self.video_model, self.clip_range)
         self.shots = shot_count(self.film_seconds, self.video_model, self.clip_range)
-        self.size_share = _size_share(argv)
+        self.size_share = _size_share(argv, self.video_model)
         self.size = _option(argv, "--size", None)
         self.kept_stages = ()
         self.kept_seconds = 0
@@ -74,7 +93,26 @@ class RunEta:
             self.workflow = self.workflow or state.workflow
             self.options = self.options or state.options or {}
             self.llm = self.llm or state.llm
+            self.direct = self.direct or state.direct
+            self.start = state.connection_mode or state.start
+            self.h3_mode, self.creativity = state.h3_mode, state.h3_creativity
+            self.take_steps = state.h3_multishot_steps or MULTISHOT_STEPS
+            self.local_model = state.h3_model
+        self.llm = None if self.direct else self.llm or default_llm()
+        if not self.local_model and (self.llm == "local" or self.h3_mode != "off"):
+            try:
+                from core import h3_refiner
+                self.local_model = h3_refiner.selected_model()
+            except Exception:
+                self.local_model = None
+        self.local = LocalModelTimer(self.timings, self.local_model, self.creativity)
         self.render_keys = render_keys(self.workflow or DEFAULT_WORKFLOW, self.options, self.size)
+        # A take replaces the sampler and its steps with its own, so it is timed apart, without the steps option.
+        take_options = {key: value for key, value in (self.options or {}).items() if key != "steps"}
+        self.take_keys = [SEPARATOR.join(("multishot", key))
+                          for key in render_keys(self.workflow or DEFAULT_WORKFLOW, take_options, self.size)]
+        self.local_mark = 0.0
+        self.planned = False
 
         self.number = 0
         self.total = 0
@@ -94,7 +132,13 @@ class RunEta:
     def names(self):
         if self.plan_only:
             return STAGES[:1]
+        if self.first_only:
+            return STAGES[:2]
         return STAGES
+
+    @property
+    def multishot(self):
+        return self.start == "multishot"
 
     # --- What the run reports ---
 
@@ -103,6 +147,22 @@ class RunEta:
             self._finish_stage()
         self.number, self.total, self.name = number, total, name
         self.stage_started = time.time()
+        self.local_mark = self.local.spent
+
+    def event(self, kind):
+        """A line of the run's log (panel/server.py Job.EVENTS): what the local model did, and where planning ends."""
+        now = time.time()
+        learned = self.local.event(kind, now)
+        if kind == "planned" and self.name == "Plan" and not self.planned:
+            # Planning alone, by its LLM's model: without starting the local model, and before any OpenH3-IR review.
+            self.planned = True
+            self.timings.learn_step(self._plan_keys(), max(0.0, now - self.stage_started - (self.local.spent - self.local_mark)))
+            learned = True
+        elif kind == "enhanced" and self.attempt_started is not None:
+            # The clip's own render starts once OpenH3-IR has written its prompt: that is timed as Enhance.
+            self.attempt_started = now
+        if learned:
+            self._save()
 
     def clip(self, number, total, seconds):
         now = time.time()
@@ -123,8 +183,8 @@ class RunEta:
             self._note(f"{clip} failed on all {attempts} tries ({problem})", 0)
 
     def finish(self):
-        """The whole run succeeded, so the step it ended on did finish."""
-        if self.number and self.number == self.total:
+        """The whole run succeeded, so the step it ended on did finish. A first-clip-only run ends after its clip."""
+        if self.number and (self.number == self.total or (self.first_only and self.name == "Clips")):
             self._finish_stage()
 
     # --- Why the ETA moved ---
@@ -144,8 +204,10 @@ class RunEta:
     # --- Learning ---
 
     def _plan_keys(self):
-        """Planning is timed per LLM, then at all."""
-        return [SEPARATOR.join(("Plan", self.llm or "default")), "Plan"]
+        """Planning is timed per LLM model (local:gemma-4-12b, gemini:..., claude:...), then per LLM, then at all."""
+        if self.direct:
+            return ["Plan | direct"]
+        return [*llm_keys("Plan", self.llm, self.local_model), "Plan"]
 
     def _finish_attempt(self, now):
         if self.attempt_started is not None and self.attempt_seconds:
@@ -158,12 +220,19 @@ class RunEta:
     def _finish_stage(self):
         now = time.time()
         self.finished[self.number] = now - self.stage_started
-        if self.name == "Clips":
+        if self.name == "Clips" and self.multishot:
+            if self.film_seconds:
+                take = (now - self.stage_started) / self.film_seconds / self.size_share * MULTISHOT_STEPS / max(1, self.take_steps)
+                self.timings.learn_render(self.take_keys, take)
+        elif self.name == "Clips":
             self._finish_attempt(now)
+        elif self.name == "Stitching" and self.multishot:
+            self.timings.learn_step("part | multishot", now - self.stage_started)
         elif self.name == "Stitching":
             self.timings.learn_step("part", (now - self.stage_started) / max(1, self.shots))
         elif self.name == "Plan":
-            self.timings.learn_step(self._plan_keys(), now - self.stage_started)
+            if not self.planned:  # Your prompt as it is: no plan line, so the whole stage less the local model
+                self.timings.learn_step(self._plan_keys(), max(0.0, now - self.stage_started - (self.local.spent - self.local_mark)))
         else:
             self.timings.learn_step(self.name, now - self.stage_started)
         self._save()
@@ -176,23 +245,45 @@ class RunEta:
     def _render_seconds(self, film_seconds):
         return self.timings.render(self.render_keys, DEFAULT_RENDER_SECONDS) * self.size_share * film_seconds
 
+    def _take_seconds(self, film_seconds):
+        rate = self.timings.render(self.take_keys, DEFAULT_TAKE_SECONDS)
+        return rate * self.size_share * film_seconds * max(1, self.take_steps) / MULTISHOT_STEPS
+
+    def _enhance_per_clip(self):
+        """OpenH3-IR before each clip: the local model started again, and the clip's prompt written."""
+        return self.local.start_seconds() + self.local.enhance_seconds() if self.h3_mode == "render" else 0
+
+    def _clips_left(self, film_seconds):
+        """Clips for film_seconds of film, at the length planned."""
+        return round(film_seconds * self.shots / self.film_seconds) if self.film_seconds else 0
+
     def _stage_seconds(self, name):
         """What a step takes from the start, without the part a continued run kept."""
         if name in self.kept_stages:
             return 0
         if name == "Clips":
-            return self._render_seconds(max(self.film_seconds - self.kept_seconds, 0))
+            left = max(self.film_seconds - self.kept_seconds, 0)
+            if self.multishot:
+                return self._take_seconds(left)
+            if self.first_only:
+                left = min(left, self.film_seconds / max(1, self.shots))
+            return self._render_seconds(left) + self._clips_left(left) * self._enhance_per_clip()
         if name == "Stitching":
-            return self.shots * self.timings.step("part")
+            return self.timings.step("part | multishot") if self.multishot else self.shots * self.timings.step("part")
         if name == "Plan":
-            return 0 if self.direct else self.timings.step(self._plan_keys())
+            plan = self.timings.step(self._plan_keys(), 0 if self.direct else None)
+            if self.llm == "local":
+                plan += self.local.start_seconds()
+            if self.h3_mode == "review":
+                plan += self.local.start_seconds() + self.shots * self.local.enhance_seconds()
+            return plan
         return self.timings.step(name, 0)
 
     def _current_left(self, now):
-        if self.name == "Clips" and self.attempt_started is not None:
+        if self.name == "Clips" and self.attempt_started is not None and not self.multishot:
             this_clip = self._render_seconds(self.attempt_seconds) - (now - self.attempt_started)
-            after = self.film_seconds - self.kept_seconds - self.done_seconds - self.attempt_seconds
-            return max(this_clip, 0) + self._render_seconds(max(after, 0))
+            after = 0 if self.first_only else self.film_seconds - self.kept_seconds - self.done_seconds - self.attempt_seconds
+            return max(this_clip, 0) + self._render_seconds(max(after, 0)) + self._clips_left(max(after, 0)) * self._enhance_per_clip()
         return max(self._stage_seconds(self.name) - (now - self.stage_started), 0)
 
     def plan(self):

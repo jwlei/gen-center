@@ -1,7 +1,7 @@
 import re
 import time
 
-from core.eta_keys import SEPARATOR, Timings, options_in, render_keys
+from core.eta_keys import SEPARATOR, LocalModelTimer, Timings, llm_keys, options_in, render_keys
 from pipelines.image.media import FROM_IMAGE, PIXELS_PER_MEGAPIXEL, parse_size
 from pipelines.image.run_state import STAGES, RunState
 
@@ -40,7 +40,9 @@ class RunEta:
     def __init__(self, argv, env, path):
         self.timings = Timings(path, {"Prompts": DEFAULT_PROMPTS_SECONDS})
         self.plan_only = "--plan-only" in argv
-        self.direct = "--direct" in argv
+        self.first_only = "--first-only" in argv
+        # A painted change or an expansion writes its own prompt from what is painted: no LLM, as with your own.
+        self.direct = "--direct" in argv or "--areas" in argv or "--expand" in argv
         self.llm = _option(argv, "--llm")
         self.options = options_in(argv)
         self.size = _size_label(argv)
@@ -66,6 +68,18 @@ class RunEta:
             self.kept = len([shot for number, shot in enumerate(state.shots, 1) if shot.get("file") and str(number) != redo])
             self.prompts_kept = True
 
+        if not self.direct and not self.llm:
+            from pipelines.video.planner import default_llm
+            self.llm = default_llm()
+        self.local_model = None
+        if self.llm == "local":
+            try:
+                from core import h3_refiner
+                self.local_model = h3_refiner.selected_model()
+            except Exception:
+                self.local_model = None
+        self.local = LocalModelTimer(self.timings, self.local_model)
+        self.local_mark = 0.0
         self.render_keys = render_keys(self.workflow, self.options, self.size, fallback="image")
         self.number = self.total = 0
         self.name = None
@@ -78,9 +92,18 @@ class RunEta:
         self.original_total = self.plan()["total"]
 
     def _prompt_keys(self):
-        """Writing the prompts is timed per LLM and per number of images, then per LLM, then at all."""
-        llm = self.llm or "default"
-        return [SEPARATOR.join(("Prompts", llm, f"{self.images} images")), SEPARATOR.join(("Prompts", llm)), "Prompts"]
+        """Writing the prompts is timed per LLM model and number of images, then per model, per LLM, and at all."""
+        by_model = llm_keys("Prompts", self.llm, self.local_model)
+        count = f"{self.images} images"
+        keys = [SEPARATOR.join((by_model[0], count)), by_model[0]]
+        if len(by_model) > 1:  # Then the LLM at all: what was timed before each of its models was
+            keys += [SEPARATOR.join((by_model[1], count)), by_model[1]]
+        return [*keys, "Prompts"]
+
+    def event(self, kind):
+        """A line of the run's log (panel/server.py Job.EVENTS): the local model starting is timed on its own."""
+        if self.local.event(kind, time.time()):
+            self.timings.save()
 
     # --- What the run reports ---
 
@@ -89,10 +112,12 @@ class RunEta:
             self._finish_stage()
         self.number, self.total, self.name = number, total, name
         self.stage_started = time.time()
+        self.local_mark = self.local.spent
 
     def image(self, number, total):
         self._finish_image(time.time())
-        self.images = total
+        # A first-image-only run says how many the set has, but makes only the first now.
+        self.images = 1 if self.first_only else total
         self.image_started = time.time()
 
     def clip_retry(self, attempt, attempts, problem):
@@ -106,7 +131,7 @@ class RunEta:
             self.changes.append({"text": f"An image failed on all {attempts} tries ({problem})", "seconds": 0})
 
     def finish(self):
-        if self.number and self.number == self.total:
+        if self.number and (self.number == self.total or (self.first_only and self.name == "Images")):
             self._finish_stage()
 
     def _finish_image(self, now):
@@ -122,7 +147,8 @@ class RunEta:
         if self.name == "Images":
             self._finish_image(now)
         elif not self.direct:
-            self.timings.learn_step(self._prompt_keys(), now - self.stage_started)
+            # The LLM's own time: without starting the local model, which is timed apart.
+            self.timings.learn_step(self._prompt_keys(), max(0.0, now - self.stage_started - (self.local.spent - self.local_mark)))
             self.timings.save()
 
     # --- Estimating ---
@@ -132,7 +158,9 @@ class RunEta:
 
     def _stage_seconds(self, name):
         if name == "Prompts":
-            return 0 if self.direct or self.prompts_kept else self.timings.step(self._prompt_keys())
+            if self.direct or self.prompts_kept:
+                return 0
+            return self.timings.step(self._prompt_keys()) + (self.local.start_seconds() if self.llm == "local" else 0)
         return self._image_seconds() * max(self.images - self.kept, 0)
 
     def plan(self):

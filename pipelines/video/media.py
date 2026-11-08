@@ -105,6 +105,15 @@ def size_problem(model, width, height):
             "Choose a smaller size.")
 
 
+# With no size chosen, a film is made at 480p's pixel count in the shape of image 1: quick, and enough to judge it.
+DEFAULT_AREA = 864 * 480
+
+
+def default_area(model=None):
+    """The pixel count a film is made at when no size is chosen: 480p's, or fewer if the model's limit is lower."""
+    return min(DEFAULT_AREA, most_pixels(model) or RENDER_AREA)
+
+
 def render_size(width, height, most=RENDER_AREA):
     """The image's shape at the workflow's pixel count (or fewer, up to `most`), so its centre crop takes next to nothing off."""
     scale = math.sqrt(min(most, RENDER_AREA) / (width * height))

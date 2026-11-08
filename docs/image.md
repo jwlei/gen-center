@@ -34,8 +34,8 @@ with the workflow's existing planning instructions. Gemma can analyze attached i
 it is text-only. ComfyUI must be reachable and idle while the local model plans; it unloads before rendering.
 Large sets may exceed the local model's context or output limits.
 The panel defaults to Local model. A selected prompt model is remembered in this browser, and a default preset can
-override it; opening a previous generation keeps that selection when the model is available for the chosen workflow.
-The CLI still follows `LLM_PROVIDER`.
+override it. Opening a previous set brings back every setting it was made with, its prompt model included, when
+that model is available for the chosen workflow. The CLI follows `LLM_PROVIDER`, else the local model.
 
 | Choice | What each image gets |
 |---|---|
@@ -263,7 +263,7 @@ Set `COMFYUI_WORKFLOW` to the workflow it runs: the panel keeps its conversions 
 | `--image FILE` | The image to edit, repeatable if the workflow takes several. |
 | `--count` | How many images, 1 to 100. Default 1. |
 | `--direct` | Uses the prompt word for word, with no LLM. |
-| `--llm` | `gemini` or `claude`. Default: `LLM_PROVIDER`, else `gemini`. |
+| `--llm` | `local`, `gemini` or `claude`. Default: `LLM_PROVIDER`, else `local`. |
 | `--aspect` | Such as `16:9`, or `image` for the source's (the default, square without one). |
 | `--megapixels` | Such as `1.5` (default 1), or `image` for the source's. |
 | `--size 1920x1080` | An exact size, in place of those two. |

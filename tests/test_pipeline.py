@@ -354,7 +354,39 @@ class PartsTest(unittest.TestCase):
                 eta.clip(2, 8, 10)
             return eta.timings.render(eta.render_keys, None)
         share = 640 * 352 / media.RENDER_AREA
-        self.assertAlmostEqual(learned("--size", "640x352", seconds_taken=100 * share), learned(seconds_taken=100), delta=0.1)
+        self.assertAlmostEqual(learned("--size", "640x352", seconds_taken=100 * share), learned("--size", "1280x736", seconds_taken=100), delta=0.1)
+
+    def test_each_llm_model_and_the_prompt_enhancer_are_timed_apart(self):
+        with mock.patch.object(RunEta, "_save"), mock.patch("core.h3_refiner.selected_model", return_value="qwen3-14b"):
+            local = RunEta(["--duration", "20", "--llm", "local", "--h3-enhance", "review"], "no_such_file.json")
+            self.assertEqual(local._plan_keys(), ["Plan | local:qwen3-14b", "Plan | local", "Plan"])
+            self.assertEqual(RunEta(["--duration", "20", "--direct"], "no_such_file.json")._plan_keys(), ["Plan | direct"])
+            local.stage(1, 3, "Plan")
+            local.stage_started -= 100
+            local.event("model_start")
+            local.local.started["model_start"] -= 30
+            local.event("model_ready")
+            local.event("planned")
+            local.event("enhance")
+            local.local.started["enhance"] -= 50
+            local.event("line")
+        steps = local.timings.steps
+        self.assertAlmostEqual(steps["Model start | qwen3-14b"], 30, delta=1)
+        self.assertAlmostEqual(steps["Plan | local:qwen3-14b"], 70, delta=1, msg="planning without starting the model")
+        self.assertAlmostEqual(steps["Enhance | qwen3-14b | balanced"], 50, delta=1)
+        self.assertGreater(local.plan()["steps"][0]["seconds"], 70 + 30 + 50, "review adds the model and a prompt per shot")
+
+    def test_a_multishot_take_is_estimated_and_learned_as_one_render_at_its_steps(self):
+        argv = ["--duration", "20", "--start", "multishot", "--fixed-clips", "--clip-seconds", "10-10", "--size", "1280x736"]
+        with mock.patch.object(RunEta, "_save"):
+            at_20 = RunEta([*argv, "--h3-multishot-steps", "20"], "no_such_file.json")
+            at_10 = RunEta([*argv, "--h3-multishot-steps", "10"], "no_such_file.json")
+            self.assertAlmostEqual(at_10.plan()["steps"][1]["seconds"] * 2, at_20.plan()["steps"][1]["seconds"], delta=2)
+            at_20.stage(2, 3, "Clips")
+            at_20.stage_started -= 2000
+            at_20.stage(3, 3, "Stitching")
+        self.assertAlmostEqual(at_20.timings.render(at_20.take_keys, None), 100, delta=1, msg="2000 s for 20 s of film")
+        self.assertNotIn("part", at_20.timings.timed_steps, "a take's stitching doesn't stand for a chain's")
 
     def test_render_size_keeps_the_shape_on_the_grid(self):
         self.assertEqual(media.render_size(1280, 736), (1280, 736))
@@ -419,16 +451,23 @@ class PlanTest(unittest.TestCase):
             for seconds in range(planner.MIN_FILM_SECONDS, planner.MAX_FILM_SECONDS + 1):
                 count = planner.shot_count(seconds, model)
                 self.assertTrue(count * shortest <= seconds <= count * longest, (model, seconds))
-        self.assertEqual(planner.shot_count(15, h3_prompt.MODEL), 1, "one H3 clip holds 15 seconds")
+        self.assertEqual(planner.shot_count(15, h3_prompt.MODEL), 2, "two clips at H3's usual 10 s")
+        self.assertEqual(planner.shot_count(15, h3_prompt.MODEL, (15, 15)), 1, "one H3 clip holds 15 seconds")
         self.assertEqual(planner.fit_durations([15, 15], 30, h3_prompt.MODEL), [15, 15])
         self.assertEqual(planner.fit_durations([15, 15], 30), [10, 10], "past what LTX makes, then short of the film")
+
+    def test_the_local_model_writes_the_prompts_unless_env_says_otherwise(self):
+        for configured, expected in (("", "local"), ("gemini", "gemini"), ("nonsense", "local")):
+            with self.subTest(configured=configured), mock.patch.dict(os.environ, {"LLM_PROVIDER": configured}):
+                self.assertEqual(planner.default_llm(), expected)
+        self.assertEqual(planner.clip_seconds(h3_prompt.MODEL)[2], 10, "H3's clips are 10 s unless chosen")
 
     def test_a_clip_length_chosen_within_the_models(self):
         self.assertEqual(planner.clip_seconds(h3_prompt.MODEL, (6, 9)), (6, 9, 8))
         self.assertEqual(planner.clip_seconds(None, (2, 30)), (5, 10, 8), "held to what LTX makes")
         self.assertEqual(planner.clip_seconds(wan_prompt.MODEL, (8, 9)), planner.clip_seconds(wan_prompt.MODEL), "nothing of it fits: the model's own")
         self.assertEqual(planner.shot_count(60, h3_prompt.MODEL, (5, 6)), 10, "short clips: more of them (60 at 6 each)")
-        self.assertEqual(planner.shot_count(60, h3_prompt.MODEL), 5, "against 5 at H3's own 12")
+        self.assertEqual(planner.shot_count(60, h3_prompt.MODEL), 6, "against 6 at H3's own 10")
         self.assertTrue(all(5 <= s <= 6 for s in planner.fit_durations([8] * 10, 60, h3_prompt.MODEL, (5, 6))))
         self.assertIn("a whole number from 5 to 15", planner._instructions("x", 60, "image", 1, h3_prompt.MODEL))
         self.assertIn("a whole number from 3 to 5", planner._instructions("x", 60, "chain", 1, wan_prompt.MODEL))
@@ -522,7 +561,7 @@ class PlanTest(unittest.TestCase):
     def test_h3_gets_its_own_instructions(self):
         two = planner._instructions("a storm rolls in", 60, "image", 2, h3_prompt.MODEL)
         self.assertIn("a storm rolls in", two)
-        for needed in ("subject_definitions:", "retention_analysis:", "<Picture 1> and <Picture 2>", "exactly 5 shots in order",
+        for needed in ("subject_definitions:", "retention_analysis:", "<Picture 1> and <Picture 2>", "exactly 6 shots in order",
                        "6 = 6.58 s", "350-500 words"):
             self.assertIn(needed, two)
         self.assertNotIn("LTX", two)
@@ -540,7 +579,7 @@ class PlanTest(unittest.TestCase):
 
     def test_a_long_h3_film_still_fits_in_one_reply(self):
         self.assertIn("350-500 words", planner._instructions("x", 60, "image", 1, h3_prompt.MODEL))
-        self.assertIn("280-400 words", planner._instructions("x", 600, "image", 1, h3_prompt.MODEL), "50 clips of 12 s")
+        self.assertIn("210-300 words", planner._instructions("x", 600, "image", 1, h3_prompt.MODEL), "60 clips of 10 s")
         low, high = h3_prompt._detail_words(75)
         self.assertLessEqual(75 * (high + h3_prompt.SECTION_WORDS), h3_prompt.FILM_WORDS)
 

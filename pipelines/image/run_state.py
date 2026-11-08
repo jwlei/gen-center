@@ -40,6 +40,7 @@ class RunState:
     detail: str = "standard"  # How big the images besides the one edited are shown: standard (about 1 MP) or full
     source_seeds: list = None  # Seeds that made the images it starts from, which its own never repeat (core/seeds.py avoid)
     region: dict = None  # Part of image 1 changed, or it expanded: what pipelines/image/regions.py prepared
+    form: dict = None  # The panel's Generate form as it was sent, files aside: reopened, the set comes back as it was made
 
     @classmethod
     def new(cls, brief, count, direct, width, height, llm=None, workflow=None, image_count=0):

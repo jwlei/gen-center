@@ -501,7 +501,7 @@ class RenderEtaTest(unittest.TestCase):
                     clock.return_value = 100
                     path = os.path.join(folder, pipeline + ".json")
                     eta = (ImageEta(["--direct", "--count", "2", "--megapixels", "1"], {}, path)
-                           if pipeline == "image" else VideoEta(["--duration", "10"], path))
+                           if pipeline == "image" else VideoEta(["--duration", "10", "--size", "1280x736"], path))
                     job = webapp.Job()
                     job.pipeline, job.eta = pipeline, eta
                     if pipeline == "image":
@@ -546,7 +546,7 @@ class RenderEtaTest(unittest.TestCase):
             path = os.path.join(folder, "video.json")
             job = webapp.Job()
             job.pipeline = "video"
-            job.eta = RunEta(["--duration", "10"], path)
+            job.eta = RunEta(["--duration", "10", "--size", "1280x736"], path)
             job._track("▶ Stage 1/2: Clips")
             job._track("🎬 Clip 1/2 · First · 5s")
             clock.return_value = 125

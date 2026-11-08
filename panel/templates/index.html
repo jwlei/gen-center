@@ -83,6 +83,7 @@
   .stopped-fold[open] .chev { transform: rotate(-135deg); }
   .stopped-fold[open] .stopped-body, .queue-list:not([hidden]) { animation: fold-open .25s ease; }
   @keyframes fold-open { from { opacity: 0; transform: translateY(-6px); } to { opacity: 1; transform: none; } }
+  details.fold-opening > :not(summary) { animation: fold-open .25s ease; }
   @media (prefers-reduced-motion: reduce) { .stopped-fold[open] .stopped-body, .queue-list:not([hidden]) { animation: none; } .queue-fold-toggle .chev { transition: none; } .queue-item.dragging { transform: none; } }
   .queue-item.dragging { cursor: grabbing; }
   .queue-item .hint { margin-top: 0; }
@@ -285,6 +286,9 @@
   dialog.panel-dialog { width: min(620px, calc(100vw - 24px)); max-height: calc(100dvh - 48px); padding: 14px 14px 12px;
     display: none; flex-direction: column; gap: 10px; animation: menu-in .2s ease; }
   dialog.panel-dialog[open] { display: flex; }
+  /* While a box is open over the page, the page under it stays put: a swipe in the box never scrolls it. */
+  html:has(dialog[open]), html:has(dialog[open]) body { overflow: hidden; }
+  dialog, dialog * { overscroll-behavior: contain; }
   dialog.panel-dialog::backdrop { background: rgba(0, 0, 0, .55); -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px); }
   .panel-dialog-title { font-size: .95rem; font-weight: 600; }
   .panel-dialog-body { min-height: 0; overflow: auto; }
@@ -359,6 +363,7 @@
     background: var(--panel-2); border: 1px solid var(--line); color: var(--text); }
   .settings-actions button:disabled { opacity: .5; }
   .settings-actions button.armed { border-color: var(--accent); color: var(--accent); }
+  .settings-actions button.restarting, .settings-actions button.restarting:disabled { opacity: 1; color: var(--warn); border-color: var(--warn); background: color-mix(in srgb, var(--warn) 12%, transparent); }
   .settings-body { display: flex; flex-direction: column; gap: 10px; }
   .reserve-row { flex-wrap: wrap; row-gap: 4px; }
   .reserve-row > label { flex: 1 1 auto; }
@@ -475,6 +480,18 @@
   .prompt-label-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 12px 0 6px; }
   .prompt-label-row label { margin: 0; }
   .prompt-actions { display: flex; align-items: center; gap: 5px; }
+  .prompt-actions[hidden] { display: none; }
+  /* Resolution on one line: the shape, then megapixels a tenth at a time, then the size that makes. */
+  .resolution-line { display: flex; align-items: center; gap: 8px; }
+  .resolution-line select { flex: 1 1 auto; min-width: 0; margin: 0; }
+  .count-stepper.mp-stepper { flex: none; gap: 4px; }
+  .count-stepper.mp-stepper.hidden { display: none; }
+  .count-stepper.mp-stepper button { width: 36px; }
+  .count-stepper.mp-stepper input[type=text] { width: 58px; margin: 0; text-align: center; font-variant-numeric: tabular-nums; cursor: pointer; }
+  .resolution-size { color: var(--muted); font-size: .78rem; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  /* The chosen shape, drawn: at most 22 by 22, outlined. */
+  .aspect-box { flex: none; box-sizing: border-box; border: 1.5px solid var(--muted); border-radius: 2px; }
+  .aspect-box.hidden { visibility: hidden; }
   .prompt-actions button { width: auto; height: 26px; margin: 0; padding: 3px 7px; background: transparent; border: 1px solid var(--line); color: var(--muted); font-size: .75rem; }
   .prompt-actions .prompt-write { width: 26px; padding: 5px; }
   .prompt-actions .prompt-write svg { display: block; width: 100%; height: 100%; }
@@ -593,6 +610,31 @@
   .paint-area input { flex: 1 1 auto; min-width: 0; }
   .paint-actions { flex: none; display: flex; justify-content: center; gap: 8px; }
   .paint-save { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 45%, transparent); }
+  /* A prompt box shows two lines; a tap opens the whole of it in the prompt editor. */
+  textarea[data-prompt] { height: calc(2.8em + 18px); min-height: 0; resize: none; overflow: hidden; cursor: pointer; line-height: 1.4; caret-color: transparent; }
+  textarea[data-prompt].more { -webkit-mask-image: linear-gradient(to bottom, #000 55%, transparent 100%); mask-image: linear-gradient(to bottom, #000 55%, transparent 100%); }
+  .prompt-writing.busy textarea[data-prompt] { height: auto; min-height: 84px; }
+  /* The editor fills what the keyboard leaves of the screen (sized from visualViewport), its buttons always in reach. */
+  dialog.prompt-editor { position: fixed; inset: 8px 0 auto; margin: 0 auto; width: min(720px, calc(100vw - 16px)); height: calc(100dvh - 16px);
+    max-height: none; box-sizing: border-box; }
+  .prompt-editor-box { position: relative; flex: 1 1 auto; min-height: 0; display: flex; }
+  .prompt-editor-box textarea { flex: 1; width: 100%; min-height: 0; margin: 0; resize: none; padding: 10px 12px; font-size: 1rem; line-height: 1.45; box-sizing: border-box; }
+  .prompt-editor-box textarea[readonly] { color: var(--muted); }
+  .prompt-copy { flex: none; width: 32px; height: 32px; margin: 0; padding: 0; display: inline-flex; align-items: center;
+    justify-content: center; border-radius: 999px; background: var(--panel-2); border: 1px solid var(--line); color: var(--muted); opacity: .85; }
+  .prompt-copy:hover, .prompt-copy:focus-visible { color: var(--text); opacity: 1; }
+  .prompt-copy.copied { color: var(--accent); border-color: var(--accent); }
+  .prompt-editor-foot { flex: none; display: flex; align-items: center; gap: 8px; }
+  .prompt-editor-gap { flex: 1 1 auto; }
+  .prompt-editor-head { display: flex; align-items: baseline; gap: 8px; }
+  .prompt-editor-head .panel-dialog-title { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .prompt-editor-head .hint { flex: none; margin: 0; font-size: .72rem; opacity: .8; font-variant-numeric: tabular-nums; }
+  /* Copy and Clear: quiet icons, no box of their own. */
+  /* Write with the LLM, Copy and Clear: quiet icons in a row on the left, no box of their own. */
+  #promptEditorEnhance, #promptEditorCopy, #promptEditorClear { width: 26px; height: 26px; background: transparent; border: 0; padding: 3px; }
+  #promptEditorEnhance svg, #promptEditorCopy svg, #promptEditorClear svg { width: 18px; height: 18px; }
+  .prompt-copy[hidden] { display: none; }
+  .prompt-editor-foot .panel-close { align-self: auto; }
   /* The image viewer: the picture as large as fits, its buttons under it. */
   dialog.viewer { width: auto; max-width: calc(100vw - 24px); max-height: calc(100dvh - 24px); background: transparent; border: 0;
     display: none; flex-direction: column; align-items: center; gap: 10px; overflow: visible; }
@@ -605,7 +647,9 @@
   dialog.viewer::backdrop { background: rgba(0, 0, 0, .55); -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px); }
   /* Its own display would otherwise beat [hidden]: after a film, the video showed under the next image. */
   #viewerImage[hidden], #viewerVideo[hidden] { display: none !important; }
-  #viewerImage { display: block; max-width: calc(100vw - 24px); max-height: calc(100dvh - 180px); object-fit: contain; border-radius: 8px; background: #000;
+  /* Room is kept for the title and both button rows: a portrait picture or film shrinks to fit rather than pushing them out. */
+  #viewerImage, #viewerVideo { max-height: calc(100dvh - 190px); }
+  #viewerImage { display: block; max-width: calc(100vw - 24px); object-fit: contain; border-radius: 8px; background: #000;
     touch-action: none; user-select: none; -webkit-user-drag: none; transform-origin: center; will-change: transform; }
   #viewerImage.easing { transition: transform .2s ease; }
   /* The old frame fades away directionally, revealing the new one without moving either. */
@@ -621,19 +665,28 @@
   @keyframes viewer-fade-y { from { mask-position: 0 100%; } to { mask-position: 0 0; } }
   /* The whole preview is one rounded card: the picture, and under it its title and buttons. */
   .viewer-bar { width: 100%; min-width: 0; display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 10px 0 0; box-sizing: border-box; }
-  /* At most two lines, so a long title can't push the buttons off the screen. */
-  .viewer-title { color: #ddd; font-size: .85rem; text-align: center; overflow-wrap: anywhere;
-    display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; overflow: hidden; }
+  /* One line, cut with an ellipsis so a long title can't push the buttons off the screen; a click shows all of it. */
+  .viewer-title { color: #ddd; font-size: .85rem; text-align: center; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: pointer; }
+  .viewer-title.full { white-space: normal; overflow-wrap: anywhere; }
   .viewer-title:empty { display: none; }
   .viewer-actions { display: flex; gap: 8px; }
-  .viewer-actions, .viewer-tools { width: 100%; justify-content: center; }
+  .viewer-actions { width: 100%; justify-content: center; }
+  .viewer-tools { width: 100%; }
   dialog.viewer .viewer-actions > * { flex: 1 1 0; min-width: 0; max-width: 120px; height: 32px; margin: 0; padding: 0 14px; box-sizing: border-box;
     display: inline-flex; align-items: center; justify-content: center; border: 1px solid var(--line); border-radius: 10px;
     font-size: .82rem; font-weight: 600; white-space: nowrap; border-radius: 999px; }
   dialog.viewer .viewer-actions > a.button { background: var(--accent); border-color: var(--accent); color: #fff; text-decoration: none; }
   dialog.viewer .viewer-actions > button { background: var(--panel-2); color: var(--text); }
   dialog.viewer .viewer-actions > button.del { color: #ff6b6b; }
-  .viewer-tools { display: flex; gap: 8px; justify-content: center; }
+  /* As in the prompts view: what to do with it on the left, keeping it (download, delete) on the right. */
+  .viewer-tools { display: flex; gap: 8px; justify-content: space-between; }
+  .viewer-tools-left, .viewer-tools-right { display: flex; gap: 8px; }
+  .viewer-tools a.icon-btn { width: 40px; height: 32px; margin: 0; padding: 0; display: inline-flex; align-items: center; justify-content: center;
+    border-radius: 999px; background: transparent; border: 1px solid var(--line); color: #ddd; }
+  .viewer-tools .icon-btn.del { color: var(--muted); }
+  /* Close, small and on its own, as the prompts view's. */
+  dialog.viewer .viewer-actions > button.plain { flex: 0 1 auto; min-width: 96px; max-width: none; padding: 6px 18px; font-size: .82rem;
+    background: var(--panel-2); border: 1px solid var(--line); color: var(--text); }
   .viewer-tools[hidden] { display: none; }
   .viewer-tools button { width: 40px; height: 32px; margin: 0; padding: 0; display: inline-flex; align-items: center; justify-content: center; font-size: .78rem; font-weight: 600; border-radius: 999px;
     background: transparent; border: 1px solid var(--line); color: #ddd; }
@@ -647,7 +700,7 @@
   .shot:first-child { border-top: 0; }
   .shot-title { display: flex; justify-content: space-between; gap: 10px; font-size: .9rem; }
   .shot-title span { color: var(--muted); font-size: .78rem; white-space: nowrap; }
-  .shot video { width: 100%; max-height: 300px; margin-top: 8px; border-radius: 8px; background: #000; display: block; }
+  .shot video { width: 100%; max-height: 46vh; margin-top: 8px; border-radius: 8px; background: #000; display: block; }
   .shot textarea { min-height: 96px; margin-top: 8px; font-size: .9rem; line-height: 1.4; resize: vertical; }
   .shot button { width: auto; margin: 8px 0 0; padding: 6px 12px; font-size: .8rem; background: var(--panel-2); border: 1px solid var(--line); color: var(--text); }
   .shots-foot { position: sticky; bottom: 0; display: flex; flex-wrap: wrap; gap: 8px; padding: 12px 16px; background: var(--panel); border-top: 1px solid var(--line); }
@@ -665,20 +718,17 @@
   /* The set's head: its title opens the original prompt, where you are on the right. */
   .shots-head { position: relative; }
   .shots-head-line { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
-  .shots-title { width: auto; margin: 0; padding: 0; background: none; border: 0; color: var(--text); font-size: 1.05rem; font-weight: 700; text-align: left; }
-  .shots-title::after { content: "\203A"; display: inline-block; margin-left: 6px; color: var(--muted); transform: rotate(90deg); }
+  .shots-title { width: auto; min-width: 0; margin: 0; padding: 0; color: var(--text); font-size: 1.05rem; font-weight: 700; text-align: left;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .shots-head-line .shots-count { flex: none; margin: 0; }
-  /* On a shade of its own: on the dialog's own colour it had no edge, and the shots showed through as if it had no background. */
-  .brief-fold { top: calc(100% - 4px); bottom: auto; left: 16px; right: 16px; width: auto; transform-origin: top left; background: var(--panel-2); }
-  .brief-foot { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 5px; }
-  .brief-foot .hint { margin: 0; }
   .copy-btn { flex: none; width: 28px; height: 26px; margin: 0; padding: 0; display: inline-flex; align-items: center; justify-content: center;
     background: transparent; border: 1px solid var(--line); border-radius: 8px; color: var(--muted); }
   .copy-btn:hover { color: var(--text); }
   .copy-btn svg { width: 14px; height: 14px; }
   .copy-btn.done { color: var(--ok); border-color: var(--ok); }
+  .copy-btn[aria-pressed="true"] { color: var(--accent); border-color: var(--accent); }
+  .copy-btn[hidden] { display: none; }
   #paintClear svg { width: 18px; height: 18px; }
-  .fold-text { margin-top: 2px; font-size: .85rem; white-space: pre-line; overflow-wrap: anywhere; }
   dialog.prompt-detail { width: min(520px, calc(100vw - 24px)); max-height: min(75dvh, 640px); padding: 0; gap: 0; overflow: hidden; }
   .prompt-detail .panel-dialog-title { flex: none; padding: 14px 16px 0; }
   .prompt-detail-text { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 16px; white-space: pre-wrap; overflow-wrap: anywhere; }
@@ -692,6 +742,17 @@
   .shot-actions .icon-btn.del { background: transparent; color: var(--muted); }
   .shot-actions .icon-btn[aria-expanded="true"] { border-color: var(--accent); color: var(--accent); }
   .shot-actions-right .seed-fold { right: 0; }
+  /* A film's row: Render again centred, its seed on the right. */
+  .shot-actions.shot-actions-centred { display: grid; grid-template-columns: 1fr auto 1fr; }
+  .shot-actions-centred .shot-actions-right { justify-self: end; }
+  .shot-actions-middle > button { width: auto; margin: 0; padding: 6px 12px; font-size: .8rem; background: var(--panel-2); border: 1px solid var(--line); color: var(--text); }
+  /* A Generate seed: its icon and value as one quiet button; it opens the seed dialog. */
+  .seed-pill { width: auto; margin: 0; padding: 6px 12px; display: inline-flex; align-items: center; gap: 8px; background: transparent;
+    border: 1px solid var(--line); border-radius: 999px; color: var(--muted); font-variant-numeric: tabular-nums; }
+  .seed-pill svg { width: 16px; height: 16px; }
+  .seed-pill.pinned { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 45%, transparent); }
+  dialog.seed-dialog { width: min(340px, calc(100vw - 24px)); }
+  .seed-dialog-foot { justify-content: flex-end; }
   /* Buttons in every box over the page: small, as Quota's Close. */
   .shots-foot.small { gap: 8px; padding: 10px 16px; }
   .shots-foot.small button, .shots-foot button { flex: 0 1 auto; min-width: 96px; padding: 6px 18px; font-size: .82rem; font-weight: 600; border-radius: 999px; }
@@ -782,8 +843,6 @@
   .strip-total:empty { display: none; }
   .stick .strip[hidden] { display: block; max-height: 0; opacity: 0; padding-top: 0; padding-bottom: 0; }
   .wrap { padding-bottom: calc(var(--head, 130px) + 16px); }
-  /* Typing on a phone, the keyboard takes the bottom of the screen: the footer steps aside until it's done. */
-  body.typing .stick { opacity: 0; transform: translateY(100%); pointer-events: none; transition: opacity .15s ease, transform .15s ease; }
   .stick { transition: opacity .2s ease, transform .2s ease; }
   .jump { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 5px; padding: 6px 16px; }
   .jump a {
@@ -866,6 +925,7 @@
   /* Each heading folds what's under it away. */
   summary.section-title { min-width: 0; overflow-wrap: anywhere; list-style: none; display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 4px 0; user-select: none; }
   summary.section-title::-webkit-details-marker { display: none; }
+  summary.section-title .clear-prompt[hidden] { display: none; }
   summary.section-title .clear-prompt { width: auto; margin: 0 0 0 auto; padding: 3px 8px; border: 1px solid var(--line); background: transparent;
     color: var(--muted); font-size: .7rem; font-weight: 600; text-transform: none; letter-spacing: normal; }
   summary.section-title::after { content: "\203A"; font-size: 1.2rem; line-height: 1; color: var(--muted); transform: rotate(90deg); transition: transform .15s; }
@@ -1175,9 +1235,9 @@
     </details>
 
     <details class="section" id="shortsPrompt">
-      <summary class="section-title">Prompt <button type="button" class="clear-prompt" id="clearShortsPrompt" aria-label="Clear topic">Clear</button></summary>
-      <label for="topic">Topic</label>
-      <input id="topic" name="topic" placeholder="e.g. Why the Sahara was once green" autocomplete="off">
+      <summary class="section-title">Prompt <button type="button" class="clear-prompt" id="clearShortsPrompt" aria-label="Clear prompt" hidden>Clear</button></summary>
+      <label for="topic">Prompt</label>
+      <textarea id="topic" name="topic" data-prompt inputmode="none" placeholder="e.g. Why the Sahara was once green" autocomplete="off"></textarea>
       <div class="hint">Leave empty for an AI pick. Topics already made aren't repeated.</div>
       <div id="shortsH3Box" hidden>
         <label class="check"><input type="checkbox" id="shortsH3Enabled"><span>Enable OpenH3-IR</span></label>
@@ -1244,7 +1304,7 @@
         <label for="shortsSeed">Seed</label>
         <div class="seed-line">
           <input id="shortsSeed" name="seed" inputmode="numeric" autocomplete="off" placeholder="Random" pattern="[0-9]*">
-          <button type="button" class="ghost" data-seed-pick="shortsSeed" title="Pick a random seed to keep" aria-label="Pick a random seed to keep"><svg class="icon" viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 3h5v5M4 20 21 3M21 16v5h-5M15 15l6 6M4 4l5 5"/></svg></button>
+          <button type="button" class="ghost" data-seed-pick="shortsSeed" title="Pick a random seed to keep" aria-label="Pick a random seed to keep"></button>
           <button type="button" class="ghost" data-seed-clear="shortsSeed" title="Back to random" aria-label="Back to a random seed every time">✕</button>
         </div>
       </div>
@@ -1311,7 +1371,7 @@
     </div>
     <div id="narrationBox" class="hidden">
       <label for="narration">What to say</label>
-      <textarea id="narration" name="narration" placeholder="The film is voiced with this, and its shots follow it."></textarea>
+      <textarea id="narration" name="narration" data-prompt inputmode="none" placeholder="The film is voiced with this, and its shots follow it."></textarea>
       <label for="videoVoice">Voice</label>
       <select id="videoVoice" name="voice">
         {% for value, label in voices %}<option value="{{ value }}">{{ label }}</option>{% endfor %}
@@ -1319,9 +1379,13 @@
     </div>
     <div class="hint" id="audioHint" hidden>The film is as long as the audio. A workflow with Load Audio gets it per clip.</div>
 
-    <label for="sizePreset">Resolution</label>
+    <div class="range-head"><label for="sizePreset">Resolution</label><output class="resolution-size" id="videoPixelSize"></output></div>
+    <div class="resolution-line">
     <select id="sizePreset">
-      <option value="">Highest (720p), in the shape of image 1</option>
+      <option value="">Same shape as image 1</option>
+      <optgroup label="Aspect ratio">
+        {% for value, label in image_aspects %}<option value="{{ value }}">{{ label }}</option>{% endfor %}
+      </optgroup>
       <optgroup label="Landscape 16:9">
         {% for name, width, height in size_presets %}<option value="{{ width }}x{{ height }}">{{ name }} ({{ width }}x{{ height }}) · {{ "%.3f"|format(width * height / 1000000) }} MP</option>{% endfor %}
       </optgroup>
@@ -1330,6 +1394,13 @@
       </optgroup>
       <option value="custom">Custom size</option>
     </select>
+    <span class="aspect-box" id="videoAspectBox" aria-hidden="true"></span>
+    <div class="count-stepper mp-stepper" id="videoMegapixelsBox">
+      <button type="button" id="videoMegapixelsDown" aria-label="0.1 megapixels fewer">−</button>
+      <input type="text" id="videoMegapixelsValue" readonly aria-label="Megapixels" title="Tap for 480p's pixel count">
+      <button type="button" id="videoMegapixelsUp" aria-label="0.1 megapixels more">+</button>
+    </div>
+    </div>
     <input id="size" name="size" placeholder="Such as 1280x736, rounded to multiples of 32" autocomplete="off" style="margin-top:8px" hidden>
 
     <div id="durationBox">
@@ -1386,8 +1457,8 @@
       {% for llm in llms %}<option value="{{ llm.name }}" {% if not llm.ready %}disabled{% endif %}>{{ llm.label }}{% if not llm.ready %} (no key in .env){% endif %}</option>{% endfor %}
     </select>
     </div>
-    <div class="prompt-label-row"><label for="prompt" id="videoPromptLabel">Prompt</label><span class="prompt-actions"><button type="button" id="clearVideoPrompt" aria-label="Clear video prompt">Clear</button><button type="button" class="prompt-write" id="writeVideoPrompt" aria-label="Write video prompt" title="Write prompt" disabled></button></span></div>
-    <div class="prompt-writing" id="videoPromptWriting"><textarea id="prompt" name="prompt" placeholder="e.g. A storm rolls in over the harbour and the fishing boats race home"></textarea><div class="prompt-progress" id="videoPromptProgress" hidden></div><div class="prompt-eta" id="videoPromptEta" role="status" hidden></div></div>
+    <div class="prompt-label-row"><label for="prompt" id="videoPromptLabel">Prompt</label><span class="prompt-actions" hidden><button type="button" id="clearVideoPrompt" aria-label="Clear video prompt">Clear</button><button type="button" class="prompt-write" id="writeVideoPrompt" aria-label="Write video prompt" title="Write prompt" disabled></button></span></div>
+    <div class="prompt-writing" id="videoPromptWriting"><textarea id="prompt" name="prompt" data-prompt inputmode="none" placeholder="e.g. A storm rolls in over the harbour and the fishing boats race home"></textarea><div class="prompt-progress" id="videoPromptProgress" hidden></div><div class="prompt-eta" id="videoPromptEta" role="status" hidden></div></div>
     <div class="err" id="videoPromptWriteError" role="alert" hidden></div>
     <div class="hint" id="videoPromptHint">A sentence or two is enough.</div>
     <div id="videoH3Box" hidden>
@@ -1422,7 +1493,7 @@
     <label for="videoSeed">Seed</label>
     <div class="seed-line">
       <input id="videoSeed" name="seed" inputmode="numeric" autocomplete="off" placeholder="Random" pattern="[0-9]*">
-      <button type="button" class="ghost" data-seed-pick="videoSeed" title="Pick a random seed to keep" aria-label="Pick a random seed to keep"><svg class="icon" viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 3h5v5M4 20 21 3M21 16v5h-5M15 15l6 6M4 4l5 5"/></svg></button>
+      <button type="button" class="ghost" data-seed-pick="videoSeed" title="Pick a random seed to keep" aria-label="Pick a random seed to keep"></button>
       <button type="button" class="ghost" data-seed-clear="videoSeed" title="Back to random" aria-label="Back to a random seed every time">✕</button>
     </div>
 
@@ -1488,10 +1559,9 @@
     </div>
 
     <div id="imageSizeBox">
-      <div class="row">
-        <div>
-          <label for="imageAspect">Aspect ratio or screen</label>
-          <select id="imageAspect" name="aspect">
+      <div class="range-head"><label for="imageAspect">Resolution</label><output class="resolution-size" id="imagePixelSize"></output></div>
+      <div class="resolution-line">
+          <select id="imageAspect" name="aspect" aria-label="Aspect ratio or screen">
             <option value="image">Same as the image</option>
             <optgroup label="Aspect ratio">
               {% for value, label in image_aspects %}<option value="{{ value }}">{{ label }}</option>{% endfor %}
@@ -1504,19 +1574,16 @@
             </optgroup>
             <option value="custom">Exact size</option>
           </select>
-        </div>
-        <div id="imageMegapixelsBox">
-          <label for="imageMegapixels">Megapixels</label>
-          <select id="imageMegapixels" name="megapixels">
-            <option value="image">Same as the image</option>
-            {% for value in image_megapixels %}<option value="{{ value }}">{{ value }} MP</option>{% endfor %}
-            <option value="1.6" hidden disabled>1.6 MP</option>
-          </select>
+        <span class="aspect-box" id="imageAspectBox" aria-hidden="true"></span>
+        <div class="count-stepper mp-stepper" id="imageMegapixelsBox">
+          <input type="hidden" id="imageMegapixels" name="megapixels" value="image">
+          <button type="button" id="imageMegapixelsDown" aria-label="0.1 megapixels fewer">−</button>
+          <input type="text" id="imageMegapixelsValue" readonly aria-label="Megapixels" title="Tap for the image's own size">
+          <button type="button" id="imageMegapixelsUp" aria-label="0.1 megapixels more">+</button>
         </div>
       </div>
       <input id="imageSize" name="size" placeholder="Such as 1920x1080" autocomplete="off" style="margin-top:8px" hidden>
     </div>
-    <div class="hint" id="imageSizeHint"></div>
     <label for="imageCount">How many images</label>
     <div class="count-stepper">
       <button type="button" id="imageCountDown" aria-label="Fewer images">−</button>
@@ -1539,8 +1606,8 @@
       </select>
       <div id="imageToPromptSlot"></div>
     </div>
-    <div class="prompt-label-row"><label for="imagePrompt" id="imagePromptLabel">Prompt</label><span class="prompt-actions"><button type="button" id="clearImagePrompt" aria-label="Clear image prompt">Clear</button><button type="button" class="prompt-write" id="writeImagePrompt" aria-label="Write image prompt" title="Write prompt" disabled></button></span></div>
-    <div class="prompt-writing" id="imagePromptWriting"><textarea id="imagePrompt" name="prompt"></textarea><div class="prompt-progress" id="imagePromptProgress" hidden></div><div class="prompt-eta" id="imagePromptEta" role="status" hidden></div></div>
+    <div class="prompt-label-row"><label for="imagePrompt" id="imagePromptLabel">Prompt</label><span class="prompt-actions" hidden><button type="button" id="clearImagePrompt" aria-label="Clear image prompt">Clear</button><button type="button" class="prompt-write" id="writeImagePrompt" aria-label="Write image prompt" title="Write prompt" disabled></button></span></div>
+    <div class="prompt-writing" id="imagePromptWriting"><textarea id="imagePrompt" name="prompt" data-prompt inputmode="none"></textarea><div class="prompt-progress" id="imagePromptProgress" hidden></div><div class="prompt-eta" id="imagePromptEta" role="status" hidden></div></div>
     <div class="err" id="imagePromptWriteError" role="alert" hidden></div>
     <div class="hint" id="imagePromptHint"></div>
     <div class="hint" id="imageHowDirect" hidden>Your prompt goes in as it is, so each image differs only by its seed.</div>
@@ -1558,7 +1625,7 @@
     <label for="imageSeed">Seed</label>
     <div class="seed-line">
       <input id="imageSeed" name="seed" inputmode="numeric" autocomplete="off" placeholder="Random" pattern="[0-9]*">
-      <button type="button" class="ghost" data-seed-pick="imageSeed" title="Pick a random seed to keep" aria-label="Pick a random seed to keep"><svg class="icon" viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 3h5v5M4 20 21 3M21 16v5h-5M15 15l6 6M4 4l5 5"/></svg></button>
+      <button type="button" class="ghost" data-seed-pick="imageSeed" title="Pick a random seed to keep" aria-label="Pick a random seed to keep"></button>
       <button type="button" class="ghost" data-seed-clear="imageSeed" title="Back to random" aria-label="Back to a random seed every time">✕</button>
     </div>
     <label class="check" id="transparentBox" hidden>
@@ -1623,6 +1690,7 @@
   <div class="panel-dialog-title" id="promptDetailTitle">Detailed prompt</div>
   <div class="prompt-detail-text" id="promptDetailText" tabindex="0"></div>
   <div class="prompt-detail-actions">
+    <button type="button" class="copy-btn" id="promptDetailYours" aria-pressed="false" aria-label="Show your prompt" title="Your prompt" hidden></button>
     <button type="button" class="copy-btn" id="promptDetailCopy" aria-label="Copy detailed prompt" title="Copy detailed prompt"></button>
     <button type="button" class="panel-close" id="promptDetailClose" autofocus>Close</button>
   </div>
@@ -1721,6 +1789,34 @@
     <button type="button" class="panel-close paint-save" id="paintDone">Save</button>
   </div>
 </dialog>
+<dialog id="seedDialog" class="panel-dialog seed-dialog" aria-labelledby="seedDialogTitle">
+  <div class="panel-dialog-title" id="seedDialogTitle">Seed</div>
+  <div class="seed-line">
+    <input id="seedDialogValue" inputmode="numeric" autocomplete="off" placeholder="Random" aria-labelledby="seedDialogTitle">
+    <button type="button" class="ghost" id="seedDialogRoll" title="A new random seed" aria-label="A new random seed"></button>
+    <button type="button" class="ghost" id="seedDialogClear" title="Back to random" aria-label="Back to a random seed">✕</button>
+  </div>
+  <div class="hint">Empty: a new random seed each time it is made.</div>
+  <div class="err" id="seedDialogError" role="alert" hidden></div>
+  <div class="prompt-editor-foot seed-dialog-foot">
+    <button type="button" class="panel-close paint-save" id="seedDialogSave">Save</button>
+    <button type="button" class="panel-close" id="seedDialogCancel">Cancel</button>
+  </div>
+</dialog>
+<dialog id="promptEditor" class="panel-dialog prompt-editor" aria-labelledby="promptEditorTitle">
+  <div class="prompt-editor-head"><div class="panel-dialog-title" id="promptEditorTitle">Prompt</div><span class="hint" id="promptEditorCount" aria-live="polite"></span></div>
+  <div class="prompt-editor-box">
+    <textarea id="promptEditorText" aria-labelledby="promptEditorTitle" spellcheck="true"></textarea>
+  </div>
+  <div class="prompt-editor-foot">
+    <button type="button" class="prompt-copy prompt-enhance" id="promptEditorEnhance" aria-label="Write it with the LLM" title="Write it with the LLM: your idea becomes a full prompt" hidden></button>
+    <button type="button" class="prompt-copy" id="promptEditorCopy" aria-label="Copy" title="Copy"></button>
+    <button type="button" class="prompt-copy prompt-clear" id="promptEditorClear" aria-label="Clear" title="Clear"></button>
+    <span class="prompt-editor-gap"></span>
+    <button type="button" class="panel-close paint-save" id="promptEditorSave">Save</button>
+    <button type="button" class="panel-close" id="promptEditorCancel">Cancel</button>
+  </div>
+</dialog>
 <dialog id="paintPrompts" class="panel-dialog" aria-labelledby="paintPromptsTitle">
   <div class="panel-dialog-title" id="paintPromptsTitle">Colour prompts</div>
   <div class="paint-error" id="paintPromptsError" role="alert" hidden></div>
@@ -1733,16 +1829,20 @@
   <div class="viewer-bar">
     <div class="viewer-head"><span class="viewer-count" id="viewerCount"></span><div class="viewer-title" id="viewerTitle"></div><span class="viewer-res" id="viewerRes"></span></div>
     <div class="viewer-meta"><button type="button" id="viewerMeta" aria-expanded="false" aria-controls="viewerMetaDetails"></button><div class="viewer-meta-details" id="viewerMetaDetails" hidden></div></div>
-    <div class="viewer-tools" id="viewerTools" hidden>
+    <div class="viewer-tools" id="viewerTools">
+      <div class="viewer-tools-left">
+      <button type="button" class="icon-btn" id="viewerVariations" aria-label="More like this" title="More like this one: its prompt and settings in Generate, on new seeds"></button>
+      <button type="button" class="icon-btn" id="viewerPrompts" aria-label="Detailed prompt" title="Detailed prompt, with your own a tap away"></button>
       <button type="button" class="icon-btn" id="viewerUpscale" aria-label="Upscale" title="Make this one bigger, as a new image in its set"></button>
       <button type="button" class="icon-btn" id="viewerEdit" aria-label="Edit" title="Edit this one: it goes to Generate as image 1, with the Qwen-Image 2.1 edit workflow"></button>
-      <button type="button" class="icon-btn" id="viewerVariations" aria-label="More like this" title="More like this one: its prompt and settings in Generate, on new seeds"></button>
-      <button type="button" class="icon-btn" id="viewerPrompts" aria-label="Prompts" title="This image's prompt, and its set's"></button>
+      </div>
+      <div class="viewer-tools-right">
+      <a class="icon-btn" id="viewerDownload" href="#" download aria-label="Download" title="Download"></a>
+      <button type="button" class="icon-btn del" id="viewerDelete" aria-label="Delete" title="Delete"></button>
+      </div>
     </div>
     <div class="viewer-actions">
-      <a class="button" id="viewerDownload" href="#" download>Download</a>
-      <button type="button" class="ghost" id="viewerClose">Close</button>
-      <button type="button" class="del" id="viewerDelete">Delete</button>
+      <button type="button" class="plain" id="viewerClose">Close</button>
     </div>
   </div>
 </dialog>
@@ -1860,17 +1960,7 @@ function loadForm() {
     else if ([...(el.options || [])].some(o => o.value === String(data[el.name]) && !o.disabled) || !el.options) el.value = data[el.name];
   }
 }
-// --- While typing on a phone, the footer steps aside: the keyboard has the bottom of the screen ---
-const TYPED = /^(text|search|email|url|tel|number|password)$/;
-function typingIn(el) { return el && (el.tagName === 'TEXTAREA' || (el.tagName === 'INPUT' && TYPED.test(el.type))); }
-function syncTyping() {
-  // A box being typed in, or the screen shrunk well below the page by a keyboard.
-  const shrunk = window.visualViewport && window.visualViewport.height < window.innerHeight * 0.75;
-  document.body.classList.toggle('typing', !WIDE.matches && (typingIn(document.activeElement) || !!shrunk));
-}
-document.addEventListener('focusin', syncTyping);
-document.addEventListener('focusout', () => setTimeout(syncTyping, 50));  // After the next box has the focus, if any
-if (window.visualViewport) window.visualViewport.addEventListener('resize', syncTyping);
+// The footer stays on the screen whatever is focused: long text is typed in the prompt editor, over it.
 
 // --- Presets: a side's settings under a name, kept by the panel so every device has them ---
 // Everything you'd set again, but not what each run is about: its prompt, narration, seed, topic, files and their roles.
@@ -2304,7 +2394,7 @@ $('tabUploaded').onclick = () => setTab('uploaded');
 
 // --- Video: an image, a prompt, and prompts you can read before rendering ---
 const VIDEO_STORE_KEY = 'comfyui-auto-gen.video.v1';
-const VIDEO_DEFAULTS = { llm: {{ default_llm | tojson }}, review: true, duration: {{ film_limits[2] | tojson }}, privacy: 'private', start: 'chain' };
+const VIDEO_DEFAULTS = { llm: {{ default_llm | tojson }}, review: false, duration: {{ film_limits[2] | tojson }}, privacy: 'private', start: 'chain' };
 // What belongs to one film rather than being the way you like to work.
 // A seed is for one run: kept, it would quietly make the next film the same.
 const NOT_REMEMBERED = ['prompt', 'size', 'narration', 'seed', 'areas', 'source_seed'];
@@ -2321,13 +2411,14 @@ function saveVideoForm() {
   }
   try { localStorage.setItem(VIDEO_STORE_KEY, JSON.stringify(data)); } catch (e) {}
 }
-function loadVideoForm() {
+function loadVideoForm(skip = []) {
   let data = {};
   try { data = JSON.parse(localStorage.getItem(VIDEO_STORE_KEY)); } catch (e) {}
   data = { ...VIDEO_DEFAULTS, ...data };
   for (const el of $('formVideo').elements) {
-    if (!remembered(el) || !(el.name in data)) continue;
-    if (el.type === 'checkbox') { if (!el.disabled) el.checked = !!data[el.name]; }
+    if (!remembered(el) || !(el.name in data) || skip.includes(el.name)) continue;
+    // A checkbox is put back even while disabled: it is only disabled until its mode is chosen, as Multishot's first frame.
+    if (el.type === 'checkbox') el.checked = !!data[el.name];
     else if (!el.options || [...el.options].some(o => o.value === String(data[el.name]) && !o.disabled)) el.value = data[el.name];
   }
 }
@@ -2364,10 +2455,10 @@ async function loadVideoWorkflows() {
   workflowMultishot = Object.fromEntries(data.workflows.map(w => [w.name, !!w.h3_multishot]));
   workflowDirector = Object.fromEntries(data.workflows.map(w => [w.name, !!w.h3_director]));
   if (firstLoad) {
-    try {
-      const saved = JSON.parse(localStorage.getItem(VIDEO_STORE_KEY)) || {};
-      if ((!saved.workflow || saved.workflow === select.value) && ['multishot', 'director'].includes(saved.start)) $('start').value = saved.start;
-    } catch (e) {}
+    // Read before the workflows were known, the form fell back on the built-in model: its 10 s clip cap cut a
+    // remembered 12 s clip, and the H3 modes weren't there to choose. Now they are, so read it again.
+    syncVideoForm();
+    loadVideoForm(['workflow']);
   }
   syncVideoForm();
   $('videoWorkflowOff').hidden = !!data.online;
@@ -2409,6 +2500,7 @@ function showImage(box) {
   if (preview.src) URL.revokeObjectURL(preview.src);
   preview.classList.toggle('hidden', !file);
   if (file) preview.src = URL.createObjectURL(file);
+  preview.onload = () => syncSize();
   // A role only goes with an image, so an empty box sends none.
   const role = box.querySelector('select');
   if (role) {
@@ -2660,12 +2752,20 @@ settingsDialog.addEventListener('click', async e => {
 });
 // After a restart, the page waits for the server to answer again, then reloads onto the new code.
 async function reloadWhenBack() {
-  settingsNote('Restarting…');
+  // The button says it, in yellow, rather than a line under it.
+  const button = $('restartPanel');
+  button.classList.add('restarting');
+  button.disabled = true;
+  button.querySelector('span').textContent = 'Restarting';
+  settingsNote('');
   await new Promise(r => setTimeout(r, 3000));
   for (let i = 0; i < 60; i++) {
     try { await fetch('/api/status', { cache: 'no-store' }); location.reload(); return; } catch (e) {}
     await new Promise(r => setTimeout(r, 1000));
   }
+  button.classList.remove('restarting');
+  button.disabled = false;
+  button.querySelector('span').textContent = 'Restart panel';
   settingsNote('The panel did not come back. Start it with start_webapp.pyw.', true);
 }
 $('restartPanel').addEventListener('click', async () => {
@@ -2767,6 +2867,22 @@ function shotCount(seconds) {
   const count = Math.max(Math.ceil(seconds / longest), Math.round(seconds / usual), 1);
   return seconds >= shortest ? Math.max(1, Math.min(count, Math.floor(seconds / shortest))) : 1;
 }
+// --- Video resolution: image 1's shape or an aspect ratio, sized a tenth of a megapixel at a time; or a preset ---
+// Untouched, "same shape as image 1" sends no size: the pipeline makes it 480p's pixel count in image 1's shape.
+const VIDEO_STEP = 32, VIDEO_DEFAULT_AREA = 864 * 480, VIDEO_FULL_AREA = 1280 * 736;
+let videoMegapixels = null;  // null: the default pixel count; else what the stepper chose
+function videoMostPixels() { return Math.min(workflowMost[$('videoWorkflow').value] || VIDEO_FULL_AREA, VIDEO_FULL_AREA); }
+function videoArea() { return Math.min(videoMegapixels == null ? VIDEO_DEFAULT_AREA : videoMegapixels * 1e6, videoMostPixels()); }
+// Image 1's shape, from its preview once that has loaded; 16:9 until then.
+function videoImageShape() {
+  const preview = imageBoxes()[0] && imageBoxes()[0].querySelector('img');
+  return preview && preview.naturalWidth && !preview.classList.contains('hidden') ? [preview.naturalWidth, preview.naturalHeight] : [1280, 736];
+}
+// Rounded down onto the grid, so the pixel count stays within the model's.
+function videoSized(ratio) {
+  const area = videoArea(), side = value => Math.max(VIDEO_STEP, Math.floor(value / VIDEO_STEP) * VIDEO_STEP);
+  return [side(Math.sqrt(area * ratio)), side(Math.sqrt(area / ratio))];
+}
 function syncSize() {
   const most = workflowMost[$('videoWorkflow').value] || 0;
   [...$('sizePreset').options].forEach(o => {
@@ -2775,10 +2891,37 @@ function syncSize() {
   });
   if ($('sizePreset').selectedOptions[0].disabled) $('sizePreset').value = '';
   $('size').placeholder = most ? `Up to ${(most / 1e6).toFixed(2)} megapixels, such as 960x544` : 'Such as 1280x736, rounded to multiples of 32';
-  const preset = $('sizePreset').value;
-  $('size').hidden = preset !== 'custom';
-  if (preset !== 'custom') $('size').value = preset;
+  const preset = $('sizePreset').value, custom = preset === 'custom', fixed = /^\d+x\d+$/.test(preset), shape = /^\d+:\d+$/.test(preset);
+  $('size').hidden = !custom;
+  $('videoMegapixelsBox').classList.toggle('hidden', custom || fixed);
+  let sides = null;
+  if (fixed) sides = preset.split('x').map(Number);
+  else if (shape) { const [w, h] = preset.split(':').map(Number); sides = videoSized(w / h); }
+  else if (!custom) { const [w, h] = videoImageShape(); sides = videoSized(w / h); }
+  if (!custom) $('size').value = fixed || shape || videoMegapixels != null ? sides.join('x') : '';
+  const shown = custom ? $('size').value.trim().split('x').map(Number) : sides;
+  $('videoPixelSize').textContent = shown && shown.length === 2 && shown.every(n => n > 0) ? shown.join('×') : '';
+  drawAspect($('videoAspectBox'), ...(shown && shown.length === 2 ? shown : [0, 0]));
+  const mp = videoArea() / 1e6;
+  $('videoMegapixelsValue').value = `${mp.toFixed(1)}MP`;
+  $('videoMegapixelsDown').disabled = mp <= 0.1 + 1e-9;
+  $('videoMegapixelsUp').disabled = mp + 0.1 > videoMostPixels() / 1e6 + 1e-9;
 }
+function stepVideoMegapixels(by) {
+  const next = Math.round((videoArea() / 1e6 + by) * 10) / 10;
+  videoMegapixels = Math.min(videoMostPixels() / 1e6, Math.max(0.1, next));
+  syncSize();
+  $('size').dispatchEvent(new Event('change', { bubbles: true }));
+}
+$('videoMegapixelsDown').addEventListener('click', () => stepVideoMegapixels(-0.1));
+$('videoMegapixelsUp').addEventListener('click', () => stepVideoMegapixels(0.1));
+// A tap on the number goes back to the default: 480p's pixel count.
+$('videoMegapixelsValue').addEventListener('click', () => {
+  videoMegapixels = null;
+  syncSize();
+  $('size').dispatchEvent(new Event('change', { bubbles: true }));
+});
+$('size').addEventListener('input', syncSize);
 function syncAudio() {
   const mode = $('audioMode').value;
   $('audioFileBox').classList.toggle('hidden', mode !== 'file');
@@ -2862,7 +3005,8 @@ $('addImage').addEventListener('click', () => {
 
 // --- Image: a set of images from text or from an image, with prompts the LLM writes or you do ---
 const IMAGE_STORE_KEY = 'comfyui-auto-gen.image.v1';
-const IMAGE_DEFAULTS = { llm: {{ default_llm | tojson }}, prompt_mode: 'llm', count: 1, aspect: 'image', megapixels: '1', review: false };
+// An image is made in the shape of image 1 at its own size, within what the model makes well (media.pick_size).
+const IMAGE_DEFAULTS = { llm: {{ default_llm | tojson }}, prompt_mode: 'llm', count: 1, aspect: 'image', megapixels: 'image', review: false };
 const SIZE_STEP = {{ image_size_step }}, MEGAPIXEL = 1024 * 1024, MOST_MEGAPIXELS = 16, LARGE_MEGAPIXELS = 4;
 const AUTOMATIC_TAKES = { min_images: 0, max_images: 1, size: true };
 // What each model makes well, from pipelines/image/models.py.
@@ -3537,28 +3681,60 @@ function syncImageLimits() {
   const picked = select => [...(select.options || [])].find(o => o.value === select.value);
   if (plain && picked($('imageAspect')) && picked($('imageAspect')).disabled) $('imageAspect').value = 'image';
   if (picked($('imageMegapixels')) && picked($('imageMegapixels')).disabled && $('imageMegapixels').value === '1.6') $('imageMegapixels').value = 'image';
+  if (most && $('imageMegapixels').value !== 'image' && +$('imageMegapixels').value > most) $('imageMegapixels').value = String(most);
   return most ? ` ${model.label} makes images up to ${most} MP.` : '';
 }
+const MP_STEP = 0.1;
+function shownMegapixels() {
+  const [width, height] = pickedSize();
+  return Math.round(width * height / MEGAPIXEL * 10) / 10;
+}
+function syncMegapixels() {
+  const own = $('imageMegapixels').value === 'image', mp = own ? shownMegapixels() : +$('imageMegapixels').value;
+  $('imageMegapixelsValue').value = `${mp.toFixed(1)}MP`;
+  $('imageMegapixelsValue').title = own ? 'The image\'s own size, within what the model makes well' : 'Tap for the image\'s own size';
+  const model = imageModel(), most = (model && model.most_megapixels) || MOST_MEGAPIXELS;
+  $('imageMegapixelsDown').disabled = mp <= MP_STEP;
+  $('imageMegapixelsUp').disabled = mp + MP_STEP > most + 1e-9;
+}
+function stepMegapixels(by) {
+  const model = imageModel(), most = (model && model.most_megapixels) || MOST_MEGAPIXELS;
+  const from = $('imageMegapixels').value === 'image' ? shownMegapixels() : +$('imageMegapixels').value;
+  const next = Math.min(most, Math.max(MP_STEP, Math.round((from + by) * 10) / 10));
+  $('imageMegapixels').value = next.toFixed(1);
+  $('imageMegapixels').dispatchEvent(new Event('change', { bubbles: true }));
+  syncImageSize();
+}
+$('imageMegapixelsDown').addEventListener('click', () => stepMegapixels(-MP_STEP));
+$('imageMegapixelsUp').addEventListener('click', () => stepMegapixels(MP_STEP));
+$('imageMegapixelsValue').addEventListener('click', () => {
+  $('imageMegapixels').value = 'image';
+  $('imageMegapixels').dispatchEvent(new Event('change', { bubbles: true }));
+  syncImageSize();
+});
 function syncImageSize() {
   const takes = imageTakes();
   const limit = syncImageLimits();
   const aspect = $('imageAspect').value, typed = aspect === 'custom', screen = /^\d+x\d+$/.test(aspect), exact = typed || screen;
   const region = ['areas', 'expand'].includes(imageMode());
   $('imageSizeBox').classList.toggle('hidden', !takes.size || region);
-  if (region) { $('imageSizeHint').textContent = imageMode() === 'areas' ? 'It keeps image 1\'s size.' : ''; return; }
+  if (region) return;
   $('imageSize').hidden = !typed;
   $('imageMegapixelsBox').classList.toggle('hidden', exact);
-  if (!takes.size) { $('imageSizeHint').textContent = 'This workflow sets its own size.'; return; }
+  if (!takes.size) { $('imagePixelSize').textContent = ''; return; }
   const size = typed ? $('imageSize').value.trim() : screen ? aspect : pickedSize().join('x');
-  const blank = !sourceSize && !chosenSources() && ($('imageAspect').value === 'image' || $('imageMegapixels').value === 'image')
-    ? ' With no image, "same as the image" means square and 1 MP.' : '';
-  const crop = chosenSources() ? ' An image of another shape is cropped at its edges to fit.' : '';
-  const sides = size.split('x').map(Number);
-  const model = imageModel(), over = model && model.most_megapixels && sides[0] * sides[1] > model.most_megapixels * MEGAPIXEL;
-  const large = over ? ` That is more than ${model.label} makes well: choose a smaller size.`
-    : sides[0] * sides[1] > LARGE_MEGAPIXELS * MEGAPIXEL ? ` That is far above what these models usually work at: expect a long render, and repeated details.` : '';
-  // Only what's worth knowing: the size itself is in the boxes above.
-  $('imageSizeHint').textContent = `${crop}${blank}${large}${limit}`.trim();
+  // The size it makes, beside the controls: it moves with each step.
+  $('imagePixelSize').textContent = typed ? '' : size.replace('x', '×');
+  drawAspect($('imageAspectBox'), ...(typed ? [0, 0] : size.split('x').map(Number)));
+  syncMegapixels();
+}
+// A small box in the shape chosen, beside the picker. Nothing to draw for a size still being typed.
+function drawAspect(box, width, height) {
+  box.classList.toggle('hidden', !(width > 0 && height > 0));
+  if (!(width > 0 && height > 0)) return;
+  const scale = 22 / Math.max(width, height);
+  box.style.width = `${Math.max(6, Math.round(width * scale))}px`;
+  box.style.height = `${Math.max(6, Math.round(height * scale))}px`;
 }
 // The chosen workflow's own options (core/workflow_options.py). A checkbox sends a hidden 0 before its own 1, so leaving
 // it unticked still says so. Drawn again only for another workflow, so what you set stays while you fill in the rest.
@@ -3581,7 +3757,7 @@ function imageOptionHtml(option, all) {
   }
   if (option.kind === 'text') {
     return `<label for="opt_${esc(option.id)}">${esc(option.label)}</label>
-      <textarea id="opt_${esc(option.id)}" name="${esc(name)}" rows="3" maxlength="4000"${locked}>${esc(option.default)}</textarea>`;
+      <textarea id="opt_${esc(option.id)}" name="${esc(name)}" rows="3" maxlength="4000" data-prompt inputmode="none"${locked}>${esc(option.default)}</textarea>`;
   }
   if (option.kind === 'choice') {
     return `<div class="option-row"><label for="opt_${esc(option.id)}">${esc(option.label)}</label>
@@ -3790,10 +3966,13 @@ const ICONS = {
   play: ICON_SVG('<path d="M7 4.5v15l12-7.5z" fill="currentColor"/>'),
   config: ICON_SVG('<path d="M4 7h10M18 7h2M4 17h2M10 17h10"/><circle cx="16" cy="7" r="2"/><circle cx="8" cy="17" r="2"/>'),
   category: ICON_SVG('<circle cx="5" cy="12" r="1" fill="currentColor"/><circle cx="12" cy="12" r="1" fill="currentColor"/><circle cx="19" cy="12" r="1" fill="currentColor"/>'),
+  // Clearing text, not deleting a thing: the bin stays for delete.
+  eraser: ICON_SVG('<path d="M7 20h13"/><path d="M4.6 15.4 14.5 5.5a2 2 0 0 1 2.8 0l2.2 2.2a2 2 0 0 1 0 2.8L11 19H7.4z"/><path d="m9 11 5 5"/>'),
+  brief: ICON_SVG('<path d="M6 3h9l4 4v14H6z"/><path d="M14 3v5h5M9 13h7M9 17h5"/>'),
   upscale: ICON_SVG('<path d="M4 10V4h6M20 14v6h-6"/><path d="M4 4l6 6M20 20l-6-6"/>'),
 };
 $('writeVideoPrompt').innerHTML = $('writeImagePrompt').innerHTML = ICONS.enhanced;
-for (const [id, icon] of Object.entries({ viewerVariations: 'config', viewerUpscale: 'upscale',
+for (const [id, icon] of Object.entries({ viewerDownload: 'download', viewerDelete: 'trash', promptDetailYours: 'brief', promptEditorCopy: 'copy', promptEditorClear: 'eraser', promptEditorEnhance: 'enhanced', viewerVariations: 'config', viewerUpscale: 'upscale',
   viewerEdit: 'prompts', viewerPrompts: 'enhanced' })) $(id).innerHTML = ICONS[icon];
 function outputSize(bytes) {
   if (bytes == null) return '';
@@ -3827,9 +4006,9 @@ function imageSetHtml(set) {
   const picture = (p, extra = '') => `<a href="/image-runs/${id}/files/${p.position}?v=${p.version}" data-view-set="${esc(set.id)}" data-view-position="${p.position}" title="${esc(p.title)}"${extra}><img loading="lazy" alt="${esc(p.title)}" src="/image-runs/${id}/thumbnails/${p.position}?v=${p.version}">`;
   const all = set.images.length > 1 ? `Download all ${set.images.length}` : 'Download';
   const actions = `<div class="image-set-actions">`
-    + `<button type="button" class="icon-btn" data-download-set="${esc(set.id)}" title="${all}" aria-label="${all}">${ICONS.download}</button>`
     + `<button type="button" class="icon-btn" data-again-set="${esc(set.id)}" title="The same again: its settings in Generate, to change first" aria-label="The same again">${ICONS.config}</button>`
     + `<button type="button" class="icon-btn" data-shots="${esc(set.id)}" title="Prompts" aria-label="Prompts">${ICONS.enhanced}</button>`
+    + `<button type="button" class="icon-btn" data-download-set="${esc(set.id)}" title="${all}" aria-label="${all}">${ICONS.download}</button>`
     + `<button type="button" class="icon-btn del" data-delete-set="${esc(set.id)}" title="Delete" aria-label="Delete">${ICONS.trash}</button></div>`;
   // Every set alike: its picture (an album's cover, with how many), and beside it the strip of the rest above its icons.
   const many = set.images.length > 1;
@@ -3858,17 +4037,21 @@ function renderImageSets() {
 }
 // --- The same again: a set's settings back in Generate, its images too, to change before pressing it ---
 // With position: more like that one image: its own prompt, word for word, four times on new seeds.
-async function sameAgain(id, position = null) {
+async function sameAgain(id, position = null, exact = null) {
   let data;
   try { data = await (await fetch(`/image-runs/${encodeURIComponent(id)}`)).json(); } catch (e) { data = { error: 'Could not reach the panel. Try again.' }; }
   if (!data.ok) { alert(data.error || 'Could not open that set.'); return; }
   const s = { ...data.settings };
-  const promptModel = $('imageLlm').value;
   const shot = position && data.shots[position - 1];
   if (shot) Object.assign(s, { prompt: shot.prompt, direct: true, count: VARIATIONS });
+  // Created again from a set's prompts: that one image, its prompt word for word, on its own seed.
+  if (exact) Object.assign(s, { prompt: exact.prompt, direct: true, count: exact.count || 1 });
   if (pipeline !== 'image') setPipeline('image');
   await loadImageWorkflows();
   $('imageWorkflow').value = [...$('imageWorkflow').options].some(o => o.value === s.workflow && !o.disabled) ? s.workflow : '';
+  syncImageForm();
+  applySavedForm($('formImage'), s.form);
+  syncImageForm();
   $('imagePromptMode').value = s.direct ? 'direct' : 'llm';
   $('imagePrompt').value = s.prompt || '';
   syncPromptWriter('image');
@@ -3889,11 +4072,12 @@ async function sameAgain(id, position = null) {
     } catch (e) { break; }
   }
   syncImageForm();
-  // The prompt model is a browser preference, not part of the content being reopened.
-  if ([...$('imageLlm').options].some(o => o.value === promptModel && !o.disabled)) $('imageLlm').value = promptModel;
+  // Reopened, a set comes back with every setting it was made with, its prompt model too.
+  if ([...$('imageLlm').options].some(o => o.value === s.llm && !o.disabled)) $('imageLlm').value = s.llm;
   syncImageForm();
   applyOptions($('imageOptionsBox'), imageTakes().options || [], s.options);
   syncImageForm();
+  if (exact) $('imageSeed').value = exact.seed || '';
   saveImageForm();
   showFormError('');
   $('imageGeneration').open = $('imagePromptSection').open = true;
@@ -3912,16 +4096,28 @@ function putFile(input, file) {
   files.items.add(file);
   input.files = files.files;
 }
+// The form a run was queued with, back in its fields. Called first: what the run itself recorded is set after it and wins.
+// The workflow is chosen before and its own options after; files go back as files.
+function applySavedForm(formEl, form) {
+  for (const el of formEl.elements) {
+    if (!form || !el.name || el.type === 'file' || el.name === 'workflow' || el.name.startsWith('opt_') || !(el.name in form)) continue;
+    const value = form[el.name];
+    if (el.type === 'checkbox') el.checked = ['on', '1', 'true', true].includes(value);
+    else if (el.type === 'radio') el.checked = el.value === String(value);
+    else if (!el.options || [...el.options].some(o => o.value === String(value))) el.value = value;
+  }
+}
 // --- The same again for a film: its settings, images, references and audio back in Generate ---
-async function sameAgainFilm(id) {
+async function sameAgainFilm(id, exact = null) {
   let data;
   try { data = await (await fetch(`/runs/${encodeURIComponent(id)}`)).json(); } catch (e) { data = { error: 'Could not reach the panel. Try again.' }; }
   if (!data.ok) { alert(data.error || 'Could not open that film.'); return; }
   const s = data.settings, base = `/runs/${encodeURIComponent(id)}/inputs`;
-  const promptModel = $('llm').value;
   if (pipeline !== 'video') setPipeline('video');
   await loadVideoWorkflows();
   $('videoWorkflow').value = [...$('videoWorkflow').options].some(o => o.value === s.workflow && !o.disabled) ? s.workflow : '';
+  syncVideoForm();
+  applySavedForm($('formVideo'), s.form);
   syncVideoForm();
   $('prompt').value = s.prompt || '';
   syncPromptWriter('video');
@@ -3935,7 +4131,13 @@ async function sameAgainFilm(id) {
   syncSize();
   $('duration').value = s.seconds;
   $('videoClipFixed').checked = !!s.clip_fixed;
-  $('videoClipSeconds').value = s.clip_fixed && s.clip_seconds ? `${s.clip_seconds}-${s.clip_seconds}` : '';
+  $('videoClipSeconds').value = s.clip_fixed && s.clip_seconds ? `${s.clip_seconds}-${s.clip_seconds}`
+    : s.clip_range ? `${s.clip_range[0]}-${s.clip_range[1]}` : (s.form ? $('videoClipSeconds').value : '');
+  $('videoPromptMode').value = s.prompt_mode || 'llm';
+  syncPromptWriter('video');
+  $('videoSeed').value = s.seed ?? '';
+  $('review').checked = !!s.review;
+  $('previewRun').checked = !!s.try_first;
   try {
     imageBoxes().forEach(clearImage);
     imagesShown = Math.max(1, s.images);
@@ -3970,9 +4172,23 @@ async function sameAgainFilm(id) {
   }
   syncVideoForm();
   applyOptions($('videoOptionsBox'), (workflowTakes[$('videoWorkflow').value] || {}).options || [], s.options);
-  if ([...$('llm').options].some(o => o.value === promptModel && !o.disabled)) $('llm').value = promptModel;
+  // Reopened, a film comes back with every setting it was made with, its prompt model too.
+  if ([...$('llm').options].some(o => o.value === s.llm && !o.disabled)) $('llm').value = s.llm;
+  if (exact) {
+    // Created again from a film's shots: that one shot as a film of its own, its prompt word for word, on its seed.
+    $('videoPromptMode').value = 'direct';
+    $('prompt').value = exact.prompt;
+    $('videoSeed').value = exact.seed || '';
+    $('duration').value = exact.seconds;
+    $('audioMode').value = 'none';
+  }
+  syncPromptWriter('video');
+  syncVideoForm();
+  // The local model is a Settings choice for every run, so it is named rather than switched.
+  const runModel = [...$('h3Model').options].find(o => o.value === s.h3_model);
+  showFormError(runModel && $('h3Model').value !== s.h3_model
+    ? `Made with ${runModel.textContent} as the local model. Settings now has ${$('h3Model').selectedOptions[0]?.textContent}.` : '');
   saveVideoForm();
-  showFormError('');
   if (WIDE.matches) $('optionsCard').scrollIntoView({ behavior: 'smooth' }); else showPage('generate');
 }
 const VARIATIONS = 5;
@@ -3997,11 +4213,18 @@ async function sameAgainShorts(id) {
   if (WIDE.matches) $('optionsCard').scrollIntoView({ behavior: 'smooth' }); else showPage('generate');
 }
 $('viewerVariations').addEventListener('click', () => {
-  if (!viewing || viewing.film) return;
-  const { id, position } = viewing;
+  if (!viewing) return;
+  const { id, position, film, run } = viewing;
+  if (film && !run) return;
   closeViewer();
-  sameAgain(id, position);
+  if (film) sameAgainFilm(run); else sameAgain(id, position);
 });
+// A cut title shows whole on a click, and is cut again on the next click, or for the next picture or film (setViewerTitle).
+$('viewerTitle').addEventListener('click', () => $('viewerTitle').classList.toggle('full'));
+function setViewerTitle(text) {
+  $('viewerTitle').classList.remove('full');
+  $('viewerTitle').textContent = text;
+}
 let upscaleMethod = 'fast';
 $('viewerUpscale').addEventListener('click', () => {
   const box = $('viewerUpscaleBar');
@@ -4105,12 +4328,18 @@ async function editInGenerate(id, position) {
   const box = sourceBoxes()[0];
   if (box) await useOutput(box, id, position);
 }
-$('viewerPrompts').addEventListener('click', () => {
+$('viewerPrompts').addEventListener('click', async () => {
   if (!viewing) return;
-  const id = viewing.film ? viewing.run : viewing.id, position = viewing.film ? undefined : viewing.position;
+  const id = viewing.film ? viewing.run : viewing.id;
   if (!id) return;
-  closeViewer();
-  openShots(id, position);
+  let data;
+  try { data = await (await fetch(runUrl(id))).json(); } catch (e) { data = { error: 'Could not reach the panel. Try again.' }; }
+  if (!data.ok) { alert(data.error || 'Could not open its prompt.'); return; }
+  // An image: its own prompt. A film: each shot's, in order.
+  const shot = viewing.film ? null : data.shots[viewing.position - 1];
+  const detailed = shot ? shot.enhanced_prompt || shot.prompt
+    : data.shots.map((s, i) => `${i + 1}. ${s.title}\n${s.enhanced_prompt || s.prompt}`).join('\n\n');
+  openPromptDetail(detailed, data.brief);
 });
 $('viewerEdit').addEventListener('click', () => {
   if (!viewing || viewing.film) return;
@@ -4162,7 +4391,7 @@ $('viewerMeta').addEventListener('click', () => {
   $('viewerMeta').setAttribute('aria-expanded', String(!$('viewerMetaDetails').hidden));
 });
 function showViewerMedia(video) {
-  $('viewerTools').hidden = video;
+  $('viewerTools').hidden = false;
   for (const id of ['viewerVariations', 'viewerEdit', 'viewerPrompts', 'viewerUpscale']) $(id).hidden = false;
   $('viewerImage').hidden = video;
   $('viewerVideo').hidden = !video;
@@ -4223,15 +4452,18 @@ function openFilm(name, filmFolder = folder) {
   showViewerMedia(true);
   // A film has Upscale (Video's only) and Prompts (its run's, if still saved), not the image editing.
   const canUpscale = filmFolder === 'video', canPrompt = !!film.run;
-  $('viewerTools').hidden = !canUpscale && !canPrompt;
-  $('viewerVariations').hidden = $('viewerEdit').hidden = true;
+  // Its settings back in Generate, from the same place as an image's "More like this".
+  $('viewerEdit').hidden = true;
+  $('viewerVariations').hidden = !canPrompt || filmFolder !== 'video';
+  $('viewerVariations').title = 'Open the settings it was made with in Generate';
+  $('viewerVariations').setAttribute('aria-label', 'Open its settings');
   $('viewerUpscale').hidden = !canUpscale;
   $('viewerPrompts').hidden = !canPrompt;
   $('viewerRes').textContent = film.resolution || '';
   $('viewerCount').textContent = films.length > 1 ? `${at + 1} of ${films.length}` : '';
   viewerMetadata(film);
   $('viewerVideo').src = url;
-  $('viewerTitle').textContent = film.title || film.topic || film.name;
+  setViewerTitle(film.title || film.topic || film.name);
   $('viewerDownload').href = `/download/${filmFolder}/${encodeURIComponent(name)}`;
   if (!$('imageViewer').open) $('imageViewer').showModal();
   $('viewerVideo').play().catch(() => {});  // A browser may want a tap first
@@ -4249,12 +4481,21 @@ function openViewer(id, position) {
   if (!picture) return;
   viewing = { id, position };
   showViewerMedia(false);
+  $('viewerVariations').title = 'More like this one: its prompt and settings in Generate, on new seeds';
+  $('viewerVariations').setAttribute('aria-label', 'More like this');
   resetZoom();
   const url = `/image-runs/${encodeURIComponent(id)}/files/${position}?v=${picture.version}`;
-  $('viewerImage').src = url;
+  // The small picture the set already shows comes at once; the full one replaces it as soon as it has arrived.
+  // The full file can be many megabytes, which is why a preview used to take so much longer than the album.
+  const img = $('viewerImage');
+  img.dataset.full = url;
+  img.src = `/image-runs/${encodeURIComponent(id)}/thumbnails/${position}?v=${picture.version}`;
+  const full = new Image();
+  full.onload = () => { if (img.dataset.full === url) img.src = url; };
+  full.src = url;
   $('viewerImage').alt = picture.title;
   const at = set.images.indexOf(picture);
-  $('viewerTitle').textContent = picture.title;
+  setViewerTitle(picture.title);
   $('viewerCount').textContent = set.images.length > 1 ? `${at + 1} of ${set.images.length}` : '';
   viewerMetadata(set);
   $('viewerDownload').href = `${url}&download=1`;
@@ -4263,6 +4504,7 @@ function openViewer(id, position) {
 }
 $('viewerImage').addEventListener('load', () => {
   const img = $('viewerImage');
+  if (img.dataset.full && !String(img.src).endsWith(img.dataset.full)) return;  // The small picture, while the full one comes
   $('viewerRes').textContent = viewing && !viewing.film && img.naturalWidth ? `${img.naturalWidth} × ${img.naturalHeight}` : '';
   // Twice the size of a 1440p image is past what SeedVR2 and the viewer can sensibly hold.
   $('viewerUpscale').hidden = Math.min(img.naturalWidth, img.naturalHeight) > UPSCALE_MOST_SIDE;
@@ -4477,9 +4719,9 @@ function filmHtml(v, filmFolder = folder) {
   const icon = (data, label, svg, extra = '') => `<button type="button" class="icon-btn${extra}" ${data} data-film-folder="${filmFolder}" title="${label}" aria-label="${label}">${svg}</button>`;
   const actions = '<div class="image-set-actions">'
     + (filmFolder === 'output' ? icon(`data-up="${name}" data-topic="${esc(v.topic || '')}"`, 'Upload to YouTube', ICONS.upload) : '')
-    + icon(`data-download-film="${name}"`, 'Download', ICONS.download)
     + (v.run ? icon(`data-again-film="${esc(v.run)}"`, 'The same again: its settings in Generate, to change first', ICONS.config) : '')
     + (v.run ? icon(`data-shots="${esc(v.run)}"`, 'Shots', ICONS.enhanced) : '')
+    + icon(`data-download-film="${name}"`, 'Download', ICONS.download)
     + icon(`data-del="${name}"`, 'Delete', ICONS.trash, ' del') + '</div>';
   return `
   <div class="image-set film" data-name="${name}">
@@ -4504,10 +4746,13 @@ function setSeed(input, value) {
   input.dispatchEvent(new Event('input', { bubbles: true }));
   input.dispatchEvent(new Event('change', { bubbles: true }));
 }
+// The shuffle button picks a seed to keep; ✕ goes back to a random one each time.
+document.querySelectorAll('[data-seed-pick]').forEach(button => { button.innerHTML = SHUFFLE_ICON; });
 document.addEventListener('click', e => {
-  const d = e.target.dataset || {};
-  if (d.seedPick) setSeed($(d.seedPick), randomSeed());
-  else if (d.seedClear) setSeed($(d.seedClear), '');
+  const button = e.target.closest && e.target.closest('[data-seed-pick], [data-seed-clear]');
+  if (!button) return;
+  if (button.dataset.seedPick) setSeed($(button.dataset.seedPick), randomSeed());
+  else setSeed($(button.dataset.seedClear), '');
 });
 // Digits only: anything else isn't a seed.
 document.addEventListener('input', e => {
@@ -4518,100 +4763,70 @@ document.addEventListener('input', e => {
 });
 // In the shots and images editors: the seed it was made with, which the next render keeps unless it's changed.
 function shownSeed(shot) { return shot.seed ?? shot.used_seed ?? null; }
+// A shot's seed: an icon on the right of its row (lit when a seed is pinned) that opens the seed dialog.
+// The value itself waits in a hidden field, which saving and rendering again read as before.
+function seedIconTitle(seed) { return seed == null || seed === '' ? 'Seed: random' : `Seed: ${seed}`; }
 function shotSeedHtml(run, shot, i, what) {
-  const number = i + 1, seed = shownSeed(shot);
-  return `
-    <div class="seed-line">
-      <label for="seed_${number}">Seed</label>
-      <input id="seed_${number}" data-seed inputmode="numeric" autocomplete="off" value="${seed ?? ''}" placeholder="Random" aria-label="Seed for ${what} ${number}" ${run.busy ? 'readonly' : ''}>
-      ${run.busy ? '' : `<button type="button" class="ghost" data-seed-roll="1" title="A new random seed" aria-label="A new random seed for ${what} ${number}">${SHUFFLE_ICON}</button>`}
-    </div>`;
+  const number = i + 1, seed = shownSeed(shot), pinned = seed != null && seed !== '';
+  return `<input type="hidden" id="seed_${number}" data-seed value="${seed ?? ''}">`
+    + `<button type="button" class="icon-btn seed-icon${pinned ? ' pinned' : ''}" data-seed-open="${number}" data-what="${what}"${run.busy ? ' data-locked="1"' : ''}`
+    + ` aria-haspopup="dialog" title="${seedIconTitle(seed)}" aria-label="${seedIconTitle(seed)}, for ${what} ${number}">${ICONS.seed}</button>`;
 }
 function editedSeeds() { return [...$('shotsBody').querySelectorAll('[data-seed]')].map(input => input.value.trim() || null); }
 
 // --- A film's shots ---
 let shotsRun = null, shotsDirty = false;
-function shotHtml(run, shot, i) {
-  const number = i + 1;
-  const clip = shot.rendered ? `<video controls preload="none" playsinline src="/runs/${esc(run.id)}/clips/${number}"></video>` : '';
-  const take = run.start === 'multishot';
-  const redo = !run.busy && !run.pending && (take ? (run.finished || run.take_rendered) && !i : shot.rendered)
-    ? `<button type="button" data-redo="${number}">${take ? 'Render the whole take again' : 'Render again'}</button>` : '';
-  const seed = take && i ? `<input type="hidden" data-seed value="${shot.seed ?? ''}">` : shotSeedHtml(run, shot, i, take ? 'take' : 'shot');
-  return `
-  <div class="shot">
-    <div class="shot-title"><b>${number}. ${esc(shot.title)}</b><span>${shot.seconds}s · ${take ? (run.finished || run.take_rendered ? 'take rendered' : 'take not rendered yet') : (shot.rendered ? 'rendered' : 'not rendered yet')}</span></div>
-    ${clip}
-    <textarea aria-label="Prompt for shot ${number}" ${run.busy ? 'readonly' : ''}>${esc(shot.prompt)}</textarea>
-    ${seed}
-    ${redo}
-  </div>`;
-}
 function runUrl(id) { return `${id.startsWith('image_') ? '/image-runs' : '/runs'}/${id}`; }
-function imageShotHtml(run, shot, i) {
-  const number = i + 1, url = `/image-runs/${encodeURIComponent(run.id)}`;
-  const picture = shot.rendered ? `<a href="${url}/files/${number}?v=${shot.version}" target="_blank" rel="noopener"><img class="shot-image" loading="lazy" alt="Image ${number}" src="${url}/thumbnails/${number}?v=${shot.version}"></a>` : '';
+// One item of a film or a set: its clip or picture, its prompt, and icons under them. On the left, what to do with
+// it: more like this in Generate (its prompt as it stands, on new seeds), and what an enhancer wrote, if one did.
+// Its prompt is the box, a tap away. On the right, keeping it: its seed, save, delete.
+function shotItemHtml(run, shot, i) {
+  const number = i + 1, film = !run.is_image, take = film && run.start === 'multishot';
   const icon = (data, label, svg, extra = '') => `<button type="button" class="icon-btn${extra}" ${data} title="${label}" aria-label="${label}">${svg}</button>`;
-  const left = run.busy ? '' : (shot.rendered && !run.pending ? icon(`data-redo="${number}"`, 'Make again', ICONS.again) : '')
-    + icon('data-save="1"', 'Save the prompts', ICONS.save) + (run.pending ? '' : icon(`data-delete-image="${number}"`, 'Delete', ICONS.trash, ' del'));
-  const enhanced = shot.enhanced_prompt ? icon(`data-enhanced="${number}" aria-haspopup="dialog"`, 'What the prompt enhancer wrote', ICONS.enhanced) : '';
+  const url = film ? '' : `/image-runs/${encodeURIComponent(run.id)}`;
+  const media = !shot.rendered ? ''
+    : film ? `<video controls preload="none" playsinline src="/runs/${esc(run.id)}/clips/${number}"></video>`
+    : `<a href="${url}/files/${number}?v=${shot.version}" target="_blank" rel="noopener"><img class="shot-image" loading="lazy" alt="Image ${number}" src="${url}/thumbnails/${number}?v=${shot.version}"></a>`;
+  const status = film ? `<span>${shot.seconds}s</span>` : '';
+  const like = icon(`data-create="${number}"`, 'More like this: its prompt and settings in Generate, on new seeds', ICONS.config);
+  // The prompt is the box itself: a tap opens it. Only what an enhancer wrote from it needs a button of its own.
+  const enhanced = shot.enhanced_prompt ? icon(`data-enhanced="${number}" aria-haspopup="dialog"`, 'Detailed prompt: what the prompt enhancer wrote', ICONS.enhanced) : '';
+  const remove = !film && !run.busy && !run.pending ? icon(`data-delete-image="${number}"`, 'Delete', ICONS.trash, ' del') : '';
+  const save = run.busy ? '' : icon('data-save="1"', 'Save the prompts', ICONS.save);
+  const seed = take && i ? `<input type="hidden" data-seed value="${shot.seed ?? ''}">` : shotSeedHtml(run, shot, i, film ? (take ? 'take' : 'shot') : 'image');
   return `
   <div class="shot">
-    <div class="shot-title"><b>${number}. ${esc(shot.title)}</b>${shot.rendered ? '<span class="finished">finished</span>' : '<span>not made yet</span>'}</div>
-    ${picture}
-    <textarea aria-label="Prompt for image ${number}" ${run.busy ? 'readonly' : ''}>${esc(shot.prompt)}</textarea>
+    <div class="shot-title"><b>${number}. ${esc(shot.title)}</b>${status}</div>
+    ${media}
+    <textarea aria-label="Prompt for ${film ? 'shot' : 'image'} ${number}" data-prompt inputmode="none" ${run.busy ? 'readonly' : ''}>${esc(shot.prompt)}</textarea>
     <div class="shot-actions">
-      <div class="shot-actions-left">${left}</div>
-      <div class="shot-actions-right">
-        ${enhanced}
-        ${icon(`data-fold="seedFold_${number}" aria-expanded="false"`, 'Seed', ICONS.seed)}
-        <div class="seed-fold" id="seedFold_${number}" hidden>${shotSeedHtml(run, shot, i, 'image')}</div>
-      </div>
+      <div class="shot-actions-left">${like}${enhanced}</div>
+      <div class="shot-actions-right">${seed}${save}${remove}</div>
     </div>
   </div>`;
 }
-function imageShotsHtml(run) {
-  const left = run.shots.filter(shot => !shot.rendered).length;
-  const note = run.busy ? '<div class="hint">This run is going or queued, so its prompts can\'t change right now.</div>'
-    : run.pending ? '<div class="hint">Save changes here, then start this run from Pending.</div>' : '';
-  const go = !left || run.busy || run.pending ? '' : `<button type="button" data-render="1">${left === run.shots.length ? 'Make the images' : `Make the ${left} left`}</button>`;
+// A film or a set: one item at a time, swiped left and right, its count by the title, its brief a tap away.
+function shotsHtml(run) {
+  const film = !run.is_image, left = run.shots.filter(shot => !shot.rendered).length;
+  const note = run.busy ? 'This run is going or queued, so its prompts can\'t change right now.'
+    : run.pending ? 'Save changes here, then start this run from Pending.'
+    : !film ? ''
+    : run.start === 'multishot' ? 'H3 Multishot renders the whole take at once. Saving edits does not change a rendered take: render the whole take again to apply them. Only the first seed controls the take.'
+    : run.start === 'chain' ? 'A continuous take: rendering a shot again also renders every shot after it, because they start from it.' : '';
+  const action = !film ? (left === run.shots.length ? 'Make the images' : `Make the ${left} left`)
+    : run.start === 'multishot' && run.take_rendered ? 'Finish the film' : left === run.shots.length ? 'Render the film' : left ? `Render the ${left} left` : 'Stitch the film';
+  const done = film ? run.finished : !left;
+  const go = done || run.busy || run.pending ? '' : `<button type="button" data-render="1">${action}</button>`;
   return `
   <div class="shots-head">
     <div class="shots-head-line">
-      <button type="button" class="shots-title" data-fold="briefFold" aria-expanded="false" title="What it was made from">${esc(run.title)}</button>
+      <h2 class="shots-title">${esc(run.title)}</h2>
       ${run.shots.length > 1 ? `<span class="shots-count" id="shotsCount">1 of ${run.shots.length}</span>` : ''}
     </div>
-    <div class="seed-fold brief-fold" id="briefFold" hidden>
-      <div class="fold-text" id="briefText">"${esc(run.brief)}"</div>
-      <div class="brief-foot">
-        <div class="hint">${run.direct ? 'Your own prompt' : `Written by ${esc(run.llm)}`} · ${esc(run.size)}</div>
-        <button type="button" class="copy-btn" data-copy-brief="1" title="Copy the prompt" aria-label="Copy the prompt">${ICONS.copy}</button>
-      </div>
-    </div>
-    ${note}
+    ${note ? `<div class="hint">${note}</div>` : ''}
   </div>
-  <div class="shots-list carousel" id="shotsCarousel">${run.shots.map((shot, i) => imageShotHtml(run, shot, i)).join('')}</div>
+  <div class="shots-list carousel" id="shotsCarousel">${run.shots.map((shot, i) => shotItemHtml(run, shot, i)).join('')}</div>
   <div class="shots-foot centred small">${go}<button type="button" class="plain" data-close="1">Close</button></div>`;
-}
-function shotsHtml(run) {
-  if (run.is_image) return imageShotsHtml(run);
-  const left = run.shots.filter(shot => !shot.rendered).length;
-  const note = run.busy ? 'This run is going or queued, so its prompts can\'t change right now.'
-    : run.pending ? 'Save changes here, then start this run from Pending.'
-    : run.start === 'multishot' ? 'H3 Multishot renders the whole take at once. Saving edits does not change a rendered take: render the whole take again to apply them. Only the first seed controls the take.'
-    : (run.start === 'chain' ? 'A continuous take: rendering a shot again also renders every shot after it, because they start from it.'
-    : 'Separate moments: rendering a shot again leaves the others as they are.') + ' A shot keeps its seed unless you change it or shuffle it, and an empty one is new each time.';
-  const action = run.start === 'multishot' && run.take_rendered ? 'Finish the film' : left === run.shots.length ? 'Render the film' : left ? `Render the ${left} left` : 'Stitch the film';
-  const go = run.finished || run.busy || run.pending ? '' : `<button type="button" data-render="1">${action}</button>`;
-  const save = run.busy ? '' : '<button type="button" class="plain" data-save="1">Save prompts</button>';
-  return `
-  <div class="shots-head">
-    <h2>${esc(run.title)}</h2>
-    <div class="hint">"${esc(run.brief)}" · written by ${esc(run.llm)}</div>
-    <div class="hint">${note}</div>
-  </div>
-  <div class="shots-list">${run.shots.map((shot, i) => shotHtml(run, shot, i)).join('')}</div>
-  <div class="shots-foot">${go}${save}<button type="button" class="plain" data-close="1">Close</button></div>`;
 }
 // page: the image to open on, from 1; the first otherwise.
 async function openShots(id, page) {
@@ -4631,6 +4846,8 @@ async function openShots(id, page) {
     carousel.addEventListener('scroll', () => {
       const at = Math.round(carousel.scrollLeft / Math.max(carousel.clientWidth, 1)) + 1;
       $('shotsCount').textContent = `${at} of ${data.shots.length}`;
+      if (carousel.dataset.at !== String(at)) $('shotsBody').querySelectorAll('video').forEach(video => video.pause());
+      carousel.dataset.at = String(at);
       closeSeedFolds();
     }, { passive: true });
   }
@@ -4671,18 +4888,13 @@ async function runSaved(url, button) {
 }
 $('shotsBody').addEventListener('input', () => { shotsDirty = true; });
 $('shotsBody').addEventListener('click', async e => {
-  const d = e.target.dataset || {};
-  const seedInput = e.target.closest('.seed-line')?.querySelector('[data-seed]');
+  const button = (e.target.closest && e.target.closest('button')) || e.target, d = button.dataset || {};
   if (d.enhanced) {
-    const shot = shotsRun.shots[Number(d.enhanced) - 1];
-    if (!shot || !shot.enhanced_prompt) { alert('Could not open the detailed prompt.'); return; }
+    const number = Number(d.enhanced), shot = shotsRun.shots[number - 1];
+    if (!shot) { alert('Could not open the detailed prompt.'); return; }
     closeSeedFolds();
-    $('promptDetailText').textContent = shot.enhanced_prompt;
-    $('promptDetailText').scrollTop = 0;
-    clearTimeout(promptCopyTimer);
-    $('promptDetailCopy').classList.remove('done');
-    $('promptDetailCopy').innerHTML = ICONS.copy;
-    $('promptDetail').showModal();
+    const box = $('shotsBody').querySelectorAll('textarea[data-prompt]')[number - 1];
+    openPromptDetail(shot.enhanced_prompt || (box ? box.value : shot.prompt), shotsRun.brief);
     return;
   }
   const toggle = e.target.closest && e.target.closest('[data-fold]');
@@ -4693,21 +4905,30 @@ $('shotsBody').addEventListener('click', async e => {
     toggle.setAttribute('aria-expanded', String(open));
     return;
   }
-  if (d.seedRoll) {
-    seedInput.value = randomSeed();
-    shotsDirty = true;
-  } else if (d.close) closeShots();
+  const seedOpen = e.target.closest && e.target.closest('[data-seed-open]');
+  if (seedOpen) { openSeedDialog(seedOpen); return; }
+  const prompts = [...$('shotsBody').querySelectorAll('textarea[data-prompt]')];
+  if (d.create) {
+    // More like this one, from Generate: its prompt as it stands here, word for word, on new seeds.
+    const number = Number(d.create), run = shotsRun, shot = run.shots[number - 1];
+    const exact = { prompt: (prompts[number - 1] || {}).value ?? shot.prompt, seed: '', seconds: shot.seconds, count: VARIATIONS };
+    closeShots();
+    if ($('shotsDialog').open) return;  // Kept open to save changes first
+    if (run.is_image) sameAgain(run.id, number, exact); else sameAgainFilm(run.id, exact);
+    return;
+  }
+  if (d.close) closeShots();
   else if (d.save) {
     // Saved: a tick for a moment where the button was.
     if (await saveShots()) {
-      e.target.innerHTML = ICONS.check;
-      setTimeout(() => { e.target.innerHTML = ICONS.save; }, 1200);
+      button.innerHTML = ICONS.check;
+      setTimeout(() => { button.innerHTML = ICONS.save; }, 1200);
     }
   }
   else if (d.render) {
-    if (await saveShots()) runSaved(`/runs/${shotsRun.id}/continue`, e.target);
+    if (await saveShots()) runSaved(`/runs/${shotsRun.id}/continue`, button);
   } else if (d.deleteImage) {
-    if (!secondTap(e.target)) return;
+    if (!secondTap(button)) return;
     if (!await saveShots()) return;
     const last = shotsRun.shots.length === 1, id = shotsRun.id;
     const data = await (await fetch(`${runUrl(id)}/delete/${d.deleteImage}`, { method: 'POST' })).json();
@@ -4716,17 +4937,54 @@ $('shotsBody').addEventListener('click', async e => {
     poll();
   } else if (d.redo && shotsRun.is_image) {
     const seed = $(`seed_${d.redo}`).value.trim();
-    if (!confirm(`Make image ${d.redo} again on ${seed ? `seed ${seed}` : 'a new seed'}? The new one replaces it.`)) return;
-    if (await saveShots()) runSaved(`${runUrl(shotsRun.id)}/redo/${d.redo}`, e.target);
+    if (!confirm(`Generate image ${d.redo} again on ${seed ? `seed ${seed}` : 'a new seed'}? The new one replaces it.`)) return;
+    if (await saveShots()) runSaved(`${runUrl(shotsRun.id)}/redo/${d.redo}`, button);
   } else if (d.redo) {
     const after = shotsRun.start === 'chain' ? shotsRun.shots.length - d.redo : 0;
     const also = after ? ` and the ${after} after it` : '';
     const seed = $(`seed_${d.redo}`).value.trim();
     const what = shotsRun.start === 'multishot' ? 'the whole take' : `shot ${d.redo}${also}`;
-    if (!confirm(`Render ${what} again on ${seed ? `seed ${seed}` : 'a new seed'}? The film replaces the one already finished.`)) return;
-    if (await saveShots()) runSaved(`/runs/${shotsRun.id}/redo/${d.redo}`, e.target);
+    if (!confirm(`Generate ${what} again on ${seed ? `seed ${seed}` : 'a new seed'}? The film replaces the one already finished.`)) return;
+    if (await saveShots()) runSaved(`/runs/${shotsRun.id}/redo/${d.redo}`, button);
   }
 });
+// --- The seed dialog: one shot's seed, to type, roll or set back to random, then Save or Cancel ---
+let seedButton = null;
+function seedField(button) { return button.dataset.seedTarget ? $(button.dataset.seedTarget) : $(`seed_${button.dataset.seedOpen}`); }
+function openSeedDialog(button) {
+  seedButton = button;
+  const number = button.dataset.seedOpen, locked = !!button.dataset.locked, value = seedField(button).value;
+  $('seedDialogTitle').textContent = button.dataset.seedTarget ? `Seed for ${button.dataset.what}` : `Seed for ${button.dataset.what || 'shot'} ${number}`;
+  $('seedDialogValue').value = value;
+  $('seedDialogValue').readOnly = locked;
+  $('seedDialogError').hidden = true;
+  for (const id of ['seedDialogRoll', 'seedDialogClear', 'seedDialogSave']) $(id).hidden = locked;
+  $('seedDialogCancel').textContent = locked ? 'Close' : 'Cancel';
+  $('seedDialog').showModal();
+}
+function saveSeedDialog() {
+  const value = $('seedDialogValue').value.trim();
+  if (value && !/^\d+$/.test(value)) {
+    $('seedDialogError').textContent = 'A seed is a whole number, or empty for a random one.';
+    $('seedDialogError').hidden = false;
+    return;
+  }
+  const number = seedButton.dataset.seedOpen, field = seedField(seedButton);
+  if (field.value !== value) {
+    field.value = value;
+    shotsDirty = true;
+  }
+  seedButton.classList.toggle('pinned', !!value);
+  seedButton.title = seedIconTitle(value);
+  seedButton.setAttribute('aria-label', `${seedIconTitle(value)}, for ${seedButton.dataset.what || 'shot'} ${number}`);
+  $('seedDialog').close();
+}
+$('seedDialogRoll').addEventListener('click', () => { $('seedDialogValue').value = randomSeed(); $('seedDialogError').hidden = true; });
+$('seedDialogClear').addEventListener('click', () => { $('seedDialogValue').value = ''; $('seedDialogError').hidden = true; });
+$('seedDialogSave').addEventListener('click', saveSeedDialog);
+$('seedDialogCancel').addEventListener('click', () => $('seedDialog').close());
+$('seedDialogValue').addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); saveSeedDialog(); } });
+$('seedDialogRoll').innerHTML = SHUFFLE_ICON;
 function closeSeedFolds() {
   $('shotsBody').querySelectorAll('.seed-fold').forEach(fold => { fold.hidden = true; });
   $('shotsBody').querySelectorAll('[data-fold]').forEach(toggle => toggle.setAttribute('aria-expanded', 'false'));
@@ -4752,7 +5010,26 @@ async function copyText(text, parent) {
   area.remove();
   return ok;
 }
-let promptCopyTimer;
+let promptCopyTimer, promptDetailTexts = { detailed: '', yours: '' };
+// The prompt as it went to the model (the enhancer's, else the one written for it), with your own prompt a tap away.
+function openPromptDetail(detailed, yours) {
+  promptDetailTexts = { detailed: detailed || '', yours: yours || '' };
+  $('promptDetailYours').hidden = !yours;
+  showPromptDetail('detailed');
+  clearTimeout(promptCopyTimer);
+  $('promptDetailCopy').classList.remove('done');
+  $('promptDetailCopy').innerHTML = ICONS.copy;
+  $('promptDetail').showModal();
+}
+function showPromptDetail(which) {
+  $('promptDetailTitle').textContent = which === 'yours' ? 'Your prompt' : 'Detailed prompt';
+  $('promptDetailText').textContent = promptDetailTexts[which];
+  $('promptDetailText').scrollTop = 0;
+  $('promptDetailYours').setAttribute('aria-pressed', String(which === 'yours'));
+  $('promptDetailYours').setAttribute('aria-label', which === 'yours' ? 'Show the detailed prompt' : 'Show your prompt');
+}
+$('promptDetailYours').addEventListener('click', () =>
+  showPromptDetail($('promptDetailYours').getAttribute('aria-pressed') === 'true' ? 'detailed' : 'yours'));
 $('promptDetailCopy').addEventListener('click', async () => {
   const button = $('promptDetailCopy');
   if (!await copyText($('promptDetailText').textContent, $('promptDetail'))) { alert('Could not copy it.'); return; }
@@ -4762,14 +5039,6 @@ $('promptDetailCopy').addEventListener('click', async () => {
   promptCopyTimer = setTimeout(() => { button.classList.remove('done'); button.innerHTML = ICONS.copy; }, 1500);
 });
 $('promptDetailClose').addEventListener('click', () => $('promptDetail').close());
-$('shotsBody').addEventListener('click', async e => {
-  const button = e.target.closest && e.target.closest('[data-copy-brief]');
-  if (!button) return;
-  if (!await copyText($('briefText').textContent.replace(/^"|"$/g, ''), $('shotsDialog'))) { alert('Could not copy it.'); return; }
-  button.classList.add('done');
-  button.innerHTML = ICONS.check;
-  setTimeout(() => { button.classList.remove('done'); button.innerHTML = ICONS.copy; }, 1500);
-});
 // Esc would otherwise close it without asking about unsaved changes.
 $('shotsDialog').addEventListener('cancel', e => { e.preventDefault(); closeShots(); });
 
@@ -4915,7 +5184,10 @@ function renderNow(data) {
     const steps = p.eta ? p.eta.steps : [];
     $('stepper').innerHTML = names.map((s, i) =>
       `<div class="step ${i + 1 < n ? 'done' : i + 1 === n ? 'now' : ''}">${esc(s)}<span class="eta">${stepEta(steps[i])}</span></div>`).join('');
-    $('stageDetail').textContent = clip ? '' : p.detail || STAGE_HINTS[name] || '';
+    // What it is doing now, in shorthand, then what it is working on unless ComfyUI's box already says so.
+    // One line says what is happening: under ComfyUI's bar while it renders, else here.
+    // The clip being rendered goes in ComfyUI's box, with the action; anything else, such as a scene, stays here.
+    $('stageDetail').textContent = comfyBusy ? (clip ? '' : p.detail || '') : [p.action, p.detail].filter(Boolean).join(' · ') || STAGE_HINTS[name] || '';
   }
 
   // ComfyUI's own progress: which part of the workflow, and sampling steps.
@@ -4926,7 +5198,8 @@ function renderNow(data) {
     $('comfySteps').textContent = hasSteps ? `step ${c.value} of ${c.max}` : '';
     $('comfyBar').style.width = hasSteps ? `${Math.round(100 * c.value / c.max)}%` : '0';
     const queued = c.queue > 1 ? ` · ${c.queue - 1} more queued` : '';
-    $('comfyMeta').textContent = `${clip ? `${clip} · ` : ''}This ${data.pipeline === 'image' ? 'image' : 'clip'}: ${fmt(c.elapsed || 0)}${queued}`;
+    const action = show && p.action ? `${p.action} · ` : '';
+    $('comfyMeta').textContent = `${action}${clip ? `${clip} · ` : ''}This ${data.pipeline === 'image' ? 'image' : 'clip'}: ${fmt(c.elapsed || 0)}${queued}`;
   }
 
   const g = data.gpu;
@@ -6824,6 +7097,211 @@ $('stick').addEventListener('transitionend', () => document.documentElement.styl
 window.addEventListener('scroll', markJump, { passive: true });
 
 for (const section of document.querySelectorAll('details.section')) section.addEventListener('toggle', markJump);
+// --- The prompt editor: a prompt box shows two lines, and a tap opens all of it here to change, copy, save or drop ---
+let promptField = null, promptEditorEnhanced = false, promptWriting = null;
+function promptSide(field) {
+  if (!field) return null;
+  const generate = Object.entries(PROMPT_FIELDS).find(([side, id]) => side !== 'shorts' && $(id) === field);
+  if (generate) return generate[0];
+  if (field.closest && field.closest('#shotsBody') && shotsRun) return shotsRun.is_image ? 'image' : 'video';
+  return null;
+}
+function promptLabel(field) {
+  const label = field.id && document.querySelector(`label[for="${field.id}"]`);
+  return (label && label.textContent.trim()) || field.getAttribute('aria-label') || 'Prompt';
+}
+// A box with more than two lines fades out at the bottom, so it is plain there is more.
+function syncPromptBox(field) {
+  if (field && field.classList) field.classList.toggle('more', field.scrollHeight > field.clientHeight + 2);
+}
+function countPrompt() {
+  const text = $('promptEditorText').value, words = text.trim() ? text.trim().split(/\s+/).length : 0;
+  $('promptEditorCount').textContent = `${words} ${words === 1 ? 'word' : 'words'} · ${text.length} characters`;
+}
+// Sized to what the keyboard leaves visible, so Save and Cancel stay above it on a phone.
+function fitPromptEditor() {
+  const view = window.visualViewport, box = $('promptEditor');
+  if (!box.open || !view) return;
+  box.style.top = `${Math.round(view.offsetTop + 8)}px`;
+  box.style.height = `${Math.round(view.height - 16)}px`;
+}
+function openPromptEditor(field) {
+  // While an LLM writes into it, the box is busy: it opens when the writing is done.
+  if (!field || field.disabled || field.closest('.prompt-writing.busy')) return;
+  promptField = field;
+  promptEditorEnhanced = false;
+  promptWriting = null;
+  const locked = field.readOnly, text = $('promptEditorText');
+  $('promptEditorTitle').textContent = promptLabel(field);
+  text.value = field.value;
+  text.readOnly = locked;
+  text.placeholder = field.placeholder || '';
+  text.maxLength = field.maxLength > 0 ? field.maxLength : 100000;
+  $('promptEditorSave').hidden = locked;
+  setPromptEditorBusy(false);
+  // The Video and Image prompts can be written by the LLM from the idea in them, from here as from beside the box.
+  const side = promptSide(field);
+  $('promptEditorEnhance').hidden = locked || !side;
+  $('promptEditorClear').hidden = locked;
+  $('promptEditorCancel').textContent = locked ? 'Close' : 'Cancel';
+  countPrompt();
+  $('promptEditor').showModal();
+  fitPromptEditor();
+  if (!locked) {
+    text.focus();
+    text.setSelectionRange(text.value.length, text.value.length);
+  }
+}
+function closePromptEditor(save) {
+  const field = promptField;
+  promptWriting = null;  // A reply still on its way is dropped
+  // Generate's image prompt, written by the LLM, is used word for word from then on, as the prompt writer always did.
+  if (save && promptEditorEnhanced && field === $(PROMPT_FIELDS.image)) {
+    const mode = $('imagePromptMode');
+    if (!mode.disabled && mode.value !== 'direct') { mode.value = 'direct'; mode.dispatchEvent(new Event('change', { bubbles: true })); }
+  }
+  if (save && field && !field.readOnly && field.value !== $('promptEditorText').value) {
+    field.value = $('promptEditorText').value;
+    // As if typed, so everything that listens to the box (the estimate, presets, saved forms) hears of it.
+    field.dispatchEvent(new Event('input', { bubbles: true }));
+    field.dispatchEvent(new Event('change', { bubbles: true }));
+  }
+  promptField = null;
+  $('promptEditor').close();
+  syncPromptBox(field);
+}
+document.addEventListener('click', e => {
+  const field = e.target && e.target.closest && e.target.closest('textarea[data-prompt]');
+  if (field) openPromptEditor(field);
+});
+// A prompt box isn't typed in: a key, Enter or a paste opens the editor instead. Tab still moves on.
+document.addEventListener('keydown', e => {
+  const field = e.target && e.target.matches && e.target.matches('textarea[data-prompt]') ? e.target : null;
+  if (!field || e.key === 'Tab' || e.key === 'Shift' || e.ctrlKey && e.key === 'c' || e.metaKey && e.key === 'c') return;
+  e.preventDefault();
+  openPromptEditor(field);
+});
+document.addEventListener('paste', e => {
+  if (e.target && e.target.matches && e.target.matches('textarea[data-prompt]')) { e.preventDefault(); openPromptEditor(e.target); }
+});
+document.addEventListener('input', e => { if (e.target && e.target.matches && e.target.matches('textarea[data-prompt]')) syncPromptBox(e.target); });
+$('promptEditorText').addEventListener('input', countPrompt);
+// Ctrl or Cmd + Enter saves, as in most editors.
+$('promptEditorText').addEventListener('keydown', e => {
+  if (e.key === 'Enter' && (e.ctrlKey || e.metaKey) && !$('promptEditorSave').hidden) { e.preventDefault(); closePromptEditor(true); }
+});
+$('promptEditorSave').addEventListener('click', () => closePromptEditor(true));
+// Clear empties the editor only: Save keeps it empty, Cancel brings the prompt back.
+$('promptEditorClear').addEventListener('click', () => {
+  $('promptEditorText').value = '';
+  countPrompt();
+  $('promptEditorText').focus();
+});
+// The LLM writes here, the same wherever the editor is opened: its prompt goes in the box, to Save or Cancel.
+function setPromptEditorBusy(busy) {
+  $('promptEditorText').readOnly = busy || !!(promptField && promptField.readOnly);
+  for (const id of ['promptEditorEnhance', 'promptEditorClear', 'promptEditorSave']) $(id).disabled = busy;
+}
+async function enhanceInEditor() {
+  const side = promptSide(promptField), text = $('promptEditorText'), idea = text.value;
+  if (!side) return;
+  if (!idea.trim()) { $('promptEditorCount').textContent = 'Enter an idea first.'; return; }
+  const writing = promptWriting = {};
+  setPromptEditorBusy(true);
+  $('promptEditorCount').textContent = 'Estimating…';
+  let timer;
+  try {
+    const estimateResponse = await fetch('/api/write-prompt?pipeline=' + encodeURIComponent(side));
+    const estimate = await estimateResponse.json();
+    if (!estimateResponse.ok || !estimate.ok || !Number.isFinite(estimate.seconds) || estimate.seconds <= 0) throw new Error(estimate.error || 'Could not estimate prompt writing.');
+    const start = performance.now();
+    const update = () => {
+      if (promptWriting !== writing) return;
+      const remaining = estimate.seconds - (performance.now() - start) / 1000;
+      $('promptEditorCount').textContent = remaining > 0 ? `Writing · ${fmtEta(remaining)} left` : 'Writing · taking longer than estimated';
+    };
+    update();
+    timer = setInterval(update, 1000);
+    const response = await fetch('/api/write-prompt', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ pipeline: side, prompt: idea, model: estimate.model }) });
+    const result = await response.json();
+    if (!response.ok || !result.ok) throw new Error(result.error || 'Could not write the prompt.');
+    if (promptWriting !== writing) return;  // Closed or written again meanwhile
+    text.value = result.prompt;
+    promptEditorEnhanced = true;
+    countPrompt();
+  } catch (e) {
+    if (promptWriting === writing) $('promptEditorCount').textContent = e.message || 'Could not write the prompt.';
+  } finally {
+    clearInterval(timer);
+    if (promptWriting === writing) { promptWriting = null; setPromptEditorBusy(false); }
+  }
+}
+$('promptEditorEnhance').addEventListener('click', enhanceInEditor);
+$('promptEditorCancel').addEventListener('click', () => closePromptEditor(false));
+// Escape drops nothing typed: with changes, it asks for Save or Cancel instead of closing.
+$('promptEditor').addEventListener('cancel', e => {
+  if (promptField && !promptField.readOnly && promptField.value !== $('promptEditorText').value) {
+    e.preventDefault();
+    $('promptEditorCount').textContent = 'Unsaved changes: Save or Cancel.';
+  } else closePromptEditor(false);
+});
+$('promptEditorCopy').addEventListener('click', async () => {
+  const text = $('promptEditorText'), button = $('promptEditorCopy');
+  try { await navigator.clipboard.writeText(text.value); } catch (e) {
+    text.select();
+    try { document.execCommand('copy'); } catch (e2) {}
+  }
+  button.classList.add('copied');
+  button.setAttribute('aria-label', 'Copied');
+  button.title = 'Copied';
+  setTimeout(() => { button.classList.remove('copied'); button.setAttribute('aria-label', 'Copy'); button.title = 'Copy'; }, 1500);
+});
+if (window.visualViewport) {
+  window.visualViewport.addEventListener('resize', fitPromptEditor);
+  window.visualViewport.addEventListener('scroll', fitPromptEditor);
+}
+// A header opens and closes the way the queue does: its height moves, so what is below slides rather than jumps.
+function foldDetails(details) {
+  const summary = details.querySelector(':scope > summary');
+  if (!summary) return;
+  summary.addEventListener('click', e => {
+    if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+      setTimeout(() => { if (details.open) revealQueueSection(details); });
+      return;
+    }
+    e.preventDefault();
+    const opening = details._fold ? !details._wantOpen : !details.open;
+    const start = details.getBoundingClientRect().height;
+    if (details._fold) details._fold.cancel();
+    // Closing, the page keeps its height until the fold is done: shrinking under the screen frame by frame made the
+    // browser pull the scroll back each time, and what it hadn't painted yet showed black at the top.
+    document.body.style.minHeight = opening ? '' : `${document.documentElement.scrollHeight}px`;
+    details.open = false;
+    const closed = details.getBoundingClientRect().height;
+    details.open = true;
+    const end = opening ? details.getBoundingClientRect().height : closed;
+    details._wantOpen = opening;
+    details.classList.toggle('fold-opening', opening);
+    details.style.overflow = 'hidden';
+    const fold = details._fold = details.animate({ height: [`${start}px`, `${end}px`] }, { duration: 250, easing: 'ease' });
+    fold.onfinish = () => {
+      if (details._fold !== fold) return;
+      details._fold = null;
+      details.style.overflow = '';
+      details.classList.remove('fold-opening');
+      details.open = opening;
+      // Opened, it comes to the top of the screen, as the queue's sections do.
+      if (opening) revealQueueSection(details);
+      else {
+        // Closed, the page shrinks once, and the header stays in sight.
+        document.body.style.minHeight = '';
+        if (summary.getBoundingClientRect().top < 0) summary.scrollIntoView({ block: 'start' });
+      }
+    };
+  });
+}
+document.querySelectorAll('details.section, details.h3-help').forEach(foldDetails);
 
 {
   let page = 'generate';
@@ -6833,6 +7311,19 @@ for (const section of document.querySelectorAll('details.section')) section.addE
 }
 loadForm();
 syncForm();
+// New defaults reach a browser that remembered the old ones, once: only these fields, the rest of what it chose stays.
+(function newDefaults() {
+  const KEY = 'comfyui-auto-gen.defaults', VERSION = '2026-11-07', drop = {
+    [VIDEO_STORE_KEY]: ['duration', 'review', 'size_preset', 'clip_seconds'], [IMAGE_STORE_KEY]: ['megapixels', 'review'] };
+  try {
+    if (localStorage.getItem(KEY) === VERSION) return;
+    for (const [store, fields] of Object.entries(drop)) {
+      const data = JSON.parse(localStorage.getItem(store) || 'null');
+      if (data) { fields.forEach(field => delete data[field]); localStorage.setItem(store, JSON.stringify(data)); }
+    }
+    localStorage.setItem(KEY, VERSION);
+  } catch (e) {}
+})();
 loadVideoForm();
 syncVideoForm();
 loadImageForm();

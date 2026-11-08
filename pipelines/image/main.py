@@ -11,7 +11,7 @@ import time
 
 from dotenv import load_dotenv
 
-from core import batch_stop, h3_refiner, seeds
+from core import batch_stop, h3_refiner, run_form, seeds
 from core.saved_workflows import shorthand, title_words, unique_name
 from pipelines.image import media, models, paths, regions
 from pipelines.image import planner as image_planner
@@ -65,9 +65,9 @@ def parse_args(argv=None):
     parser.add_argument("--image", action="append", default=[], metavar="FILE", help="The image to edit, repeatable if the workflow takes several. Without one, it makes them from text.")
     parser.add_argument("--count", type=parse_count, default=1, help=f"How many images, 1-{image_planner.MAX_IMAGES} (default 1).")
     parser.add_argument("--direct", action="store_true", help="Use the prompt word for word. No LLM: each image only gets a new seed.")
-    parser.add_argument("--llm", choices=[name for name, _ in planner.LLMS], default=None, help="Who writes the prompts (default: LLM_PROVIDER in .env, else gemini).")
+    parser.add_argument("--llm", choices=[name for name, _ in planner.LLMS], default=None, help="Who writes the prompts (default: LLM_PROVIDER in .env, else local).")
     parser.add_argument("--aspect", type=parse_aspect, default=media.FROM_IMAGE, help=f"Aspect ratio such as 16:9, or '{media.FROM_IMAGE}' for the source image's (the default, square without one).")
-    parser.add_argument("--megapixels", type=parse_megapixels, default=str(media.DEFAULT_MEGAPIXELS), help=f"Pixel count, such as 1.5 (the default is {media.DEFAULT_MEGAPIXELS:g}), or '{media.FROM_IMAGE}' for the source image's.")
+    parser.add_argument("--megapixels", type=parse_megapixels, default=media.FROM_IMAGE, help=f"Pixel count, such as 1.5, or '{media.FROM_IMAGE}' (the default) for the source image's, within what the model makes well. With no image, {media.DEFAULT_MEGAPIXELS:g}.")
     parser.add_argument("--size", type=parse_size, help="An exact size such as 1920x1080, in place of --aspect and --megapixels.")
     parser.add_argument("--seed", type=parse_seed, help="The first image's seed. Each image after it gets the next one, so the set "
                                                        "can be made again. Default: a random seed for every image.")
@@ -202,6 +202,7 @@ def plan_run(args, stages):
     state.inputs = inputs
     state.options = options or None
     state.compose, state.transparent, state.detail = args.compose, args.transparent, args.reference_detail
+    state.form = run_form.from_env()
     for image, path in zip(images, state.input_paths):
         media.save_source(image, path)
     taken = set(args.source_seed)

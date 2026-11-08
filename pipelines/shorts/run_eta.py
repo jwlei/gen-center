@@ -3,7 +3,7 @@ import math
 import os
 import time
 
-from core.eta_keys import Timings, options_in_env, render_keys
+from core.eta_keys import LocalModelTimer, Timings, options_in_env, render_keys
 from pipelines.shorts.avatar_generator import DEFAULT_CLIP_RANGE, DEFAULT_ON_SCREEN_RANGE, DEFAULT_WORKFLOW, video_model
 from pipelines.shorts.run_state import STAGES, RunState
 
@@ -51,6 +51,11 @@ def _model_of_run(env):
         return None
 
 
+# Renders are timed as if at 1280x736 (the Video side's full size), so the avatar sizes share what they learn.
+FULL_SIZE_AREA = 1280 * 736
+DEFAULT_AVATAR_SIZE = "736x1280"
+
+
 class RunEta:
     """
     Estimates what is left of a run from how long each step took before. Steps are
@@ -64,7 +69,25 @@ class RunEta:
     def __init__(self, argv, env, path):
         self.timings = Timings(path, DEFAULT_TIMINGS)
         self.model = _model_of_run(env)
-        self.render_keys = render_keys(_workflow_of_run(env), options_in_env(env))
+        env = env or {}
+        # The avatar's size, and OpenH3-IR before each clip, are part of what a clip is timed under.
+        self.size = (env.get("AVATAR_SIZE") or os.getenv("AVATAR_SIZE") or DEFAULT_AVATAR_SIZE).lower()
+        width, _, height = self.size.partition("x")
+        self.size_share = int(width) * int(height) / FULL_SIZE_AREA if width.isdigit() and height.isdigit() else 1
+        self.h3_mode = env.get("H3IR_ENHANCE") or "off"
+        options = options_in_env(env)
+        if self.h3_mode != "off":
+            options = {**options, "h3ir": f"{self.h3_mode}/{env.get('H3IR_CREATIVITY') or 'balanced'}"}
+        self.render_keys = render_keys(_workflow_of_run(env), options, self.size)
+        local_model = None
+        if self.h3_mode != "off":
+            try:
+                from core import h3_refiner
+                local_model = h3_refiner.selected_model()
+            except Exception:
+                local_model = None
+        self.local = LocalModelTimer(self.timings, local_model, env.get("H3IR_CREATIVITY"))
+        self.attempt_mark = 0.0
         self.videos_left = int(_option(argv, "--runs", 1)) - 1
         self.upload = "--upload" in argv
         self.clip_range = _slider(env, "AVATAR_CLIPS_MIN", "AVATAR_CLIPS_MAX", DEFAULT_CLIP_RANGE)
@@ -138,7 +161,13 @@ class RunEta:
         self.clip_number, self.clip_count = number, total
         self.first_clip_at = self.first_clip_at or now
         self.attempt_started = now
+        self.attempt_mark = self.local.spent
         self.attempt_seconds = seconds
+
+    def event(self, kind):
+        """A line of the run's log (panel/server.py Job.EVENTS): OpenH3-IR's local model is timed on its own."""
+        if self.local.event(kind, time.time()):
+            self.timings.save()
 
     def clip_rejected(self, attempt, attempts, problem):
         """The lip-sync check failed: another render starts now, unless that was the last try."""
@@ -147,6 +176,7 @@ class RunEta:
         problem = problem.split(",")[0]  # The measurement after the comma only means something in the log
         if attempt < attempts:
             self.attempt_started = now
+            self.attempt_mark = self.local.spent
             self._note(f"{clip} rejected ({problem}), rendering it again", self._render_seconds(self.attempt_seconds))
         else:
             self.attempt_started = None
@@ -191,7 +221,9 @@ class RunEta:
 
     def _finish_attempt(self, now):
         if self.attempt_started is not None:
-            self.timings.learn_render(self.render_keys, (now - self.attempt_started) / max(self.attempt_seconds, 1))
+            # The render alone, as if at full size: OpenH3-IR's model and prompt are timed apart.
+            rendering = now - self.attempt_started - (self.local.spent - self.attempt_mark)
+            self.timings.learn_render(self.render_keys, max(rendering, 0) / max(self.attempt_seconds, 1) / self.size_share)
             self.attempt_started = None
 
     def _finish_stage(self):
@@ -213,7 +245,9 @@ class RunEta:
     # --- Estimating ---
 
     def _render_seconds(self, clip_seconds):
-        return self.timings.render(self.render_keys, DEFAULT_RENDER_SECONDS) * clip_seconds
+        """One clip: its render at this size, and OpenH3-IR's model started and its prompt written, if it's on."""
+        enhance = self.local.start_seconds() + self.local.enhance_seconds() if self.h3_mode != "off" else 0
+        return self.timings.render(self.render_keys, DEFAULT_RENDER_SECONDS) * clip_seconds * self.size_share + enhance
 
     def _stage_seconds(self, name, clips, scenes):
         if name == "Avatar clips":

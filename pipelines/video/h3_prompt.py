@@ -209,8 +209,18 @@ def instructions(brief, seconds, count, images, shortest, longest, second_image=
     restarting it. Keep clothes, place and time of day the same from clip to clip unless the story changes them."""
     if count > 1 and start in ("chain", "multishot"):
         separate = """The clips form one continuous take. Each clip starts from the previous clip's final frame,
-    without a cut or fade. Give each clip a different action that follows what just happened, and finish each action
-    at a clear point the next can continue from. Keep the subjects, place, lighting and camera position consistent."""
+    without a cut or fade, and H3 is also told to keep the subject, the place and the light the same. So whatever
+    the words of a clip do not change, stays as it was, and two clips with similar words come out as the same clip.
+    - Each clip opens exactly as the previous one ended: same positions, same framing. Give its first moments a small
+      live movement, such as a breath, a weight shift or a glance, never a frozen hold.
+    - Each clip then has a different action that changes something physical and leaves it changed: a garment comes
+      off and lies on the floor, she crosses to the window and now stands beside it. A mood, a look, a camera move or
+      a repeated gesture is not a change. If two clips' actions could swap places, they are too alike.
+    - Say what changes, not what stays. "Remains still", "goes still" and "does not move" freeze the whole frame.
+      End each clip settled but alive, in an arrangement the next one can pick up.
+    - subject_definitions holds only what stays the same for the whole film: face, hair, skin, build and fixed marks.
+      Clothes, armour or anything else the brief changes or takes off belong in each clip's detailed_description, as
+      they are at that clip's start, and retention_analysis names only the lasting details."""
     return f"""
     You are a director and prompt engineer for MiniMax H3, an open-weight video model that makes picture and
     stereo sound together in one pass, at {FPS} frames per second. You are turning a short brief into a

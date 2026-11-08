@@ -8,7 +8,7 @@ from types import SimpleNamespace
 
 from flask import abort, request, send_file
 
-from core import director, h3_refiner, seeds, workflow_options
+from core import director, h3_refiner, run_form, seeds, workflow_options
 from panel.server import (read_outcome, form_options, PIPELINES, VIDEO_TIMINGS, _runs_cache, active_runs, app, busy_runs, item_images, job,
                           password_required, safe_video_path, saved_at, run_queue, saved_runs, saved_workflows, queue_form_snapshot)
 from panel.shorts import VOICES
@@ -21,7 +21,7 @@ from pipelines.video.run_state import STAGES, UPSCALED, RunState, films_of_runs,
 from pipelines.video import upscale as film_upscale
 
 COMMAND = [sys.executable, "-m", "pipelines.video.main"]
-DEFAULT_FILM_SECONDS = 120
+DEFAULT_FILM_SECONDS = 30
 BUILT_IN_TAKES = {"min_images": 1, "max_images": 1, "max_videos": 0, "max_audios": 0, "max_references": 1}
 # The most the form offers, however many a workflow could take.
 MOST_IMAGES = 20
@@ -176,7 +176,13 @@ def estimate():
     flags, error = build_options(request.form)
     if error:
         return {"ok": False, "error": error}
-    env, _, _ = chosen_workflow(request.form)
+    env, takes, error = chosen_workflow(request.form)
+    if error:
+        return {"ok": False, "error": error}
+    # The workflow's options too, as Generate sends them: steps and a turbo LoRA change the time several times over.
+    chosen, problem = form_options(request.form, takes)
+    if chosen and not problem:
+        env = {**env, "COMFYUI_OPTIONS": json.dumps(chosen)}
     # Reviewing first only writes the prompts now, but what you're deciding on is the whole film.
     return {"ok": True, **RunEta([arg for arg in flags if arg != "--plan-only"], VIDEO_TIMINGS, env).plan()}
 
@@ -277,6 +283,8 @@ def generate():
     if chosen:
         # Kept with the run, for the rest of its clips (pipelines/video/main.py).
         env = {**env, "COMFYUI_OPTIONS": json.dumps(chosen)}
+    # The whole form goes with it, so the run can be opened again with every setting it had.
+    env = {**env, run_form.ENV: run_form.to_env(queue_form_snapshot())}
     prompt = (request.form.get("prompt") or "").strip()
     if not prompt:
         return {"ok": False, "error": "Say what should happen in the video."}, 400
@@ -337,7 +345,7 @@ def generate():
             return {"ok": True, "queued": False, "shots": state.id, "continued": state.title}
         # Options change how the rest is made, not the plan: what's paid for stays.
         state.options = json.loads(env.get("COMFYUI_OPTIONS") or "{}") or None
-        state.adopt(flags)
+        state.adopt(flags, queue_form_snapshot())
         reply = queue_saved_run(state)
         return reply if isinstance(reply, tuple) else {**reply, "continued": state.title}
 
@@ -361,11 +369,11 @@ def generate():
     detail = ["film as long as its audio" if audio else f"{length} film", llm or "your prompt, every clip",
               *(["OpenH3-IR " + option(flags, "--h3-creativity", "balanced")] if "--h3-enhance" in flags else []),
               *(["review the prompts first"] if plan_only else [])]
-    if env:
+    if request.form.get("workflow"):
         detail.append(request.form["workflow"].removesuffix(".json"))
     chosen_size = size or "x".join(str(side) for side in media.render_size(
         *(images[0].size if images else media.DEFAULT_SHAPE),
-        media.most_pixels(workflow_model(env.get("COMFYUI_WORKFLOW"))) or media.RENDER_AREA))
+        media.default_area(workflow_model(env.get("COMFYUI_WORKFLOW")))))
     item = {"pipeline": "video", "label": f"1 video: {queue_label(prompt)}" if prompt else "1 video", "prompt": prompt, "detail": " · ".join(detail), "argv": argv, "env": env,
             "resolution": chosen_size,
             "image": image_paths[0] if image_paths else None, "references": image_paths[1:] + ([audio_path] if audio_path else []) + media_paths, "plan_only": plan_only, "first_only": "--first-only" in flags,
@@ -438,7 +446,8 @@ def run_detail(run_id):
         busy = run_id in active_runs()
         pending = not busy and run_id in busy_runs()
     return {"ok": True, "id": state.id, "title": state.title, "brief": state.brief, "start": state.start,
-            "llm": state.llm, "busy": busy, "pending": pending, "finished": bool(state.final),
+            "llm": state.llm, "direct": state.direct, "size": f"{state.width}x{state.height}",
+            "busy": busy, "pending": pending, "finished": bool(state.final),
             "take_rendered": bool(state.take_file), "settings": settings_of(state),
             "shots": [{"title": shot["title"], "seconds": shot["seconds"], "prompt": shot["prompt"],
                        "enhanced_prompt": shot.get("enhanced_prompt"),
@@ -465,7 +474,12 @@ def settings_of(state):
             "clip_fixed": state.fixed_clip, "clip_seconds": state.shots[0]["seconds"] if state.fixed_clip and state.shots else None,
             "references": [{"kind": "video", "role": video["role"]} for video in state.ref_videos]
                           + [{"kind": "audio", "role": audio["role"]} for audio in state.ref_audios],
-            "track": bool(files["track"])}
+            "track": bool(files["track"]),
+            "prompt_mode": "direct" if state.direct else "llm", "seed": state.seed,
+            "clip_range": state.clip_seconds, "h3_model": state.h3_model,
+            "review": state.plan_only, "try_first": state.first_only,
+            # The form as it was sent: anything above that it doesn't hold comes from the run itself.
+            "form": run_form.flat(state.form)}
 
 
 @app.route("/runs/<run_id>/inputs/<kind>/<int:number>")

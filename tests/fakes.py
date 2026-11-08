@@ -31,6 +31,8 @@ os.environ["AUTOGEN_DATA"] = DATA
 for name in ("APP_PASSWORD", "COMFYUI_LAUNCHER", "GEMINI_MODEL", "CLAUDE_MODEL", "LLM_PROVIDER", "COMFYUI_WORKFLOW",
              "YOUTUBE_CLIENT_ID", "YOUTUBE_CLIENT_SECRET", "YOUTUBE_REFRESH_TOKEN"):
     os.environ[name] = ""
+# The tests fake Gemini's replies; the real default is the local model (planner.default_llm).
+os.environ["LLM_PROVIDER"] = "gemini"
 
 
 def make_clip(path, seconds, color="red", audio=True):

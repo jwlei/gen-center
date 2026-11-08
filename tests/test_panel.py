@@ -670,15 +670,16 @@ class PanelTest(unittest.TestCase):
         short = self.client.post("/api/estimate/video", data={"duration": "5"}).get_json()
         long = self.client.post("/api/estimate/video", data={"duration": "600"}).get_json()
         self.assertEqual((short["clips"], long["clips"]), (1, 75))
-        self.assertGreater(long["total"], 5 * 3600 * 0.9, "about 5 hours at the default render speed")
+        share = 864 * 480 / (1280 * 736)
+        self.assertGreater(long["total"], 5 * 3600 * share * 0.9, "about 5 hours of full-size rendering, at 480p's pixels")
         self.assertLess(short["total"], 600)
 
     def test_the_estimate_follows_the_resolution(self):
         clips = lambda **size: self.client.post("/api/estimate/video", data={"duration": "60", **size}).get_json()["steps"][1]["seconds"]
-        highest = clips()
-        self.assertEqual(clips(size="1280x736"), highest, "the default is the highest preset")
+        highest = clips(size="1280x736")
         self.assertEqual(clips(size="736x1280"), highest, "turning it doesn't change the pixels")
         self.assertAlmostEqual(clips(size="640x352") / highest, 640 * 352 / (1280 * 736), places=2)
+        self.assertAlmostEqual(clips() / highest, 864 * 480 / (1280 * 736), places=2, msg="with no size chosen, 480p's pixels")
 
     def test_a_preset_is_what_gets_rendered(self):
         self.comfy.script = []
@@ -1072,6 +1073,9 @@ class PanelTest(unittest.TestCase):
         # The same again: what it was made with, and the image it was given.
         settings = self.client.get(f"/runs/{run.id}").get_json()["settings"]
         self.assertEqual((settings["workflow"], settings["options"], settings["images"]), ("wan.json", {"steps": "12"}, 1))
+        # Every field of the form it was queued with, so it reopens exactly as it was made.
+        self.assertEqual((settings["form"]["workflow"], settings["form"]["opt_steps"]), ("wan.json", "12"))
+        self.assertEqual((settings["prompt_mode"], settings["llm"]), ("llm", run.llm))
         self.assertEqual(self.client.get(f"/runs/{run.id}/inputs/image/1").status_code, 200)
         self.assertEqual(self.client.get(f"/runs/{run.id}/inputs/image/2").status_code, 404)
         self.assertEqual(self.client.get(f"/runs/{run.id}/inputs/secret/1").status_code, 404)

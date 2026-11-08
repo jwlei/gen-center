@@ -32,11 +32,11 @@ MAX_FILM_SECONDS = 600
 # How long the video model can make a clip, in seconds: (shortest, longest, usual). Shorter clips
 # can't hold an action; longer ones go beyond what the model was trained on, or the workflow's memory.
 # - LTX-2.3 (the built-in workflow, and any model without a line of its own): about 10 s holds up.
-# - MiniMax H3: trained on 124-362 frames at 24 fps, so about 5-15 s.
+# - MiniMax H3: trained on 124-362 frames at 24 fps, so about 5-15 s. 10 s by default.
 # - Wan 2.2: trained on 81 frames at 16 fps, so 5 s at most.
 CLIP_SECONDS = {
     None: (5, 10, 8),
-    h3_prompt.MODEL: (5, 15, 12),
+    h3_prompt.MODEL: (5, 15, 10),
     wan_prompt.MODEL: (3, 5, 5),
 }
 MIN_SHOT_SECONDS, MAX_SHOT_SECONDS, AVERAGE_SHOT_SECONDS = CLIP_SECONDS[None]
@@ -108,8 +108,8 @@ METADATA_SCHEMA = {
 
 
 def default_llm():
-    configured = (os.getenv("LLM_PROVIDER") or "gemini").strip().lower()
-    return configured if configured in dict(LLMS) else "gemini"
+    configured = (os.getenv("LLM_PROVIDER") or "local").strip().lower()
+    return configured if configured in dict(LLMS) else "local"
 
 
 def llm_configured(llm):

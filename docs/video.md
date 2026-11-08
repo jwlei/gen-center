@@ -30,7 +30,7 @@ In `.env`, set at least one LLM key:
 |---|---|
 | `GEMINI_API_KEY` | Writing the prompts with Gemini, on its free tier. |
 | `ANTHROPIC_API_KEY` | Writing the prompts with Claude Opus 5.5, paid per use. Keys come from platform.claude.com. |
-| `LLM_PROVIDER` | Which one to use when you don't choose: `gemini` (default) or `claude`. |
+| `LLM_PROVIDER` | Which one to use when you don't choose: `local` (default), `gemini` or `claude`. |
 | `COMFYUI_LAUNCHER` | Lets the panel start ComfyUI when a render needs it. |
 | `APP_PASSWORD` | Needed to reach the panel from your phone. Without it, it only answers this PC. |
 | `YOUTUBE_*` | Uploading. Run `scripts/authorize_youtube.py` once and paste what it prints. |
@@ -66,7 +66,8 @@ the existing workflow-specific planner. Gemma can analyze attached images; Qwen 
 The local model unloads before rendering and needs an idle, reachable ComfyUI. Large plans can take substantial
 time and may exceed the local model's context or output limits.
 The panel defaults to Local model. A selected prompt model is remembered in this browser, and a default preset can
-override it; opening a previous generation keeps the selected model. The CLI still follows `LLM_PROVIDER`.
+override it. Opening a previous film brings back every setting it was made with, its prompt model included: the
+whole Generate form is kept with each run. The CLI follows `LLM_PROVIDER`, else the local model.
 
 **OpenH3-IR (MiniMax H3).** The Prompt section offers this optional compiler on supported H3 workflows. It is off
 by default; enable it to show its settings. Choose **before review** to compile each planned prompt before editing it (using the original reference
@@ -142,11 +143,11 @@ numbered before the audio clips. Every prompt has to name each one, or the missi
 
 **How long a clip is** depends on the video model, and the LLM is held to it:
 
-| Video model | A clip | Why |
-|---|---|---|
-| LTX-2.3 (LTX23_I2V_T2V, and any other) | 5-10 s | About as long as it holds up. |
-| MiniMax H3 | 5-15 s | It was trained on 124-362 frames at 24 fps. |
-| Wan 2.2 | 3-5 s | It was trained on 81 frames at 16 fps. |
+| Video model | A clip | Usual (the fixed length's default) | Why |
+|---|---|---|---|
+| LTX-2.3 (LTX23_I2V_T2V, and any other) | 5-10 s | 8 s | About as long as it holds up. |
+| MiniMax H3 | 5-15 s | 10 s | It was trained on 124-362 frames at 24 fps. |
+| Wan 2.2 | 3-5 s | 5 s | It was trained on 81 frames at 16 fps. |
 
 Film length under Generation shows how many clips that comes to on the workflow you chose. The buttons adjust it by
 five seconds; type a whole number in the middle for finer control.
@@ -288,7 +289,7 @@ python -m pipelines.video.main harbour.jpg "a storm rolls in over the harbour" -
 | Option | What it does |
 |---|---|
 | `--duration` | Film length: `90`, `3m` or `2m30`. From 5 seconds to 10 minutes, default `2m`. It's split into clips as long as the video model makes them. |
-| `--llm` | `gemini` or `claude`. Default: `LLM_PROVIDER`, else `gemini`. |
+| `--llm` | `local`, `gemini` or `claude`. Default: `LLM_PROVIDER`, else `local`. |
 | `--start` | `chain` for a normal continuous take (default), `image` for separate moments, `director` for H3 Motion Director chaining, or `multishot` for an H3 Multishot take. |
 | `--h3-first-frame`, `--h3-multishot-steps N` | For Multishot: use image 1 as the first frame and a reference; set sampling steps (default 20). Multishot also requires `--fixed-clips --clip-seconds N-N`. |
 | `--reference IMAGE` | Another image, repeatable. The first one is image 2. |

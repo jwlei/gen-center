@@ -250,8 +250,49 @@ class Job:
         ],
     }
 
+    # What it is doing right now, in a word or two, for the line under the progress bars.
+    # A stage starts with its own; a line from inside the stage narrows it down.
+    STAGE_ACTIONS = {
+        "Plan": "Planning", "Prompts": "Generating prompts", "Clips": "Rendering clips", "Images": "Rendering images",
+        "Topic & script": "Writing script", "Voice": "Voicing", "Stock footage": "Fetching stock footage",
+        "Avatar clips": "Rendering avatar clips", "Rendering scenes": "Composing scenes", "Stitching": "Stitching",
+        "Upload": "Uploading",
+    }
+    ACTIONS = [
+        (re.compile(r"Starting the local OpenH3-IR model"), "Starting local model"),
+        (re.compile(r"OpenH3-IR: writing a brief"), "Enhancing prompt"),
+        (re.compile(r"prompt enhancer is writing"), "Enhancing prompts"),
+        (re.compile(r"is writing \d+ prompts?\b"), "Generating prompts"),
+        (re.compile(r"Waiting for ComfyUI|ComfyUI is starting"), "Starting ComfyUI"),
+        (re.compile(r"Voicing the narration|narration for \d+ scenes|Starting Audio Generation"), "Voicing narration"),
+        (re.compile(r"Rendering the whole H3 Multishot take"), "Rendering take"),
+        (re.compile(r"Clip \d+/\d+ ·|OpenH3-IR prompt:"), "Rendering clip"),
+        (re.compile(r"Image \d+/\d+ ·"), "Rendering image"),
+        (re.compile(r"Rejected: |❌ .*\(attempt \d+/\d+\)"), "Retrying"),
+        (re.compile(r"Preparing clip \d+/\d+"), "Preparing clips"),
+        (re.compile(r"Processing Scene \d+"), "Composing scenes"),
+        (re.compile(r"Stitching"), "Stitching"),
+        (re.compile(r"Upscaling"), "Upscaling"),
+        (re.compile(r"Uploading to YouTube"), "Uploading"),
+    ]
+
+    # Lines that start or end something the ETA times on its own (core/eta_keys.py LocalModelTimer).
+    EVENTS = [
+        ("model_start", re.compile(r"Starting the local OpenH3-IR model")),
+        ("model_ready", re.compile(r"Local model ready")),
+        ("enhance", re.compile(r"OpenH3-IR: writing a brief")),
+        ("enhanced", re.compile(r"OpenH3-IR prompt:")),
+        ("planned", re.compile(r"^\s*🎞️? (?!Continuing|Fixed clip length)")),
+        ("take", re.compile(r"Rendering the whole H3 Multishot take")),
+    ]
+
     def _track(self, line):
         p = self.progress
+        if self.eta is not None and hasattr(self.eta, "event"):
+            self.eta.event(next((kind for kind, pattern in self.EVENTS if pattern.search(line)), "line"))
+        action = next((label for pattern, label in self.ACTIONS if pattern.search(line)), None)
+        if action:
+            p["action"] = action
         if self.pipeline == "video" and line.startswith("✅ Upscaled: "):
             p["upscaled_file"] = os.path.basename(line.removeprefix("✅ Upscaled: ").strip())
         for kind, pattern in self.PATTERNS[self.pipeline]:
@@ -267,6 +308,7 @@ class Job:
                 p["stage"] = [int(m.group(1)), int(m.group(2)), m.group(3).strip()]
                 p["stage_started"] = time.time()
                 p.pop("detail", None)
+                p["action"] = self.STAGE_ACTIONS.get(p["stage"][2], p["stage"][2])
                 self.eta.stage(*p["stage"])
             elif kind == "scenes":
                 p["scenes"] = int(m.group(1) or m.group(2))

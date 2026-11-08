@@ -132,3 +132,90 @@ class Timings:
                           f, indent=2)
         except OSError:
             pass  # Next run just starts from older numbers
+
+
+# --- Who writes the prompts, and the local model's own costs ---
+
+def llm_tag(llm, local_model=None):
+    """
+    Who writes the prompts, down to the model, so each is timed apart: local:gemma-4-12b, gemini:<its first model>,
+    claude:<model>. None or "direct" is your prompt as it is, which no LLM writes.
+    """
+    if not llm or llm == "direct":
+        return "direct"
+    if llm == "local":
+        if not local_model:
+            try:
+                from core import h3_refiner
+                local_model = h3_refiner.selected_model()
+            except Exception:  # Settings unreadable: still timed, just not per model
+                local_model = None
+        return f"local:{local_model}" if local_model else "local"
+    if llm == "gemini":
+        try:
+            from core.gemini_models import get_text_models
+            return f"gemini:{get_text_models()[0]}"
+        except Exception:
+            return "gemini"
+    if llm == "claude":
+        return f"claude:{os.getenv('CLAUDE_MODEL') or 'claude-opus-5-5'}"
+    return llm
+
+
+def llm_keys(prefix, llm, local_model=None):
+    """Step keys for something an LLM does: by its model, then by the LLM at all."""
+    tag = llm_tag(llm, local_model)
+    keys = [SEPARATOR.join((prefix, tag))]
+    family = tag.split(":", 1)[0]
+    if family != tag:
+        keys.append(SEPARATOR.join((prefix, family)))
+    return keys
+
+
+# Until timed: starting llama.cpp with the model, and OpenH3-IR writing one prompt with it.
+MODEL_START_SECONDS = 45
+ENHANCE_SECONDS = 120
+
+
+class LocalModelTimer:
+    """
+    The local model's own costs, timed apart from the step they happen in: starting it (the "Starting the local
+    OpenH3-IR model" line until "Local model ready"), and OpenH3-IR writing one prompt ("writing a brief" until the
+    next line). `spent` is what they took, for a step that holds them to leave them out of its own time.
+    """
+
+    def __init__(self, timings, model, creativity=None):
+        self.timings = timings
+        self.model = model or "local"
+        self.creativity = creativity or "balanced"
+        self.started = {}
+        self.spent = 0.0
+
+    def _start_keys(self):
+        return [SEPARATOR.join(("Model start", self.model)), "Model start"]
+
+    def _enhance_keys(self):
+        return [SEPARATOR.join(("Enhance", self.model, self.creativity)), SEPARATOR.join(("Enhance", self.model)), "Enhance"]
+
+    def start_seconds(self):
+        return self.timings.step(self._start_keys(), MODEL_START_SECONDS)
+
+    def enhance_seconds(self):
+        return self.timings.step(self._enhance_keys(), ENHANCE_SECONDS)
+
+    def event(self, kind, now):
+        """A line the run printed: model_start, model_ready, enhance, or any other line. Returns whether it learned."""
+        learned = False
+        if "enhance" in self.started:  # Any line after "writing a brief" ends that prompt
+            seconds = now - self.started.pop("enhance")
+            self.timings.learn_step(self._enhance_keys(), seconds)
+            self.spent += seconds
+            learned = True
+        if kind == "model_ready" and "model_start" in self.started:
+            seconds = now - self.started.pop("model_start")
+            self.timings.learn_step(self._start_keys(), seconds)
+            self.spent += seconds
+            learned = True
+        elif kind in ("model_start", "enhance"):
+            self.started[kind] = now
+        return learned

@@ -53,6 +53,14 @@ class RunState:
     h3_multishot_steps: int = 20
     take_file: str = None
     connection_mode: str = None
+    # Everything else it was asked for, to make it again or change it: older runs leave these out.
+    direct: bool = False  # Your prompt as it is for every clip, no LLM
+    seed: int = None  # The first clip's seed as chosen, None for random
+    clip_seconds: list = None  # [shortest, longest] as chosen, None for the video model's own
+    h3_model: str = None  # The local model (Settings) that wrote or enhanced the prompts
+    plan_only: bool = False  # Stopped to review the prompts before rendering
+    first_only: bool = False  # Rendered the first clip only, to see it first
+    form: dict = None  # The panel's Generate form as it was sent, files aside
 
     @classmethod
     def new(cls, brief, seconds, start, width, height, llm="gemini", workflow=None, image_count=1):
@@ -128,9 +136,11 @@ class RunState:
             setattr(self, name, value)
         self.save()
 
-    def adopt(self, flags):
+    def adopt(self, flags, form=None):
         """Takes the options chosen now, for Generate to continue this run. The plan stays: it's what was paid for."""
         self.llm = next((flags[i + 1] for i, flag in enumerate(flags[:-1]) if flag == "--llm"), self.llm)
+        self.form = form or self.form
+        self.first_only = "--first-only" in flags
         size = next((flags[i + 1] for i, flag in enumerate(flags[:-1]) if flag == "--size"), None)
         if size:
             width, height = (on_grid(int(side)) for side in size.split("x"))

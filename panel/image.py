@@ -8,7 +8,7 @@ from types import SimpleNamespace
 from flask import abort, request, send_file
 from PIL import Image
 
-from core import h3_refiner, seeds, workflow_options
+from core import h3_refiner, run_form, seeds, workflow_options
 from core.saved_workflows import display_label, shorthand
 from panel.server import (read_outcome, IMAGE_TIMINGS, PIPELINES, _runs_cache, active_runs, app, busy_runs, form_options, password_required, run_queue, saved_at, queue_form_snapshot,
                           saved_workflows)
@@ -296,6 +296,10 @@ def estimate():
     error = error or model_problem(flags, takes, None)
     if error:
         return {"ok": False, "error": error}
+    # The workflow's options too, as Generate sends them: steps, turbo and an upscaler change the time by minutes.
+    option_flags, problem = chosen_options(request.form, takes)
+    if not problem:
+        flags = flags + option_flags
     # Reviewing first only writes the prompts now, but what you're deciding on is the whole set.
     return {"ok": True, **RunEta([arg for arg in flags if arg != "--plan-only"], env, IMAGE_TIMINGS).plan()}
 
@@ -372,6 +376,7 @@ def generate():
         adopt_size(state, flags, images, takes.get("model"))
         # Options change how the rest are made, not their prompts: what's paid for stays.
         state.options = dict(value.split("=", 1) for flag, value in zip(flags, flags[1:]) if flag == "--option") or None
+        state.form = queue_form_snapshot()
         state.save()
         reply = queue_saved_run(state)
         return reply if isinstance(reply, tuple) else {**reply, "continued": state.title}
@@ -400,6 +405,8 @@ def generate():
     chosen_size = None if mode in ("areas", "expand") else media.pick_size(
         option(flags, "--size"), option(flags, "--aspect"), option(flags, "--megapixels"),
         images[0].size if images else None, models.most_megapixels(takes.get("model"), "--compose" in flags))
+    # The whole form goes with it, so the set can be reopened with every setting it had.
+    env = {**env, run_form.ENV: run_form.to_env(queue_form_snapshot())}
     item = {"pipeline": "image", "label": f"{count_label}: {queue_label(prompt)}" if prompt else count_label, "prompt": prompt, "detail": " · ".join(detail), "argv": argv, "env": env,
             "resolution": f"{chosen_size[0]}x{chosen_size[1]}" if chosen_size else ("Expanded source size" if mode == "expand" else "Source image size"),
             "image": image_paths[0] if image_paths else None, "references": image_paths[1:] + region_files, "plan_only": plan_only, "first_only": "--first-only" in flags,
@@ -482,7 +489,9 @@ def settings_of(state):
     workflow = next((w["name"] for w in saved_workflows() if state.workflow and w.get("path") and os.path.abspath(w["path"]) == os.path.abspath(state.workflow)), "")
     return {"prompt": state.brief, "direct": state.direct, "count": len(state.shots or []) or state.count, "llm": state.llm,
             "workflow": workflow, "size": f"{state.width}x{state.height}", "options": state.options or {},
-            "inputs": sum(1 for path in state.input_paths if os.path.exists(path))}
+            "inputs": sum(1 for path in state.input_paths if os.path.exists(path)),
+            # The form as it was sent: anything above that it doesn't hold comes from the set itself.
+            "form": run_form.flat(state.form)}
 
 
 @app.route("/image-runs/<run_id>/inputs/<int:number>")

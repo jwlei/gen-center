@@ -168,6 +168,8 @@ class Refiner:
                 try:
                     response = requests.get(f"http://127.0.0.1:{port}/v1/models", timeout=2)
                     if response.ok and any(m.get("id") == "h3-refiner" for m in response.json().get("data", [])):
+                        # The panel times the start up to here (core/eta_keys.py LocalModelTimer).
+                        print("🧠 Local model ready.", flush=True)
                         return self
                 except (requests.RequestException, ValueError):
                     pass
