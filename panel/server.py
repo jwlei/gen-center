@@ -37,8 +37,9 @@ from dotenv import load_dotenv
 from flask import (Flask, abort, has_request_context, redirect, render_template, request,
                    send_file, session, url_for)
 from werkzeug.exceptions import NotFound
+from werkzeug.datastructures import MultiDict
 
-from core import batch_stop, eta_keys, workflow_options
+from core import batch_stop, eta_keys, run_form, workflow_options
 from core.paths import LOGS_DIR, PROJECT_ROOT, SAVED_WORKFLOWS_DIR, comfyui_client_id
 from core.quota import quota_summary
 from core.saved_workflows import display_label, list_saved, pipeline_of
@@ -578,12 +579,41 @@ class JobQueue:
             self._record(item, "done")
             note_outcome(self.job, item, NOT_RENDERED if item.get("plan_only") else FIRST_ONLY if item.get("first_only") else None)
         else:
+            if self is run_queue and hit_aimdo(self.job):
+                if not item.get("aimdo_retried"):
+                    self._retry_after_aimdo(item)
+                    return
+                self.job.log("❌ The aimdo memory compile error came back after a restart: it goes to Failed, and "
+                             "ComfyUI restarts once more for what comes next.")
+                restart_comfyui_in_background()
             # In plain words, with what to do, when it's a failure we know; the run's own lines under it.
             plain, said = explain_failure(self.job, code)
             self._record(item, "failed", plain or f"exit {code}")
             note_outcome(self.job, item, {"outcome": "failed", "why": f"{plain}\n\nFrom its log:\n{said}" if plain else said})
             if self.items:
                 self.job.log(f"❌ {item['label']} failed (exit {code}).")
+
+    def _retry_after_aimdo(self, item):
+        """
+        First aimdo memory compile error for this job: ComfyUI is force-restarted and the job goes first in line, to
+        continue its saved run when it made one (its prompts are kept) or start over when it didn't.
+        """
+        retry = {**item, "aimdo_retried": True, "waited": True}
+        retry.pop("later", None)
+        run_id = (self.job.progress or {}).get("run_id")
+        pipeline = PIPELINES.get(item.get("pipeline"))
+        if run_id and not item.get("resume") and pipeline and hasattr(pipeline, "resume_argv"):
+            state = pipeline.load_run(run_id)
+            if state:
+                argv = pipeline.resume_argv(state)
+                # A preview run stays one: continuing would otherwise make every clip.
+                retry["argv"] = argv + ["--first-only"] if "--first-only" in (item.get("argv") or []) else argv
+                retry["resume"] = run_id
+        restarting = restart_comfyui_in_background()
+        self.job.log("⚠️ ComfyUI hit the aimdo memory compile error: "
+                     + ("restarting it, then trying once more." if restarting else "trying once more."))
+        self.items.insert(0, retry)
+        self._save()
 
     def _start(self, item):
         if item.get("waited"):
@@ -626,7 +656,7 @@ class JobQueue:
         self._save_results()
 
     # What a job picks up while it waits or runs, and that a recovered copy must start without.
-    TRANSIENT_KEYS = ("id", "waited", "error", "later", "edit_token", "edit_from_queue")
+    TRANSIENT_KEYS = ("id", "waited", "error", "later", "edit_token", "edit_from_queue", "aimdo_retried")
 
     def recoverable(self):
         """The failed jobs that can still go back to Pending: their inputs must outlast the cleanup of old uploads."""
@@ -1582,7 +1612,8 @@ def prepare_upload(item):
 _writing_prompt = False
 _panel_closing = False
 _comfy_restarting = False
-run_queue = JobQueue(job, prepare_run, blocked=lambda: _writing_prompt or _panel_closing, path=os.path.join(LOGS_DIR, "queue_runs.json"))
+# A ComfyUI restart going (after an aimdo error) holds the next run back until it is done.
+run_queue = JobQueue(job, prepare_run, blocked=lambda: _writing_prompt or _panel_closing or _comfy_restarting, path=os.path.join(LOGS_DIR, "queue_runs.json"))
 # A run's own upload step is waited out, when its video sits in Ready with no topic recorded yet.
 upload_queue = JobQueue(uploads, prepare_upload, blocked=lambda: job.uploading,
                         path=os.path.join(LOGS_DIR, "queue_uploads.json"))
@@ -1646,6 +1677,33 @@ NOT_RENDERED = {"outcome": "not rendered",
 # The lines that say what went wrong, as the pipelines print them.
 TROUBLE = re.compile(r"❌|⚠️|Error|Exception|Traceback|failed|refused|can't|could not", re.I)
 MOST_WHY_LINES = 4
+# ComfyUI's memory compiler (comfy-aimdo) failing: a fresh ComfyUI clears it, so it is restarted and tried once more.
+AIMDO_ERROR = re.compile(r"aimdo memory compile error", re.I)
+
+
+def hit_aimdo(job):
+    """Whether the job that just ended stopped on ComfyUI's aimdo memory compile error."""
+    return any(AIMDO_ERROR.search(line["text"]) for line in job.lines if line["n"] > getattr(job, "first_line", 0))
+
+
+def restart_comfyui_in_background():
+    """
+    Force-restarts ComfyUI on a thread. The run queue waits while it does. Returns False when it can't: already
+    restarting, or no launcher to start it again.
+    """
+    global _comfy_restarting
+    if _comfy_restarting or not comfyui_launcher():
+        return False
+    _comfy_restarting = True
+
+    def restart():
+        global _comfy_restarting
+        try:
+            restart_comfyui_now()
+        finally:
+            _comfy_restarting = False
+    threading.Thread(target=restart, daemon=True).start()
+    return True
 
 
 # The failures that come up, in plain words with what to do: the first whose pattern is in the run's log.
@@ -2057,7 +2115,7 @@ def upscale_queue_settings(item):
     flag = lambda name, default="": argv[argv.index(name) + 1] if name in argv[:-1] else default
     if "pipelines.image.upscale" in argv and item.get("pipeline") == "image":
         return {"kind": "image_upscale", "method": flag("--method", "seedvr2"),
-                "strength": flag("--strength", "1"), "resolution": flag("--resolution", "0")}
+                "strength": flag("--strength", "1"), "resolution": flag("--resolution", "0"), "denoise": flag("--denoise")}
     if "pipelines.video.upscale" in argv and item.get("pipeline") == "video":
         return {"kind": "video_upscale", "scale": flag("--scale", "2"), "quality": flag("--quality")}
     return None
@@ -2071,6 +2129,15 @@ def queue_edit(item_id):
         if not item:
             return {"ok": False, "error": "That job has already started or is no longer queued."}, 409
         upscale = upscale_queue_settings(item)
+        continued = continued_setup(item) if item.get("resume") and not upscale else None
+        if continued:
+            # Its prompts are written: the setup opens as it was, to change how the rest is made, not what.
+            item["edit_from_queue"] = not item.get("later")
+            item["later"] = True
+            item["edit_token"] = secrets.token_urlsafe(24)
+            run_queue._save()
+            return {"ok": True, "id": item_id, "token": item["edit_token"], "pipeline": item.get("pipeline"),
+                    "form": continued["form"], "files": [], "filenames": {}, "options": {}, "continued": continued["run"]}
         if item.get("resume") and not upscale:
             return {"ok": False, "error": "Setup for a continued run cannot be edited here. The job was not changed."}, 409
         if upscale:
@@ -2094,6 +2161,77 @@ def queue_edit(item_id):
         run_queue._save()
         return {"ok": True, "id": item_id, "token": item["edit_token"], "pipeline": item.get("pipeline"),
                 "form": form, "files": list(files), "filenames": {name: os.path.basename(path) for name, path in files.items()}, "options": options}
+
+
+# What can change for a run whose prompts are written: how the rest is made. Its prompt, images, length, workflow and
+# LLM made those prompts, so they stay as they were.
+CONTINUED_FIELDS = ("size", "aspect", "megapixels", "try_first")
+CONTINUED_PREFIXES = ("opt_", "latent_upscale")
+
+
+def continued_field(name):
+    return name in CONTINUED_FIELDS or name.startswith(CONTINUED_PREFIXES)
+
+
+def continued_form(saved, sent):
+    """The run's form as it was made, with the fields that may change taken from what was sent now."""
+    merged = MultiDict()
+    for name, values in (saved or {}).items():
+        if not continued_field(name):
+            for value in values if isinstance(values, list) else [values]:
+                merged.add(name, value)
+    for name in sent:
+        if continued_field(name):
+            for value in sent.getlist(name):
+                merged.add(name, value)
+    return merged
+
+
+def continued_setup(item):
+    """A queued continuation's run as Edit opens it: its form and prompts. None when it can't be (no form kept, a redo)."""
+    if item.get("pipeline") not in ("video", "image") or "--redo" in (item.get("argv") or []):
+        return None
+    state = PIPELINES[item["pipeline"]].load_run(item["resume"])
+    if not state or not state.shots or not state.form:
+        return None
+    form = run_form.flat(state.form)
+    # A preview run is the job's own choice, not the run's.
+    form["try_first"] = "1" if "--first-only" in (item.get("argv") or []) else ""
+    return {"form": form, "run": {"id": state.id, "title": state.title or state.brief, "image": item["pipeline"] == "image",
+                                  "prompts": [shot.get("prompt") or "" for shot in state.shots]}}
+
+
+@app.route("/queue/run/edit/<int:item_id>/continue", methods=["POST"])
+@password_required
+def queue_edit_continue(item_id):
+    """Saves a continued run's changed setup (size, workflow options, a preview run) and puts it back in line."""
+    token = request.form.get("queue_edit_token", "")
+    with run_queue.lock:
+        old = next((entry for entry in run_queue.items if entry["id"] == item_id), None)
+        if not old or not old.get("edit_token") or not secrets.compare_digest(old["edit_token"], token):
+            return {"ok": False, "error": "That editing session expired. Open the queued job again."}, 409
+        if not continued_setup(old):
+            return {"ok": False, "error": "This job's setup cannot be edited."}, 409
+        pipeline = PIPELINES[old["pipeline"]]
+        state = pipeline.load_run(old["resume"])
+        error = pipeline.edit_continuation(state, continued_form(state.form, request.form))
+        if error:
+            return {"ok": False, "error": error}, 400
+        argv = pipeline.resume_argv(state)
+        if request.form.get("try_first"):
+            argv = argv + ["--first-only"]
+        replacement = {**old, "argv": argv, "waited": True, "first_only": bool(request.form.get("try_first")),
+                       "resolution": f"{state.width}x{state.height}"}
+        for key in ("later", "edit_token", "edit_from_queue"):
+            replacement.pop(key, None)
+        if request.form.get("start_later"):
+            replacement["later"] = True
+        run_queue.items.remove(old)
+        run_queue.items.insert(len(run_queue.items) if replacement.get("later") else 0, replacement)
+        run_queue._save()
+        run_queue._advance()
+        _runs_cache["at"] = 0.0
+        return {"ok": True, "queued": replacement in run_queue.items, "continued": state.title or state.brief}
 
 
 @app.route("/queue/run/edit/<int:item_id>/upscale", methods=["POST"])
@@ -2134,17 +2272,27 @@ def queue_edit_upscale(item_id):
                 resolution = int(data.get("resolution", 0))
             except (TypeError, ValueError):
                 return {"ok": False, "error": "Choose a valid strength and resolution."}, 400
-            if method not in ("fast", "seedvr2") or not math.isfinite(strength) or not 0 <= strength <= 1:
+            if method not in image_panel.UPSCALE_METHODS or not math.isfinite(strength) or not 0 <= strength <= 1:
                 return {"ok": False, "error": "Choose a valid upscale method and strength."}, 400
             if shorter > image_panel.UPSCALE_MOST_SIDE or (method == "seedvr2" and resolution and
                     (resolution not in image_panel.UPSCALE_RESOLUTIONS or resolution <= shorter)):
                 return {"ok": False, "error": "Choose a supported resolution larger than the original image."}, 400
-            if method == "fast":
+            if method != "seedvr2":
                 resolution = 0
-            how = (f"SeedVR2, {resolution}p" if resolution else "SeedVR2, twice the size") if method == "seedvr2" else f"Superscale-SP, twice the size, strength {round(strength * 100)}%"
+            denoise = None
+            if method in image_panel.REFINE_UPSCALES:
+                try:
+                    denoise = float(data.get("denoise") or (0.35 if method == "hires" else 0.3))
+                except (TypeError, ValueError):
+                    return {"ok": False, "error": "Denoise is a number from 0.05 to 1."}, 400
+                if not math.isfinite(denoise) or not 0.05 <= denoise <= 1:
+                    return {"ok": False, "error": "Denoise is a number from 0.05 to 1."}, 400
+            how = image_panel.upscale_detail(method, strength, resolution, denoise)
             new_argv = [*image_panel.UPSCALE, "--resume", state.id, "--image", position, "--method", method,
-                        "--strength", f"{strength:g}", *(["--resolution", str(resolution)] if resolution else [])]
-            estimate = image_panel.UPSCALE_SECONDS if method == "seedvr2" else image_panel.FAST_UPSCALE_SECONDS
+                        "--strength", f"{strength:g}", *(["--resolution", str(resolution)] if resolution else []),
+                        *(["--denoise", f"{denoise:g}"] if denoise is not None else [])]
+            estimate = (image_panel.UPSCALE_SECONDS if method == "seedvr2" else image_panel.REFINE_UPSCALE_SECONDS if denoise is not None
+                        else image_panel.FAST_UPSCALE_SECONDS)
         else:
             name = flag("--film")
             if not name:
@@ -2498,15 +2646,7 @@ def restart_comfyui():
             return {"ok": False, "error": "A run or prompt writer is going, or ComfyUI is restarting. Wait for it first."}, 409
         if not comfyui_launcher():
             return {"ok": False, "error": "COMFYUI_LAUNCHER isn't set in .env, so the panel can't start ComfyUI again."}, 400
-        _comfy_restarting = True
-        def restart():
-            global _comfy_restarting
-            try:
-                restart_comfyui_now()
-            finally:
-                with run_queue.lock:
-                    _comfy_restarting = False
-        threading.Thread(target=restart, daemon=True).start()
+        restart_comfyui_in_background()
     return {"ok": True}
 
 

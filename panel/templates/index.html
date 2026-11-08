@@ -345,6 +345,7 @@
   dialog#viewerUpscaleBar.closing { animation: menu-out .15s ease forwards; pointer-events: none; }
   .upscale-methods { display: flex; flex-direction: column; gap: 4px; }
   .upscale-dialog .upscale-methods button { width: 100%; padding: 9px 14px; font-size: .85rem; text-align: left; border-radius: 9px; background: var(--panel-2); }
+  .upscale-dialog .upscale-methods button:disabled { opacity: .4; cursor: not-allowed; }
   @media (prefers-reduced-motion: reduce) { dialog#viewerUpscaleBar, dialog#viewerUpscaleBar.closing { animation: none; } }
   dialog.upscale-settings { inset: 0; margin: auto; width: min(320px, 90vw); height: fit-content; }
   .viewer-head { position: relative; z-index: 0; width: 100%; }
@@ -522,6 +523,17 @@
   .count-stepper .mp-field { width: 65px; margin: 0; padding: 13px 4px; background: var(--panel-2); border: 1px solid var(--line); border-radius: 10px;
     color: var(--text); font-size: inherit; font-variant-numeric: tabular-nums; white-space: nowrap; }
   .count-stepper .mp-field .mp-unit { margin-left: 2px; color: var(--muted); font-size: .8em; }
+  span.mp-field { display: inline-flex; align-items: center; justify-content: center; box-sizing: border-box; }
+  /* Latent upscale's own settings, for Custom: folded under its stepper. */
+  .latent-custom { margin-top: 8px; border: 1px solid var(--line); border-radius: 10px; padding: 0 10px; }
+  .latent-custom[hidden] { display: none; }
+  .latent-custom-head { width: 100%; margin: 0; padding: 9px 0; background: transparent; border: 0; color: var(--muted); font-size: .85rem; text-align: left; }
+  .latent-custom-head::before { content: "▸ "; }
+  .latent-custom.open .latent-custom-head { color: var(--text); }
+  .latent-custom.open .latent-custom-head::before { content: "▾ "; }
+  .latent-custom:not(.open) .latent-custom-body { display: none; }
+  .latent-custom .option-row { margin-bottom: 10px; }
+  #videoLatentBox.unavailable .range-head, #videoLatentBox.unavailable select, #videoLatentBox.unavailable .count-stepper { opacity: .45; }
   .resolution-size { color: var(--muted); font-size: .78rem; font-variant-numeric: tabular-nums; white-space: nowrap; }
   /* The chosen shape, drawn: at most 22 by 22, outlined. */
   .aspect-box { flex: none; box-sizing: border-box; border: 1.5px solid var(--muted); border-radius: 2px; }
@@ -659,6 +671,20 @@
   .prompt-copy:hover, .prompt-copy:focus-visible { color: var(--text); opacity: 1; }
   .prompt-copy.copied { color: var(--accent); border-color: var(--accent); }
   .prompt-editor-foot { flex: none; display: flex; align-items: center; gap: 8px; }
+  /* A run's generated prompts: one to a page in the editor, swiped through like a set's prompts. */
+  .generated-prompts { width: auto; margin: 6px 0 0; padding: 6px 12px; font-size: .8rem; background: var(--panel-2); border: 1px solid var(--line); color: var(--text); }
+  .generated-prompts[hidden] { display: none; }
+  .prompt-editor-pages { flex: 1; min-width: 0; display: flex; overflow-x: auto; scroll-snap-type: x mandatory; scrollbar-width: none; overscroll-behavior-x: contain; scroll-behavior: smooth; }
+  .prompt-editor-pages[hidden] { display: none; }
+  .prompt-editor-pages::-webkit-scrollbar { display: none; }
+  .prompt-page { flex: 0 0 100%; min-width: 0; display: flex; flex-direction: column; gap: 6px; scroll-snap-align: center; scroll-snap-stop: always; box-sizing: border-box; padding: 0 1px; }
+  .prompt-page-title { flex: none; color: var(--muted); font-size: .78rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .prompt-page textarea { flex: 1; width: 100%; min-height: 0; margin: 0; resize: none; padding: 10px 12px; font-size: 1rem; line-height: 1.45; box-sizing: border-box; }
+  .prompt-editor-turn { flex: none; display: flex; gap: 4px; }
+  .prompt-editor-turn[hidden] { display: none; }
+  .prompt-editor-turn button { width: 28px; height: 26px; margin: 0; padding: 0; background: transparent; border: 1px solid var(--line); border-radius: 8px; color: var(--muted); font-size: 1.1rem; line-height: 1; }
+  .prompt-editor-turn button:disabled { opacity: .35; }
+  @media (prefers-reduced-motion: reduce) { .prompt-editor-pages { scroll-behavior: auto; } }
   .prompt-editor-gap { flex: 1 1 auto; }
   .prompt-editor-head { display: flex; align-items: baseline; gap: 8px; }
   .prompt-editor-head .panel-dialog-title { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -1492,6 +1518,29 @@
       <button type="button" id="videoMegapixelsUp" aria-label="0.1 megapixels more">+</button>
     </div>
     <input id="size" name="size" placeholder="Such as 1280x736, rounded to multiples of 32" autocomplete="off" style="margin-top:8px" hidden>
+    <div id="videoLatentBox" hidden>
+      <div class="range-head" style="margin-top:12px"><label for="videoLatentUpscale">Latent upscale</label><output class="resolution-size" id="videoLatentSize"></output></div>
+      <select id="videoLatentUpscale" name="opt_latent_upscale" disabled></select>
+      <input type="hidden" id="videoLatentMp" name="opt_latent_upscale_mp" value="1" disabled>
+      <div class="count-stepper mp-stepper hidden" id="videoLatentMpBox">
+        <button type="button" id="videoLatentDown" aria-label="0.1 megapixels fewer">−</button>
+        <span class="mp-field" id="videoLatentMpValue" aria-live="polite"></span>
+        <button type="button" id="videoLatentUp" aria-label="0.1 megapixels more">+</button>
+      </div>
+      <div class="latent-custom open" id="videoLatentCustom" hidden>
+        <button type="button" class="latent-custom-head" id="videoLatentCustomToggle" aria-expanded="true">Custom settings</button>
+        <div class="latent-custom-body">
+        <div class="option-row"><label for="videoLatentDenoise">Denoise</label>
+          <input type="number" id="videoLatentDenoise" name="opt_latent_upscale_denoise" min="0.05" max="1" step="0.05" value="0.5" disabled></div>
+        <div class="option-row"><label for="videoLatentSteps">Refine steps</label>
+          <input type="number" id="videoLatentSteps" name="opt_latent_upscale_steps" min="1" max="12" step="1" value="3" disabled></div>
+        <div class="option-row"><label for="videoLatentSampler">Refine sampler</label>
+          <select id="videoLatentSampler" name="opt_latent_upscale_sampler" disabled></select></div>
+        <label class="check"><input type="hidden" name="opt_latent_upscale_chunking" value="0" id="videoLatentChunkingOff" disabled><input type="checkbox" id="videoLatentChunking" name="opt_latent_upscale_chunking" value="1" checked disabled><span>Temporal chunking (less VRAM)</span></label>
+        </div>
+      </div>
+      <div class="hint" id="videoLatentHint"></div>
+    </div>
 
     <div id="durationBox">
     <div class="range-head" style="margin-top:12px"><label for="duration">Film length</label><output id="durationText"></output></div>
@@ -1551,6 +1600,7 @@
     <div class="prompt-label-row"><label for="prompt" id="videoPromptLabel">Prompt</label><span class="prompt-actions" hidden><button type="button" id="clearVideoPrompt" aria-label="Clear video prompt">Clear</button><button type="button" class="prompt-write" id="writeVideoPrompt" aria-label="Write video prompt" title="Write prompt" disabled></button></span></div>
     <div class="prompt-writing" id="videoPromptWriting"><textarea id="prompt" name="prompt" data-prompt inputmode="none" placeholder="e.g. A storm rolls in over the harbour and the fishing boats race home"></textarea><div class="prompt-progress" id="videoPromptProgress" hidden></div><div class="prompt-eta" id="videoPromptEta" role="status" hidden></div></div>
     <div class="err" id="videoPromptWriteError" role="alert" hidden></div>
+    <button type="button" class="generated-prompts" data-generated-prompts hidden></button>
     <div class="hint" id="videoPromptHint">A sentence or two is enough.</div>
     <div id="videoH3Box" hidden>
       <label class="check"><input type="checkbox" id="videoH3Enabled"><span>Enable OpenH3-IR</span></label>
@@ -1700,6 +1750,7 @@
     <div class="prompt-label-row"><label for="imagePrompt" id="imagePromptLabel">Prompt</label><span class="prompt-actions" hidden><button type="button" id="clearImagePrompt" aria-label="Clear image prompt">Clear</button><button type="button" class="prompt-write" id="writeImagePrompt" aria-label="Write image prompt" title="Write prompt" disabled></button></span></div>
     <div class="prompt-writing" id="imagePromptWriting"><textarea id="imagePrompt" name="prompt" data-prompt inputmode="none"></textarea><div class="prompt-progress" id="imagePromptProgress" hidden></div><div class="prompt-eta" id="imagePromptEta" role="status" hidden></div></div>
     <div class="err" id="imagePromptWriteError" role="alert" hidden></div>
+    <button type="button" class="generated-prompts" data-generated-prompts hidden></button>
     <div class="hint" id="imagePromptHint"></div>
     <div class="hint" id="imageHowDirect" hidden>Your prompt goes in as it is, so each image differs only by its seed.</div>
   </details>
@@ -1902,10 +1953,11 @@
   </div>
 </dialog>
 <dialog id="promptEditor" class="panel-dialog prompt-editor" aria-labelledby="promptEditorTitle">
-  <div class="prompt-editor-head"><div class="panel-dialog-title" id="promptEditorTitle">Prompt</div><span class="hint" id="promptEditorCount" aria-live="polite"></span></div>
+  <div class="prompt-editor-head"><div class="panel-dialog-title" id="promptEditorTitle">Prompt</div><span class="hint" id="promptEditorCount" aria-live="polite"></span><span class="prompt-editor-turn" id="promptEditorTurn" hidden><button type="button" id="promptEditorPrev" aria-label="Previous prompt" title="Previous">&#8249;</button><button type="button" id="promptEditorNext" aria-label="Next prompt" title="Next">&#8250;</button></span></div>
   <div class="prompt-editor-box">
     <textarea id="promptEditorText" aria-labelledby="promptEditorTitle" spellcheck="true"></textarea>
     <div class="prompt-progress" id="promptEditorProgress" hidden></div>
+    <div class="prompt-editor-pages" id="promptEditorPages" hidden></div>
   </div>
   <div class="prompt-editor-foot">
     <button type="button" class="prompt-copy prompt-enhance" id="promptEditorEnhance" aria-label="Write it with the LLM" title="Write it with the LLM: your idea becomes a full prompt" hidden></button>
@@ -1949,8 +2001,12 @@
   <div class="upscale-head"><span>Upscale</span><span class="upscale-note" id="upscaleNote"></span></div>
   <div class="upscale-methods" id="upscaleMethods">
     <button type="button" data-method="fast" data-for="image" title="Superscale-SP: seconds, and adds no new detail">Fast</button>
+    <button type="button" data-method="ultrasharp" data-for="image" title="4x-UltraSharp: seconds, the picture as it is with crisper edges">UltraSharp</button>
+    <button type="button" data-method="hires" data-for="image" title="Hires fix: the set's own model draws it again twice as big, adding skin, hair and texture">Hires fix</button>
+    <button type="button" data-method="usdu" data-for="image" title="Ultimate SD Upscale: 4x-UltraSharp, then the set's own model redraws it in tiles">Ultimate SD</button>
     <button type="button" data-method="seedvr2" data-for="image" title="SeedVR2: minutes, and draws finer detail">SeedVR2</button>
     <button type="button" data-method="vsr" data-for="film" title="NVIDIA RTX Video Super Resolution">RTX VSR</button>
+    <button type="button" data-method="latent" data-for="film" title="H3 latent upscaler: the film is made again on the same seeds, then upscaled and refined">Latent</button>
   </div>
 </dialog>
 <dialog id="upscaleSettings" class="panel-dialog upscale-dialog upscale-settings" aria-label="Upscale settings">
@@ -1964,7 +2020,24 @@
       <option value="STREAMING_ULTRA">Streaming · ultra</option><option value="ULTRA">Ultra</option>
     </select>
   </div>
-  <div class="upscale-row" data-show="fast">
+  <div class="upscale-row" data-show="latent">
+    <select id="filmLatentPreset" aria-label="Preset" title="Clean keeps the film as it was; Hires fix and Heavy draw in more detail.">
+      <option>Clean</option><option selected>Hires fix</option><option>Heavy</option>
+    </select>
+    <div class="count-stepper">
+      <button type="button" id="filmLatentDown" aria-label="0.1 megapixels fewer">−</button>
+      <span class="mp-field" id="filmLatentMpValue" aria-live="polite"></span>
+      <button type="button" id="filmLatentUp" aria-label="0.1 megapixels more">+</button>
+    </div>
+  </div>
+  <div class="upscale-row hint" data-show="latent" id="filmLatentHint"></div>
+  <div class="upscale-row" data-show="hires usdu">
+    <select id="viewerUpscaleDenoise" aria-label="Denoise" title="How much the set's model draws again: 0.3 is subtle, 0.45 a heavy rework.">
+      <option value="0.25">Denoise 0.25 · subtle</option><option value="0.3">Denoise 0.3</option><option value="0.35">Denoise 0.35</option>
+      <option value="0.45">Denoise 0.45 · heavy</option>
+    </select>
+  </div>
+  <div class="upscale-row" data-show="fast ultrasharp">
     <select id="viewerUpscaleStrength" aria-label="Upscaler mix" title="How much of the upscaler's result is used, the rest a plain resize. Lower tones down texture the upscaler invents.">
       <option value="1">Upscaler 100%</option><option value="0.75">Upscaler 75%</option><option value="0.5">Upscaler 50%</option>
     </select>
@@ -1983,7 +2056,8 @@
   <div class="upscale-head"><span>Edit upscale</span></div>
   <div class="upscale-row" id="queueUpscaleMethodRow">
     <select id="queueUpscaleMethod" aria-label="Upscale method">
-      <option value="fast">Superscale-SP</option><option value="seedvr2">SeedVR2</option>
+      <option value="fast">Superscale-SP</option><option value="ultrasharp">4x-UltraSharp</option><option value="seedvr2">SeedVR2</option>
+      <option value="hires">Hires fix</option><option value="usdu">Ultimate SD Upscale</option>
     </select>
   </div>
   <div class="upscale-row" id="queueUpscaleStrengthRow">
@@ -3023,7 +3097,109 @@ function syncSize() {
   $('videoMegapixelsValue').innerHTML = `${mp.toFixed(1)}<span class="mp-unit">MP</span>`;
   $('videoMegapixelsDown').disabled = mp <= 0.1 + 1e-9;
   $('videoMegapixelsUp').disabled = mp + 0.1 > videoMostPixels() / 1e6 + 1e-9;
+  showVideoLatent();
 }
+// Latent upscale, under Resolution: the clip is made at the size above, its latent made this big, then refined.
+const LATENT_OPTIONS = ['latent_upscale', 'latent_upscale_mp', 'latent_upscale_denoise', 'latent_upscale_steps', 'latent_upscale_chunking', 'latent_upscale_sampler'];
+const LATENT_FIELDS = ['videoLatentUpscale', 'videoLatentMp', 'videoLatentDenoise', 'videoLatentSteps', 'videoLatentSampler', 'videoLatentChunking', 'videoLatentChunkingOff'];
+const LATENT_KEY = 'gen-center.videoLatent';
+function savedLatent() {
+  try { return JSON.parse(localStorage.getItem(LATENT_KEY) || '{}') || {}; } catch (e) { return {}; }
+}
+function rememberLatent() {
+  try {
+    localStorage.setItem(LATENT_KEY, JSON.stringify({ preset: $('videoLatentUpscale').value, mp: $('videoLatentMp').value,
+      denoise: $('videoLatentDenoise').value, steps: $('videoLatentSteps').value, sampler: $('videoLatentSampler').value,
+      chunking: $('videoLatentChunking').checked }));
+  } catch (e) {}
+}
+// H3 Motion Director, Multishot and Infinite make their clips their own way: there is no latent between to upscale.
+function latentUnavailable() {
+  const start = $('start').hidden ? 'image' : $('start').value;
+  return { director: 'H3 Motion Director', multishot: 'H3 Multishot', infinite: 'H3 Infinite continuation' }[start] || '';
+}
+function syncVideoLatent(options) {
+  const preset = options.find(option => option.id === 'latent_upscale'), mp = options.find(option => option.id === 'latent_upscale_mp');
+  const box = $('videoLatentBox'), h3 = !!workflowH3[$('videoWorkflow').value] || !!workflowMultishot[$('videoWorkflow').value] || !!workflowDirector[$('videoWorkflow').value];
+  const unavailable = latentUnavailable() || (!preset && h3 ? 'this workflow' : '');
+  // Shown greyed where it can't be used on an H3 workflow, and not at all on others.
+  box.hidden = !preset && !unavailable;
+  box.classList.toggle('unavailable', !!unavailable);
+  for (const id of LATENT_FIELDS) $(id).disabled = box.hidden || !!unavailable;
+  if (box.hidden) return;
+  if (!preset) {
+    $('videoLatentUpscale').innerHTML = '<option>Off</option>';
+    $('videoLatentMpBox').classList.add('hidden');
+    $('videoLatentCustom').hidden = true;
+    $('videoLatentSize').textContent = '';
+    $('videoLatentHint').textContent = `Not available with ${unavailable}: it makes its clips without a latent to upscale.`;
+    return;
+  }
+  const sampler = options.find(option => option.id === 'latent_upscale_sampler');
+  const samplerKey = JSON.stringify(sampler ? sampler.choices : []);
+  if ($('videoLatentSampler').dataset.key !== samplerKey) {
+    const was = $('videoLatentSampler').value || savedLatent().sampler;
+    $('videoLatentSampler').dataset.key = samplerKey;
+    $('videoLatentSampler').innerHTML = (sampler ? sampler.choices : ['Same as the clip']).map(value => `<option>${esc(value)}</option>`).join('');
+    if (sampler && sampler.choices.includes(was)) $('videoLatentSampler').value = was;
+  }
+  const key = JSON.stringify([preset.choices, mp.min, mp.max]);
+  if (box.dataset.key !== key) {
+    const first = !box.dataset.key, saved = savedLatent(), was = first ? saved.preset : $('videoLatentUpscale').value;
+    box.dataset.key = key;
+    box.dataset.min = mp.min;
+    box.dataset.max = mp.max;
+    $('videoLatentUpscale').innerHTML = preset.choices.map(value => `<option>${esc(value)}</option>`).join('');
+    $('videoLatentUpscale').value = preset.choices.includes(was) ? was : preset.default;
+    if (first) {
+      $('videoLatentMp').value = saved.mp || mp.default;
+      if (saved.denoise) $('videoLatentDenoise').value = saved.denoise;
+      if (saved.steps) $('videoLatentSteps').value = saved.steps;
+      if (saved.chunking === false) $('videoLatentChunking').checked = false;
+    }
+  }
+  if (unavailable) $('videoLatentUpscale').value = 'Off';
+  showVideoLatent();
+  if (unavailable) $('videoLatentHint').textContent = `Not available with ${unavailable}: it makes its clips without a latent to upscale.`;
+}
+function showVideoLatent() {
+  const box = $('videoLatentBox');
+  if (box.hidden) return;
+  const on = $('videoLatentUpscale').value !== 'Off', least = Number(box.dataset.min) || 0.5, most = Number(box.dataset.max) || 4;
+  const mp = Math.min(most, Math.max(least, Number($('videoLatentMp').value) || 1));
+  $('videoLatentMp').value = mp.toFixed(1);
+  $('videoLatentMpBox').classList.toggle('hidden', !on);
+  $('videoLatentCustom').hidden = $('videoLatentUpscale').value !== 'Custom';
+  $('videoLatentMpValue').innerHTML = `${mp.toFixed(1)}<span class="mp-unit">MP</span>`;
+  $('videoLatentDown').disabled = mp <= least + 1e-9;
+  $('videoLatentUp').disabled = mp >= most - 1e-9;
+  // The size it ends at: the shape of the one above, at this many pixels, on the 32 grid.
+  const sides = ($('videoPixelSize').textContent || '').split('×').map(Number);
+  const shaped = sides.length === 2 && sides.every(n => n > 0);
+  const ratio = shaped ? sides[0] / sides[1] : 16 / 9, height = Math.sqrt(mp * 1e6 / ratio);
+  $('videoLatentSize').textContent = on ? `${Math.round(height * ratio / 32) * 32}×${Math.round(height / 32) * 32}` : '';
+  const small = shaped && mp * 1e6 <= sides[0] * sides[1];
+  $('videoLatentHint').textContent = !on ? ''
+    : small ? 'Set this above the resolution: the clip is made at the resolution, then upscaled to this.'
+    : $('videoLatentUpscale').value === 'Custom' ? 'Made at the resolution above, then upscaled to this and refined as set below: more denoise draws in more.'
+    : 'Made at the resolution above, then upscaled to this and refined. Clean keeps it as it was; Hires fix and Heavy draw in more detail.';
+}
+function stepVideoLatent(by) {
+  $('videoLatentMp').value = (Math.round((Number($('videoLatentMp').value) + by) * 10) / 10).toFixed(1);
+  showVideoLatent();
+  rememberLatent();
+  $('videoLatentMp').dispatchEvent(new Event('change', { bubbles: true }));
+}
+$('videoLatentDown').addEventListener('click', () => stepVideoLatent(-0.1));
+$('videoLatentUp').addEventListener('click', () => stepVideoLatent(0.1));
+// A tap on the number goes back to 1 MP.
+$('videoLatentMpValue').addEventListener('click', () => { $('videoLatentMp').value = '1.0'; showVideoLatent(); rememberLatent(); });
+$('videoLatentUpscale').addEventListener('change', () => { showVideoLatent(); rememberLatent(); });
+$('videoLatentCustom').addEventListener('change', rememberLatent);
+$('videoLatentCustomToggle').addEventListener('click', () => {
+  const open = $('videoLatentCustom').classList.toggle('open');
+  $('videoLatentCustomToggle').setAttribute('aria-expanded', String(open));
+});
 function stepVideoMegapixels(by) {
   const next = Math.round((videoArea() / 1e6 + by) * 10) / 10;
   videoMegapixels = Math.min(videoMostPixels() / 1e6, Math.max(0.1, next));
@@ -3071,9 +3247,13 @@ function syncVideoForm() {
     ? Math.min(Math.floor(+$('duration').max / shortest), Math.max(1, Math.floor(seconds / shortest + .5))) * shortest : seconds;
   const single = $('audioMode').value === 'none' && $('duration').value && Number.isInteger(seconds)
     && seconds >= +$('duration').min && seconds <= +$('duration').max && shotCount(adjusted) === 1;
-  $('connectionBox').hidden = !!single;
+  // One clip has nothing to connect to: it shows as Separate moments, and goes as one.
   $('startSingle').disabled = !single;
-  if (single) $('start').disabled = true;
+  if (single) {
+    $('start').disabled = $('start').hidden = true;
+    $('startUnavailable').hidden = false;
+    $('startHint').textContent = 'One clip: it has nothing to connect to, so it is a separate moment.';
+  }
   const multishot = !single && $('start').value === 'multishot' && !!workflowMultishot[$('videoWorkflow').value];
   if (multishot && !$('videoClipFixed').checked) {
     const [, , usual] = videoClips();
@@ -3095,7 +3275,9 @@ function syncVideoForm() {
   syncH3Controls('video', !multishot && !infinite && !!workflowH3[$('videoWorkflow').value]);
   $('videoLlmBox').classList.toggle('hidden', direct);
   $('videoPromptHint').textContent = direct ? (multishot ? 'Every shot gets it as you wrote it.' : 'Every clip gets it as you wrote it, each on its own seed.') : 'A sentence or two is enough.';
-  syncOptions('videoOptions', 'videoOptionsBox', (workflowTakes[$('videoWorkflow').value] || {}).options || [], $('videoWorkflow').value);
+  const videoOptions = (workflowTakes[$('videoWorkflow').value] || {}).options || [];
+  syncOptions('videoOptions', 'videoOptionsBox', videoOptions.filter(option => !LATENT_OPTIONS.includes(option.id)), $('videoWorkflow').value);
+  syncVideoLatent(videoOptions);
   syncMediaInput();
   syncSize();
   syncAudio();
@@ -4365,6 +4547,11 @@ $('viewerUpscale').addEventListener('click', () => {
   if (box.open) return;
   const film = !!(viewing && viewing.film);
   for (const b of box.querySelectorAll('[data-for]')) b.hidden = (b.dataset.for === 'film') !== film;
+  // Latent upscale only for a film it can make again: greyed out for Motion Director, Multishot, Infinite and others.
+  const latent = box.querySelector('[data-method="latent"]');
+  latent.disabled = film && !viewing.latent;
+  latent.title = latent.disabled ? 'Not available for this film: it needs an H3 reference-to-video run that is still saved, not Motion Director, Multishot or Infinite'
+    : 'H3 latent upscaler: the film is made again on the same seeds, then upscaled and refined';
   const options = [...box.querySelectorAll('button[data-method]')].filter(b => !b.hidden);
   if (options.length === 1) { openUpscaleSettings(options[0].dataset.method); return; }
   box.classList.remove('closing');
@@ -4382,13 +4569,15 @@ function placeOverViewerButtons(box) {
 }
 function openUpscaleSettings(method) {
   upscaleMethod = method;
-  const film = method === 'vsr', img = $('viewerImage'), w = img.naturalWidth, h = img.naturalHeight;
-  $('upscaleTitle').textContent = { fast: 'Fast upscale 2×', seedvr2: 'SeedVR2 upscale', vsr: 'RTX VSR upscale' }[method];
+  const film = method === 'vsr' || method === 'latent', img = $('viewerImage'), w = img.naturalWidth, h = img.naturalHeight;
+  if (method === 'latent') showFilmLatent();
+  $('upscaleTitle').textContent = { fast: 'Fast upscale 2×', ultrasharp: 'UltraSharp upscale 2×', hires: 'Hires fix 2×', usdu: 'Ultimate SD upscale 2×', seedvr2: 'SeedVR2 upscale', vsr: 'RTX VSR upscale', latent: 'Latent upscale' }[method];
   $('upscaleSettingsNote').textContent = film ? ($('viewerRes').textContent || '') : w ? `${w} × ${h}` : '';
-  for (const row of $('upscaleSettings').querySelectorAll('[data-show]')) row.hidden = row.dataset.show !== method;
+  for (const row of $('upscaleSettings').querySelectorAll('[data-show]')) row.hidden = !row.dataset.show.split(' ').includes(method);
   const shorter = Math.min(w, h);
   for (const o of $('viewerUpscaleSize').options) o.disabled = +o.value > 0 && +o.value <= shorter;
   $('viewerUpscaleSize').value = '0';
+  if (method === 'hires' || method === 'usdu') $('viewerUpscaleDenoise').value = method === 'hires' ? '0.35' : '0.3';
   $('upscaleSettings').showModal();
   placeOverViewerButtons($('upscaleSettings'));
 }
@@ -4409,6 +4598,20 @@ $('viewerUpscaleBar').addEventListener('click', e => {
   const pick = e.target.closest && e.target.closest('button[data-method]');
   if (pick) closeUpscaleMenu(() => openUpscaleSettings(pick.dataset.method));
 });
+// A film's latent upscale: made again on the same seeds at its size, then upscaled to this many megapixels.
+let filmLatentMp = 1;
+function showFilmLatent() {
+  const sides = ($('viewerRes').textContent || '').match(/(\d+)\D+(\d+)/);
+  const area = sides ? Number(sides[1]) * Number(sides[2]) / 1e6 : 0;
+  filmLatentMp = Math.min(4, Math.max(0.5, Math.round(filmLatentMp * 10) / 10));
+  $('filmLatentMpValue').innerHTML = `${filmLatentMp.toFixed(1)}<span class="mp-unit">MP</span>`;
+  $('filmLatentDown').disabled = filmLatentMp <= 0.5 + 1e-9;
+  $('filmLatentUp').disabled = filmLatentMp >= 4 - 1e-9;
+  $('filmLatentHint').textContent = area && filmLatentMp <= area ? `It is ${area.toFixed(1)} MP already: choose more.`
+    : 'Renders the film again on the seeds it was made with, then upscales it: about as long as it took to make.';
+}
+$('filmLatentDown').addEventListener('click', () => { filmLatentMp -= 0.1; showFilmLatent(); });
+$('filmLatentUp').addEventListener('click', () => { filmLatentMp += 0.1; showFilmLatent(); });
 $('upscaleSettings').addEventListener('click', async e => {
   if (e.target.closest && e.target.closest('#upscaleCancel')) { $('upscaleSettings').close(); return; }
   const button = e.target.closest && e.target.closest('#upscaleGo');
@@ -4423,13 +4626,17 @@ $('upscaleSettings').addEventListener('click', async e => {
   };
   let body;
   if (viewing.film) {
-    const query = `scale=${encodeURIComponent($('filmUpscaleScale').value)}&quality=${encodeURIComponent($('filmUpscaleQuality').value)}`;
+    const query = upscaleMethod === 'latent'
+      ? `method=latent&preset=${encodeURIComponent($('filmLatentPreset').value)}&mp=${filmLatentMp.toFixed(1)}`
+      : `scale=${encodeURIComponent($('filmUpscaleScale').value)}&quality=${encodeURIComponent($('filmUpscaleQuality').value)}`;
     body = await queueRequest(button, async () => (await fetch(`/films/${encodeURIComponent(viewing.name)}/upscale?${query}`, { method: 'POST' })).json());
     done(body);
     return;
   }
   const { id, position } = viewing;
-  const query = upscaleMethod === 'fast' ? `?method=fast&strength=${encodeURIComponent($('viewerUpscaleStrength').value)}` : `?method=seedvr2&resolution=${encodeURIComponent($('viewerUpscaleSize').value)}`;
+  const query = upscaleMethod === 'seedvr2' ? `?method=seedvr2&resolution=${encodeURIComponent($('viewerUpscaleSize').value)}`
+    : ['hires', 'usdu'].includes(upscaleMethod) ? `?method=${upscaleMethod}&denoise=${encodeURIComponent($('viewerUpscaleDenoise').value)}`
+    : `?method=${upscaleMethod}&strength=${encodeURIComponent($('viewerUpscaleStrength').value)}`;
   body = await queueRequest(button, async () => (await fetch(`/image-runs/${encodeURIComponent(id)}/upscale/${position}${query}`, { method: 'POST' })).json());
   done(body);
 });
@@ -4483,6 +4690,15 @@ $('viewerEdit').addEventListener('click', () => {
 });
 // Every option as a set had it: what it chose, else the workflow's own default.
 function applyOptions(box, options, chosen) {
+  if (box === $('videoOptionsBox')) {
+    if (chosen.latent_upscale) $('videoLatentUpscale').value = chosen.latent_upscale;
+    if (chosen.latent_upscale_mp) $('videoLatentMp').value = chosen.latent_upscale_mp;
+    if (chosen.latent_upscale_denoise) $('videoLatentDenoise').value = chosen.latent_upscale_denoise;
+    if (chosen.latent_upscale_steps) $('videoLatentSteps').value = chosen.latent_upscale_steps;
+    if (chosen.latent_upscale_sampler) $('videoLatentSampler').value = chosen.latent_upscale_sampler;
+    if (chosen.latent_upscale_chunking) $('videoLatentChunking').checked = chosen.latent_upscale_chunking === '1';
+    showVideoLatent();
+  }
   for (const option of options.filter(o => !o.role)) {
     const value = chosen[option.id] ?? option.default;
     const field = name => box.querySelector(`[name="${name}"]:not([type="hidden"])`);
@@ -4585,7 +4801,7 @@ function openFilm(name, filmFolder = folder) {
   const films = visibleFilms(), at = films.findIndex(v => v.name === name);
   if (at < 0) return;
   const film = films[at], url = `/videos/${filmFolder}/${encodeURIComponent(name)}`;
-  viewing = { film: true, name, run: film.run || null, folder: filmFolder };
+  viewing = { film: true, name, run: film.run || null, folder: filmFolder, latent: !!film.latent };
   showViewerMedia(true);
   // A film has Upscale (Video's only) and Prompts (its run's, if still saved), not the image editing.
   const canUpscale = filmFolder === 'video', canPrompt = !!film.run;
@@ -6874,7 +7090,7 @@ async function removeQueued(lane, id) {
 function syncQueueUpscale() {
   const image = queueUpscaleEdit.kind === 'image_upscale';
   $('queueUpscaleMethodRow').hidden = !image;
-  $('queueUpscaleStrengthRow').hidden = !image || $('queueUpscaleMethod').value !== 'fast';
+  $('queueUpscaleStrengthRow').hidden = !image || ['seedvr2', 'hires', 'usdu'].includes($('queueUpscaleMethod').value);
   $('queueUpscaleResolutionRow').hidden = !image || $('queueUpscaleMethod').value !== 'seedvr2';
   $('queueUpscaleFilmRow').hidden = image;
 }
@@ -6898,12 +7114,14 @@ $('queueUpscaleSave').addEventListener('click', async e => {
   if (!queueUpscaleEdit) return;
   const image = queueUpscaleEdit.kind === 'image_upscale';
   const fields = image
-    ? [$('queueUpscaleMethod'), $('queueUpscaleMethod').value === 'fast' ? $('queueUpscaleStrength') : $('queueUpscaleResolution')]
+    ? [$('queueUpscaleMethod'), ...(['hires', 'usdu'].includes($('queueUpscaleMethod').value) ? []
+      : [$('queueUpscaleMethod').value !== 'seedvr2' ? $('queueUpscaleStrength') : $('queueUpscaleResolution')])]
     : [$('queueUpscaleScale'), $('queueUpscaleQuality')];
   if (fields.some(field => !field.value || !field.reportValidity())) return;
   const edit = queueUpscaleEdit;
   const values = { token: edit.token, method: $('queueUpscaleMethod').value, strength: $('queueUpscaleStrength').value,
-    resolution: $('queueUpscaleResolution').value, scale: $('queueUpscaleScale').value, quality: $('queueUpscaleQuality').value };
+    resolution: $('queueUpscaleResolution').value, scale: $('queueUpscaleScale').value, quality: $('queueUpscaleQuality').value,
+    denoise: queueUpscaleEdit.denoise };
   $('queueUpscaleCancel').disabled = true;
   const body = await queueRequest(e.currentTarget, async () => (await fetch(`/queue/run/edit/${edit.id}/upscale`, {
     method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(values),
@@ -6911,7 +7129,22 @@ $('queueUpscaleSave').addEventListener('click', async e => {
   $('queueUpscaleCancel').disabled = false;
   if (body) { queueUpscaleEdit = null; $('queueUpscaleSettings').close(); poll(); }
 });
+// A continued run being edited: its prompt made the generated ones, so it stays; they open from under it.
+function syncContinued() {
+  const run = queueEdit && queueEdit.continued;
+  for (const button of document.querySelectorAll('[data-generated-prompts]')) {
+    const side = button.closest('#formImage') ? 'image' : 'video';
+    button.hidden = !run || queueEdit.pipeline !== side;
+    if (run) button.textContent = `Generated prompts · ${run.prompts.length}`;
+  }
+  for (const side of ['video', 'image']) {
+    const field = $(PROMPT_FIELDS[side]);
+    if (run && queueEdit.pipeline === side) { field.dataset.continued = '1'; field.readOnly = true; }
+    else if (field.dataset.continued) { delete field.dataset.continued; field.readOnly = false; }
+  }
+}
 function queueEditLabel() {
+  syncContinued();
   $('cancelQueueEdit').hidden = !queueEdit;
   $('goLater').hidden = !!queueEdit;
   if (!submitting) $('go').textContent = $('goStick').textContent = queueEdit ? 'Save to queue' : goLabel(wasRunning);
@@ -6928,7 +7161,7 @@ async function editQueued(id, button) {
   const data = await queueRequest(button, async () => (await fetch(`/queue/run/edit/${id}`, { method: 'POST' })).json(), 'Pending', 'Opening…');
   if (!data) return;
   if (data.upscale) {
-    queueUpscaleEdit = { id: data.id, token: data.token, kind: data.upscale.kind };
+    queueUpscaleEdit = { id: data.id, token: data.token, kind: data.upscale.kind, denoise: data.upscale.denoise };
     $('queueUpscaleMethod').value = data.upscale.method || 'fast';
     $('queueUpscaleStrength').value = data.upscale.strength || '1';
     $('queueUpscaleResolution').value = data.upscale.resolution || '0';
@@ -6939,7 +7172,7 @@ async function editQueued(id, button) {
     poll();
     return;
   }
-  queueEdit = { id: data.id, token: data.token, pipeline: data.pipeline, ready: false };
+  queueEdit = { id: data.id, token: data.token, pipeline: data.pipeline, ready: false, continued: data.continued || null };
   const edit = queueEdit;
   queueEditLabel();
   poll();
@@ -6977,7 +7210,7 @@ async function editQueued(id, button) {
     apply();
     const workflow = Array.isArray(values.workflow) ? values.workflow[0] : values.workflow;
     const workflowField = pipeline === 'image' ? $('imageWorkflow') : pipeline === 'video' ? $('videoWorkflow') : $('workflow');
-    if (workflow && workflowField.value !== workflow) throw new Error('The saved workflow is unavailable. The job remains in Pending.');
+    if (workflow && workflowField.value !== workflow && !edit.continued) throw new Error('The saved workflow is unavailable. The job remains in Pending.');
     if (pipeline === 'video') {
       imageBoxes().forEach(clearImage);
       mediaBoxes().forEach(clearMedia);
@@ -7008,6 +7241,10 @@ async function editQueued(id, button) {
     edit.ready = true;
     showFormError('');
     queueEditLabel();
+    if (edit.continued) {
+      $('formNote').hidden = false;
+      $('formNote').textContent = `Editing ${edit.continued.title}: its prompts are written, so resolution, workflow options and Preview run change here. The prompt, images, length and workflow stay as planned.`;
+    }
     if (WIDE.matches) $('optionsCard').scrollIntoView({ behavior: 'smooth' }); else showPage('generate');
   } catch (error) {
     if (queueEdit !== edit) return;
@@ -7070,6 +7307,7 @@ async function startJob(url, later = false) {
   if (later) $('goLater').textContent = 'Adding…';
   const form = new FormData($(SIDE_FORMS[pipeline]));
   if (later) form.append('start_later', '1');
+  if (queueEdit && queueEdit.continued) url = `/queue/run/edit/${queueEdit.id}/continue`;
   if (queueEdit) {
     form.append('queue_edit_id', String(queueEdit.id));
     form.append('queue_edit_token', queueEdit.token);
@@ -7091,6 +7329,9 @@ async function startJob(url, later = false) {
   if (body.continued) $('formNote').textContent = `Continuing what was already paid for: ${body.continued}`;
   if (!body.ok) {
     showFormError(body.error || 'Could not start.');
+  } else if (url.startsWith('/queue/run/edit/')) {
+    autoScroll = true;
+    queuePlan();
   } else if (url.startsWith('/generate/video')) {
     // Keep the form intact so variants can be queued without entering everything again.
     autoScroll = true;
@@ -7384,10 +7625,104 @@ function promptLabel(field) {
 function syncPromptBox(field) {
   if (field && field.classList) field.classList.toggle('more', field.scrollHeight > field.clientHeight + 2);
 }
-function countPrompt() {
-  const text = $('promptEditorText').value, words = text.trim() ? text.trim().split(/\s+/).length : 0;
-  $('promptEditorCount').textContent = `${words} ${words === 1 ? 'word' : 'words'} · ${text.length} characters`;
+// The box being edited: the one prompt, or the page shown of a run's generated prompts.
+let generatedEdit = null;
+function promptPage() {
+  const pages = $('promptEditorPages');
+  return Math.min(generatedEdit ? generatedEdit.shots.length - 1 : 0, Math.max(0, Math.round(pages.scrollLeft / Math.max(pages.clientWidth, 1))));
 }
+function editorText() {
+  return generatedEdit ? $('promptEditorPages').querySelectorAll('textarea')[promptPage()] : $('promptEditorText');
+}
+function countPrompt() {
+  const text = editorText().value, words = text.trim() ? text.trim().split(/\s+/).length : 0;
+  if (!generatedEdit) {
+    $('promptEditorCount').textContent = `${words} ${words === 1 ? 'word' : 'words'} · ${text.length} characters`;
+    return;
+  }
+  const where = generatedEdit.shots.length > 1 ? `${promptPage() + 1} of ${generatedEdit.shots.length} · ` : '';
+  $('promptEditorCount').textContent = `${where}${words} ${words === 1 ? 'word' : 'words'}`;
+  $('promptEditorPrev').disabled = promptPage() === 0;
+  $('promptEditorNext').disabled = promptPage() === generatedEdit.shots.length - 1;
+}
+// A queued run's generated prompts, one to a page: swipe, the arrows, or Ctrl+arrow keys turn them.
+async function openGeneratedPrompts() {
+  const run = queueEdit && queueEdit.continued;
+  if (!run) return;
+  let data;
+  try {
+    data = await (await fetch(runUrl(run.id))).json();
+  } catch (e) {
+    data = { error: 'Could not reach the panel. Try again.' };
+  }
+  if (!data.ok) { alert(data.error || 'Could not open the generated prompts.'); return; }
+  generatedEdit = { id: data.id, shots: data.shots, dirty: false };
+  promptField = null;
+  promptWriting = null;
+  const pages = $('promptEditorPages');
+  pages.innerHTML = data.shots.map((shot, i) => `<div class="prompt-page">
+    <div class="prompt-page-title">${esc(shot.title || `${data.is_image ? 'Image' : 'Shot'} ${i + 1}`)}</div>
+    <textarea spellcheck="true" aria-label="Prompt ${i + 1}">${esc(shot.prompt || '')}</textarea></div>`).join('');
+  $('promptEditorText').hidden = true;
+  pages.hidden = false;
+  $('promptEditorTurn').hidden = data.shots.length < 2;
+  $('promptEditorTitle').textContent = 'Generated prompts';
+  $('promptEditorSave').hidden = $('promptEditorClear').hidden = false;
+  $('promptEditorEnhance').hidden = true;
+  $('promptEditorCancel').textContent = 'Cancel';
+  setPromptEditorBusy(false);
+  $('promptEditor').showModal();
+  fitPromptEditor();
+  pages.scrollLeft = 0;
+  countPrompt();
+}
+function turnPrompt(by) {
+  const pages = $('promptEditorPages');
+  pages.scrollTo({ left: (promptPage() + by) * pages.clientWidth });
+}
+$('promptEditorPrev').addEventListener('click', () => turnPrompt(-1));
+$('promptEditorNext').addEventListener('click', () => turnPrompt(1));
+$('promptEditorPages').addEventListener('scroll', countPrompt, { passive: true });
+$('promptEditorPages').addEventListener('input', () => { if (generatedEdit) { generatedEdit.dirty = true; countPrompt(); } });
+$('promptEditorPages').addEventListener('keydown', e => {
+  if (!generatedEdit || !(e.ctrlKey || e.metaKey) || !['ArrowLeft', 'ArrowRight'].includes(e.key)) return;
+  e.preventDefault();
+  turnPrompt(e.key === 'ArrowRight' ? 1 : -1);
+});
+function closeGeneratedPrompts() {
+  generatedEdit = null;
+  $('promptEditorPages').hidden = true;
+  $('promptEditorPages').innerHTML = '';
+  $('promptEditorText').hidden = false;
+  $('promptEditorTurn').hidden = true;
+  $('promptEditor').close();
+}
+async function saveGeneratedPrompts() {
+  const edit = generatedEdit;
+  if (!edit) return;
+  if (!edit.dirty) { closeGeneratedPrompts(); return; }
+  const prompts = [...$('promptEditorPages').querySelectorAll('textarea')].map(t => t.value);
+  if (prompts.some(prompt => !prompt.trim())) { $('promptEditorCount').textContent = 'Every prompt needs some text.'; return; }
+  // Their seeds go back as they are: without them, every one would be random.
+  const seeds = edit.shots.map(shot => shot.seed == null ? null : String(shot.seed));
+  $('promptEditorSave').disabled = true;
+  let data;
+  try {
+    data = await (await fetch(`${runUrl(edit.id)}/shots`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ prompts, seeds }),
+    })).json();
+  } catch (e) {
+    data = { error: 'Could not reach the panel. Try again.' };
+  }
+  $('promptEditorSave').disabled = false;
+  if (generatedEdit !== edit) return;
+  if (!data.ok) { $('promptEditorCount').textContent = data.error || 'Could not save the prompts.'; return; }
+  if (queueEdit && queueEdit.continued) queueEdit.continued.prompts = prompts;
+  closeGeneratedPrompts();
+}
+document.addEventListener('click', e => {
+  if (e.target && e.target.closest && e.target.closest('[data-generated-prompts]')) openGeneratedPrompts();
+});
 // Sized to what the keyboard leaves visible, so Save and Cancel stay above it on a phone.
 function fitPromptEditor() {
   const view = window.visualViewport, box = $('promptEditor');
@@ -7460,12 +7795,14 @@ $('promptEditorText').addEventListener('input', countPrompt);
 $('promptEditorText').addEventListener('keydown', e => {
   if (e.key === 'Enter' && (e.ctrlKey || e.metaKey) && !$('promptEditorSave').hidden) { e.preventDefault(); closePromptEditor(true); }
 });
-$('promptEditorSave').addEventListener('click', () => closePromptEditor(true));
+$('promptEditorSave').addEventListener('click', () => generatedEdit ? saveGeneratedPrompts() : closePromptEditor(true));
 // Clear empties the editor only: Save keeps it empty, Cancel brings the prompt back.
 $('promptEditorClear').addEventListener('click', () => {
-  $('promptEditorText').value = '';
+  const text = editorText();
+  text.value = '';
+  if (generatedEdit) generatedEdit.dirty = true;
   countPrompt();
-  $('promptEditorText').focus();
+  text.focus();
 });
 // The LLM writes here, the same wherever the editor is opened: its prompt goes in the box, to Save or Cancel.
 function setPromptEditorBusy(busy) {
@@ -7515,16 +7852,26 @@ async function enhanceInEditor() {
   }
 }
 $('promptEditorEnhance').addEventListener('click', enhanceInEditor);
-$('promptEditorCancel').addEventListener('click', () => closePromptEditor(false));
+$('promptEditorCancel').addEventListener('click', () => {
+  if (!generatedEdit) { closePromptEditor(false); return; }
+  if (generatedEdit.dirty && !confirm('Close without saving your changes to the prompts?')) return;
+  closeGeneratedPrompts();
+});
 // Escape drops nothing typed: with changes, it asks for Save or Cancel instead of closing.
 $('promptEditor').addEventListener('cancel', e => {
+  if (generatedEdit) {
+    e.preventDefault();
+    if (generatedEdit.dirty) $('promptEditorCount').textContent = 'Unsaved changes: Save or Cancel.';
+    else closeGeneratedPrompts();
+    return;
+  }
   if (promptField && !promptField.readOnly && promptField.value !== $('promptEditorText').value) {
     e.preventDefault();
     $('promptEditorCount').textContent = 'Unsaved changes: Save or Cancel.';
   } else closePromptEditor(false);
 });
 $('promptEditorCopy').addEventListener('click', async () => {
-  const text = $('promptEditorText'), button = $('promptEditorCopy');
+  const text = editorText(), button = $('promptEditorCopy');
   try { await navigator.clipboard.writeText(text.value); } catch (e) {
     text.select();
     try { document.execCommand('copy'); } catch (e2) {}

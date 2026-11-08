@@ -9,7 +9,7 @@ from types import SimpleNamespace
 from flask import abort, request, send_file
 
 from core import director, h3_refiner, run_form, seeds, workflow_options
-from panel.server import (read_outcome, form_options, PIPELINES, VIDEO_TIMINGS, _runs_cache, active_runs, app, busy_runs, item_images, job,
+from panel.server import (OUTCOME_FILE, read_outcome, form_options, PIPELINES, VIDEO_TIMINGS, _runs_cache, active_runs, app, busy_runs, item_images, job,
                           password_required, safe_video_path, saved_at, run_queue, saved_runs, saved_workflows, queue_form_snapshot)
 from panel.shorts import VOICES
 from pipelines.video import h3_infinite, h3_multishot, media, output_metadata, paths, planner, roles
@@ -423,6 +423,30 @@ def run_to_continue(prompt, flags, env, takes, images, audio=None, references=()
     return None
 
 
+def edit_continuation(state, form):
+    """
+    A queued run's new settings, its prompts kept: the size (a new one makes its clips again) and the workflow's
+    options. form is the run's form with the changed fields in it. Returns what's wrong, or None.
+    """
+    flags, error = build_options(form)
+    if error:
+        return error
+    env, takes, error = chosen_workflow(form)
+    if error:
+        return error
+    size = option(flags, "--size")
+    if size and env.get("COMFYUI_WORKFLOW"):
+        problem = media.size_problem(workflow_model(env["COMFYUI_WORKFLOW"]), *map(int, size.split("x")))
+        if problem:
+            return problem
+    chosen, error = form_options(form, takes)
+    if error:
+        return error
+    state.options = chosen or None
+    state.adopt(flags, {name: form.getlist(name) for name in form})
+    return None
+
+
 def queue_saved_run(state, redo=None):
     argv = resume_argv(state, redo)
     what = f"Redo from shot {redo}" if redo else "Continue"
@@ -598,6 +622,8 @@ UPSCALE = [sys.executable, "-m", "pipelines.video.upscale"]
 def upscale_film(name):
     """Queues a finished film to be made bigger with NVIDIA RTX VSR, as a new film beside it."""
     path = safe_video_path("video", name)
+    if request.args.get("method") == "latent":
+        return latent_upscale_film(name, path)
     try:
         scale = float(request.args.get("scale") or 2)
     except ValueError:
@@ -613,6 +639,90 @@ def upscale_film(name):
     queued = run_queue.add(item)
     _runs_cache["at"] = 0.0
     if item.get("error"):
+        return {"ok": False, "error": item["error"]}, 500
+    return {"ok": True, "queued": queued}
+
+
+LATENT_SUFFIX = "_latent"
+# What a run copies to its copy: its inputs. Its clips, the stitching and its state are its own.
+NOT_COPIED = ("clips", "parts", "state.json")
+
+
+def offers_latent_upscale(workflow):
+    """Whether the workflow, as last listed, has the H3 latent upscaler among its options."""
+    if not workflow:
+        return False
+    try:
+        with open(os.path.splitext(workflow)[0] + ".map.json", "r", encoding="utf-8") as f:
+            return any(option.get("id") == "latent_upscale" for option in json.load(f).get("_options") or [])
+    except (OSError, ValueError, AttributeError):
+        return False
+
+
+def latent_copy(state, preset, megapixels):
+    """
+    A copy of a finished run to make again with the latent upscaler: the same prompts, each clip on the seed it was made
+    with, so it comes out the same, then bigger. The copy is a run of its own, its film named after the original's.
+    """
+    import shutil
+    from datetime import datetime, timedelta
+    from core.saved_workflows import unique_name
+
+    copy = RunState(**{name: getattr(state, name) for name in RunState.__dataclass_fields__})
+    when = datetime.now()
+    while True:
+        copy.id = f"run_{when:%Y%m%d_%H%M%S}"
+        if not os.path.exists(copy.folder):
+            break
+        when += timedelta(seconds=1)
+    shots = []
+    for shot in state.shots:
+        made = {**shot, "seed": shot.get("used_seed", shot.get("seed"))}
+        made.pop("used_seed", None)
+        shots.append(made)
+    base = state.film_name or os.path.splitext(os.path.basename(state.final or state.id))[0]
+    copy.shots, copy.clips, copy.final, copy.take_file = shots, {}, None, None
+    copy.film_name = unique_name(paths.OUTPUT_DIR, base + LATENT_SUFFIX, ".mp4")
+    copy.options = {**(state.options or {}), "latent_upscale": preset, "latent_upscale_mp": f"{megapixels:g}"}
+    copy.plan_only = copy.first_only = False
+    copy.inputs = None  # Generate never takes it for the original run to continue
+    os.makedirs(copy.folder)
+    for name in os.listdir(state.folder):
+        source = os.path.join(state.folder, name)
+        if name not in NOT_COPIED and name != OUTCOME_FILE and os.path.isfile(source):
+            shutil.copy2(source, os.path.join(copy.folder, name))
+    copy.save()
+    return copy
+
+
+def latent_upscale_film(name, path):
+    """Queues a film to be made again at its size, then latent-upscaled: a new film beside it."""
+    from core.workflow_options import LATENT_UPSCALES, UPSCALE_MEGAPIXELS
+    state = RunState.load(run_of_film(name)) if not UPSCALED.search(name) else None
+    if not state or not state.shots or not state.final:
+        return {"ok": False, "error": "Only a finished film whose run is still saved can be latent-upscaled."}, 409
+    if (state.connection_mode or state.start) in ("director", "multishot", "infinite") or not offers_latent_upscale(state.workflow):
+        return {"ok": False, "error": "Latent upscale needs a film made with an H3 reference-to-video workflow that offers it. "
+                                      "Restart ComfyUI after installing the upscaler, then open the panel to list the workflows again."}, 400
+    preset = request.args.get("preset") or "Hires fix"
+    try:
+        megapixels = float(request.args.get("mp") or UPSCALE_MEGAPIXELS[2])
+    except ValueError:
+        return {"ok": False, "error": "Megapixels is a number."}, 400
+    least, most, _ = UPSCALE_MEGAPIXELS
+    if preset not in LATENT_UPSCALES or not least <= megapixels <= most:
+        return {"ok": False, "error": f"Choose Clean, Hires fix or Heavy, and {least:g} to {most:g} megapixels."}, 400
+    if megapixels * 1e6 <= state.width * state.height:
+        return {"ok": False, "error": f"It is {state.width}x{state.height} already: choose more megapixels than that."}, 400
+    copy = latent_copy(state, preset, megapixels)
+    argv = resume_argv(copy)
+    item = {"pipeline": "video", "label": queue_label(f"Latent upscale: {name}"), "detail": f"Latent upscale, {preset}, {megapixels:g} MP",
+            "argv": argv, "env": {}, "resume": copy.id, "resolution": f"{state.width}x{state.height}",
+            "estimate": RunEta(argv, VIDEO_TIMINGS).plan()["total"]}
+    queued = run_queue.add(item)
+    _runs_cache["at"] = 0.0
+    if item.get("error"):
+        copy.remove()
         return {"ok": False, "error": item["error"]}, 500
     return {"ok": True, "queued": queued}
 
@@ -685,7 +795,17 @@ def captions():
                 "llm": made_by.llm if made_by else None,
                 "h3_mode": made_by.h3_mode if made_by else None,
                 "h3_creativity": made_by.h3_creativity if made_by else None,
-                "loras": workflow_options.loras_used(made_by.workflow, made_by.options, "video") if made_by else []}
+                "loras": workflow_options.loras_used(made_by.workflow, made_by.options, "video") if made_by else [],
+                # The viewer's Latent upscale: greyed out where it can't be used (see latent_upscale_film).
+                "latent": bool(made_by and made_by.final and not UPSCALED.search(name)
+                               and (made_by.connection_mode or made_by.start) not in ("director", "multishot", "infinite")
+                               and offers(made_by.workflow))}
+    offered = {}
+
+    def offers(workflow):
+        if workflow not in offered:
+            offered[workflow] = offers_latent_upscale(workflow)
+        return offered[workflow]
     return caption
 
 
@@ -706,4 +826,5 @@ def context():
 
 PIPELINES["video"] = SimpleNamespace(
     load_run=RunState.load, describe_runs=lambda: [describe_run(state) for state in list_runs() if state.shots], continue_run=continue_run,
-    discard_run=discard_run, delete_video=delete_video, captions=captions, context=context)
+    discard_run=discard_run, delete_video=delete_video, captions=captions, context=context,
+    resume_argv=resume_argv, edit_continuation=edit_continuation)

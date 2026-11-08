@@ -761,6 +761,31 @@ class PanelTest(unittest.TestCase):
         self.assertEqual(next(n for n in sent.values() if n["class_type"] == "UpscaleModelLoader")["inputs"]["model_name"],
                          "4x_NMKD-Superscale-SP_178000_G.pth")
 
+    def test_upscaling_with_ultrasharp_takes_its_own_model(self):
+        self.make(count="1", aspect="1:1", megapixels="0.5")
+        run = self.only_run()
+        prompts = len(self.comfy.prompts)
+        self.assertTrue(self.client.post(f"/image-runs/{run.id}/upscale/1?method=ultrasharp").get_json()["ok"])
+        self.wait_idle()
+        run = self.only_run()
+        self.assertEqual(run.shots[1]["title"], run.shots[0]["title"] + " · upscaled with UltraSharp")
+        sent = self.comfy.prompts[prompts]["prompt"]
+        self.assertEqual(next(n for n in sent.values() if n["class_type"] == "UpscaleModelLoader")["inputs"]["model_name"], "4x-UltraSharp.pth")
+
+    def test_hires_and_ultimate_sd_are_queued_with_their_denoise(self):
+        self.make(count="1", aspect="1:1", megapixels="0.5")
+        run = self.only_run()
+        added = []
+        with mock.patch.object(webapp.run_queue, "add", lambda item: added.append(item) or 1):
+            self.assertEqual(self.client.post(f"/image-runs/{run.id}/upscale/1?method=hires&denoise=2").status_code, 400)
+            self.assertTrue(self.client.post(f"/image-runs/{run.id}/upscale/1?method=hires&denoise=0.45").get_json()["ok"])
+            self.assertTrue(self.client.post(f"/image-runs/{run.id}/upscale/1?method=usdu").get_json()["ok"])
+        self.assertEqual(added[0]["argv"][added[0]["argv"].index("--method") + 1], "hires")
+        self.assertIn("--denoise", added[0]["argv"])
+        self.assertEqual(added[0]["argv"][added[0]["argv"].index("--denoise") + 1], "0.45")
+        self.assertEqual(added[0]["detail"], "Hires fix, twice the size, denoise 0.45")
+        self.assertEqual(added[1]["argv"][added[1]["argv"].index("--denoise") + 1], "0.3", "Ultimate SD's usual")
+
     def test_trying_one_first_makes_one_and_stops(self):
         self.make(count="3", try_first="1")
         run = self.only_run()

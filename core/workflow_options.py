@@ -392,6 +392,129 @@ def _tune(api, info, chosen):
             if chosen.get(SLOT, NO_LORA) != NO_LORA:
                 api[loaders[0]]["inputs"]["lora_1"] = {"on": True, "lora": chosen[SLOT], "strength": float(chosen.get(f"{SLOT}_strength", 1)), "strengthTwo": None}
     options += _h3(api, info, chosen)
+    options += _h3_fastvideo(api, info, chosen)
+    options += _h3_latent_upscale(api, info, chosen)
+    return options
+
+
+# MiniMax H3's latent upscaler (Comfyui_Minimax_h3_latent_Upscaler): the clip is made at the size chosen, its video latent
+# made bigger, then a short second pass draws the detail in at the new size. How much it draws again is the preset: the
+# first sigma of that pass, out of the H3 turbo schedule (0.9231, 0.8780, 0.8000, 0.6316, 0.3158, 0).
+H3_UPSCALER = "MinimaxH3LatentUpscaler3D"
+NO_UPSCALE = "Off"
+LATENT_UPSCALES = {
+    "Clean": "0.3158, 0.0000",  # Sharper at the new size, the clip as it was: one light step
+    "Hires fix": "0.6316, 0.3158, 0.0000",  # Detail added (skin, hair, texture), about a 0.35 denoise
+    "Heavy": "0.8000, 0.6316, 0.3158, 0.0000",  # Reworked more, about 0.45: more new detail, a little drift
+}
+UPSCALE_MEGAPIXELS = (0.5, 4.0, 1.0)  # least, most, usual
+# Custom: how much is drawn again (the refine pass's first sigma), in how many steps, with which sampler.
+CUSTOM_UPSCALE = "Custom"
+SAME_SAMPLER = "Same as the clip"
+
+
+def custom_sigmas(denoise, steps):
+    """Evenly from denoise down to 0 in steps: "0.5000, 0.2500, 0.0000" for 0.5 in 2."""
+    return ", ".join(f"{denoise * (steps - i) / steps:.4f}" for i in range(steps + 1))
+
+
+def _upscaler_model(info):
+    """The upscaler's weights: BF16 where there is one (as small as FP16, and what a 30-series card runs natively)."""
+    names = [name for name in _combo(info, H3_UPSCALER, "model_name") if not name.startswith("(")]
+    return next((name for name in names if "bf16" in name.lower()), names[0] if names else None)
+
+
+def _h3_decoders(api):
+    """The VAE decoders fed by one H3 SamplerCustomAdvanced, and that sampler's output: ([node ids], link), or ([], None)."""
+    if not any(node["class_type"].startswith("MiniMaxH3") for node in api.values()):
+        return [], None
+    decoders = [node_id for node_id, node in api.items() if node["class_type"] in ("VAEDecode", "VAEDecodeAudio", "VAEDecodeTiled")
+                and isinstance(node["inputs"].get("samples"), list)
+                and api.get(node["inputs"]["samples"][0], {}).get("class_type") == "SamplerCustomAdvanced"]
+    links = {tuple(api[node_id]["inputs"]["samples"]) for node_id in decoders}
+    return (decoders, list(next(iter(links)))) if len(links) == 1 else ([], None)
+
+
+def _h3_latent_upscale(api, info, chosen):
+    """
+    The latent upscaler, for an H3 workflow that samples with SamplerCustomAdvanced and decodes what it made (the
+    reference-to-video ones; Motion Director samples inside its own node, so it has no latent to give).
+    """
+    model = _upscaler_model(info) if all(name in info for name in (H3_UPSCALER, "LTXVSeparateAVLatent", "LTXVConcatAVLatent", "ManualSigmas")) else None
+    decoders, made = _h3_decoders(api)
+    if not model or not made:
+        return []
+    least, most, usual = UPSCALE_MEGAPIXELS
+    samplers = _combo(info, "KSamplerSelect", "sampler_name")
+    options = [{"id": "latent_upscale", "kind": "choice", "label": "Latent upscale", "choices": [NO_UPSCALE, *LATENT_UPSCALES, CUSTOM_UPSCALE],
+                "default": NO_UPSCALE},
+               {"id": "latent_upscale_mp", "kind": "number", "label": "Upscale to (MP)", "parent": "latent_upscale",
+                "default": f"{usual:g}", "min": least, "max": most, "step": 0.1},
+               {"id": "latent_upscale_denoise", "kind": "number", "label": "Denoise", "parent": "latent_upscale", "default": "0.5",
+                "min": 0.05, "max": 1, "step": 0.05},
+               {"id": "latent_upscale_steps", "kind": "number", "label": "Refine steps", "parent": "latent_upscale", "default": "3",
+                "min": 1, "max": 12, "step": 1},
+               {"id": "latent_upscale_chunking", "kind": "switch", "label": "Temporal chunking (less VRAM)", "parent": "latent_upscale", "default": ON}]
+    if samplers:
+        options.append({"id": "latent_upscale_sampler", "kind": "choice", "label": "Refine sampler", "parent": "latent_upscale",
+                        "choices": [SAME_SAMPLER, *samplers], "default": SAME_SAMPLER})
+    preset = chosen.get("latent_upscale", NO_UPSCALE)
+    if preset not in LATENT_UPSCALES and preset != CUSTOM_UPSCALE:
+        return options
+    custom = preset == CUSTOM_UPSCALE
+    if custom:
+        denoise = min(1.0, max(0.05, float(chosen.get("latent_upscale_denoise", 0.5))))
+        sigmas = custom_sigmas(denoise, min(12, max(1, int(float(chosen.get("latent_upscale_steps", 3))))))
+    else:
+        sigmas = LATENT_UPSCALES[preset]
+    sampler = api[made[0]]
+    megapixels = min(most, max(least, float(chosen.get("latent_upscale_mp", usual))))
+    api["lu_split"] = {"class_type": "LTXVSeparateAVLatent", "inputs": {"av_latent": made}, "_meta": {"title": "Latent upscale: split"}}
+    api["lu_upscale"] = {"class_type": H3_UPSCALER, "_meta": {"title": "Latent upscale"}, "inputs": {
+        "latent": ["lu_split", 0], "model_name": model, "mode": "megapixels", "mode.megapixels": megapixels, "align": 32,
+        "enable_temporal_chunking": not custom or chosen.get("latent_upscale_chunking", ON) == ON, "force_unload": True, "device": "cuda", "precision": "bf16" if "bf16" in model.lower() else "fp16"}}
+    api["lu_join"] = {"class_type": "LTXVConcatAVLatent", "inputs": {"video_latent": ["lu_upscale", 0], "audio_latent": ["lu_split", 1]},
+                      "_meta": {"title": "Latent upscale: join"}}
+    api["lu_sigmas"] = {"class_type": "ManualSigmas", "inputs": {"sigmas": sigmas}, "_meta": {"title": f"Latent upscale: {preset}"}}
+    api["lu_refine"] = {"class_type": "SamplerCustomAdvanced", "_meta": {"title": "Latent upscale: refine"}, "inputs": {
+        **{name: sampler["inputs"][name] for name in ("noise", "guider", "sampler")}, "sigmas": ["lu_sigmas", 0], "latent_image": ["lu_join", 0]}}
+    chosen_sampler = chosen.get("latent_upscale_sampler", SAME_SAMPLER)
+    if custom and chosen_sampler in samplers:
+        api["lu_sampler"] = {"class_type": "KSamplerSelect", "inputs": {"sampler_name": chosen_sampler}, "_meta": {"title": "Latent upscale: sampler"}}
+        api["lu_refine"]["inputs"]["sampler"] = ["lu_sampler", 0]
+    for node_id in decoders:
+        api[node_id]["inputs"]["samples"] = ["lu_refine", 0]
+    return options
+
+
+# FastVideo: a 4-step distillation of H3's first/last-frame model. It stands in for that model, at 4 steps, and a turbo
+# LoRA made for the full model comes out: it is distilled already.
+FASTVIDEO = "minimax_h3_fastvideo"
+H3_MODELS = ("Standard", "FastVideo 4-step")
+
+
+def _h3_fastvideo(api, info, chosen):
+    loaders = [node_id for node_id, node in api.items() if node["class_type"] == "UNETLoader"
+               and "minimax_h3_fl2va" in str(node["inputs"].get("unet_name", "")).lower()]
+    fast = next((name for name in _combo(info, "UNETLoader", "unet_name") if FASTVIDEO in name.lower()), None)
+    if not loaders or not fast:
+        return []
+    options = [{"id": "h3_model", "kind": "choice", "label": "H3 model", "choices": list(H3_MODELS), "default": H3_MODELS[0], "advanced": True}]
+    if chosen.get("h3_model") != H3_MODELS[1]:
+        return options
+    for node_id in loaders:
+        api[node_id]["inputs"]["unet_name"] = fast
+    turbo = [node_id for node_id, node in api.items() if node["class_type"] in ("LoraLoaderModelOnly", "LoraLoader")
+             and re.search(r"turbo|lightx2v|\dstep", str(node["inputs"].get("lora_name", "")), re.I) and isinstance(node["inputs"].get("model"), list)]
+    for node_id in turbo:
+        source = api[node_id]["inputs"]["model"]
+        for node in api.values():
+            for name, value in node["inputs"].items():
+                if value == [node_id, 0]:
+                    node["inputs"][name] = source
+    steps = _steps(api)
+    if steps and "steps" not in chosen:
+        api[steps[0]]["inputs"][steps[1]] = 4
     return options
 
 

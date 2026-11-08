@@ -63,14 +63,19 @@ def upscale_workflow(image, resolution):
 # mixes it with a plain resize, to tone down texture the model invents (Kokon's upscaler strength).
 FAST_MODEL = "4x_NMKD-Superscale-SP_178000_G.pth"
 FAST_MOST_EDGE = 8192
-METHODS = ("seedvr2", "fast")
+# The ways that only run an upscale model (ESRGAN, 4x), then down to twice the size: {method: (model, name)}.
+# 4x-UltraSharp keeps the picture as it is, just bigger and with crisper edges ("Method 1", the AI model upscale).
+MODEL_METHODS = {"fast": (FAST_MODEL, "Superscale-SP"), "ultrasharp": ("4x-UltraSharp.pth", "4x-UltraSharp")}
+# The ways that draw it again with the set's own model and prompt (pipelines/image/refine_upscale.py).
+REFINE_METHODS = {"hires": "Hires fix", "usdu": "Ultimate SD Upscale"}
+METHODS = ("seedvr2", *MODEL_METHODS, *REFINE_METHODS)
 
 
-def fast_workflow(image):
-    """Superscale-SP on one image, 4x, into ComfyUI's temp folder (PreviewImage)."""
+def fast_workflow(image, model=FAST_MODEL):
+    """An upscale model (Superscale-SP unless said) on one image, 4x, into ComfyUI's temp folder (PreviewImage)."""
     workflow = {
         "1": {"class_type": "LoadImage", "inputs": {"image": image}},
-        "2": {"class_type": "UpscaleModelLoader", "inputs": {"model_name": FAST_MODEL}},
+        "2": {"class_type": "UpscaleModelLoader", "inputs": {"model_name": model}},
         "3": {"class_type": "ImageUpscaleWithModel", "inputs": {"upscale_model": ["2", 0], "image": ["1", 0]}},
         "4": {"class_type": "PreviewImage", "inputs": {"images": ["3", 0]}},
     }
@@ -100,7 +105,26 @@ def target_resolution(width, height):
     return min(MOST_EDGE, FACTOR * min(width, height))
 
 
-def upscale(state, position, comfy, method="seedvr2", strength=1.0, resolution=0):
+def refined(state, shot, uploaded, method, denoise, save_as):
+    """Hires fix or Ultimate SD Upscale: the set's own workflow, filled in as for this image, with the upscale spliced in."""
+    from pipelines.image import refine_upscale
+    from pipelines.image.comfy import ImageClient
+    from pipelines.image.main import upload_images
+    if not state.workflow:
+        raise RuntimeError("This set has no saved workflow to draw it again with.")
+    os.environ["COMFYUI_WORKFLOW"] = state.workflow
+    client = ImageClient(state.options or {})
+    images = upload_images(state, client) if not state.region else []
+    graph = client.filled(shot["prompt"], images, *client.render_size(state.width, state.height))
+    try:
+        graph = refine_upscale.SPLICES[method](graph, uploaded, denoise=denoise)
+    except refine_upscale.Unsupported as e:
+        raise RuntimeError(f"{REFINE_METHODS[method]} can't run on this set's workflow: {e}")
+    entry = client._run(graph, shot.get("used_seed", shot.get("seed")))
+    return client._download(entry, save_as, IMAGE_EXTENSIONS, "an image")
+
+
+def upscale(state, position, comfy, method="seedvr2", strength=1.0, resolution=0, denoise=None):
     """Makes the image at position again, bigger, and puts it in the set after it. Returns the new file's path."""
     from PIL import Image
     shot = state.shots[position - 1]
@@ -109,10 +133,16 @@ def upscale(state, position, comfy, method="seedvr2", strength=1.0, resolution=0
         width, height = image.size
     uploaded = comfy.upload(source, f"autocomfyui_{state.id}_upscale_{position}.png")
     stem = unique_name(state.output_dir, os.path.splitext(shot["file"])[0] + SUFFIX, ".png")
-    if method == "fast":
+    if method in REFINE_METHODS:
+        from pipelines.image.refine_upscale import DENOISE
+        denoise = DENOISE[method] if denoise is None else denoise
+        print(f"🔍 Upscaling image {position}, {width}x{height}, to twice the size with {REFINE_METHODS[method]}, denoise {denoise:g}...")
+        path = refined(state, shot, uploaded, method, denoise, os.path.join(state.output_dir, stem))
+    elif method in MODEL_METHODS:
+        model, name = MODEL_METHODS[method]
         size = fast_size(width, height)
-        print(f"🔍 Upscaling image {position}, {width}x{height}, to {size[0]}x{size[1]} with Superscale-SP, strength {strength:g}...")
-        entry = comfy._run(fast_workflow(uploaded), 777)
+        print(f"🔍 Upscaling image {position}, {width}x{height}, to {size[0]}x{size[1]} with {name}, strength {strength:g}...")
+        entry = comfy._run(fast_workflow(uploaded, model), 777)
         path = comfy._download(entry, os.path.join(state.output_dir, stem), IMAGE_EXTENSIONS, "an image")
         with Image.open(path) as made, Image.open(source) as original:
             finished = blended(made, original, size, strength)
@@ -124,7 +154,8 @@ def upscale(state, position, comfy, method="seedvr2", strength=1.0, resolution=0
         print(f"🔍 Upscaling image {position}, {width}x{height}, to {resolution} on its shorter side...")
         entry = comfy._run(upscale_workflow(uploaded, resolution), 777)
         path = comfy._download(entry, os.path.join(state.output_dir, stem), IMAGE_EXTENSIONS, "an image")
-    how = "upscaled" if method == "seedvr2" else "upscaled fast"
+    how = {"seedvr2": "upscaled", "fast": "upscaled fast", "ultrasharp": "upscaled with UltraSharp",
+           "hires": "upscaled with Hires fix", "usdu": "upscaled with Ultimate SD"}[method]
     made = {**{key: value for key, value in shot.items() if key not in ("redo",)},
             "title": f"{shot['title']} · {how}", "file": os.path.basename(path), "upscaled_from": position}
     state.shots.insert(position, made)
@@ -140,8 +171,11 @@ def main(argv=None):
     parser.add_argument("--resume", metavar="RUN", required=True, help="The set the image is in.")
     parser.add_argument("--image", type=int, required=True, metavar="N", help="Its place in the set, from 1.")
     parser.add_argument("--method", choices=METHODS, default="seedvr2",
-                        help="seedvr2: redraws the detail, minutes (the default). fast: Superscale-SP, seconds, adds no new content.")
-    parser.add_argument("--strength", type=float, default=1.0, help="With fast: how much of the model's result, 0-1, the rest a plain resize.")
+                        help="seedvr2: redraws the detail, minutes (the default). fast: Superscale-SP, seconds, adds no new content. "
+                             "ultrasharp: 4x-UltraSharp, seconds, the picture as it is with crisper edges.")
+    parser.add_argument("--strength", type=float, default=1.0, help="With fast or ultrasharp: how much of the model's result, 0-1, the rest a plain resize.")
+    parser.add_argument("--denoise", type=float, default=None,
+                        help="With hires or usdu: how much is drawn again, 0-1 (0.35 and 0.3 unless set).")
     parser.add_argument("--resolution", type=int, default=0, metavar="PX",
                         help="With seedvr2: the shorter side to make it, as the Krea 2 workflow's 720p/1080p/1440p/4K. 0: twice what it is.")
     args = parser.parse_args(argv)
@@ -155,7 +189,8 @@ def main(argv=None):
         print(f"❌ ComfyUI isn't running at {comfy.url}.")
         return 1
     try:
-        upscale(state, args.image, comfy, args.method, min(1.0, max(0.0, args.strength)), max(0, args.resolution))
+        upscale(state, args.image, comfy, args.method, min(1.0, max(0.0, args.strength)), max(0, args.resolution),
+                None if args.denoise is None else min(1.0, max(0.05, args.denoise)))
     except (RuntimeError, OSError) as e:
         print(f"❌ Could not upscale it: {e}")
         return 1

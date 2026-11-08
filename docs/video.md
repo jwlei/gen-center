@@ -188,7 +188,21 @@ Generate or switch sides to clear it automatically; the other settings stay in p
 **Save to queue** replaces it at the front of the queue; **Cancel editing** leaves the original in Pending.
 Removing the pending job ends its editing session; the form can then be used for a new generation.
 Upscale jobs use their own settings dialog and follow the same Pending and queue replacement behavior.
-Continued runs cannot currently be edited this way.
+A continued run (its prompts already written, such as after a preview run) opens its setup too: resolution, workflow
+options (sampler, steps, latent upscale) and Preview run can change, while the prompt, images, length and workflow stay
+as they were planned. **Generated prompts** under the prompt box opens every prompt of the run in the prompt editor,
+one to a page: swipe, or use the arrows, to go through them. A run that stops on ComfyUI's *aimdo memory compile
+error* is tried once more after ComfyUI is force-restarted; if it fails the same way again, it goes to Failed and
+ComfyUI is restarted once more for the next job.
+
+**Latent upscale** (under Resolution, for H3 reference-to-video workflows with the
+[Minimax H3 latent upscaler](https://github.com/LBH-123-AI/Comfyui_Minimax_h3_latent_Upscaler) installed): the clip is
+made at the resolution above, its latent is enlarged to the megapixels set under it, and a short second pass draws it
+in at that size. *Clean* sharpens it as it was, *Hires fix* adds detail (about a 0.35 denoise), *Heavy* reworks more
+(about 0.45). Set the resolution low (0.4 MP or so) and the upscale higher. A finished film can be latent-upscaled
+from its viewer (Upscale → **Latent**): a copy of its run is made again on the seeds each clip was made with, then
+upscaled, as a new film named `<film>_latent`. It takes about as long as the film took to make. Workflows using H3's first/last-frame model
+also offer **H3 model: FastVideo 4-step** under Advanced, which runs at 4 steps without a turbo LoRA.
 For a saved run in Pending, the settings icon opens its setup in Generate for a new or matching run;
 the original stays in Pending. The prompts icon also opens the saved prompts for a continued job in
 the queue or Pending.

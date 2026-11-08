@@ -151,7 +151,13 @@ with one chosen from your images; one that would repeat it is swapped for anothe
 enlarged after, rather than failing.
 
 **Upscale**, under an image in the viewer: **Fast** is Superscale-SP, in seconds, and adds no new detail; its strength
-mixes it with a plain resize, to tone down texture it invents. **SeedVR2** takes minutes and draws finer detail. Either is
+mixes it with a plain resize, to tone down texture it invents. **UltraSharp** is the same with 4x-UltraSharp: the
+picture as it is, with crisper edges. **SeedVR2** takes minutes and draws finer detail. **Hires fix** puts the image back
+into a latent, makes it twice as big, and has the set's own model and prompt draw it again at a low denoise (0.35 by
+default; 0.3 is subtle, 0.45 a heavy rework), adding skin, hair and texture. **Ultimate SD** enlarges it with
+4x-UltraSharp, then has the set's model redraw it in 768px tiles (Chess, mask blur 16, denoise 0.3), so a big image
+never has to fit on the card at once. Both work on every image workflow here: KSampler, RES4LYF's ClownsharKSampler
+(Krea 2 SFW/NSFW, run as euler there), SamplerCustom and SamplerCustomAdvanced (through Ultimate SD's guider node). Each is
 a new image in the set. The button is only there while the image's shorter side is 1440px or less.
 
 Select runs on the CPU, so the GPU stays with ComfyUI. Its model (MobileSAM, 44 MB) is in `models/`:

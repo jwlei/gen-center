@@ -443,6 +443,38 @@ def adopt_size(state, flags, images, model=None):
     state.save()
 
 
+def edit_continuation(state, form):
+    """
+    A queued set's new settings, its prompts kept: the size of the images still to make and the workflow's options.
+    form is the set's form with the changed fields in it. Returns what's wrong, or None.
+    """
+    flags, error = build_options(form)
+    if error:
+        return error
+    count = form.get("image_count")
+    env, takes, error = chosen_workflow(form, int(count) if (count or "").isdigit() else None)
+    if error:
+        return error
+    option_flags, problem = chosen_options(form, takes)
+    if problem:
+        return problem
+    images = []
+    for path in state.input_paths:
+        try:
+            with Image.open(path) as image:
+                images.append(image.copy())
+        except OSError:
+            return "An image this set was made from is gone."
+    problem = model_problem(flags, takes, images[0].size if images else None)
+    if problem:
+        return problem
+    adopt_size(state, flags, images, takes.get("model"))
+    state.options = dict(value.split("=", 1) for flag, value in zip(option_flags, option_flags[1:]) if flag == "--option") or None
+    state.form = {name: form.getlist(name) for name in form}
+    state.save()
+    return None
+
+
 def queue_saved_run(state, redo=None):
     argv = resume_argv(state, redo)
     what = f"Redo image {redo}" if redo else "Continue"
@@ -611,6 +643,19 @@ UPSCALE = [sys.executable, "-m", "pipelines.image.upscale"]
 UPSCALE_SECONDS = 180  # About what SeedVR2 takes for one image on this card
 FAST_UPSCALE_SECONDS = 20  # Superscale-SP: seconds, as Kokon measured it (13 s for 1472² on a 5070 Ti)
 UPSCALE_RESOLUTIONS = (720, 1080, 1440, 2160)  # SeedVR2's shorter side, as the Krea 2 workflow's 720p, 1080p, 1440p and 4K
+UPSCALE_METHODS = ("seedvr2", "fast", "ultrasharp", "hires", "usdu")
+REFINE_UPSCALES = {"hires": "Hires fix", "usdu": "Ultimate SD Upscale"}  # Drawn again with the set's model: denoise, not strength
+REFINE_UPSCALE_SECONDS = 90
+
+
+def upscale_detail(method, strength, resolution, denoise=None):
+    """How a queued upscale is described in the queue."""
+    if method in REFINE_UPSCALES:
+        return f"{REFINE_UPSCALES[method]}, twice the size" + (f", denoise {denoise:g}" if denoise is not None else "")
+    if method == "seedvr2":
+        return f"SeedVR2, {resolution}p" if resolution else "SeedVR2, twice the size"
+    name = "4x-UltraSharp" if method == "ultrasharp" else "Superscale-SP"
+    return f"{name}, twice the size, strength {round(strength * 100)}%"
 UPSCALE_MOST_SIDE = 1440  # The shorter side of an image that can still be upscaled, as the viewer's button
 
 
@@ -631,7 +676,7 @@ def upscale_image(run_id, position):
     if shorter > UPSCALE_MOST_SIDE:
         return {"ok": False, "error": f"It's already {shorter}px on its shorter side: images past {UPSCALE_MOST_SIDE}px aren't upscaled."}, 400
     method = request.args.get("method") or (request.get_json(silent=True) or {}).get("method") or "seedvr2"
-    if method not in ("seedvr2", "fast"):
+    if method not in UPSCALE_METHODS:
         return {"ok": False, "error": "Unknown way to upscale."}, 400
     try:
         strength = float(request.args.get("strength") or (request.get_json(silent=True) or {}).get("strength") or 1)
@@ -645,11 +690,22 @@ def upscale_image(run_id, position):
         return {"ok": False, "error": "Unknown resolution."}, 400
     if resolution and resolution <= shorter:
         return {"ok": False, "error": f"It's already {shorter}px on its shorter side: pick a bigger resolution."}, 400
-    how = (f"SeedVR2, {resolution}p" if resolution else "SeedVR2, twice the size") if method == "seedvr2" else f"Superscale-SP, twice the size, strength {round(strength * 100)}%"
+    denoise = None
+    if method in REFINE_UPSCALES:
+        if not state.workflow:
+            return {"ok": False, "error": f"{REFINE_UPSCALES[method]} draws it again with the set's workflow, and this set has none saved."}, 400
+        try:
+            denoise = float(request.args.get("denoise") or (0.35 if method == "hires" else 0.3))
+        except ValueError:
+            return {"ok": False, "error": "Denoise is a number from 0.05 to 1."}, 400
+        if not 0.05 <= denoise <= 1:
+            return {"ok": False, "error": "Denoise is a number from 0.05 to 1."}, 400
+    how = upscale_detail(method, strength, resolution, denoise)
     item = {"pipeline": "image", "label": queue_label(f"Upscale: {state.shots[position - 1]['title']}"), "detail": how,
             "argv": [*UPSCALE, "--resume", state.id, "--image", str(position), "--method", method, "--strength", f"{min(1, max(0, strength)):g}",
-                     *(["--resolution", str(resolution)] if resolution else [])],
-            "env": {}, "resume": state.id, "estimate": UPSCALE_SECONDS if method == "seedvr2" else FAST_UPSCALE_SECONDS}
+                     *(["--resolution", str(resolution)] if resolution else []), *(["--denoise", f"{denoise:g}"] if denoise is not None else [])],
+            "env": {}, "resume": state.id,
+            "estimate": UPSCALE_SECONDS if method == "seedvr2" else REFINE_UPSCALE_SECONDS if denoise is not None else FAST_UPSCALE_SECONDS}
     queued = run_queue.add(item)
     _runs_cache["at"] = 0.0
     if item.get("error"):
@@ -686,4 +742,5 @@ def context():
 
 PIPELINES["image"] = SimpleNamespace(
     load_run=RunState.load, describe_runs=lambda: [describe_run(state) for state in list_runs() if state.shots], continue_run=continue_run,
-    discard_run=discard_run, delete_video=lambda folder, path: abort(404), captions=lambda: lambda name: {}, context=context)
+    discard_run=discard_run, delete_video=lambda folder, path: abort(404), captions=lambda: lambda name: {}, context=context,
+    resume_argv=resume_argv, edit_continuation=edit_continuation)

@@ -98,12 +98,17 @@ class ImageClient(ComfyClient):
             media.opaque(path)
         return path
 
-    def _render_once(self, prompt, images, width, height, save_as, seed):
+    def filled(self, prompt, images, width, height):
+        """The workflow as it makes this image, before it is sent: for an upscale to build on (pipelines/image/refine_upscale.py)."""
         workflow = copy.deepcopy(self.workflow)
         self._set(workflow, "prompt", prompt)
         self._fill_images(workflow, images)
         self._set(workflow, "width", width)
         self._set(workflow, "height", height)
+        return workflow
+
+    def _render_once(self, prompt, images, width, height, save_as, seed):
+        workflow = self.filled(prompt, images, width, height)
         watched = watch_text_generation(workflow)
         entry = self._run(workflow, seed)
         self.enhanced = generated_text(entry, watched)

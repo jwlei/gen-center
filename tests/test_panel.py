@@ -1507,6 +1507,30 @@ class PanelTest(unittest.TestCase):
         self.assertTrue(body["ok"])
         self.assertEqual(added[0]["argv"][-6:], ["--film", "zz_upscale_test.mp4", "--scale", "3", "--quality", "ULTRA"])
 
+    def test_film_latent_upscale_makes_a_copy_on_the_same_seeds(self):
+        self.assertTrue(self.generate().get_json()["ok"])
+        self.wait_idle()
+        state = self.only_run()
+        name = os.path.basename(state.final)
+        added = []
+        with mock.patch.object(webapp.run_queue, "add", lambda item: added.append(item) or 1):
+            self.assertEqual(self.client.post(f"/films/{name}/upscale?method=latent").status_code, 400, "the workflow doesn't offer it")
+            with mock.patch.object(video_panel, "offers_latent_upscale", return_value=True):
+                self.assertEqual(self.client.post(f"/films/{name}/upscale?method=latent&preset=Sideways").status_code, 400)
+                self.assertEqual(self.client.post(f"/films/{name}/upscale?method=latent&mp=0.01").status_code, 400)
+                body = self.client.post(f"/films/{name}/upscale?method=latent&preset=Heavy&mp=2").get_json()
+        self.assertTrue(body["ok"], body)
+        copy = RunState.load(added[0]["resume"])
+        self.addCleanup(copy.remove)
+        self.assertNotEqual(copy.id, state.id)
+        self.assertEqual(copy.options["latent_upscale"], "Heavy")
+        self.assertEqual(copy.options["latent_upscale_mp"], "2")
+        self.assertEqual([shot["seed"] for shot in copy.shots], [shot["used_seed"] for shot in state.shots], "made again as it was")
+        self.assertEqual([shot["prompt"] for shot in copy.shots], [shot["prompt"] for shot in state.shots])
+        self.assertTrue(copy.film_name.endswith("_latent"))
+        self.assertEqual((copy.clips, copy.final, copy.inputs), ({}, None, None))
+        self.assertTrue(RunState.load(state.id).final, "the original stays as it is")
+
     def test_poweroff_is_per_session_and_cancellable(self):
         calls = []
         with mock.patch.object(webapp, "_run_shutdown", lambda cancel=False: calls.append(cancel)), \
@@ -1552,6 +1576,37 @@ class PanelTest(unittest.TestCase):
         self.assertEqual(self.client.post(f"/runs/{run_id}/shots", json={"prompts": prompts}).status_code, 409)
         with webapp.run_queue.lock:
             webapp.run_queue.items.remove(item)
+
+    def test_a_continued_run_opens_its_setup_and_keeps_its_prompts(self):
+        self.assertTrue(self.generate(review="1").get_json()["ok"])
+        self.wait_idle()
+        state = self.only_run()
+        prompts = [shot["prompt"] for shot in state.shots]
+        item = {"id": 901, "pipeline": "video", "label": "Continue", "resume": state.id, "later": True,
+                "argv": webapp.PIPELINES["video"].resume_argv(state)}
+        with webapp.run_queue.lock:
+            webapp.run_queue.items.append(item)
+        self.addCleanup(lambda: webapp.run_queue.items.clear())
+        edit = self.client.post("/queue/run/edit/901").get_json()
+        self.assertTrue(edit["ok"], edit)
+        self.assertEqual(edit["continued"]["prompts"], prompts)
+        self.assertEqual(edit["form"]["prompt"], state.brief, "opens as it was made")
+
+        # The prompt sent along is ignored: only how the rest is made changes.
+        reply = self.client.post("/queue/run/edit/901/continue", data={
+            "queue_edit_token": edit["token"], "prompt": "Something else entirely", "size": "640x384", "try_first": "1",
+            "start_later": "1"}).get_json()
+        self.assertTrue(reply["ok"], reply)
+        after = RunState.load(state.id)
+        self.assertEqual((after.width, after.height), (640, 384))
+        self.assertEqual(after.brief, state.brief)
+        self.assertEqual([shot["prompt"] for shot in after.shots], prompts)
+        queued = next(entry for entry in webapp.run_queue.items if entry["id"] == 901)
+        self.assertIn("--first-only", queued["argv"])
+        self.assertNotIn("edit_token", queued)
+        self.assertTrue(queued["later"])
+        self.assertEqual(self.client.post("/queue/run/edit/901/continue", data={"queue_edit_token": edit["token"]}).status_code, 409,
+                         "the session is spent")
 
     def test_pending_jobs_do_not_block_guarded_restart(self):
         with mock.patch.object(webapp.run_queue, "pending", return_value=[{"id": 1, "later": True}]), \
