@@ -453,13 +453,22 @@
   .step .eta { display: block; margin-top: 2px; color: var(--muted); font-weight: 400; font-variant-numeric: tabular-nums; }
   .now-line { font-size: .92rem; display: flex; flex-wrap: wrap; gap: 4px 8px; align-items: baseline; }
   .now-line .time { color: var(--muted); font-size: .8rem; font-variant-numeric: tabular-nums; }
+  /* Every status line alike: what it is doing - to what, and how long that is; under it, which one of how many on
+     the left and how long it has taken on the right. */
+  .status-lines:empty { display: none; }
+  .status-first { overflow-wrap: anywhere; }
+  .status-foot { display: flex; justify-content: space-between; gap: 10px; }
+  .status-foot .time { margin-left: auto; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  /* Only a line of text, such as "Generating prompts", with no count or time beside it: centred. */
+  .status-foot > .status-first:only-child { flex: 1; text-align: center; }
+  .strip .status-lines .status-first { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
   .comfy-now { margin-top: 12px; padding: 10px 12px; background: var(--panel-2); border: 1px solid var(--line); border-radius: 10px; }
   .bar { height: 6px; background: #0a0b0f; border-radius: 4px; overflow: hidden; margin-top: 8px; }
   .bar > div { height: 100%; width: 0; background: var(--accent); transition: width .4s; }
   .gpu { margin: 10px 0 12px; padding-bottom: 12px; border-bottom: 1px solid var(--line); font-variant-numeric: tabular-nums; font-size: .72rem; white-space: nowrap; }
   .gpu .mi { width: 1.15em; height: 1.15em; vertical-align: -.22em; margin-right: 2px; }
   .gpu:empty, #stageDetail:empty { display: none; }
-  #stageDetail { text-align: center; }
+  #stageDetail { text-align: left; }
   .q-group { font-size: .72rem; color: var(--muted); margin: 9px 0 2px; }
   .q-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 2px 10px; font-size: .78rem; padding: 2px 0; }
   .q-name { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
@@ -1114,7 +1123,7 @@
     <div class="strip-line"><div class="bar"><div id="runStripBar"></div></div><span id="runStripRight"></span></div>
     <div class="strip-more">
       <div class="strip-head"><b id="runStripText"></b></div>
-      <div class="hint" id="runStripHint"></div>
+      <div class="hint status-lines" id="runStripHint"></div>
       <div class="hint strip-total" id="runStripTotal"></div>
     </div>
   </div>
@@ -1122,7 +1131,7 @@
     <div class="strip-line"><div class="bar"><div id="uploadStripBar"></div></div><span id="uploadStripRight"></span></div>
     <div class="strip-more">
       <div class="strip-head"><b id="uploadStripText"></b></div>
-      <div class="hint" id="uploadStripHint"></div>
+      <div class="hint status-lines" id="uploadStripHint"></div>
       <div class="hint strip-total" id="uploadStripTotal"></div>
     </div>
   </div>
@@ -1160,11 +1169,11 @@
   <div class="hint eta-detail" id="etaDetail" hidden></div>
   <div id="now" class="hidden">
     <div class="stepper" id="stepper"></div>
-    <div class="hint" id="stageDetail"></div>
+    <div class="hint status-lines" id="stageDetail"></div>
     <div id="comfyNow" class="comfy-now hidden">
       <div class="now-line"><b id="comfyLabel"></b><span class="time" id="comfySteps"></span></div>
       <div class="bar"><div id="comfyBar"></div></div>
-      <div class="hint" id="comfyMeta"></div>
+      <div class="hint status-lines" id="comfyMeta"></div>
     </div>
   </div>
 
@@ -1177,7 +1186,7 @@
     <div class="progress" id="uploadProgress" hidden>
       <div class="strip-head"><b id="uploadProgressText"></b><span id="uploadProgressRight"></span></div>
       <div class="bar"><div id="uploadProgressBar"></div></div>
-      <div class="hint" id="uploadProgressHint"></div>
+      <div class="hint status-lines" id="uploadProgressHint"></div>
     </div>
   </div>
   <div class="run-actions" id="runActions" hidden>
@@ -5244,7 +5253,9 @@ function renderNow(data) {
     // What it is doing now, in shorthand, then what it is working on unless ComfyUI's box already says so.
     // One line says what is happening: under ComfyUI's bar while it renders, else here.
     // The clip being rendered goes in ComfyUI's box, with the action; anything else, such as a scene, stays here.
-    $('stageDetail').textContent = comfyBusy ? (clip ? '' : p.detail || '') : [p.action, p.detail].filter(Boolean).join(' · ') || STAGE_HINTS[name] || '';
+    const [count, what] = splitCount(comfyBusy && clip ? '' : p.detail);
+    const first = comfyBusy ? what : [p.action, what].filter(Boolean).join(' - ') || (count ? '' : STAGE_HINTS[name] || '');
+    $('stageDetail').innerHTML = statusHtml(first, count);
   }
 
   // ComfyUI's own progress: which part of the workflow, and sampling steps.
@@ -5254,9 +5265,10 @@ function renderNow(data) {
     const hasSteps = c.max && c.value != null;
     $('comfySteps').textContent = hasSteps ? `step ${c.value} of ${c.max}` : '';
     $('comfyBar').style.width = hasSteps ? `${Math.round(100 * c.value / c.max)}%` : '0';
-    const queued = c.queue > 1 ? ` · ${c.queue - 1} more queued` : '';
-    const action = show && p.action ? `${p.action} · ` : '';
-    $('comfyMeta').textContent = `${action}${clip ? `${clip} · ` : ''}This ${data.pipeline === 'image' ? 'image' : 'clip'}: ${fmt(c.elapsed || 0)}${queued}`;
+    const [counter, what] = splitCount(clip);
+    const queued = c.queue > 1 ? `${counter ? ' · ' : ''}${c.queue - 1} more queued` : '';
+    $('comfyMeta').innerHTML = statusHtml([show && p.action, what].filter(Boolean).join(' - '), counter + queued,
+      fmt(c.elapsed || 0), `This ${data.pipeline === 'image' ? 'image' : 'clip'} so far`);
   }
 
   const g = data.gpu;
@@ -6332,6 +6344,19 @@ function syncStrips() {
   for (const job of Object.keys(stripActive)) $(`${job}Strip`).hidden = !stripActive[job] || onStatus;
   document.documentElement.style.setProperty('--head', `${$('stick').offsetHeight}px`);
 }
+// A status in two lines: "Rendering clip - The Descent to Knees, 5s", then "Clip 6 of 8" left and "0:19" right.
+// The count is split off a detail such as "Clip 6 of 8: The Descent, 5s" or Shorts' "Clip 2 of 5 - scene 3, 6s".
+function splitCount(detail) {
+  const m = /^((?:Clip|Image|Scene|Video) \d+ of \d+)(?::\s*|\s+-\s+)?(.*)$/.exec(detail || '');
+  return m ? [m[1], m[2]] : ['', detail || ''];
+}
+// With no count there is no second line: the time goes at the right of the first.
+function statusHtml(first, count = '', time = '', timeTitle = '') {
+  const clock = time ? `<span class="time"${timeTitle ? ` title="${esc(timeTitle)}"` : ''}>${esc(time)}</span>` : '';
+  if (!count) return first || time ? `<div class="status-foot"><span class="status-first">${esc(first)}</span>${clock}</div>` : '';
+  return (first ? `<div class="status-first">${esc(first)}</div>` : '')
+    + `<div class="status-foot"><span class="status-count">${esc(count)}</span>${clock}</div>`;
+}
 // The footer bar says it all in one line; Status already has the stage and the time so
 // far, so its bar only adds how far along and when it ends.
 function setStrip(job, show, strip, status, share) {
@@ -6347,9 +6372,9 @@ function setStrip(job, show, strip, status, share) {
     bar.parentElement.classList.toggle('busy', share === null);
     bar.style.width = `${share === null ? 30 : Math.round(share * 100)}%`;
   }
-  $(`${job}StripHint`).textContent = strip.hint;
+  $(`${job}StripHint`).innerHTML = strip.hint;
   $(`${job}StripTotal`).textContent = strip.total || '';
-  if (job === 'upload') $('uploadProgressHint').textContent = status.hint;
+  if (job === 'upload') $('uploadProgressHint').innerHTML = status.hint;
 }
 const STRIP_OPEN_MS = 5000;
 const stripTimers = {};
@@ -6382,15 +6407,20 @@ function renderStrips(data) {
   // Everything queued after it too, when there is more.
   const all = eta && queueAhead > eta.total_left + 30 ? ` · the whole queue around ${clockIn(queueAhead)}` : '';
   const total = eta ? `Done around ${clockIn(eta.total_left)}${all}` : `${fmt(data.elapsed)} so far`;
+  const [count, what] = splitCount(p.detail);
+  const c = data.comfyui || {};
+  const hint = statusHtml([p.action, what].filter(Boolean).join(' - ') || (count ? '' : STAGE_HINTS[stage[2]] || ''), count,
+    c.active && /^(Clip|Image) \d/.test(p.detail || '') ? fmt(c.elapsed || 0) : '');
   setStrip('run', data.running,
-    { text: video + (stage[2] || 'Starting'), right: left + (runsQueued ? ` · +${runsQueued} queued` : ''), hint: p.detail || STAGE_HINTS[stage[2]] || '', total },
+    { text: video + (stage[2] || 'Starting'), right: left + (runsQueued ? ` · +${runsQueued} queued` : ''), hint, total },
     { text: p.run && p.run[1] > 1 ? `Video ${p.run[0]} of ${p.run[1]}` : '', right: eta ? `${left}, done around ${clockIn(eta.total_left)}` : '' },
     eta && eta.adjusted_total ? 1 - eta.total_left / eta.adjusted_total : null);
   const up = data.upload, at = (up.progress || {}).upload;
-  const sending = at ? at[2] : 'Writing the title and description.';
+  const sending = statusHtml(at ? `Uploading - ${at[2]}` : 'Writing the title and description', at ? `Video ${at[0]} of ${at[1]}` : '',
+    fmt(up.elapsed || 0));
   setStrip('upload', up.running,
     { text: at ? `Uploading ${at[0]}/${at[1]}` : 'Uploading', right: fmt(up.elapsed), hint: sending, total: '' },
-    { text: at ? `Video ${at[0]} of ${at[1]}` : 'Getting ready', right: '', hint: sending },
+    { text: at ? 'Uploading' : 'Getting ready', right: '', hint: sending },
     at && at[1] > 1 ? (at[0] - 1) / at[1] : null);
   syncStrips();
 }

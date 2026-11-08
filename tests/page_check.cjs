@@ -813,14 +813,20 @@ assert(/^~10 min left, done around /.test(els.runProgressRight.textContent), 'wh
 assert.strictEqual(els.runStripText.textContent, 'Clips');
 assert.strictEqual(els.runStripRight.textContent, '40% · ~10 min left');
 assert.strictEqual(els.runStripBar.style.width, '40%');
-assert(els.runStripHint.textContent.startsWith('Clip 2 of 75'));
+// A status, as statusHtml writes it: its first line, the count under it on the left, and the time on the right.
+const lines = el => ({ first: (/class="status-first">([^<]*)</.exec(el.innerHTML) || [])[1] || '',
+  count: (/class="status-count">([^<]*)</.exec(el.innerHTML) || [])[1] || '', time: (/class="time"[^>]*>([^<]*)</.exec(el.innerHTML) || [])[1] || '',
+  twoLines: el.innerHTML.startsWith('<div class="status-first">') });
+context.statusLinesOf = lines;
+assert.strictEqual(lines(els.runStripHint).count, 'Clip 2 of 75', 'the footer says which clip on its second line');
 context.uploading = { ...idle, upload: { running: true, elapsed: 75, progress: { upload: [2, 3, 'A.mp4'] } } };
 run('renderStrips(uploading)');
 assert.strictEqual(els.uploadStripText.textContent, 'Uploading 2/3');
-assert.strictEqual(els.uploadStripHint.textContent, 'A.mp4');
+assert.deepStrictEqual(lines(els.uploadStripHint), { first: 'Uploading - A.mp4', count: 'Video 2 of 3', time: '1:15', twoLines: true },
+  'an upload: what it sends, then which of how many and its time');
 assert.strictEqual(els.uploadStripBar.style.width, '33%');
 assert.strictEqual(els.uploadProgressBar.style.width, '33%');
-assert.strictEqual(els.uploadProgressHint.textContent, 'A.mp4');
+assert.strictEqual(lines(els.uploadProgressHint).first, 'Uploading - A.mp4');
 assert.strictEqual(els.uploadProgressRight.textContent, '33%', 'the status line above it has the time so far');
 assert.strictEqual(els.uploadProgress.hidden, false);
 
@@ -1049,7 +1055,7 @@ assert.strictEqual(run("workHeading({label: '1 image: Cat'}, 'image')"), 'Image:
 assert.strictEqual(run("workHeading({label: '3 videos', facts: {count: 3}}, 'shorts')"), 'Shorts(3):');
 assert.strictEqual(run("workHeading({label: 'Topic', facts: {count: 2}}, 'shorts')"), 'Shorts(2): Topic');
 assert.strictEqual(run("workHeading({label: 'Upscale: Film'}, 'video')"), 'Video: Upscale: Film');
-assert(/#stageDetail \{ text-align: center; \}/.test(html), 'stage status text is centered');
+assert(/#stageDetail \{ text-align: left; \}/.test(html), 'the stage status lines up like every other');
 assert(/id="viewerVariations"[^>]*><\/button>\s*<button type="button" class="icon-btn" id="viewerPrompts"[^>]*><\/button>/.test(html) && script.includes('openPromptDetail(detailed, data.brief);'), 'More like this beside Prompts, which opens its detailed prompt');
 assert(/#currentWork\.arrive \{ animation: work-arrive/.test(html) && /\.queue-item\.leaving \{[^}]*animation: queue-leave/.test(html));
 assert(/dialog\.viewer \.viewer-actions > \* \{ flex: 1 1 0; min-width: 0; max-width: 120px; height: 32px;/.test(html), 'Download, Delete and Close share the available space');
@@ -1507,13 +1513,21 @@ assert(!status.includes('<span>ComfyUI:</span>'));
 context.atStage = (detail, comfy) => ({ running: true, pipeline: 'shorts', gpu: null, progress: { stage: [4, 7, 'Avatar clips'], detail },
   comfyui: comfy ? { active: true, connected: true, label: 'Generating video', value: 3, max: 8, elapsed: 65, queue: 1 } : {} });
 run(`renderNow(atStage('Clip 2 of 5 - scene 3, 6s lipsync', true))`);
-assert.strictEqual(els.comfyMeta.textContent, 'Clip 2 of 5 - scene 3, 6s lipsync · This clip: 1:05');
-assert.strictEqual(els.stageDetail.textContent, '', 'and not said again above it');
+assert.deepStrictEqual(lines(els.comfyMeta), { first: 'scene 3, 6s lipsync', count: 'Clip 2 of 5', time: '1:05', twoLines: true },
+  'what it renders and how long; then which one on the left, its time on the right');
+run(`renderNow({ ...atStage('Clip 6 of 8: The Descent to Knees, 5s', true), pipeline: 'video', progress: { stage: [2, 3, 'Clips'], detail: 'Clip 6 of 8: The Descent to Knees, 5s', action: 'Rendering clip' } })`);
+assert.strictEqual(lines(els.comfyMeta).first, 'Rendering clip - The Descent to Knees, 5s', 'action - title, duration');
+assert.strictEqual(lines(els.comfyMeta).count, 'Clip 6 of 8');
+assert.strictEqual(els.stageDetail.innerHTML, '', 'and not said again above it');
 run(`renderNow(atStage('Clip 2 of 5 - scene 3, 6s lipsync', false))`);
-assert.strictEqual(els.stageDetail.textContent, 'Clip 2 of 5 - scene 3, 6s lipsync', 'no box up yet: it still says it');
+assert.deepStrictEqual(lines(els.stageDetail), { first: 'scene 3, 6s lipsync', count: 'Clip 2 of 5', time: '', twoLines: true }, 'no box up yet: it still says it');
 run(`renderNow(atStage('Scene 4 of 9', true))`);
-assert.strictEqual(els.stageDetail.textContent, 'Scene 4 of 9', 'only a clip goes in the box');
-assert.strictEqual(els.comfyMeta.textContent, 'This clip: 1:05');
+assert.strictEqual(lines(els.stageDetail).count, 'Scene 4 of 9', 'only a clip goes in the box');
+assert.deepStrictEqual(lines(els.comfyMeta), { first: '', count: '', time: '1:05', twoLines: false }, 'no clip: one line, the time on its right');
+assert.deepStrictEqual(lines({ innerHTML: run(`statusHtml('Stitching', '', '0:42')`) }), { first: 'Stitching', count: '', time: '0:42', twoLines: false },
+  'not two lines: the time at the right of the first');
+assert.strictEqual(run(`statusHtml('Generating prompts')`), '<div class="status-foot"><span class="status-first">Generating prompts</span></div>');
+assert(/\.status-foot > \.status-first:only-child \{ flex: 1; text-align: center; \}/.test(html), 'a status that is only text is centred');
 
 // The footer bars show away from Status, which has its own.
 run('stripActive.run = true; stripActive.upload = false; syncStrips()');
