@@ -2380,7 +2380,7 @@ assert(els.comfyFacts.innerHTML.includes('Generating the image · 3/8') && els.c
   run(`pipeline = 'video'; loadVideoWorkflows = async () => { $('llm').value = 'gemini'; }; syncVideoForm = () => {};
        syncSize = () => {}; syncImageInput = () => {}; syncMediaInput = () => {};
        syncPromptWriter = () => {}; saveVideoForm = () => {}; applyOptions = () => {};
-       showFormError = () => {}; showPage = () => {}`);
+       showFormError = () => {}; showPage = () => {}; reopened = () => {}`);
   context.document.getElementById('llm').value = 'local';
   els.llm.options = [{ value: 'local' }, { value: 'gemini' }];
   els.videoWorkflow.options = [];
@@ -2478,3 +2478,11 @@ assert(els.comfyFacts.innerHTML.includes('Generating the image · 3/8') && els.c
 
   console.log('all page checks passed');
 })().catch(e => { console.error(e); process.exit(1); });
+
+// Reopened from something made or a queued job, a form is its own: the starred preset isn't put over it, and the picker
+// isn't left naming the preset picked before.
+for (const fn of ['sameAgain', 'sameAgainFilm', 'sameAgainShorts', 'editQueued', 'openEditor']) {
+  const body = script.slice(script.indexOf(`async function ${fn}(`), script.indexOf('\n}\n', script.indexOf(`async function ${fn}(`)));
+  assert(/reopening\(/.test(body) && body.indexOf('reopening(') < body.indexOf('Workflows()'), `${fn}: the default preset stays off it`);
+  assert(/reopened\(/.test(body), `${fn}: the preset picker is checked against the form`);
+}

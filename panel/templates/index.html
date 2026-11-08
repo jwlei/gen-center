@@ -2206,6 +2206,13 @@ function applyDefaultPreset(side) {
   const preset = (presets[side] || []).find(p => p.default);
   if (preset) applyPreset(side, preset.name, true);
 }
+// A form filled from something made, or a queued job: the starred preset isn't put over it, and the picker shows a
+// preset only where one holds what the form now does, not the one picked before.
+function reopening(side) { defaultsDue.delete(side); }
+function reopened(side) {
+  delete presetPicked[side];
+  syncPresets(side);
+}
 async function loadPresets() {
   try { presets = { ...presets, ...(await (await fetch('/api/presets')).json()).presets }; } catch (e) { return; }
   presetsLoaded = true;
@@ -4427,6 +4434,7 @@ async function sameAgain(id, position = null, exact = null) {
   if (shot) Object.assign(s, { prompt: shot.prompt, direct: true, count: VARIATIONS });
   // Created again from a set's prompts: that one image, its prompt word for word, on its own seed.
   if (exact) Object.assign(s, { prompt: exact.prompt, direct: true, count: exact.count || 1 });
+  reopening('image');
   if (pipeline !== 'image') setPipeline('image');
   await loadImageWorkflows();
   $('imageWorkflow').value = [...$('imageWorkflow').options].some(o => o.value === s.workflow && !o.disabled) ? s.workflow : '';
@@ -4462,6 +4470,7 @@ async function sameAgain(id, position = null, exact = null) {
   // From one picture: its seed, a tap away, to make it again with other settings.
   offerSameSeed(shot ? shot.used_seed ?? shot.seed : null);
   saveImageForm();
+  reopened('image');
   showFormError('');
   $('imageGeneration').open = $('imagePromptSection').open = true;
   $('imageOptions').open = !$('imageOptions').hidden;
@@ -4496,6 +4505,7 @@ async function sameAgainFilm(id, exact = null) {
   try { data = await (await fetch(`/runs/${encodeURIComponent(id)}`)).json(); } catch (e) { data = { error: 'Could not reach the panel. Try again.' }; }
   if (!data.ok) { alert(data.error || 'Could not open that film.'); return; }
   const s = data.settings, base = `/runs/${encodeURIComponent(id)}/inputs`;
+  reopening('video');
   if (pipeline !== 'video') setPipeline('video');
   await loadVideoWorkflows();
   $('videoWorkflow').value = [...$('videoWorkflow').options].some(o => o.value === s.workflow && !o.disabled) ? s.workflow : '';
@@ -4573,6 +4583,7 @@ async function sameAgainFilm(id, exact = null) {
   showFormError(runModel && modelSetting.value !== s.h3_model
     ? `Made with ${runModel.textContent} as the local model. Settings now has ${modelSetting.selectedOptions[0]?.textContent}.` : '');
   saveVideoForm();
+  reopened('video');
   if (WIDE.matches) $('optionsCard').scrollIntoView({ behavior: 'smooth' }); else showPage('generate');
 }
 const VARIATIONS = 5;
@@ -4581,6 +4592,7 @@ async function sameAgainShorts(id) {
   let data;
   try { data = await (await fetch(`/shorts-runs/${encodeURIComponent(id)}/form`)).json(); } catch (e) { data = { error: 'Could not reach the panel. Try again.' }; }
   if (!data.ok) { alert(data.error || 'Could not open that run.'); return; }
+  reopening('shorts');
   if (pipeline !== 'shorts') setPipeline('shorts');
   await loadWorkflows();
   for (const el of $('formShorts').elements) {
@@ -4593,6 +4605,7 @@ async function sameAgainShorts(id) {
   applyOptions($('shortsOptionsBox'), (shortsTakes[$('workflow').value] || {}).options || [], data.options);
   syncForm();
   saveForm();
+  reopened('shorts');
   showFormError('');
   if (WIDE.matches) $('optionsCard').scrollIntoView({ behavior: 'smooth' }); else showPage('generate');
 }
@@ -4725,6 +4738,7 @@ function editWorkflowName() {
   return names.includes(EDIT_WORKFLOW) ? EDIT_WORKFLOW : names.find(name => imageWorkflows[name].model === 'qwen_image_21_edit') || '';
 }
 async function openEditor() {
+  reopening('image');
   if (pipeline !== 'image') setPipeline('image');
   await loadImageWorkflows();
   // The preset chosen in Settings, as it was saved; else the Qwen-Image 2.1 edit workflow at the image's own size.
@@ -4744,6 +4758,7 @@ async function openEditor() {
   $('imageMegapixels').value = 'image';
   syncImageForm();
   saveImageForm();
+  reopened('image');
   backToGenerate();
 }
 // This image in Generate as image 1, with the edit workflow chosen.
@@ -7294,6 +7309,7 @@ async function editQueued(id, button) {
     return;
   }
   queueEdit = { id: data.id, token: data.token, pipeline: data.pipeline, ready: false, continued: data.continued || null };
+  reopening(data.pipeline);
   const edit = queueEdit;
   queueEditLabel();
   poll();
@@ -7361,6 +7377,7 @@ async function editQueued(id, button) {
     if (Object.keys(data.options || {}).length) applyOptions($(OPTION_BOXES[pipeline]), options, data.options);
     edit.ready = true;
     showFormError('');
+    reopened(pipeline);
     queueEditLabel();
     if (edit.continued) {
       $('formNote').hidden = false;
