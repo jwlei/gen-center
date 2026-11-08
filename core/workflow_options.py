@@ -420,7 +420,8 @@ def custom_sigmas(denoise, steps):
 
 def _upscaler_model(info):
     """The upscaler's weights: BF16 where there is one (as small as FP16, and what a 30-series card runs natively)."""
-    names = [name for name in _combo(info, H3_UPSCALER, "model_name") if not name.startswith("(")]
+    # The folder is shared: LTX's spatial upscaler sits there too, and isn't one for H3.
+    names = [name for name in _combo(info, H3_UPSCALER, "model_name") if "minimax_h3" in name.lower()]
     return next((name for name in names if "bf16" in name.lower()), names[0] if names else None)
 
 

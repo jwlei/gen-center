@@ -5,7 +5,7 @@ import unittest
 from core import workflow_options as wo
 
 INFO = {
-    wo.H3_UPSCALER: {"input": {"required": {"model_name": [["minimax_h3_latent_upscaler_3d_conv_v1_fp16.safetensors",
+    wo.H3_UPSCALER: {"input": {"required": {"model_name": [["ltx-2.3-spatial-upscaler-x2-1.0.safetensors", "minimax_h3_latent_upscaler_3d_conv_v1_fp16.safetensors",
                                                              "minimax_h3_latent_upscaler_3d_conv_v1_bf16.safetensors"]]}}},
     "LTXVSeparateAVLatent": {}, "LTXVConcatAVLatent": {}, "ManualSigmas": {},
     "UNETLoader": {"input": {"required": {"unet_name": [["minimax_h3_fl2va_pruned_int8_convrot.safetensors",
