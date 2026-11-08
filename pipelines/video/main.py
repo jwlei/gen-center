@@ -170,7 +170,7 @@ def check_setup(args):
         problems.append("ffmpeg isn't installed, or isn't on the PATH.")
     if llm == "local":
         try:
-            h3_refiner._paths(h3_refiner.selected_model(), require_compiler=False)
+            h3_refiner._paths(h3_refiner.local_llm_model(), require_compiler=False)
             print("✅ Local model and llama.cpp found.")
         except (RuntimeError, ValueError) as e:
             problems.append(str(e))
@@ -281,7 +281,7 @@ def plan_run(args, stages):
     width, height = args.size or media.render_size(*(images[0].size if images else media.DEFAULT_SHAPE),
                                                    media.default_area(video_model))
     llm = args.llm or planner.default_llm()
-    if not args.direct and llm == "local" and h3_refiner.selected_model() == "qwen3-14b" and (images or image_2_in_words):
+    if not args.direct and llm == "local" and h3_refiner.local_llm_model() == "qwen3-14b" and (images or image_2_in_words):
         raise RuntimeError("Qwen3 14B is text-only and cannot analyze attached images. Choose Gemma 4 in Settings.")
     if not args.direct and not planner.llm_configured(llm):
         raise RuntimeError(f"{llm} has no credentials: see .env.example.")
@@ -295,7 +295,8 @@ def plan_run(args, stages):
     state.direct, state.seed, state.plan_only, state.first_only = args.direct, args.seed, args.plan_only, args.first_only
     state.clip_seconds = list(args.clip_seconds) if args.clip_seconds else None
     if (not args.direct and llm == "local") or args.h3_enhance != "off":
-        state.h3_model = h3_refiner.selected_model()
+        # The model that wrote the plan, when the local one did; else OpenH3-IR's, which enhanced it.
+        state.h3_model = h3_refiner.local_llm_model() if not args.direct and llm == "local" else h3_refiner.selected_model()
     state.form = run_form.from_env()
     print_stage("Plan", stages)
     keep_references(state, videos, audios)
@@ -340,7 +341,7 @@ def plan_run(args, stages):
                  video_model, args.image_roles, media.preview_jpeg(image_2_in_words) if image_2_in_words else None,
                  state.references())
     if llm == "local":
-        with h3_refiner.Refiner(comfy.url, require_compiler=False) as refiner:
+        with h3_refiner.Refiner(comfy.url, require_compiler=False, model_id=h3_refiner.local_llm_model()) as refiner:
             title, shots = planner.plan_film(*plan_args, chosen=args.clip_seconds, refiner=refiner,
                                              first_frame=state.start == "multishot" and state.h3_first_frame)
     else:

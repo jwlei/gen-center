@@ -29,9 +29,9 @@
   .estimate-line b { color: var(--text); font-weight: 600; }
   #estimateDetail { text-align: right; }
   .estimate .err { margin: 0; }
-  /* Under the time left, over the bar, at the right: how the estimate moved, a tap away from why. */
-  .eta-detail { margin: 2px 0 0; text-align: right; }
-  .eta-detail summary { font-size: .78rem; font-weight: 400; color: var(--muted); }
+  /* The time left says how far the estimate moved; tapped, the first estimate, and why, show under it at the right. */
+  #runProgressRight.eta-moved { cursor: pointer; }
+  .eta-detail { margin: 2px 0 0; text-align: right; font-size: .78rem; color: var(--muted); }
   .eta-detail .changes { text-align: left; }
   .eta-detail .changes { max-height: 7.5em; overflow-y: auto; margin-top: 4px; }
   #uploadBox .status { margin-bottom: 8px; }
@@ -124,9 +124,10 @@
   .stopped-run .what { overflow-wrap: anywhere; font-weight: 600; }
   .stopped-run .hint { margin-top: 2px; }
   /* A job's buttons: what moves it on the left, how long it takes in the middle, the rest on the right. */
-  .stopped-actions, .queue-item.run-card .queue-item-actions { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  .stopped-actions, .queue-item.run-card .queue-item-actions { display: grid; grid-template-columns: minmax(max-content, 1fr) auto minmax(max-content, 1fr);
     align-items: center; gap: 6px; margin-top: 8px; }
-  .acts-side { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; min-width: 0; }
+  /* Each side's buttons on one line: a side with more of them takes the room it needs. */
+  .acts-side { display: flex; flex-wrap: nowrap; align-items: center; gap: 6px; }
   .acts-side.acts-end { justify-content: flex-end; }
   .stopped-actions .when, .queue-item-actions .when { color: var(--muted); font-size: .78rem; white-space: nowrap; font-variant-numeric: tabular-nums; text-align: center; }
   .stopped-actions.unsaved-actions { display: flex; justify-content: flex-end; }
@@ -148,6 +149,8 @@
   .log-panes.hide-comfy .ln.comfy { display: none; }
   .log-panes.problems-only .ln:not(.err):not(.warn):not(.stage) { display: none; }
   .log-tools { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 6px; }
+  /* How much to show on the left; ComfyUI and Errors, which add or narrow, on the right. */
+  .log-tools #logComfy { margin-left: auto; }
   .log-chip { width: auto; margin: 0; padding: 2px 10px; font-size: .78rem; font-weight: 400; border-radius: 999px; border: 1px solid var(--line); background: transparent; color: var(--muted); cursor: pointer; }
   .log-chip[aria-pressed="true"] { color: var(--accent); border-color: var(--accent); }
   /* Summary and Detailed are one switch: two halves of a pill. */
@@ -188,7 +191,7 @@
   .workflow-tools { display: flex; gap: 8px; margin: 8px 0; flex-wrap: wrap; }
   .ln.stage { margin-top: 8px; padding-top: 7px; border-top: 1px solid var(--line); }
   .ln.stage:first-child { margin-top: 0; padding-top: 1px; border-top: 0; }
-  .ln.stage .x { color: var(--accent); font-weight: 700; }
+  .ln.stage .x { font-weight: 700; }
   .hint { color: var(--muted); font-size: .78rem; margin-top: 5px; line-height: 1.4; }
   .hint b { color: var(--text); font-weight: 600; }
   .centred-hint { text-align: center; }
@@ -374,25 +377,29 @@
   .result-type { flex: none; padding: 0 6px; border: 1px solid var(--line); border-radius: 6px; font-size: .7rem; color: var(--text); }
   .result-label { flex: 1 1 0; min-width: 0; overflow-wrap: anywhere; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; overflow: hidden; text-align: left; }
   .finished .failed { color: var(--err); }
-  .settings-actions { display: flex; gap: 8px; }
-  .settings-actions button { flex: 1 1 0; display: flex; flex-direction: column; align-items: center; gap: 6px; margin: 0; padding: 12px 6px; font-size: .75rem;
+  /* Restart, Log out and Shut down: at the foot, always in view however far the settings scroll, and small. */
+  .settings-actions { display: flex; gap: 6px; flex: none; margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--line); }
+  .settings-actions svg { width: 16px; height: 16px; }
+  .settings-actions a.button { flex: 1 1 0; display: flex; flex-direction: column; align-items: center; gap: 4px; margin: 0; padding: 7px 4px; font-size: .68rem;
+    font-weight: 600; text-decoration: none; text-align: center; border-radius: 10px; background: var(--panel-2); border: 1px solid var(--line); color: var(--text); }
+  .settings-actions button { flex: 1 1 0; display: flex; flex-direction: column; align-items: center; gap: 4px; margin: 0; padding: 7px 4px; font-size: .68rem;
     background: var(--panel-2); border: 1px solid var(--line); color: var(--text); }
   .settings-actions button:disabled { opacity: .5; }
   .settings-actions button.armed { border-color: var(--accent); color: var(--accent); }
   .settings-actions button.restarting, .settings-actions button.restarting:disabled { opacity: 1; color: var(--warn); border-color: var(--warn); background: color-mix(in srgb, var(--warn) 12%, transparent); }
   .settings-body { display: flex; flex-direction: column; gap: 10px; }
-  .reserve-row { flex-wrap: wrap; row-gap: 4px; }
-  .reserve-row > label { flex: 1 1 auto; }
-  .reserve-row b { font-weight: 600; font-size: .85rem; }
-  .reserve-row button { width: auto; flex: none; margin: 0; padding: 1px 9px; font-size: .7rem; background: transparent; border: 1px solid var(--line); color: var(--muted); }
-  .reserve-row button.changed { border-color: var(--accent); color: var(--accent); background: rgba(255, 255, 255, .05); }
-  .reserve-row input { flex: 1 0 100%; margin: 0; }
+  /* Free RAM: the stepper centred, as Generate's; Set to its left, there only while a change waits to be set. */
+  .reserve-row { position: relative; display: flex; justify-content: center; }
+  .reserve-row .mp-field { min-width: 80px; font-variant-numeric: tabular-nums; }
+  #reserveSet { position: absolute; left: 0; top: 50%; transform: translateY(-50%); width: auto; margin: 0; padding: 6px 12px; font-size: .78rem;
+    background: transparent; border: 1px solid var(--accent); color: var(--accent); }
+  #reserveSet[hidden] { display: none; }
   #restartComfy.pulse { border-color: #e6b800; color: #e6b800; background: rgba(230, 184, 0, .14); animation: pulse 1.2s ease-in-out infinite; }
   @keyframes pulse { 50% { box-shadow: 0 0 0 4px rgba(230, 184, 0, .35); } }
   .settings-actions #shutdown { background: rgba(229, 83, 75, .14); border-color: var(--err); color: var(--err); }
   .settings-actions #shutdown.armed { background: var(--err); color: #fff; }
   .settings-note { margin: 0; }
-  .settings-group { margin-top: 6px; padding-top: 10px; border-top: 1px solid var(--line); font-size: .78rem; text-transform: uppercase; letter-spacing: .04em; color: var(--accent); font-weight: 600; }
+  .settings-group { margin-top: 6px; padding-top: 10px; border-top: 1px solid var(--line); font-size: .78rem; text-transform: uppercase; letter-spacing: .04em; color: var(--neutral); font-weight: 600; }
   .settings-check { display: flex; align-items: flex-start; gap: 10px; margin: 0; text-transform: none; letter-spacing: 0; font-size: .9rem; color: var(--text); cursor: pointer; }
   .settings-check input { width: auto; margin: 3px 0 0; }
   .settings-check small { display: block; margin-top: 2px; color: var(--muted); font-size: .78rem; }
@@ -909,12 +916,12 @@
   #runProgressBar, #runStripBar, #comfyBar, #uploadProgressBar, #uploadStripBar, #queuePendingBar { position: relative; overflow: hidden; }
   #runProgressBar::after, #runStripBar::after, #comfyBar::after, #uploadProgressBar::after, #uploadStripBar::after, #queuePendingBar::after {
     content: ""; position: absolute; top: 0; bottom: 0; left: 0; width: 40%; pointer-events: none;
-    background: linear-gradient(90deg, transparent, rgba(255, 255, 255, .2), transparent); transform: translateX(-100%);
+    background: linear-gradient(90deg, transparent, rgba(255, 255, 255, .38), transparent); transform: translateX(-100%);
     animation: bar-sheen 3.6s ease-in-out infinite; }
   @keyframes bar-sheen { 0% { transform: translateX(-100%); } 55%, 100% { transform: translateX(250%); } }
   .step { position: relative; }
   .step.now::before { content: ""; position: absolute; top: -3px; left: 0; right: 0; height: 3px; pointer-events: none;
-    background: linear-gradient(90deg, transparent, rgba(255, 255, 255, .3), transparent) no-repeat; background-size: 40% 100%;
+    background: linear-gradient(90deg, transparent, rgba(255, 255, 255, .5), transparent) no-repeat; background-size: 40% 100%;
     animation: step-sheen 3.6s ease-in-out infinite; }
   @keyframes step-sheen { 0% { background-position: -70% 0; } 55%, 100% { background-position: 170% 0; } }
   @media (prefers-reduced-motion: reduce) {
@@ -955,21 +962,25 @@
   .status-head .status { margin: 0; font-size: .78rem; gap: 6px; white-space: nowrap; }
   .status-times { display: flex; gap: 8px; font-size: .78rem; white-space: nowrap; font-variant-numeric: tabular-nums; color: var(--muted); }
   .status-times[hidden] { display: none; }
-  /* No status light: idle says so in a word, running shows its times. */
-  .status-head #dot { display: none; }
-  .status-head .status:has(#statusText:empty) { display: none; }
+  /* The status light is here, in Status's own header; the side switch at the top has none. While it runs, the
+     light says it: no empty word holding the timers away from it. */
+  .status-head #statusText:empty { display: none; }
+  .status-head .status + .status-times { margin-left: -4px; }
+  .switch button .dot { display: none; }
   /* Status is shared by every side, so it is neutral; only its bars take the colour of the job they show (--job,
      set while one runs: Shorts red, Video blue, Image green). Uploads are Shorts'. */
   #runCard { --accent: var(--neutral); }
   #runCard .bar > div, .stick #runStrip .bar > div { background: var(--job, var(--neutral)); }
   #uploadBox, .stick #uploadStrip { --job: #ff0033; }
   #runCard .step.now { border-color: var(--job, var(--neutral)); }
-  #runCard .step.done { border-color: color-mix(in srgb, var(--job, var(--neutral)) 50%, transparent); }
+  #runCard .step.done { border-color: var(--job, var(--neutral)); }
   /* The side's own colour, kept before Status makes its accent neutral. */
   body { --side-accent: var(--accent); }
   /* The log, and Status in the bottom bar, say what kind of job it is: its colour while one runs, else the side's. */
   #runCard .log-chip[aria-pressed="true"] { color: var(--job, var(--side-accent)); border-color: var(--job, var(--side-accent)); }
-  #runCard .ln.stage .x, #runCard .ln-more { color: var(--job, var(--side-accent)); }
+  #runCard .ln-more { color: var(--job, var(--side-accent)); }
+  /* The log is shared too: its stage headers are silver, as Status's. */
+  .ln.stage .x { color: var(--neutral); }
   .jump a.run.active { border-color: var(--job, var(--accent)); }
   /* ComfyUI as an icon with a dot for its state; a tap shows the rest. */
   .comfy-status { position: relative; display: inline-flex; align-items: center; justify-content: center; width: 36px; height: 36px; padding: 0;
@@ -979,6 +990,17 @@
   /* Small and quiet, centred: there when wanted, not the first thing you see. */
   .run-actions { display: flex; justify-content: center; gap: 8px; margin: 12px 0 8px; }
   .run-actions[hidden] { display: none; }
+  /* The running part's foot, apart from the queue under it, in the queue box's own line: solid along the bottom and
+     round its corners, then dotted up the sides, fading out at about the top of Cancel and Stop. Two layers, so both
+     sides are drawn alike (one border, dotted and solid together, came out uneven at the corners). Drawn over, never
+     in the way: it takes no room and changes no width. */
+  #runActions { position: relative; --foot-corner: 12px; }
+  #runActions::before, #runActions::after { content: ""; position: absolute; left: -10px; right: -10px; top: -10px; pointer-events: none; }
+  #runActions::after { bottom: -10px; border: 1px solid var(--line); border-top: 0; border-radius: 0 0 var(--foot-corner) var(--foot-corner);
+    -webkit-mask-image: linear-gradient(to top, #000 var(--foot-corner), transparent var(--foot-corner));
+    mask-image: linear-gradient(to top, #000 var(--foot-corner), transparent var(--foot-corner)); }
+  #runActions::before { bottom: calc(var(--foot-corner) - 10px); border-left: 1px dotted var(--line); border-right: 1px dotted var(--line);
+    -webkit-mask-image: linear-gradient(to top, #000 15%, transparent); mask-image: linear-gradient(to top, #000 15%, transparent); }
   .run-actions button { flex: none; width: auto; min-width: 84px; margin: 0; padding: 6px 16px; font-size: .82rem; font-weight: 600;
     background: transparent; border: 1px solid var(--line); border-radius: 999px; color: var(--muted); }
   .run-actions button[hidden] { display: none; }
@@ -1254,7 +1276,6 @@
         </span>
         <button type="button" class="log-chip" id="logComfy" aria-pressed="true" title="What ComfyUI is doing, and how long each part took">ComfyUI</button>
         <button type="button" class="log-chip" id="logProblems" aria-pressed="false" title="Only the stages, warnings and errors">Errors</button>
-        <button type="button" class="log-chip" id="logWorkflow" title="The workflow this run renders with, and the options it was set to">Workflow</button>
       </div>
       <div class="q-group">Generation</div>
       <div class="log" id="log"><span class="empty-log">No run yet.</span></div>
@@ -1770,17 +1791,18 @@
     <div class="panel-dialog-title" id="settingsTitle">Settings</div>
   </div>
   <div class="panel-dialog-body settings-body">
-  <div class="settings-actions">
-    <button type="button" id="restartPanel" title="Start the panel again, to load new code. Not while a run or upload is going."><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 11a8 8 0 1 0-2.3 5.7"/><path d="M20 4v7h-7"/></svg><span>Restart panel</span></button>
-    <button type="button" id="restartComfy" title="Start fresh: closes local ComfyUI processes, including work started outside the panel. Not while a panel run is going."><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="2"/><rect x="9.5" y="9.5" width="5" height="5" rx=".5"/><path d="M9 2.5v3M15 2.5v3M9 18.5v3M15 18.5v3M2.5 9h3M2.5 15h3M18.5 9h3M18.5 15h3"/></svg><span>Restart ComfyUI</span></button>
-    <button type="button" id="shutdown" title="Shut down: force-stops everything, then the panel's server. Start it again with start_webapp.pyw or the gen-center shortcut."><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M12 3v9"/><path d="M6.3 7.3a8 8 0 1 0 11.4 0"/></svg><span>Shut down</span></button>
-  </div>
   <div class="hint settings-note" id="settingsNote" hidden></div>
-  <div class="settings-row reserve-row"><label for="reserveRam">Reserve free RAM</label><b id="reserveRamValue"></b><button type="button" id="reserveSet">Set</button><input type="range" id="reserveRam" min="3" max="12" step="1"></div>
+  <div class="settings-group" id="reserveTitle">Reserve free RAM</div>
+  <div class="reserve-row" role="group" aria-labelledby="reserveTitle">
+    <button type="button" id="reserveSet" hidden>Set</button>
+    <div class="count-stepper"><button type="button" id="reserveDown" aria-label="Less free RAM">−</button><span class="mp-field" id="reserveRamValue" aria-live="polite"></span><button type="button" id="reserveUp" aria-label="More free RAM">+</button></div>
+  </div>
   <label class="settings-check"><input type="checkbox" id="lowPriority"><span>Run generation at lower priority<small>The pipeline and ComfyUI give way to your other programs, so the PC stays responsive while it renders.</small></span></label>
   <label class="settings-check"><input type="checkbox" id="poweroff"><span>Shut down the PC when the queue is empty<small id="poweroffNote">This session only: it isn't saved. You get a minute to cancel it.</small></span></label>
-  <div class="settings-group">OpenH3-IR model</div>
-  <div class="settings-row"><label for="h3Model">Prompt enhancer</label><select id="h3Model"><option value="gemma-4-12b">Gemma 4 12B (vision)</option><option value="qwen3-14b">Qwen3 14B (text only)</option></select></div>
+  <div class="settings-group" id="localLlmTitle">Local LLM model</div>
+  <div class="settings-row"><select id="localLlmModel" aria-labelledby="localLlmTitle"><option value="gemma-4-12b">Gemma 4 12B (vision)</option><option value="qwen3-14b">Qwen3 14B (text only)</option></select></div>
+  <div class="settings-group" id="h3ModelTitle">OpenH3-IR model</div>
+  <div class="settings-row"><select id="h3Model" aria-labelledby="h3ModelTitle"><option value="gemma-4-12b">Gemma 4 12B (vision)</option><option value="qwen3-14b">Qwen3 14B (text only)</option></select></div>
   <div class="hint">Qwen3 cannot analyze image or video references; choose Gemma for those.</div>
   <div class="settings-group">Default workflow</div>
   <div class="settings-row"><label for="defaultShorts">Shorts</label><select id="defaultShorts" data-side="shorts"></select></div>
@@ -1792,6 +1814,12 @@
   {% if tailscale_problem %}<div class="hint">Tailscale: {{ tailscale_problem }}</div>{% endif %}
   <div class="settings-group">Storage</div>
   <div class="disk" id="diskBox"><div class="hint">Checking…</div></div>
+  </div>
+  <div class="settings-actions">
+    <button type="button" id="restartPanel" title="Start the panel again, to load new code. Not while a run or upload is going."><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 11a8 8 0 1 0-2.3 5.7"/><path d="M20 4v7h-7"/></svg><span>Restart panel</span></button>
+    <button type="button" id="restartComfy" title="Start fresh: closes local ComfyUI processes, including work started outside the panel. Not while a panel run is going."><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="2"/><rect x="9.5" y="9.5" width="5" height="5" rx=".5"/><path d="M9 2.5v3M15 2.5v3M9 18.5v3M15 18.5v3M2.5 9h3M2.5 15h3M18.5 9h3M18.5 15h3"/></svg><span>Restart ComfyUI</span></button>
+    <a class="button" href="/logout" id="logout" title="Log out on this device: the panel keeps running."><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 4h3a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-3"/><path d="M10 17l5-5-5-5"/><path d="M15 12H4"/></svg><span>Log out</span></a>
+    <button type="button" id="shutdown" title="Shut down: force-stops everything, then the panel's server. Start it again with start_webapp.pyw or the gen-center shortcut."><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M12 3v9"/><path d="M6.3 7.3a8 8 0 1 0 11.4 0"/></svg><span>Shut down</span></button>
   </div>
   <button type="button" class="panel-close" id="settingsClose">Close</button>
 </dialog>
@@ -2758,9 +2786,9 @@ function formatBytes(n) {
 async function fillSettings() {
   $('lowPriority').checked = !!SETTINGS.low_priority;
   $('h3Model').value = SETTINGS.h3_model;
-  $('reserveRam').value = SETTINGS.reserve_ram_gb || 3;
-  $('reserveRamValue').textContent = $('reserveRam').value + ' GB';
-  $('reserveSet').classList.remove('changed');
+  $('localLlmModel').value = SETTINGS.local_llm_model || SETTINGS.h3_model;
+  reserveGb = reserveSaved();
+  showReserve();
   for (const side of ['shorts', 'video', 'image']) {
     const select = document.getElementById('default' + side[0].toUpperCase() + side.slice(1));
     const chosen = (SETTINGS.default_workflow || {})[side] || '';
@@ -2790,7 +2818,17 @@ $('settingsClose').addEventListener('click', () => settingsDialog.close());
 settingsDialog.addEventListener('click', e => { if (e.target === settingsDialog) settingsDialog.close(); });
 $('lowPriority').addEventListener('change', () => saveSettings({ low_priority: $('lowPriority').checked }));
 $('h3Model').addEventListener('change', () => saveSettings({ h3_model: $('h3Model').value }));
-const reserveSaved = () => SETTINGS.reserve_ram_gb || 3;
+$('localLlmModel').addEventListener('change', () => saveSettings({ local_llm_model: $('localLlmModel').value }));
+// Free RAM ComfyUI keeps, in whole GB, 3 unless set. Saved with Set, used from ComfyUI's next start.
+const RESERVE_LEAST = 1, RESERVE_MOST = 24, RESERVE_DEFAULT = 3;
+let reserveGb = RESERVE_DEFAULT;
+const reserveSaved = () => Math.round(SETTINGS.reserve_ram_gb || RESERVE_DEFAULT);
+function showReserve() {
+  $('reserveRamValue').textContent = `${reserveGb} GB`;
+  $('reserveDown').disabled = reserveGb <= RESERVE_LEAST;
+  $('reserveUp').disabled = reserveGb >= RESERVE_MOST;
+  $('reserveSet').hidden = reserveGb === reserveSaved();
+}
 // Shut down when the queue is empty: kept by the server for this session only.
 function renderPoweroff(p) {
   if (!p) return;
@@ -2804,14 +2842,11 @@ $('poweroff').addEventListener('change', async () => {
     renderPoweroff(await (await fetch('/api/poweroff', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ armed: $('poweroff').checked }) })).json());
   } catch (e) { settingsNote('Could not reach the panel.', true); }
 });
-$('reserveRam').addEventListener('input', () => {
-  $('reserveRamValue').textContent = $('reserveRam').value + ' GB';
-  $('reserveSet').classList.toggle('changed', Number($('reserveRam').value) !== reserveSaved());
-});
+$('reserveDown').addEventListener('click', () => { reserveGb = Math.max(RESERVE_LEAST, reserveGb - 1); showReserve(); });
+$('reserveUp').addEventListener('click', () => { reserveGb = Math.min(RESERVE_MOST, reserveGb + 1); showReserve(); });
 $('reserveSet').addEventListener('click', async () => {
-  const gb = Number($('reserveRam').value);
-  await saveSettings({ reserve_ram_gb: gb <= 3 ? 0 : gb });
-  $('reserveSet').classList.remove('changed');
+  await saveSettings({ reserve_ram_gb: reserveGb });
+  showReserve();  // Set: nothing waits any more
   $('restartComfy').classList.add('pulse');
 });
 settingsDialog.addEventListener('change', e => {
@@ -4283,9 +4318,10 @@ async function sameAgainFilm(id, exact = null) {
   syncPromptWriter('video');
   syncVideoForm();
   // The local model is a Settings choice for every run, so it is named rather than switched.
-  const runModel = [...$('h3Model').options].find(o => o.value === s.h3_model);
-  showFormError(runModel && $('h3Model').value !== s.h3_model
-    ? `Made with ${runModel.textContent} as the local model. Settings now has ${$('h3Model').selectedOptions[0]?.textContent}.` : '');
+  const modelSetting = $(s.llm === 'local' ? 'localLlmModel' : 'h3Model');
+  const runModel = [...modelSetting.options].find(o => o.value === s.h3_model);
+  showFormError(runModel && modelSetting.value !== s.h3_model
+    ? `Made with ${runModel.textContent} as the local model. Settings now has ${modelSetting.selectedOptions[0]?.textContent}.` : '');
   saveVideoForm();
   if (WIDE.matches) $('optionsCard').scrollIntoView({ behavior: 'smooth' }); else showPage('generate');
 }
@@ -4505,7 +4541,10 @@ function clearViewerTransition() {
   ghost.remove();
   viewerTransition = null;
 }
-function transitionViewer(media, direction, open) {
+// media: what shows now, left as a picture of itself that slides away. target: what shows next, whose loading lets it
+// go: the same element, or the other one when a swipe goes between a film and a set (it never loads in the old one,
+// so waiting on that left the screen black).
+function transitionViewer(media, direction, open, target = media) {
   clearViewerTransition();
   if (window.matchMedia('(prefers-reduced-motion: reduce)').matches ||
       (media === $('viewerVideo') ? !(media.readyState >= 2 && media.videoWidth && media.videoHeight) : !media.complete || !media.naturalWidth)) {
@@ -4528,7 +4567,7 @@ function transitionViewer(media, direction, open) {
   Object.assign(ghost.style, { left: `${box.left}px`, top: `${box.top}px`, width: `${box.width}px`, height: `${box.height}px`, transform: 'none' });
   ghost.setAttribute('aria-hidden', 'true');
   $('imageViewer').appendChild(ghost);
-  const event = media === $('viewerVideo') ? 'loadeddata' : 'load';
+  const event = target === $('viewerVideo') ? 'loadeddata' : 'load';
   const failed = () => clearViewerTransition();
   const ready = () => {
     clearTimeout(viewerTransition.timer);
@@ -4536,9 +4575,9 @@ function transitionViewer(media, direction, open) {
     ghost.classList.add(direction);
     viewerTransition.timer = setTimeout(clearViewerTransition, 500);
   };
-  media.addEventListener(event, ready, { once: true });
-  media.addEventListener('error', failed, { once: true });
-  viewerTransition = { media, ghost, ready, failed, event, timer: setTimeout(clearViewerTransition, 10000) };
+  target.addEventListener(event, ready, { once: true });
+  target.addEventListener('error', failed, { once: true });
+  viewerTransition = { media: target, ghost, ready, failed, event, timer: setTimeout(clearViewerTransition, 10000) };
   open();
 }
 // A film in the viewer, playing; a swipe goes to the one beside it in Output.
@@ -4729,7 +4768,8 @@ function stepSet(by) {
     disarm($('viewerDelete'));
     if (viewing.film && next.set) $('viewerVideo').pause();
     transitionViewer($(viewing.film ? 'viewerVideo' : 'viewerImage'), by > 0 ? 'to-down' : 'to-up',
-      () => next.film ? openFilm(next.film.name, 'video') : openViewer(next.set.id, next.set.images[0].position));
+      () => next.film ? openFilm(next.film.name, 'video') : openViewer(next.set.id, next.set.images[0].position),
+      $(next.film ? 'viewerVideo' : 'viewerImage'));
     return true;
   }
   if (viewing.film) {
@@ -5208,17 +5248,29 @@ function etaChange(change) {
   const effect = change.seconds ? `${sign}${fmtEta(Math.abs(change.seconds)).slice(1)} · ` : '';
   return `<div>${effect}${esc(change.text)}</div>`;
 }
+// How far the estimate has moved from the first one, as "+2 min" or "-1 min"; nothing under half a minute.
+function etaShift(eta) {
+  const moved = eta ? eta.adjusted_total - eta.original_total : 0;
+  return eta && (eta.changes || []).length && Math.abs(moved) >= 30 ? `${moved > 0 ? '+' : '-'}${fmtEta(Math.abs(moved)).slice(1)}` : '';
+}
+// The time left says how far it moved, "(+2 min)" after it; a tap on it shows the first estimate, and why, under it.
+let etaOpen = false;
 function renderEtaDetail(eta) {
-  // The time left is on the bar, and the queue's on the queue: this only says why it moved.
-  const box = $('etaDetail');
-  box.hidden = !eta || !eta.changes.length;
+  const box = $('etaDetail'), shift = etaShift(eta);
+  $('runProgressRight').classList.toggle('eta-moved', !!shift);
+  $('runProgressRight').setAttribute('aria-expanded', String(!!shift && etaOpen));
+  box.hidden = !shift || !etaOpen;
   if (box.hidden) return;
-  const moved = eta.adjusted_total - eta.original_total;
-  const by = Math.abs(moved) >= 30 ? ` (${moved > 0 ? '+' : '-'}${fmtEta(Math.abs(moved)).slice(1)})` : '';
-  const html = `<details${box.querySelector('details[open]') ? ' open' : ''}><summary>First estimate was ${fmtEta(eta.original_total)}${by}</summary>`
-    + `<div class="changes">${eta.changes.map(etaChange).join('')}</div></details>`;
+  const html = `<div class="eta-first">Original estimate: ${fmtEta(eta.original_total)} (${shift})</div>`
+    // What made it move; the rest of the gap ("Running faster than estimated") goes unsaid: the shift above says it.
+    + `<div class="changes">${(eta.changes || []).filter(change => !/^Running (slower|faster) than estimated$/.test(change.text)).map(etaChange).join('')}</div>`;
   if (box.dataset.html !== html) { box.innerHTML = html; box.dataset.html = html; }
 }
+$('runProgressRight').addEventListener('click', () => {
+  if (!$('runProgressRight').classList.contains('eta-moved')) return;
+  etaOpen = !etaOpen;
+  renderEtaDetail(lastStatus && lastStatus.running ? (lastStatus.progress || {}).eta : null);
+});
 
 // --- Estimate before a run, from the form's current options ---
 let plan = null, planRequest = 0, planTimer = 0;
@@ -5312,7 +5364,9 @@ function renderNow(data) {
     // The clip being rendered goes in ComfyUI's box, with the action; anything else, such as a scene, stays here.
     const [count, what] = splitCount(comfyBusy && clip ? '' : p.detail);
     const first = comfyBusy ? what : [p.action, what].filter(Boolean).join(' - ') || (count ? '' : STAGE_HINTS[name] || '');
-    $('stageDetail').innerHTML = statusHtml(first, count);
+    // How long it has been at this, on the right, unless ComfyUI's box already times it.
+    $('stageDetail').innerHTML = statusHtml(first, count, !comfyBusy && first && p.action_elapsed != null ? fmt(p.action_elapsed) : '',
+      'How long it has been at this');
   }
 
   // ComfyUI's own progress: which part of the workflow, and sampling steps.
@@ -6033,11 +6087,15 @@ function renderStopped(runs, parked = [], results = [], canRunNow = false) {
   const unsavedRow = result => `
     <div class="stopped-run" data-job-id="${esc(String(result.job_id))}">
       <div class="run-head"><div class="what">${queueTitle(`failed-${result.job_id}`, result.label)}</div><span class="run-tag">Failed</span></div>
-      <div class="hint">${SIDE_NAMES[result.pipeline] || 'Shorts'} · No saved run to retry</div>
+      <div class="hint">${SIDE_NAMES[result.pipeline] || 'Shorts'} · ${result.recoverable ? 'Failed before a run was saved; its settings are kept' : 'No saved run to retry'}</div>
       ${result.note ? whyHtml({ why: result.note }) : ''}
-      <div class="stopped-actions unsaved-actions">
+      ${result.recoverable ? `<div class="stopped-actions">
+        <span class="acts-side"><button type="button" class="icon-btn" data-requeue-job="${esc(String(result.job_id))}" aria-label="Back to Pending" title="Back to Pending with its settings, to start it again">${ICONS.again}</button></span>
+        <span class="when"></span>
+        <span class="acts-side acts-end"><button type="button" class="icon-btn" data-requeue-job="${esc(String(result.job_id))}" data-requeue-edit="1" aria-label="Change settings" title="Back to Generate with its settings, to change them (it waits in Pending)">${ICONS.config}</button><button type="button" class="icon-btn" data-dismiss-job="${esc(String(result.job_id))}" aria-label="Delete this failure" title="Delete it (tap twice)">${ICONS.trash}</button></span>
+      </div>` : `<div class="stopped-actions unsaved-actions">
         <button type="button" class="icon-btn" data-dismiss-job="${esc(String(result.job_id))}" aria-label="Delete this failure" title="Delete it (tap twice)">${ICONS.trash}</button>
-      </div>
+      </div>`}
     </div>`;
   const fold = (id, title, rows) => {
     const el = $(id);
@@ -6084,6 +6142,21 @@ for (const id of ['stoppedRuns', 'failedRuns']) {
       // Two taps, as a delete: what it already made stays in Output.
       if (!secondTap(button)) return;
       url = `/runs/${d.discard}/discard`;
+    } else if (d.requeueJob) {
+      // Back to Pending with its settings; the sliders then open it for editing there, as any pending job.
+      if (d.requeueEdit && (queueEdit || queueUpscaleEdit)) {
+        alert('Finish or cancel the current queued edit first.');
+        return;
+      }
+      const data = await queueRequest(button, async () => (await fetch(`/queue/run/failed/${encodeURIComponent(d.requeueJob)}/requeue`, { method: 'POST' })).json(), 'Pending', 'Moving…');
+      if (!data) return;
+      if (d.requeueEdit) {
+        const opener = document.createElement('button');
+        opener.className = 'icon-btn';
+        await editQueued(data.id, opener);
+      }
+      poll();
+      return;
     } else if (d.dismissJob) {
       if (!secondTap(button)) return;
       url = `/queue/run/failed/${encodeURIComponent(d.dismissJob)}/dismiss`;
@@ -6493,7 +6566,7 @@ function renderStrips(data) {
     c.active && /^(Clip|Image) \d/.test(p.detail || '') ? fmt(c.elapsed || 0) : '');
   setStrip('run', data.running,
     { text: video + (stage[2] || 'Starting'), right: left + (runsQueued ? ` · +${runsQueued} queued` : ''), hint, total },
-    { text: p.run && p.run[1] > 1 ? `Video ${p.run[0]} of ${p.run[1]}` : '', right: eta ? `${left}, done around ${clockIn(eta.total_left)}` : '' },
+    { text: p.run && p.run[1] > 1 ? `Video ${p.run[0]} of ${p.run[1]}` : '', right: eta ? `${left}, done around ${clockIn(eta.total_left)}${etaShift(eta) ? ` (${etaShift(eta)})` : ''}` : '' },
     eta && eta.adjusted_total ? 1 - eta.total_left / eta.adjusted_total : null);
   const up = data.upload, at = (up.progress || {}).upload;
   const sending = statusHtml(at ? `Uploading - ${at[2]}` : 'Writing the title and description', at ? `Video ${at[0]} of ${at[1]}` : '',
@@ -6753,7 +6826,6 @@ async function showWorkflow() {
     `<details><summary>${esc(node.id)} · ${esc(node.type)}<small>${Object.keys(node.inputs).length} inputs</small></summary><dl>${
       Object.entries(node.inputs).map(([name, value]) => `<dt>${esc(name)}</dt><dd>${esc(value)}</dd>`).join('')}</dl></details>`).join('');
 }
-$('logWorkflow').addEventListener('click', showWorkflow);
 $('workflowClose').addEventListener('click', () => $('workflowDialog').close());
 $('workflowDialog').addEventListener('click', e => { if (e.target === $('workflowDialog')) $('workflowDialog').close(); });
 $('workflowExpand').addEventListener('click', () => {

@@ -103,7 +103,7 @@ class RunEta:
         if not self.local_model and (self.llm == "local" or self.h3_mode != "off"):
             try:
                 from core import h3_refiner
-                self.local_model = h3_refiner.selected_model()
+                self.local_model = h3_refiner.local_llm_model() if self.llm == "local" else h3_refiner.selected_model()
             except Exception:
                 self.local_model = None
         self.local = LocalModelTimer(self.timings, self.local_model, self.creativity)

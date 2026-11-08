@@ -180,7 +180,9 @@ same entry again clears it, and selecting another moves it there.
 Tap the Queue heading to collapse or expand it. Queue, Pending and Failed scroll internally when their
 lists exceed three cards or the available screen height; scrolling past an end continues on the page.
 Queue and Pending entries show their resolution and a shortened prompt. Finished items open their output when available;
-failed items open and highlight their entry under Failed. A failure before a run was saved has no saved run to retry.
+failed items open and highlight their entry under Failed. A failure before a run was saved (a planning error, or
+ComfyUI stopping) keeps its settings: **Back to Pending** puts it in Pending to start again, and the sliders put it
+there and open its setup to change it first.
 Generate keeps the prompt after queuing so you can make variants. Use **Clear** beside Prompt to empty it, or leave
 Generate or switch sides to clear it automatically; the other settings stay in place.
 **Save to queue** replaces it at the front of the queue; **Cancel editing** leaves the original in Pending.

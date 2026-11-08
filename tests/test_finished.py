@@ -44,6 +44,31 @@ class FinishedTest(unittest.TestCase):
                 f.write("{not json")
             self.assertEqual(self.queue(folder).results, [])
 
+    def test_what_is_deleted_from_output_leaves_finished(self):
+        with tempfile.TemporaryDirectory() as folder:
+            queue = self.queue(folder)
+            queue.results = [{"label": "Film", "run_id": "run_1", "film": "Film.mp4"},
+                             {"label": "Set", "run_id": "image_1", "film": None},
+                             {"label": "Short", "run_id": None, "film": "short.mp4"},
+                             {"label": "Other", "run_id": "run_2", "film": "Other.mp4"}]
+            queue.forget(run_id="image_1")
+            queue.forget(film="short.mp4")
+            queue.forget(run_id="run_1", film="Film.mp4")
+            self.assertEqual([r["label"] for r in queue.results], ["Other"])
+            self.assertEqual([r["label"] for r in self.queue(folder).results], ["Other"], "and stays gone after a restart")
+
+    def test_deleting_a_film_forgets_it_in_both_lists(self):
+        client = server.app.test_client()
+        with client.session_transaction() as session:
+            session["authed"] = True
+        with mock.patch.object(server, "safe_video_path", return_value=os.path.join("x", "Film.mp4")), \
+                mock.patch.object(server, "run_of_film", return_value="run_1"), \
+                mock.patch.dict(server.PIPELINES, {"video": mock.Mock(delete_video=mock.Mock(return_value={"ok": True}))}), \
+                mock.patch.object(server.run_queue, "forget") as runs, mock.patch.object(server.upload_queue, "forget") as uploads:
+            self.assertTrue(client.post("/delete/video/Film.mp4").get_json()["ok"])
+        runs.assert_called_once_with(run_id="run_1", film="Film.mp4")
+        uploads.assert_called_once_with(run_id="run_1", film="Film.mp4")
+
     def test_clear_route_empties_runs_and_uploads(self):
         client = server.app.test_client()
         with client.session_transaction() as session:

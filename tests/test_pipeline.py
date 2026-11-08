@@ -357,7 +357,7 @@ class PartsTest(unittest.TestCase):
         self.assertAlmostEqual(learned("--size", "640x352", seconds_taken=100 * share), learned("--size", "1280x736", seconds_taken=100), delta=0.1)
 
     def test_each_llm_model_and_the_prompt_enhancer_are_timed_apart(self):
-        with mock.patch.object(RunEta, "_save"), mock.patch("core.h3_refiner.selected_model", return_value="qwen3-14b"):
+        with mock.patch.object(RunEta, "_save"), mock.patch("core.h3_refiner.selected_model", return_value="qwen3-14b"),                 mock.patch("core.h3_refiner.local_llm_model", return_value="qwen3-14b"):
             local = RunEta(["--duration", "20", "--llm", "local", "--h3-enhance", "review"], "no_such_file.json")
             self.assertEqual(local._plan_keys(), ["Plan | local:qwen3-14b", "Plan | local", "Plan"])
             self.assertEqual(RunEta(["--duration", "20", "--direct"], "no_such_file.json")._plan_keys(), ["Plan | direct"])

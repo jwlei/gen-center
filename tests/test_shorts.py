@@ -478,6 +478,21 @@ class ProgressActionTest(unittest.TestCase):
         self.assertEqual(job.progress["action"], "Enhancing prompt")
 
 
+class ActionTimeTest(unittest.TestCase):
+    def test_status_says_how_long_it_has_been_at_what_it_is_doing(self):
+        job = webapp.Job()
+        job.pipeline, job.eta = "video", mock.Mock()
+        with mock.patch("time.time", return_value=100):
+            job._track("▶ Stage 2/3: Clips")
+            job._track("🧠 OpenH3-IR: writing a brief (balanced)...")
+        self.assertEqual((job.progress["action"], job.progress["action_started"]), ("Enhancing prompt", 100))
+        with mock.patch("time.time", return_value=130):
+            job._track("   a line that changes nothing")
+        self.assertEqual(job.progress["action_started"], 100, "the same thing: its time keeps counting")
+        with mock.patch("time.time", return_value=400):
+            self.assertEqual(job.snapshot()["progress"]["action_elapsed"], 300)
+
+
 class MovedProjectTest(unittest.TestCase):
     def test_a_film_saved_under_the_old_project_folder_is_found_where_it_is_now(self):
         from core.paths import moved

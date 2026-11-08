@@ -63,7 +63,13 @@ def first_frame(workflow, images):
 
 
 def selected_model():
+    """OpenH3-IR's model (Settings), for reviewing and rendering prompts."""
     return panel_settings.load()["h3_model"]
+
+
+def local_llm_model():
+    """The local model that writes the prompts when the local LLM is chosen (Settings), apart from OpenH3-IR's."""
+    return panel_settings.load()["local_llm_model"]
 
 
 def _paths(model_id, require_compiler=True):
@@ -120,8 +126,9 @@ def video_prompt_format(text):
 
 
 class Refiner:
-    def __init__(self, comfy_url=None, require_compiler=True):
-        self.model_id = selected_model()
+    def __init__(self, comfy_url=None, require_compiler=True, model_id=None):
+        # OpenH3-IR's model unless told which: writing prompts asks for the local LLM's.
+        self.model_id = model_id or selected_model()
         self.root, self.python, server, model, projector = _paths(self.model_id, require_compiler)
         self.process = None
         self.server = server

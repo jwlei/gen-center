@@ -356,7 +356,7 @@ class PanelTest(unittest.TestCase):
                 release.set()
                 thread.join(10)
             self.assertEqual(replies[0].get_json(), {"ok": True, "prompt": "finished"})
-            factory.assert_called_once_with(self.comfy.url, require_compiler=False)
+            factory.assert_called_once_with(self.comfy.url, require_compiler=False, model_id=mock.ANY)
             refiner.write_prompt.assert_called_once_with("idea", "video")
             refiner.__exit__.assert_called_once()
             self.assertFalse(webapp.run_queue.blocked())
@@ -380,7 +380,7 @@ class PanelTest(unittest.TestCase):
         refiner.write_prompt.return_value = "written"
         clock = mock.Mock(wraps=time)
         clock.monotonic.side_effect = [10, 110, 200, 400, 500, 530]
-        with mock.patch.object(h3_refiner, "selected_model", return_value="gemma-4-12b"), \
+        with mock.patch.object(h3_refiner, "local_llm_model", return_value="gemma-4-12b"), \
                 mock.patch.object(h3_refiner, "Refiner", return_value=refiner), \
                 mock.patch.object(webapp, "time", clock):
             estimate = lambda side: self.client.get(f"/api/write-prompt?pipeline={side}").get_json()["seconds"]
@@ -397,7 +397,7 @@ class PanelTest(unittest.TestCase):
             with open(webapp.PROMPT_WRITER_TIMINGS, encoding="utf-8") as file:
                 saved = json.load(file)
             self.assertEqual(saved["steps"], {"gemma-4-12b | video": 130, "gemma-4-12b | image": 30})
-        with mock.patch.object(h3_refiner, "selected_model", return_value="qwen3-14b"), \
+        with mock.patch.object(h3_refiner, "local_llm_model", return_value="qwen3-14b"), \
                 mock.patch.object(h3_refiner, "Refiner", return_value=refiner):
             self.assertEqual(self.client.get("/api/write-prompt?pipeline=video").get_json()["seconds"], 300)
             self.assertEqual(self.client.post("/api/write-prompt", json={"pipeline": "video", "prompt": "idea",
@@ -415,7 +415,7 @@ class PanelTest(unittest.TestCase):
         refiner.__enter__.return_value = refiner
         refiner.model_id = "gemma-4-12b"
         refiner.write_prompt.return_value = "written"
-        with mock.patch.object(h3_refiner, "selected_model", return_value="gemma-4-12b"), \
+        with mock.patch.object(h3_refiner, "local_llm_model", return_value="gemma-4-12b"), \
                 mock.patch.object(h3_refiner, "Refiner", return_value=refiner), \
                 self.assertLogs(webapp.app.logger, level="WARNING") as logs:
             self.assertEqual(self.client.get("/api/write-prompt?pipeline=video").get_json()["seconds"], 180)
@@ -442,7 +442,7 @@ class PanelTest(unittest.TestCase):
         self.assertIn("claude", dict(video_panel.planner.LLMS))
 
     def test_local_qwen_rejects_attached_images_before_queuing(self):
-        with mock.patch.object(video_panel.h3_refiner, "selected_model", return_value="qwen3-14b"):
+        with mock.patch.object(video_panel.h3_refiner, "local_llm_model", return_value="qwen3-14b"):
             result = self.generate(llm="local")
             self.assertEqual(result.status_code, 400)
             self.assertIn("text-only", result.get_json()["error"])
@@ -1032,6 +1032,28 @@ class PanelTest(unittest.TestCase):
         self.assertIsNone(status["queue"]["results"][-1]["run_id"])
         self.assertIsNotNone(status["queue"]["results"][-1]["job_id"])
 
+    def test_a_failure_without_a_saved_run_keeps_its_settings(self):
+        self.claude.status = 401
+        self.assertTrue(self.generate(review="1", prompt="a fox crossing the snow").get_json()["ok"])
+        self.wait_idle()
+        failure = self.status()["queue"]["results"][-1]
+        self.assertTrue(failure["recoverable"])
+        self.assertNotIn("job", failure, "its command line and environment stay on the server")
+        image = webapp.run_queue.recoverable()[-1]["image"]
+        video_panel.clean_inputs()
+        self.assertTrue(os.path.exists(image), "its upload outlasts the cleanup")
+
+        reply = self.client.post(f"/queue/run/failed/{failure['job_id']}/requeue").get_json()
+        self.assertTrue(reply["ok"])
+        status = self.status()
+        self.assertFalse(any(result.get("job_id") == failure["job_id"] for result in status["queue"]["results"]))
+        pending = next(item for item in status["queue"]["items"] if item["id"] == reply["id"])
+        self.assertTrue(pending["later"], "back in Pending, not started")
+        edit = self.client.post(f"/queue/run/edit/{reply['id']}").get_json()
+        self.assertTrue(edit["ok"], edit)
+        self.assertEqual(edit["form"]["prompt"], ["a fox crossing the snow"])
+        self.assertEqual(self.client.post(f"/queue/run/failed/{failure['job_id']}/requeue").status_code, 404)
+
     def test_bad_forms_are_refused(self):
         for fields, expected in (
             ({"prompt": ""}, "what should happen"),
@@ -1400,7 +1422,14 @@ class PanelTest(unittest.TestCase):
             self.assertEqual(client.get("/").status_code, 302)
             self.assertEqual(client.get("/api/status").status_code, 302)
             self.assertEqual(client.post("/generate/video").status_code, 302)
-            self.assertIn(b"Wrong password", client.post("/login", data={"password": "nope"}).data)
+            page = client.get("/login").get_data(as_text=True)
+            self.assertIn(":root { --accent: var(--neutral); }", page, "the way in is Status's silver")
+            self.assertIn('<span class="spinner" aria-hidden="true"></span><span id="loginLabel">Sign in</span>', page)
+            self.assertIn("form.classList.add('busy');", page, "sent, it shows it is signing in")
+            self.assertNotIn('class="card wrong"', page)
+            wrong = client.post("/login", data={"password": "nope"}).get_data(as_text=True)
+            self.assertIn("Wrong password", wrong)
+            self.assertIn('class="card wrong"', wrong, "a wrong password shakes the card")
             self.assertEqual(client.get("/").status_code, 302)
             reply = client.post("/login?next=//evil.example", data={"password": "open sesame"})
             self.assertEqual(reply.status_code, 302)
@@ -1453,14 +1482,14 @@ class PanelTest(unittest.TestCase):
             saved = self.client.post("/api/settings", json={"reserve_ram_gb": "8"}).get_json()["settings"]
             self.assertEqual(saved["reserve_ram_gb"], 8)
             self.assertEqual(self.client.post("/api/settings", json={"reserve_ram_gb": 999}).get_json()["settings"]["reserve_ram_gb"], webapp.settings.MAX_RESERVE_GB)
-            self.assertEqual(self.client.post("/api/settings", json={"reserve_ram_gb": "x"}).get_json()["settings"]["reserve_ram_gb"], 0)
+            self.assertEqual(self.client.post("/api/settings", json={"reserve_ram_gb": "x"}).get_json()["settings"]["reserve_ram_gb"], 3, "unreadable: the 3 GB default")
             bat = os.path.join(self.temp, "run.bat")
             with open(bat, "w") as f:
                 f.write("python main.py --enable-manager\n")
             self.client.post("/api/settings", json={"reserve_ram_gb": 8})
             self.assertTrue(webapp.comfyui_command(bat).endswith("--disable-auto-launch --cache-ram 8"))
             self.client.post("/api/settings", json={"reserve_ram_gb": 0})
-            self.assertNotIn("--cache-ram", webapp.comfyui_command(bat))
+            self.assertTrue(webapp.comfyui_command(bat).endswith("--cache-ram 3"), "unset, ComfyUI keeps 3 GB free")
             self.assertEqual(self.client.post("/api/settings", data="no").status_code, 400)
             self.assertIn("disk", self.client.get("/api/settings").get_json())
 

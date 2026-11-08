@@ -237,6 +237,22 @@ class H3RefinerTest(unittest.TestCase):
                 settings.update({"h3_model": "missing"})
             self.assertEqual(settings.load()["h3_model"], "qwen3-14b")
 
+    def test_the_local_llm_has_its_own_model_apart_from_openh3(self):
+        from panel import settings
+        path = os.path.join(DATA, "local-llm-settings-test.json")
+        if os.path.exists(path):
+            os.remove(path)
+        with mock.patch.object(settings, "PATH", path):
+            settings.update({"h3_model": "qwen3-14b"})
+            self.assertEqual(h3_refiner.local_llm_model(), "qwen3-14b", "until chosen, it is OpenH3-IR's, as it was")
+            settings.update({"local_llm_model": "gemma-4-12b"})
+            self.assertEqual((h3_refiner.local_llm_model(), h3_refiner.selected_model()), ("gemma-4-12b", "qwen3-14b"))
+            with self.assertRaisesRegex(ValueError, "Unknown local LLM"):
+                settings.update({"local_llm_model": "missing"})
+            with mock.patch.object(h3_refiner, "_paths", return_value=("root", "python", "server", "model", None)):
+                self.assertEqual(h3_refiner.Refiner(model_id=h3_refiner.local_llm_model()).model_id, "gemma-4-12b", "writing prompts")
+                self.assertEqual(h3_refiner.Refiner().model_id, "qwen3-14b", "OpenH3-IR")
+
     def test_before_review_saves_each_prompt_and_skips_completed(self):
         state = RunState.new("brief", 10, "image", 1280, 736, image_count=0)
         state.h3_mode, state.h3_creativity = "review", "extreme"

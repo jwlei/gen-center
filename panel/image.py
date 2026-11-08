@@ -327,7 +327,7 @@ def generate():
         return {"ok": False, "error": f"{llm} has no credentials. See .env.example, or use your own prompt."}, 400
 
     uploads = form_uploads(request.files)
-    if llm == "local" and uploads and h3_refiner.selected_model() == "qwen3-14b":
+    if llm == "local" and uploads and h3_refiner.local_llm_model() == "qwen3-14b":
         return {"ok": False, "error": "Qwen3 14B is text-only and cannot analyze attached images. Choose Gemma 4 in Settings."}, 400
     env, takes, error = chosen_workflow(request.form, len(uploads))
     if error:
@@ -571,6 +571,7 @@ def delete_image(run_id, position):
     shot = state.shots[position - 1]
     if len(state.shots) == 1:
         state.remove()
+        run_queue.forget(run_id=run_id)  # The set is gone, so its line in Finished goes too
         images = []
     else:
         if shot.get("file"):
@@ -664,6 +665,7 @@ def delete_image_set(run_id):
     if refused:
         return refused
     state.remove()
+    run_queue.forget(run_id=run_id)  # Deleted from Output, it is gone from Finished too
     _runs_cache["at"] = 0.0
     return {"ok": True}
 

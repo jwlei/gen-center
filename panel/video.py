@@ -48,7 +48,9 @@ def chosen_workflow(form):
 
 def clean_inputs(keep=()):
     """Images and audio whose job has finished or gone: the run keeps its own copy, so nothing needs these any more."""
-    needed = {path for item in run_queue.pending() for path in item_images(item)} | set(keep)
+    # A failed job that can go back to Pending still needs its uploads.
+    jobs = run_queue.pending() + run_queue.recoverable()
+    needed = {path for item in jobs for path in [*item_images(item), *(item.get("form_files") or {}).values()]} | set(keep)
     try:
         for name in os.listdir(paths.INPUTS_DIR):
             path = os.path.join(paths.INPUTS_DIR, name)
@@ -322,7 +324,7 @@ def generate():
                                 or narration or (audio_upload and audio_upload.filename)):
         return {"ok": False, "error": "H3 Infinite continuation makes its own sound: it takes no reference video, "
                                      "reference audio, narration or audio file."}, 400
-    if llm == "local" and uploads and h3_refiner.selected_model() == "qwen3-14b":
+    if llm == "local" and uploads and h3_refiner.local_llm_model() == "qwen3-14b":
         return {"ok": False, "error": "Qwen3 14B is text-only and cannot analyze attached images. Choose Gemma 4 in Settings."}, 400
     try:
         images = [media.load_image(upload.stream) for upload in uploads]

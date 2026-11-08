@@ -135,7 +135,7 @@ def check_setup(args):
     problems = []
     if llm == "local":
         try:
-            h3_refiner._paths(h3_refiner.selected_model(), require_compiler=False)
+            h3_refiner._paths(h3_refiner.local_llm_model(), require_compiler=False)
             print("✅ Local model and llama.cpp found.")
         except (RuntimeError, ValueError) as e:
             problems.append(str(e))
@@ -185,7 +185,7 @@ def plan_run(args, stages):
         raise RuntimeError(f"This workflow takes {takes['min_images']}-{takes['max_images']} images, not {len(images)}.")
     direct = args.direct or region_edit
     llm = None if direct else args.llm or planner.default_llm()
-    if llm == "local" and images and h3_refiner.selected_model() == "qwen3-14b":
+    if llm == "local" and images and h3_refiner.local_llm_model() == "qwen3-14b":
         raise RuntimeError("Qwen3 14B is text-only and cannot analyze attached images. Choose Gemma 4 in Settings.")
     if llm and not planner.llm_configured(llm):
         raise RuntimeError(f"{llm} has no credentials: see .env.example.")
@@ -220,7 +220,7 @@ def plan_run(args, stages):
         print(f"🧠 {llm} is writing {args.count} {'prompt' if args.count == 1 else 'prompts'}...")
         plan_args = ([video_media.preview_jpeg(image) for image in images], args.prompt, args.count, llm, model)
         if llm == "local":
-            with h3_refiner.Refiner(comfy.url, require_compiler=False) as refiner:
+            with h3_refiner.Refiner(comfy.url, require_compiler=False, model_id=h3_refiner.local_llm_model()) as refiner:
                 title, versions = image_planner.write_prompts(*plan_args, compose=args.compose,
                                                               transparent=args.transparent, refiner=refiner)
         else:

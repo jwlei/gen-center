@@ -291,6 +291,16 @@ class Job:
     ]
 
     def _track(self, line):
+        # When what it is doing changes, so Status can say how long it has been at it: a long step, such as OpenH3-IR
+        # writing a clip's prompt from several images, otherwise looks stuck.
+        before = self.progress.get("action")
+        try:
+            self._track_line(line)
+        finally:
+            if self.progress.get("action") != before:
+                self.progress["action_started"] = time.time()
+
+    def _track_line(self, line):
         p = self.progress
         if self.eta is not None and hasattr(self.eta, "event"):
             self.eta.event(next((kind for kind, pattern in self.EVENTS if pattern.search(line)), "line"))
@@ -390,6 +400,8 @@ class Job:
             "progress": {**self.progress,
                          "stage_elapsed": int(time.time() - self.progress["stage_started"])
                          if "stage_started" in self.progress else 0,
+                         "action_elapsed": int(time.time() - self.progress["action_started"])
+                         if "action_started" in self.progress else None,
                          "eta": self.eta.estimate() if self.eta and self.running else None},
         }
 
@@ -454,6 +466,15 @@ class JobQueue:
             os.replace(self.results_path + ".tmp", self.results_path)
         except OSError as e:
             self.job.log(f"⚠️ Could not save Finished, it won't survive a restart: {e}")
+
+    def forget(self, run_id=None, film=None):
+        """Takes out of Finished what was deleted from Output: the lines for that run or that film."""
+        with self.lock:
+            kept = [result for result in self.results
+                    if not ((run_id and result.get("run_id") == run_id) or (film and result.get("film") == film))]
+            if len(kept) != len(self.results):
+                self.results = kept
+                self._save_results()
 
     def clear_results(self):
         """Empties Finished. Saved runs and their files stay: only the list goes."""
@@ -593,11 +614,45 @@ class JobQueue:
         position = None
         if outcome == "done" and "pipelines.image.upscale" in argv and "--image" in argv[:-1] and argv[argv.index("--image") + 1].isdigit():
             position = int(argv[argv.index("--image") + 1]) + 1
-        self.results.append({"label": item["label"], "outcome": outcome, "note": note, "pipeline": item.get("pipeline"),
-                             "run_id": run_id, "film": film, "position": position, "job_id": item.get("id"),
-                             "at": datetime.now().strftime("%H:%M"), "t": time.time()})
+        result = {"label": item["label"], "outcome": outcome, "note": note, "pipeline": item.get("pipeline"),
+                  "run_id": run_id, "film": film, "position": position, "job_id": item.get("id"),
+                  "at": datetime.now().strftime("%H:%M"), "t": time.time()}
+        # Failed before a run was saved (a planning error, ComfyUI gone): the job itself is kept, so its settings can
+        # go back to Pending instead of being lost with it.
+        if outcome == "failed" and not run_id and self is run_queue:
+            result["job"] = {key: value for key, value in item.items() if key not in self.TRANSIENT_KEYS}
+        self.results.append(result)
         del self.results[:-self.KEPT_RESULTS]
         self._save_results()
+
+    # What a job picks up while it waits or runs, and that a recovered copy must start without.
+    TRANSIENT_KEYS = ("id", "waited", "error", "later", "edit_token", "edit_from_queue")
+
+    def recoverable(self):
+        """The failed jobs that can still go back to Pending: their inputs must outlast the cleanup of old uploads."""
+        with self.lock:
+            return [result["job"] for result in self.results if result.get("job")]
+
+    def requeue_failure(self, job_id):
+        """
+        Puts a failed job that left no saved run back in Pending, with the settings it had, to edit or start again.
+        Returns its id in Pending, or None if there was none to put back.
+        """
+        with self.lock:
+            result = next((result for result in self.results if result.get("job_id") == job_id
+                           and result.get("outcome") == "failed" and not result.get("run_id") and result.get("job")), None)
+            if not result:
+                return None
+            self.results.remove(result)
+            self._ensure_watcher()
+            # A new number: the old one names the failure, which is gone now.
+            item_id = self.next_id
+            self.next_id += 1
+            self.items.append({**result["job"], "id": item_id, "later": True, "waited": True})
+            self._save()
+            self._save_results()
+            self._advance()
+            return item_id
 
     def dismiss_failure(self, job_id):
         """Forgets a failure that has no saved run to retry. Returns whether there was one."""
@@ -735,9 +790,12 @@ class JobQueue:
                                    "continuation": bool(item.get("resume") and "--redo" not in (item.get("argv") or [])
                                                         and not upscale_queue_settings(item)),
                                    "facts": run_facts(item)}
+            # A kept job's command line and environment stay on the server: the page only learns it can be recovered.
+            shown = lambda result: {**{key: value for key, value in result.items() if key != "job"},
+                                    "recoverable": bool(result.get("job"))}
             return {"items": [public(item) for item in self.items],
                     "current": public(self.current) if self.current else None,
-                    "results": list(self.results),
+                    "results": [shown(result) for result in self.results],
                     "held": self.held}
 
 
@@ -1908,6 +1966,18 @@ def queue_dismiss_failure(lane, job_id):
     return {"ok": QUEUES[lane].dismiss_failure(job_id)}
 
 
+@app.route("/queue/<lane>/failed/<int:job_id>/requeue", methods=["POST"])
+@password_required
+def queue_requeue_failure(lane, job_id):
+    """A failed job with no saved run, back in Pending with its settings."""
+    if lane != "run":
+        abort(404)
+    item_id = run_queue.requeue_failure(job_id)
+    if item_id is None:
+        return {"ok": False, "error": "That failure is gone, or its settings were not kept."}, 404
+    return {"ok": True, "id": item_id}
+
+
 @app.route("/queue/<lane>/start/<int:item_id>", methods=["POST"])
 @password_required
 def queue_start(lane, item_id):
@@ -2229,7 +2299,7 @@ def write_prompt():
         if side not in ("image", "video"):
             return {"ok": False, "error": "Choose an image or video prompt."}, 400
         try:
-            model = h3_refiner.selected_model()
+            model = h3_refiner.local_llm_model()
         except ValueError as e:
             return {"ok": False, "error": str(e)}, 500
         timings = eta_keys.Timings(PROMPT_WRITER_TIMINGS, {})
@@ -2253,7 +2323,7 @@ def write_prompt():
     try:
         url = (os.getenv("COMFYUI_URL") or "http://127.0.0.1:8188").rstrip("/")
         started = time.monotonic()
-        refiner = h3_refiner.Refiner(url, require_compiler=False)
+        refiner = h3_refiner.Refiner(url, require_compiler=False, model_id=h3_refiner.local_llm_model())
         if data.get("model") is not None and data["model"] != refiner.model_id:
             return {"ok": False, "error": "The selected model changed. Try writing the prompt again."}, 409
         with refiner:
@@ -2726,7 +2796,19 @@ def open_folder(folder):
 @app.route("/delete/<folder>/<path:name>", methods=["POST"])
 @password_required
 def delete(folder, name):
-    return PIPELINES[FOLDER_PIPELINES.get(folder, "shorts")].delete_video(folder, safe_video_path(folder, name))
+    path = safe_video_path(folder, name)
+    film = os.path.basename(path)
+    # Which run made it, asked before the run goes with it; an upscaled copy is only itself.
+    run_id = None
+    if FOLDER_PIPELINES.get(folder) == "video":
+        run_id = None if UPSCALED.search(film) else run_of_film(film)
+    reply = PIPELINES[FOLDER_PIPELINES.get(folder, "shorts")].delete_video(folder, path)
+    body = reply[0] if isinstance(reply, tuple) else reply
+    if isinstance(body, dict) and body.get("ok"):
+        # Deleted from Output, it is gone from Finished too.
+        for queue in QUEUES.values():
+            queue.forget(run_id=run_id, film=film)
+    return reply
 
 
 @app.after_request

@@ -318,11 +318,18 @@ assert(!script.includes('totalEta(') && !script.includes('Original ETA') && !scr
 assert(!html.includes('stageName') && !html.includes('stageTime') && !script.includes('Step ${n}'), 'the stepper says which step, with no line repeating it');
 run(`renderEtaDetail({ changes: [], original_total: 600, adjusted_total: 600 })`);
 assert.strictEqual(els.etaDetail.hidden, true, 'on track: nothing to explain');
+assert.strictEqual(run(`etaShift({ changes: [{ text: 'x', seconds: 120 }], original_total: 600, adjusted_total: 720 })`), '+2 min', 'how far it moved');
+assert.strictEqual(run(`etaShift({ changes: [], original_total: 600, adjusted_total: 600 })`), '');
 run(`renderEtaDetail({ changes: [{ text: 'Clip <b>3</b> was slow', seconds: 120 }], original_total: 600, adjusted_total: 720 })`);
-assert(!els.etaDetail.hidden && els.etaDetail.innerHTML.includes('<details') && els.etaDetail.innerHTML.includes('+2 min') && !els.etaDetail.innerHTML.includes('<b>3'));
-assert(!els.etaDetail.innerHTML.includes(': why'), 'the ETA summary omits why');
+assert(els.etaDetail.hidden && script.includes("$('runProgressRight').classList.toggle('eta-moved', !!shift);"), 'moved: said on the time left, the detail folded');
+run(`etaOpen = true; renderEtaDetail({ changes: [{ text: 'Clip <b>3</b> was slow', seconds: 120 }], original_total: 600, adjusted_total: 720 }); etaOpen = false`);
+assert(!els.etaDetail.hidden && els.etaDetail.innerHTML.startsWith('<div class="eta-first">Original estimate: ~10 min (+2 min)</div>') && !els.etaDetail.innerHTML.includes('<b>3'),
+  'tapped: the original estimate and the change, under it');
+assert(script.includes("${etaShift(eta) ? ` (${etaShift(eta)})` : ''}"), 'the time left line ends with (+2 min)');
+run(`etaOpen = true; renderEtaDetail({ changes: [{ text: 'Running faster than estimated', seconds: -120 }], original_total: 600, adjusted_total: 480 }); etaOpen = false`);
+assert(els.etaDetail.innerHTML.includes('Original estimate: ~10 min (-2 min)') && !els.etaDetail.innerHTML.includes('Running faster'), 'no "running faster" line under it');
 assert(/<span id="runProgressRight"><\/span><\/div>\s*<div class="hint eta-detail" id="etaDetail" hidden><\/div>\s*<div class="bar"><div id="runProgressBar">/.test(html)
-  && /\.eta-detail \{ margin: 2px 0 0; text-align: right; \}/.test(html), 'the first estimate sits under the time left, over the bar, at the right');
+  && /\.eta-detail \{ margin: 2px 0 0; text-align: right;/.test(html), 'the original estimate sits under the time left, over the bar, at the right');
 
 // Shorts in YouTube red; the phone addresses are in the settings box, with copy buttons; no voice hint.
 assert(/body\.on-shorts \{ --accent: #ff0033; \}/.test(html));
@@ -722,6 +729,10 @@ assert(els.failedRuns.innerHTML.indexOf('data-continue="run_failed"') < els.fail
 run(`renderStopped([], [], [{ job_id: 7, pipeline: 'image', label: 'No plan', outcome: 'failed', note: 'Failed to start' }])`);
 assert(els.failedRuns.innerHTML.includes('data-job-id="7"') && els.failedRuns.innerHTML.includes('No saved run to retry'), 'failures without a saved run still appear under Failed');
 assert(els.failedRuns.innerHTML.includes('data-dismiss-job="7"') && els.failedRuns.innerHTML.includes('unsaved-actions'), 'a failure without a saved run has a delete button');
+run(`renderStopped([], [], [{ job_id: 8, pipeline: 'video', label: 'Kept', outcome: 'failed', note: 'ComfyUI stopped', recoverable: true }])`);
+assert(els.failedRuns.innerHTML.includes('data-requeue-job="8"') && !els.failedRuns.innerHTML.includes('No saved run to retry'), 'a failure with kept settings can go back to Pending');
+assert(els.failedRuns.innerHTML.includes('data-requeue-edit="1"') && els.failedRuns.innerHTML.includes('Change settings'), 'a failure with kept settings has the sliders button');
+assert(els.failedRuns.innerHTML.includes('data-dismiss-job="8"'), 'a failure with kept settings can still be deleted');
 // How a run or upload ended is said once, under Finished, newest first; the status itself goes back to Idle.
 const finishedClasses = {};
 els.finishedToggle.classList.toggle = (name, value) => { finishedClasses[name] = value; };
@@ -1065,6 +1076,7 @@ assert(!html.includes('.current-work::after'), 'the clickable run title has no c
 assert(/<textarea id="promptEditorText"[^>]*><\/textarea>\s*<div class="prompt-progress" id="promptEditorProgress" hidden><\/div>/.test(html), 'the prompt editor has a progress bar inside the top of its box');
 assert(/#promptEditorEnhance\.working svg \{ animation: prompt-writing-icon/.test(html) && /\$\('promptEditorEnhance'\)\.classList\.toggle\('working', busy\)/.test(html), 'the write button animates while the LLM writes');
 assert(/button\.classList\.add\('working'\)/.test(html) && /button\.classList\.remove\('working'\)/.test(html), 'the form write button animates too');
+assert(/rgba\(255, 255, 255, \.38\)/.test(html) && /#runCard \.step\.done \{ border-color: var\(--job, var\(--neutral\)\); \}/.test(html), 'a brighter sweep, finished stages in full colour');
 assert(/#comfyBar::after[^{]*\{[^}]*animation: bar-sheen 3\.6s/.test(html) && /\.step\.now::before \{[^}]*animation: step-sheen 3\.6s/.test(html), 'live bars and the stage under way have a slow, quiet sheen');
 assert(!/\.disk \.bar > div::after/.test(html), 'the disk meter does not flash');
 assert(/new ResizeObserver\(\(\) => \{[\s\S]{0,200}height < lastHeight && window\.scrollY > 0[\s\S]{0,300}window\.scrollTo\(0, y\)/.test(html), 'a page made shorter by a fold is repainted, not left black at the top');
@@ -1539,7 +1551,18 @@ assert(/\.switch button\.active \{[^}]*color: var\(--accent\)/.test(html) && /bo
 // The switch is the top of the page, with the title gone and the gear beside it; shut down is in the settings box.
 assert(html.indexOf('id="switchShorts"') < html.indexOf('id="stick"') && !/<h1>/.test(html.slice(0, html.indexOf('<script>'))));
 assert(/id="settingsBtn"[^>]*aria-label="Settings"/.test(html) && !/Sign out/.test(html));
-assert(/<dialog id="settingsDialog"[\s\S]*id="restartPanel"[\s\S]*id="restartComfy"[\s\S]*id="shutdown"[\s\S]*id="lowPriority"[\s\S]*id="defaultShorts"[\s\S]*id="diskBox"/.test(html));
+assert(/<dialog id="settingsDialog"[\s\S]*id="lowPriority"[\s\S]*id="localLlmModel"[\s\S]*id="h3Model"[\s\S]*id="defaultShorts"[\s\S]*id="diskBox"[\s\S]*<div class="settings-actions">[\s\S]*id="restartPanel"[\s\S]*id="restartComfy"[\s\S]*href="\/logout" id="logout"[\s\S]*id="shutdown"[\s\S]*id="settingsClose"/.test(html),
+  'settings, then at the foot Restart, Log out left of Shut down; the local LLM above OpenH3-IR');
+assert(/\.settings-actions \{ display: flex; gap: 6px; flex: none;/.test(html), 'the buttons stay at the foot, smaller');
+assert(/<div class="settings-group" id="reserveTitle">Reserve free RAM<\/div>\s*<div class="reserve-row"[^>]*>\s*<button type="button" id="reserveSet" hidden>Set<\/button>\s*<div class="count-stepper"><button type="button" id="reserveDown"/.test(html),
+  'free RAM: its heading, then Set left of a stepper as Generate\'s');
+run('SETTINGS.reserve_ram_gb = 0; reserveGb = reserveSaved(); showReserve()');
+assert.strictEqual(els.reserveRamValue.textContent, '3 GB', '3 GB unless set');
+assert.strictEqual(els.reserveSet.hidden, true, 'nothing to set');
+run('reserveGb = 6; showReserve()');
+assert(els.reserveRamValue.textContent === '6 GB' && els.reserveSet.hidden === false, 'changed: Set shows');
+assert(!html.includes('When Local model is chosen under Model') && /<div class="settings-group" id="localLlmTitle">Local LLM model<\/div>\s*<div class="settings-row"><select id="localLlmModel"/.test(html),
+  'each model: its heading, the choice under it');
 // Queue and log live in Status, the queue first, and the footer no longer goes to them.
 const status = html.slice(html.indexOf('id="runCard"'), html.indexOf('id="optionsCard"'));
 assert(status.indexOf('id="runQueue"') > 0 && status.indexOf('id="runQueue"') < status.indexOf('id="logBox"') && status.indexOf('id="logBox"') < status.indexOf('id="log"'));
@@ -1574,6 +1597,9 @@ assert.strictEqual(lines(els.comfyMeta).first, 'Rendering clip - The Descent to 
 assert.strictEqual(lines(els.comfyMeta).count, 'Clip 6 of 8');
 assert.strictEqual(els.comfySteps.textContent, 'Step 3 of 8', 'steps start with a capital');
 assert.strictEqual(els.stageDetail.innerHTML, '', 'and not said again above it');
+run(`renderNow(atStage('Clip 2 of 5 - scene 3, 6s lipsync', false))`);
+run(`renderNow({ ...atStage('Clip 1 of 2: Clip 1, 10s', false), pipeline: 'video', progress: { stage: [2, 3, 'Clips'], detail: 'Clip 1 of 2: Clip 1, 10s', action: 'Enhancing prompt', action_elapsed: 292 } })`);
+assert.deepStrictEqual(lines(els.stageDetail), { first: 'Enhancing prompt - Clip 1, 10s', count: 'Clip 1 of 2', time: '4:52', twoLines: true }, 'a long step says how long it has been at it');
 run(`renderNow(atStage('Clip 2 of 5 - scene 3, 6s lipsync', false))`);
 assert.deepStrictEqual(lines(els.stageDetail), { first: 'scene 3, 6s lipsync', count: 'Clip 2 of 5', time: '', twoLines: true }, 'no box up yet: it still says it');
 run(`renderNow(atStage('Scene 4 of 9', true))`);
@@ -1638,18 +1664,26 @@ run(`renderQueue(queue, { items: [{ id: 4, label: 'continue', detail: 'd', pipel
 assert(queue.innerHTML.includes('data-shots="run_1"'), 'continued jobs in the queue expose their prompts');
 assert(queue.innerHTML.includes(`data-shots="run_1" aria-label="Prompts" title="View prompts">${run('ICONS.enhanced')}</button>`), 'queued prompts use the star');
 assert(/class="queue-item run-card"[^>]*>[\s\S]*class="queue-item-top"[\s\S]*class="what"[\s\S]*class="hint"[\s\S]*<\/div><\/div><div class="queue-item-actions">\s*<span class="acts-side">[\s\S]*data-pause="4"[\s\S]*<\/span><span class="when">[^<]*<\/span><span class="acts-side acts-end">[\s\S]*data-shots="run_1"[\s\S]*data-edit="4"[\s\S]*data-remove="4"/.test(queue.innerHTML), 'run details and actions occupy separate rows in a card: Pending on the left, the time in the middle, the rest on the right');
-assert(/\.queue-item\.run-card \{[^}]*background: var\(--panel-2\); border: 1px solid var\(--line\); border-radius: 10px/.test(html) && /\.stopped-actions, \.queue-item\.run-card \.queue-item-actions \{ display: grid; grid-template-columns: minmax\(0, 1fr\) auto minmax\(0, 1fr\);/.test(html)
-  && /\.acts-side \{ display: flex; flex-wrap: wrap;/.test(html), 'run cards match Pending: the time centred between buttons that can wrap');
+assert(/\.queue-item\.run-card \{[^}]*background: var\(--panel-2\); border: 1px solid var\(--line\); border-radius: 10px/.test(html) && /\.stopped-actions, \.queue-item\.run-card \.queue-item-actions \{ display: grid; grid-template-columns: minmax\(max-content, 1fr\) auto minmax\(max-content, 1fr\);/.test(html)
+  && /\.acts-side \{ display: flex; flex-wrap: nowrap;/.test(html), 'run cards match Pending: the time centred, each side on one line');
 // Under the running job's title: its workflow on the left, its size on the right.
 assert(/<div class="current-work-size" id="currentWorkSize" hidden><span id="currentWorkflow"><\/span><span id="currentResolution"><\/span><\/div>/.test(html)
   && /#currentWorkSize \{ display: flex; justify-content: space-between;/.test(html), 'workflow left, resolution right');
 assert(script.includes("$('currentWorkflow').textContent = facts.workflow || '';") && script.includes("$('currentResolution').textContent = facts.resolution || '';"));
-assert(/\.status-head #dot \{ display: none; \}/.test(html) && /\.status-head \.status:has\(#statusText:empty\) \{ display: none; \}/.test(html), 'no status light in the header');
+assert(!/\.status-head #dot \{ display: none; \}/.test(html) && /\.switch button \.dot \{ display: none; \}/.test(html), 'the status light is in Status, not on the side switch');
+assert(/\.status-head #statusText:empty \{ display: none; \}/.test(html) && /\.status-head \.status \+ \.status-times \{ margin-left: -4px; \}/.test(html), 'the timers sit close to the light');
+assert(script.includes("function transitionViewer(media, direction, open, target = media) {") && script.includes("$(next.film ? 'viewerVideo' : 'viewerImage'));"),
+  'between a film and a set, the swipe waits on what shows next, not on what showed before');
+assert(/#runActions::after \{ bottom: -10px; border: 1px solid var\(--line\); border-top: 0;/.test(html)
+  && /#runActions::before \{[^}]*border-left: 1px dotted var\(--line\); border-right: 1px dotted var\(--line\);[^}]*mask-image: linear-gradient\(to top, #000 15%, transparent\);/.test(html),
+  'the running part ends in the queue box\'s line: solid along the bottom and corners, dotted and fading up both sides alike');
 assert(/#runCard \{ --accent: var\(--neutral\); \}/.test(html) && /#runCard \.bar > div, \.stick #runStrip \.bar > div \{ background: var\(--job, var\(--neutral\)\); \}/.test(html)
   && /#runCard \.step\.now \{ border-color: var\(--job, var\(--neutral\)\); \}/.test(html), 'Status is neutral, its bars the colour of the job');
 assert(script.includes("document.documentElement.style.setProperty('--job', running && SIDE_COLOURS[data.pipeline] || '');"), 'the job colour follows what is generating, and goes when idle');
-assert(/#runCard \.ln\.stage \.x, #runCard \.ln-more \{ color: var\(--job, var\(--side-accent\)\); \}/.test(html) && /\.jump a\.run\.active \{ border-color: var\(--job, var\(--accent\)\); \}/.test(html),
-  'the log and Status in the bottom bar keep the type colour');
+assert(/#runCard \.ln-more \{ color: var\(--job, var\(--side-accent\)\); \}/.test(html) && /\.jump a\.run\.active \{ border-color: var\(--job, var\(--accent\)\); \}/.test(html),
+  'the log\'s highlights and Status in the bottom bar keep the type colour');
+assert(/\.ln\.stage \.x \{ color: var\(--neutral\); \}/.test(html) && /\.settings-group \{[^}]*color: var\(--neutral\);/.test(html), 'the log\'s and settings\' headers are silver, as Status\'s');
+assert(!html.includes('id="logWorkflow"') && /\.log-tools #logComfy \{ margin-left: auto; \}/.test(html), 'no Workflow in the log; ComfyUI and Errors on the right');
 // Titles in the queues: two lines and "…", opened by a tap when cut, kept open when the list is drawn again.
 assert(queue.innerHTML.includes('<span class="queue-title" data-title-key="queue-4"><span class="queue-pos">1.</span> Video: continue</span>'), 'a queue title is cut to two lines, titled as the running one, its place greyed');
 assert(/\.queue-pos \{ color: var\(--muted\);/.test(html), 'the place in the queue is grey');

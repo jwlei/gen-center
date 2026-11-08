@@ -1,13 +1,77 @@
 {% extends "base.html" %}
 {% block title %}Sign in — gen-center{% endblock %}
 {% block body %}
-<h1>🎬 gen-center</h1>
-<p class="sub">Enter the password to continue.</p>
+<style>
+  /* The way in is shared by every side, so it is Status's silver, not one side's colour. */
+  :root { --accent: var(--neutral); }
+  .login { min-height: calc(100dvh - 120px); display: flex; flex-direction: column; justify-content: center; max-width: 400px; margin: 0 auto; }
+  .login h1 { display: flex; align-items: center; gap: 10px; font-size: 1.5rem; letter-spacing: .01em; animation: login-in .6s cubic-bezier(.2, .8, .2, 1) both; }
+  .login .sub { animation: login-in .6s .08s cubic-bezier(.2, .8, .2, 1) both; }
+  .login-mark { width: 30px; height: 30px; flex: none; border-radius: 9px; display: grid; place-items: center;
+    background: linear-gradient(135deg, #e6eaf2, var(--neutral) 55%, #8f97a8); color: #0e0f13; font-size: 1rem; }
+  /* The card arrives, and a soft silver light breathes behind it. */
+  .login .card { position: relative; overflow: hidden; padding: 20px; animation: login-in .6s .14s cubic-bezier(.2, .8, .2, 1) both;
+    box-shadow: 0 0 0 1px color-mix(in srgb, var(--neutral) 10%, transparent), 0 18px 50px rgba(0, 0, 0, .45); }
+  .login .card::before { content: ""; position: absolute; inset: -40% -20% auto; height: 120%; pointer-events: none;
+    background: radial-gradient(closest-side, color-mix(in srgb, var(--neutral) 14%, transparent), transparent);
+    animation: login-glow 6s ease-in-out infinite alternate; }
+  .login .card > * { position: relative; }
+  .login label:first-of-type { margin-top: 0; }
+  .login input { transition: border-color .2s ease, box-shadow .2s ease; }
+  .login input:focus { outline: none; border-color: var(--neutral); box-shadow: 0 0 0 3px color-mix(in srgb, var(--neutral) 22%, transparent); }
+  .login button { position: relative; display: flex; align-items: center; justify-content: center; gap: 10px; color: #0e0f13;
+    background: linear-gradient(180deg, #e3e7ef, var(--neutral)); transition: transform .15s ease, filter .15s ease, box-shadow .2s ease; }
+  .login button:hover { filter: brightness(1.05); box-shadow: 0 6px 20px color-mix(in srgb, var(--neutral) 18%, transparent); }
+  .login button:active { transform: scale(.985); }
+  .login .spinner { display: none; width: 18px; height: 18px; border-radius: 50%; border: 2px solid rgba(14, 15, 19, .25); border-top-color: #0e0f13;
+    animation: login-spin .7s linear infinite; }
+  /* Signing in: the button turns, and a bar runs along the top of the card until the panel opens. */
+  .login .card.busy button { cursor: progress; }
+  .login .card.busy .spinner { display: block; }
+  .login .card .loading { position: absolute; top: 0; left: 0; right: 0; height: 2px; opacity: 0; transition: opacity .2s ease;
+    background: linear-gradient(90deg, transparent, var(--neutral), transparent); background-size: 40% 100%; background-repeat: no-repeat; }
+  .login .card.busy .loading { opacity: 1; animation: login-bar 1.1s ease-in-out infinite; }
+  /* A wrong password: a short shake. */
+  .login .card.wrong { animation: login-in .6s .14s cubic-bezier(.2, .8, .2, 1) both, login-shake .42s .55s ease both; }
+  @keyframes login-in { from { opacity: 0; transform: translateY(14px); } to { opacity: 1; transform: none; } }
+  @keyframes login-glow { from { transform: translateX(-12%); opacity: .7; } to { transform: translateX(12%); opacity: 1; } }
+  @keyframes login-spin { to { transform: rotate(360deg); } }
+  @keyframes login-bar { from { background-position: -60% 0; } to { background-position: 160% 0; } }
+  @keyframes login-shake { 20%, 60% { transform: translateX(-6px); } 40%, 80% { transform: translateX(6px); } }
+  @media (prefers-reduced-motion: reduce) {
+    .login h1, .login .sub, .login .card, .login .card.wrong, .login .card::before, .login .card.busy .loading, .login .spinner { animation: none; }
+  }
+</style>
+<div class="login">
+  <h1><span class="login-mark" aria-hidden="true">🎬</span>gen-center</h1>
+  <p class="sub">Enter the password to continue.</p>
 
-<form class="card" method="post">
-  <label for="password">Password</label>
-  <input id="password" name="password" type="password" autocomplete="current-password" autofocus required>
-  {% if error %}<div class="err">{{ error }}</div>{% endif %}
-  <button type="submit">Sign in</button>
-</form>
+  <form class="card{% if error %} wrong{% endif %}" method="post" id="loginForm">
+    <div class="loading" aria-hidden="true"></div>
+    <label for="password">Password</label>
+    <input id="password" name="password" type="password" autocomplete="current-password" autofocus required>
+    {% if error %}<div class="err" role="alert">{{ error }}</div>{% endif %}
+    <button type="submit" id="loginButton"><span class="spinner" aria-hidden="true"></span><span id="loginLabel">Sign in</span></button>
+  </form>
+</div>
+<script>
+  // Sent: it says so, and can't be sent twice, while the panel opens.
+  document.getElementById('loginForm').addEventListener('submit', e => {
+    const form = e.currentTarget, button = document.getElementById('loginButton');
+    if (form.classList.contains('busy')) { e.preventDefault(); return; }
+    form.classList.add('busy');
+    form.setAttribute('aria-busy', 'true');
+    document.getElementById('loginLabel').textContent = 'Signing in…';
+    // Disabled after it is sent, or the browser would not send it.
+    setTimeout(() => { button.disabled = true; }, 0);
+  });
+  // Back from the browser's history, a page left busy would wait for nothing.
+  window.addEventListener('pageshow', () => {
+    const form = document.getElementById('loginForm');
+    form.classList.remove('busy');
+    form.removeAttribute('aria-busy');
+    document.getElementById('loginButton').disabled = false;
+    document.getElementById('loginLabel').textContent = 'Sign in';
+  });
+</script>
 {% endblock %}

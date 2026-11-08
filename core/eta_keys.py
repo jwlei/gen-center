@@ -151,7 +151,7 @@ def llm_tag(llm, local_model=None):
         if not local_model:
             try:
                 from core import h3_refiner
-                local_model = h3_refiner.selected_model()
+                local_model = h3_refiner.local_llm_model()
             except Exception:  # Settings unreadable: still timed, just not per model
                 local_model = None
         return f"local:{local_model}" if local_model else "local"
