@@ -37,16 +37,17 @@ class HiresTest(unittest.TestCase):
         api = ru.hires(copy.deepcopy(KSAMPLER), "up.png", denoise=0.35)
         self.assertEqual(api["ru_encode"]["inputs"], {"pixels": ["ru_load", 0], "vae": ["6", 0]})
         self.assertEqual(api["ru_latent"]["inputs"]["scale_by"], 2.0)
-        self.assertEqual(api["5"]["inputs"]["latent_image"], ["ru_latent", 0])
-        self.assertEqual(api["5"]["inputs"]["denoise"], 0.35)
-        self.assertEqual(api["ru_show"]["inputs"]["images"], ["7", 0])
+        self.assertEqual(api["ru_pass"]["inputs"]["latent_image"], ["ru_latent", 0])
+        self.assertEqual(api["ru_pass"]["inputs"]["denoise"], 0.35)
+        self.assertEqual(api["ru_pass"]["inputs"]["positive"], ["2", 0], "the set's own prompt")
+        self.assertEqual(api["ru_show"]["inputs"]["images"], ["ru_decode", 0])
         self.assertNotIn("8", api, "the workflow's own save is out")
-        self.assertNotIn("4", api, "the empty latent isn't needed")
+        self.assertNotIn("5", api, "its first pass doesn't run")
 
     def test_second_pass_is_the_one_and_what_came_after_is_dropped(self):
         api = ru.hires(two_passes(), "up.png")
-        self.assertEqual(api["9"]["inputs"]["latent_image"], ["ru_latent", 0])
-        self.assertEqual(api["9"]["inputs"]["denoise"], 0.35, "a linked denoise is set outright")
+        self.assertEqual(api["ru_pass"]["class_type"], "ClownsharKSampler_Beta", "a copy of the second pass")
+        self.assertEqual(api["ru_pass"]["inputs"]["denoise"], 0.35, "a linked denoise is set outright")
         self.assertNotIn("11", api, "no SeedVR2 after it")
         self.assertNotIn("5", api, "the first pass doesn't run")
 
@@ -58,7 +59,7 @@ class HiresTest(unittest.TestCase):
             api[node_id] = {"class_type": "X", "inputs": {}}
         ru.hires(api, "up.png", denoise=0.4)
         self.assertEqual(api["ru_split"]["inputs"], {"sigmas": ["15", 0], "denoise": 0.4})
-        self.assertEqual(api["5"]["inputs"]["sigmas"], ["ru_split", 1])
+        self.assertEqual(api["ru_pass"]["inputs"]["sigmas"], ["ru_split", 1])
 
     def test_no_decoded_sampler_is_unsupported(self):
         with self.assertRaises(ru.Unsupported):
@@ -101,6 +102,25 @@ class UltimateTest(unittest.TestCase):
         node = ru.usdu(api, "up.png")["ru_usdu"]
         self.assertEqual(node["class_type"], "UltimateSDUpscaleCustomSample")
         self.assertEqual((node["inputs"]["custom_sampler"], node["inputs"]["custom_sigmas"], node["inputs"]["cfg"]), (["14", 0], ["ru_split", 1], 4.0))
+
+
+class InGenerationTest(unittest.TestCase):
+    def test_each_upscale_goes_between_the_decoder_and_what_read_it(self):
+        for method, last in (("ultrasharp", "ru_scale"), ("hires", "ru_decode"), ("usdu", "ru_usdu")):
+            api = ru.in_generation(two_passes(), method)
+            self.assertEqual(api["11"]["inputs"]["image"], [last, 0], f"{method}: SeedVR2, after it, reads the upscaled image")
+            self.assertIn("5", api, "the workflow still makes its image")
+            self.assertEqual(api["7"]["inputs"]["samples"], ["9", 0])
+
+    def test_ultrasharp_ends_twice_the_size(self):
+        api = ru.in_generation(copy.deepcopy(KSAMPLER), "ultrasharp")
+        self.assertEqual(api["ru_scale"]["inputs"]["scale_by"], 0.5)
+        self.assertEqual(api["8"]["inputs"]["images"], ["ru_scale", 0])
+
+    def test_hires_uses_the_denoise_asked(self):
+        api = ru.in_generation(copy.deepcopy(KSAMPLER), "hires", denoise=0.45)
+        self.assertEqual(api["ru_pass"]["inputs"]["denoise"], 0.45)
+        self.assertEqual(api["ru_encode"]["inputs"]["pixels"], ["7", 0])
 
 
 if __name__ == "__main__":

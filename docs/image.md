@@ -150,6 +150,9 @@ with one chosen from your images; one that would repeat it is swapped for anothe
 **Out of memory**, ComfyUI is told to free its memory and the image is tried again, then once more a size smaller and
 enlarged after, rather than failing.
 
+**Upscale** under Resolution in Generate makes each image of a set twice as big as it comes out, before it is saved:
+**UltraSharp**, **Hires fix** or **Ultimate SD**, as below, with a denoise for the last two.
+
 **Upscale**, under an image in the viewer: **Fast** is Superscale-SP, in seconds, and adds no new detail; its strength
 mixes it with a plain resize, to tone down texture it invents. **UltraSharp** is the same with 4x-UltraSharp: the
 picture as it is, with crisper edges. **SeedVR2** takes minutes and draws finer detail. **Hires fix** puts the image back

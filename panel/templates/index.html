@@ -1725,6 +1725,13 @@
         </div>
       <input id="imageSize" name="size" placeholder="Such as 1920x1080" autocomplete="off" style="margin-top:8px" hidden>
     </div>
+    <div id="imageUpscaleBox" hidden>
+      <div class="range-head" style="margin-top:12px"><label for="imageUpscale">Upscale</label><output class="resolution-size" id="imageUpscaleSize"></output></div>
+      <select id="imageUpscale" name="opt_image_upscale" disabled></select>
+      <div class="option-row" id="imageUpscaleDenoiseRow" hidden style="margin-top:8px"><label for="imageUpscaleDenoise">Denoise</label>
+        <input type="number" id="imageUpscaleDenoise" name="opt_image_upscale_denoise" min="0.05" max="1" step="0.05" value="0.35" disabled></div>
+      <div class="hint" id="imageUpscaleHint"></div>
+    </div>
     <label for="imageCount">How many images</label>
     <div class="count-stepper">
       <button type="button" id="imageCountDown" aria-label="Fewer images">−</button>
@@ -4139,7 +4146,49 @@ for (const box of ['shortsOptionsBox', 'videoOptionsBox', 'imageOptionsBox']) {
   $(box).addEventListener('change', e => { followSwitch($(box), e.target); rememberOptions($(box)); });
   $(box).addEventListener('input', () => rememberOptions($(box)));
 }
-function syncImageOptions() { syncOptions('imageOptions', 'imageOptionsBox', imageTakes().options || [], baseImageTakes().name); }
+function syncImageOptions() {
+  const options = imageTakes().options || [];
+  syncOptions('imageOptions', 'imageOptionsBox', options.filter(option => !IMAGE_UPSCALE_OPTIONS.includes(option.id)), baseImageTakes().name);
+  syncImageUpscale(options);
+}
+// Upscale, under Resolution: each image made twice as big as it comes out, before it is saved.
+const IMAGE_UPSCALE_OPTIONS = ['image_upscale', 'image_upscale_denoise'];
+const IMAGE_UPSCALE_KEY = 'gen-center.imageUpscale';
+const IMAGE_UPSCALE_HINTS = {
+  UltraSharp: '4x-UltraSharp: the picture as it is, twice as big with crisper edges. Seconds.',
+  'Hires fix': "The set's own model draws it again twice as big at this denoise: skin, hair and texture. 0.3 is subtle, 0.45 a heavy rework.",
+  'Ultimate SD': "4x-UltraSharp, then the set's own model redraws it in tiles at this denoise, so a big image fits on the card.",
+};
+function savedImageUpscale() {
+  try { return JSON.parse(localStorage.getItem(IMAGE_UPSCALE_KEY) || '{}') || {}; } catch (e) { return {}; }
+}
+function rememberImageUpscale() {
+  try { localStorage.setItem(IMAGE_UPSCALE_KEY, JSON.stringify({ method: $('imageUpscale').value, denoise: $('imageUpscaleDenoise').value })); } catch (e) {}
+}
+function syncImageUpscale(options) {
+  const choice = options.find(option => option.id === 'image_upscale'), box = $('imageUpscaleBox');
+  box.hidden = !choice;
+  $('imageUpscale').disabled = $('imageUpscaleDenoise').disabled = !choice;
+  if (!choice) return;
+  const key = JSON.stringify(choice.choices);
+  if (box.dataset.key !== key) {
+    const first = !box.dataset.key, saved = savedImageUpscale(), was = first ? saved.method : $('imageUpscale').value;
+    box.dataset.key = key;
+    $('imageUpscale').innerHTML = choice.choices.map(value => `<option>${esc(value)}</option>`).join('');
+    $('imageUpscale').value = choice.choices.includes(was) ? was : choice.default;
+    if (first && saved.denoise) $('imageUpscaleDenoise').value = saved.denoise;
+  }
+  showImageUpscale();
+}
+function showImageUpscale() {
+  const method = $('imageUpscale').value, on = !!method && method !== 'Off';
+  $('imageUpscaleDenoiseRow').hidden = !['Hires fix', 'Ultimate SD'].includes(method);
+  $('imageUpscaleHint').textContent = on ? IMAGE_UPSCALE_HINTS[method] || '' : '';
+  const sides = ($('imagePixelSize') && $('imagePixelSize').textContent || '').split('×').map(Number);
+  $('imageUpscaleSize').textContent = on && sides.length === 2 && sides.every(n => n > 0) ? `${sides[0] * 2}×${sides[1] * 2}` : on ? '2×' : '';
+}
+$('imageUpscale').addEventListener('change', () => { showImageUpscale(); rememberImageUpscale(); });
+$('imageUpscaleDenoise').addEventListener('change', rememberImageUpscale);
 // The workflow writing its own prompts: its prompt enhancer, or image to prompt.
 const ROLE_LABELS = { image_to_prompt: 'Image to prompt', prompt_enhancer: 'Prompt Enhancer' };
 function syncImageLlm() {
@@ -4690,6 +4739,11 @@ $('viewerEdit').addEventListener('click', () => {
 });
 // Every option as a set had it: what it chose, else the workflow's own default.
 function applyOptions(box, options, chosen) {
+  if (box === $('imageOptionsBox')) {
+    if (chosen.image_upscale) $('imageUpscale').value = chosen.image_upscale;
+    if (chosen.image_upscale_denoise) $('imageUpscaleDenoise').value = chosen.image_upscale_denoise;
+    showImageUpscale();
+  }
   if (box === $('videoOptionsBox')) {
     if (chosen.latent_upscale) $('videoLatentUpscale').value = chosen.latent_upscale;
     if (chosen.latent_upscale_mp) $('videoLatentMp').value = chosen.latent_upscale_mp;

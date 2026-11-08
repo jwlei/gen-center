@@ -995,7 +995,7 @@ def _prepare(name, ui, info, folder, pipeline):
         # A run with other options makes its workflow again from these, with what the pipeline adds to it.
         kinds = {node["type"] for node in _without_subgraphs(_with_hidden_links(ui))["nodes"]}
         kinds |= {PREVIEW, COMBINE, "LoraLoader", "LoadImage", "LoadVideo", "LoadAudio", "GetVideoComponents",
-                  workflow_options.H3_MEMORY, workflow_options.H3_SPARSE, director.INPUTS, director.ASSETS}
+                  workflow_options.H3_MEMORY, workflow_options.H3_SPARSE, director.INPUTS, director.ASSETS, *workflow_options.SPLICED_NODES}
         _write_json(stem + ".ui.json", ui)
         _write_json(stem + ".info.json", {kind: info[kind] for kind in kinds if kind in info})
     _write_json(stem + ".json", api)

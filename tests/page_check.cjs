@@ -1181,7 +1181,7 @@ assert(/\.switch button \{[^}]*padding: 4px 12px; font-size: \.78rem;/.test(html
   assert.strictEqual(steps.value, '20', "another workflow's settings are its own");
   context.localStorage = { getItem: () => null, setItem() {} };
 }
-assert(/syncOptions\('imageOptions', 'imageOptionsBox', imageTakes\(\)\.options \|\| \[\], baseImageTakes\(\)\.name\)/.test(script), "Automatic's pick by its name");
+assert(/syncOptions\('imageOptions', 'imageOptionsBox', options\.filter\([^)]*\)\), baseImageTakes\(\)\.name\)/.test(script), "Automatic's pick by its name");
 
 // Why Generate was turned down shows beside the footer's button too, where it was pressed.
 run("showFormError('This workflow makes images from text alone: leave the image out.')");

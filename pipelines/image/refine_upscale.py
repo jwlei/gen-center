@@ -61,17 +61,16 @@ def _denoised_sigmas(api, sigmas, denoise):
     return ["ru_split", 1]
 
 
-def hires(api, uploaded, scale=2.0, denoise=DENOISE["hires"]):
-    """The set's workflow as a Hires fix of the uploaded image."""
-    decoder, sampler_id = last_sampler(api)
-    sampler = api[sampler_id]["inputs"]
-    api["ru_load"] = {"class_type": "LoadImage", "inputs": {"image": uploaded}, "_meta": {"title": "Image to upscale"}}
-    api["ru_encode"] = {"class_type": "VAEEncode", "inputs": {"pixels": ["ru_load", 0], "vae": api[decoder]["inputs"]["vae"]},
-                        "_meta": {"title": "Hires fix: encode"}}
+def _second_pass(api, sampler_id, vae, image, scale, denoise):
+    """
+    Hires fix on an image: into a latent, that made bigger, then a copy of the set's sampler drawing it again at a low
+    denoise, decoded. Returns the link to the image it makes.
+    """
+    api["ru_encode"] = {"class_type": "VAEEncode", "inputs": {"pixels": image, "vae": vae}, "_meta": {"title": "Hires fix: encode"}}
     api["ru_latent"] = {"class_type": "LatentUpscaleBy", "inputs": {"samples": ["ru_encode", 0], "upscale_method": "bislerp", "scale_by": scale},
                         "_meta": {"title": "Hires fix: upscale latent"}}
-    sampler["latent_image"] = ["ru_latent", 0]
     kind = api[sampler_id]["class_type"]
+    sampler = {**api[sampler_id]["inputs"], "latent_image": ["ru_latent", 0]}
     if "denoise" in sampler or kind in ("KSampler", "ClownsharKSampler_Beta", "ClownsharKSampler"):
         sampler["denoise"] = denoise
     elif kind == "KSamplerAdvanced":
@@ -84,7 +83,20 @@ def hires(api, uploaded, scale=2.0, denoise=DENOISE["hires"]):
         sampler["sigmas"] = _denoised_sigmas(api, sampler["sigmas"], denoise)
     else:
         raise Unsupported("Its sampler has no denoise to set.")
-    _show_only(api, [decoder, 0])
+    api["ru_pass"] = {"class_type": kind, "inputs": sampler, "_meta": {"title": "Hires fix: second pass"}}
+    api["ru_decode"] = {"class_type": "VAEDecode", "inputs": {"samples": ["ru_pass", 0], "vae": vae}, "_meta": {"title": "Hires fix: decode"}}
+    return ["ru_decode", 0]
+
+
+def _load(api, uploaded):
+    api["ru_load"] = {"class_type": "LoadImage", "inputs": {"image": uploaded}, "_meta": {"title": "Image to upscale"}}
+    return ["ru_load", 0]
+
+
+def hires(api, uploaded, scale=2.0, denoise=DENOISE["hires"]):
+    """The set's workflow as a Hires fix of the uploaded image."""
+    decoder, sampler_id = last_sampler(api)
+    _show_only(api, _second_pass(api, sampler_id, api[decoder]["inputs"]["vae"], _load(api, uploaded), scale, denoise))
     return api
 
 
@@ -101,13 +113,11 @@ def _number(api, value, default):
     return default
 
 
-def usdu(api, uploaded, scale=2.0, denoise=DENOISE["usdu"], seed=777):
-    """The set's workflow as Ultimate SD Upscale of the uploaded image, 4x-UltraSharp then tiles redrawn."""
-    decoder, sampler_id = last_sampler(api)
+def _tiled(api, sampler_id, vae, image, scale, denoise, seed=777):
+    """Ultimate SD Upscale on an image with the set's sampler's model and prompts. Returns the link to the image it makes."""
     sampler, kind = api[sampler_id]["inputs"], api[sampler_id]["class_type"]
-    api["ru_load"] = {"class_type": "LoadImage", "inputs": {"image": uploaded}, "_meta": {"title": "Image to upscale"}}
     api["ru_model"] = {"class_type": "UpscaleModelLoader", "inputs": {"model_name": UPSCALE_MODEL}, "_meta": {"title": "4x-UltraSharp"}}
-    common = {"image": ["ru_load", 0], "vae": api[decoder]["inputs"]["vae"], "upscale_by": scale, "seed": seed,
+    common = {"image": image, "vae": vae, "upscale_by": scale, "seed": seed,
               "upscale_model": ["ru_model", 0], "mode_type": "Chess", "tile_width": TILE, "tile_height": TILE, "mask_blur": 16,
               "tile_padding": 32, "seam_fix_mode": "None", "seam_fix_denoise": 1.0, "seam_fix_width": 64, "seam_fix_mask_blur": 8,
               "seam_fix_padding": 16, "force_uniform_tiles": True, "tiled_decode": False, "batch_size": 1}
@@ -135,8 +145,50 @@ def usdu(api, uploaded, scale=2.0, denoise=DENOISE["usdu"], seed=777):
         raise Unsupported("Its sampler doesn't take a model and prompts that Ultimate SD Upscale can use.")
     node["_meta"] = {"title": "Ultimate SD Upscale"}
     api["ru_usdu"] = node
-    _show_only(api, ["ru_usdu", 0])
+    return ["ru_usdu", 0]
+
+
+def usdu(api, uploaded, scale=2.0, denoise=DENOISE["usdu"], seed=777):
+    """The set's workflow as Ultimate SD Upscale of the uploaded image, 4x-UltraSharp then tiles redrawn."""
+    decoder, sampler_id = last_sampler(api)
+    _show_only(api, _tiled(api, sampler_id, api[decoder]["inputs"]["vae"], _load(api, uploaded), scale, denoise, seed))
     return api
 
 
 SPLICES = {"hires": hires, "usdu": usdu}
+
+
+def _sharpened(api, image, scale):
+    """4x-UltraSharp, then down to scale: the picture as it was, bigger, with crisper edges."""
+    api["ru_model"] = {"class_type": "UpscaleModelLoader", "inputs": {"model_name": UPSCALE_MODEL}, "_meta": {"title": "4x-UltraSharp"}}
+    api["ru_sharp"] = {"class_type": "ImageUpscaleWithModel", "inputs": {"upscale_model": ["ru_model", 0], "image": image},
+                       "_meta": {"title": "UltraSharp"}}
+    api["ru_scale"] = {"class_type": "ImageScaleBy", "inputs": {"image": ["ru_sharp", 0], "upscale_method": "lanczos", "scale_by": scale / 4},
+                       "_meta": {"title": "UltraSharp: to size"}}
+    return ["ru_scale", 0]
+
+
+# In Generate: each image of the set upscaled as it is made, before the workflow saves it.
+IN_GENERATION = {"UltraSharp": "ultrasharp", "Hires fix": "hires", "Ultimate SD": "usdu"}
+
+
+def in_generation(api, method, denoise=None, scale=2.0):
+    """
+    The set's workflow with its image upscaled before it is saved: what read the decoded image (its save, and anything
+    after such as a sharpen or SeedVR2) reads the upscaled one instead. Raises Unsupported.
+    """
+    decoder, sampler_id = last_sampler(api)
+    made = [decoder, 0]
+    readers = [(node, name) for node in api.values() for name, value in node["inputs"].items() if value == made]
+    vae = api[decoder]["inputs"]["vae"]
+    if method == "ultrasharp":
+        image = _sharpened(api, made, scale)
+    elif method == "hires":
+        image = _second_pass(api, sampler_id, vae, made, scale, DENOISE["hires"] if denoise is None else denoise)
+    elif method == "usdu":
+        image = _tiled(api, sampler_id, vae, made, scale, DENOISE["usdu"] if denoise is None else denoise)
+    else:
+        raise Unsupported(f"No upscale called {method}.")
+    for node, name in readers:
+        node["inputs"][name] = image
+    return api
