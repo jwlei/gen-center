@@ -648,6 +648,16 @@ LATENT_SUFFIX = "_latent"
 NOT_COPIED = ("clips", "parts", "state.json")
 
 
+def latent_used(state):
+    """The latent upscale a film was made with, for the gallery's "Upscaled:" line, or None."""
+    options = (state.options if state else None) or {}
+    preset = options.get("latent_upscale")
+    if not preset or preset == "Off":
+        return None
+    detail = f", denoise {options.get('latent_upscale_denoise', '0.5')}" if preset == "Custom" else ""
+    return f"Latent, {preset}{detail}, {options.get('latent_upscale_mp', '1')} MP"
+
+
 def offers_latent_upscale(workflow):
     """Whether the workflow, as last listed, has the H3 latent upscaler among its options."""
     if not workflow:
@@ -784,7 +794,7 @@ def captions():
                         output_metadata.write(path, metadata)
                 if metadata is not None:
                     return {**{key: metadata.get(key) for key in ("title", "model", "llm", "h3_mode", "h3_creativity")},
-                            "loras": metadata.get("loras", []),
+                            "loras": metadata.get("loras", []), "upscaled": "RTX VSR",
                             "run": metadata.get("origin_run") if metadata.get("origin_run") in titles else None}
             except (OSError, ValueError) as error:
                 app.logger.warning("Could not preserve video metadata for %s: %s", name, error)
@@ -796,6 +806,7 @@ def captions():
                 "h3_mode": made_by.h3_mode if made_by else None,
                 "h3_creativity": made_by.h3_creativity if made_by else None,
                 "loras": workflow_options.loras_used(made_by.workflow, made_by.options, "video") if made_by else [],
+                "upscaled": "RTX VSR" if UPSCALED.search(name) else latent_used(made_by),
                 # The viewer's Latent upscale: greyed out where it can't be used (see latent_upscale_film).
                 "latent": bool(made_by and made_by.final and not UPSCALED.search(name)
                                and (made_by.connection_mode or made_by.start) not in ("director", "multishot", "infinite")

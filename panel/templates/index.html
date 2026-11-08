@@ -571,6 +571,10 @@
   .seed-line button { flex: none; width: auto; margin: 0; padding: 8px 12px; }
   /* A click on the icon is a click on its button. */
   .seed-line .icon { display: block; pointer-events: none; }
+  .seed-line button[hidden] { display: none; }
+  .seed-line button[aria-pressed="true"] { color: var(--accent); border-color: var(--accent); background: color-mix(in srgb, var(--accent) 14%, transparent); }
+  /* Upscale on an image too big for SeedVR2 and Hires fix: greyed, but it still opens the ways that fit. */
+  .icon-btn.dim { opacity: .4; }
   .shot .seed-line { margin: 6px 0; font-size: .85rem; }
   .shot .seed-line label { margin: 0; flex: none; }
   #addImage, #addMedia { width: auto; margin: 8px 0 0; padding: 4px 16px; font-size: 1.1rem; }
@@ -1774,6 +1778,7 @@
     <label for="imageSeed">Seed</label>
     <div class="seed-line">
       <input id="imageSeed" name="seed" inputmode="numeric" autocomplete="off" placeholder="Random" pattern="[0-9]*">
+      <button type="button" class="ghost" id="imageSeedSame" aria-pressed="false" hidden></button>
       <button type="button" class="ghost" data-seed-pick="imageSeed" title="Pick a random seed to keep" aria-label="Pick a random seed to keep"></button>
       <button type="button" class="ghost" data-seed-clear="imageSeed" title="Back to random" aria-label="Back to a random seed every time">✕</button>
     </div>
@@ -1866,6 +1871,9 @@
   <div class="settings-row"><label for="defaultShorts">Shorts</label><select id="defaultShorts" data-side="shorts"></select></div>
   <div class="settings-row"><label for="defaultVideo">Video</label><select id="defaultVideo" data-side="video"></select></div>
   <div class="settings-row"><label for="defaultImage">Image</label><select id="defaultImage" data-side="image"></select></div>
+  <div class="settings-group" id="editPresetTitle">Image edit (the pen in the viewer)</div>
+  <div class="settings-row"><select id="editPreset" aria-labelledby="editPresetTitle"></select></div>
+  <div class="hint">The image preset Edit opens Generate with, the picture as image 1.</div>
   <div class="settings-group">URL's</div>
   <div class="settings-row url-row"><span class="url-name">Local</span><code>{{ phone_url }}</code><button type="button" class="copy-url" data-url="{{ phone_url }}">Copy</button></div>
   {% if tailscale_url %}<div class="settings-row url-row"><span class="url-name">Tailscale</span><code>{{ tailscale_url }}</code><button type="button" class="copy-url" data-url="{{ tailscale_url }}">Copy</button></div>{% endif %}
@@ -1992,7 +2000,7 @@
       <button type="button" class="icon-btn" id="viewerVariations" aria-label="More like this" title="More like this one: its prompt and settings in Generate, on new seeds"></button>
       <button type="button" class="icon-btn" id="viewerPrompts" aria-label="Detailed prompt" title="Detailed prompt, with your own a tap away"></button>
       <button type="button" class="icon-btn" id="viewerUpscale" aria-label="Upscale" title="Make this one bigger, as a new image in its set"></button>
-      <button type="button" class="icon-btn" id="viewerEdit" aria-label="Edit" title="Edit this one: it goes to Generate as image 1, with the Qwen-Image 2.1 edit workflow"></button>
+      <button type="button" class="icon-btn" id="viewerEdit" aria-label="Edit" title="Edit this one: it goes to Generate as image 1, with the edit preset chosen in Settings"></button>
       </div>
       <div class="viewer-tools-right">
       <a class="icon-btn" id="viewerDownload" href="#" download aria-label="Download" title="Download"></a>
@@ -2870,6 +2878,11 @@ async function fillSettings() {
   $('localLlmModel').value = SETTINGS.local_llm_model || SETTINGS.h3_model;
   reserveGb = reserveSaved();
   showReserve();
+  const edit = SETTINGS.edit_preset || '';
+  $('editPreset').innerHTML = '<option value="">Qwen-Image 2.1 edit workflow</option>'
+    + (presets.image || []).map(p => `<option value="${esc(p.name)}">Preset: ${esc(p.name)}</option>`).join('');
+  $('editPreset').value = edit;
+  if ($('editPreset').value !== edit) $('editPreset').add(new Option(`Preset: ${edit} (gone)`, edit, false, true));
   for (const side of ['shorts', 'video', 'image']) {
     const select = document.getElementById('default' + side[0].toUpperCase() + side.slice(1));
     const chosen = (SETTINGS.default_workflow || {})[side] || '';
@@ -2900,6 +2913,7 @@ settingsDialog.addEventListener('click', e => { if (e.target === settingsDialog)
 $('lowPriority').addEventListener('change', () => saveSettings({ low_priority: $('lowPriority').checked }));
 $('h3Model').addEventListener('change', () => saveSettings({ h3_model: $('h3Model').value }));
 $('localLlmModel').addEventListener('change', () => saveSettings({ local_llm_model: $('localLlmModel').value }));
+$('editPreset').addEventListener('change', () => saveSettings({ edit_preset: $('editPreset').value }));
 // Free RAM ComfyUI keeps, in whole GB, 3 unless set. Saved with Set, used from ComfyUI's next start.
 const RESERVE_LEAST = 1, RESERVE_MOST = 24, RESERVE_DEFAULT = 3;
 let reserveGb = RESERVE_DEFAULT;
@@ -4292,6 +4306,9 @@ function h3Description(item) {
   const creativity = item.h3_creativity;
   return `OpenH3-IR: ${mode}${creativity ? ` · ${creativity.charAt(0).toUpperCase() + creativity.slice(1)}` : ''}`;
 }
+function upscaledLine(item) {
+  return item.upscaled ? `<div class="meta">Upscaled: ${esc(item.upscaled)}</div>` : '';
+}
 function h3Line(item) {
   const text = h3Description(item);
   return text ? `<div class="meta">${esc(text)}</div>` : '';
@@ -4374,7 +4391,7 @@ function imageSetHtml(set) {
   return `
   <div class="image-set">
     <div class="image-set-heading"><h3>${esc(set.label)}</h3>${nsfwButton('image', set.id, !!set.nsfw)}</div>
-    <div class="meta">${[set.model && esc(set.model), set.resolutions?.length && esc(set.resolutions.join(', ')), outputSize(set.size_bytes), outputCount(set)].filter(Boolean).join(' · ')}</div>${lorasLine(set.loras)}${h3Line(set)}
+    <div class="meta">${[set.model && esc(set.model), set.resolutions?.length && esc(set.resolutions.join(', ')), outputSize(set.size_bytes), outputCount(set)].filter(Boolean).join(' · ')}</div>${lorasLine(set.loras)}${h3Line(set)}${upscaledLine(set)}
     ${row}
   </div>`;
 }
@@ -4442,6 +4459,8 @@ async function sameAgain(id, position = null, exact = null) {
   applyOptions($('imageOptionsBox'), imageTakes().options || [], s.options);
   syncImageForm();
   if (exact) $('imageSeed').value = exact.seed || '';
+  // From one picture: its seed, a tap away, to make it again with other settings.
+  offerSameSeed(shot ? shot.used_seed ?? shot.seed : null);
   saveImageForm();
   showFormError('');
   $('imageGeneration').open = $('imagePromptSection').open = true;
@@ -4601,8 +4620,17 @@ $('viewerUpscale').addEventListener('click', () => {
   latent.disabled = film && !viewing.latent;
   latent.title = latent.disabled ? 'Not available for this film: it needs an H3 reference-to-video run that is still saved, not Motion Director, Multishot or Infinite'
     : 'H3 latent upscaler: the film is made again on the same seeds, then upscaled and refined';
+  if (!film) {
+    const img = $('viewerImage'), problem = method => upscaleProblem(method, img.naturalWidth, img.naturalHeight);
+    for (const b of box.querySelectorAll('[data-for="image"]')) {
+      const why = img.naturalWidth ? problem(b.dataset.method) : '';
+      b.disabled = !!why;
+      if (!b.dataset.title) b.dataset.title = b.title;
+      b.title = why || b.dataset.title;
+    }
+  }
   const options = [...box.querySelectorAll('button[data-method]')].filter(b => !b.hidden);
-  if (options.length === 1) { openUpscaleSettings(options[0].dataset.method); return; }
+  if (options.length === 1 && !options[0].disabled) { openUpscaleSettings(options[0].dataset.method); return; }
   box.classList.remove('closing');
   box.showModal();
   placeOverViewerButtons(box);
@@ -4699,6 +4727,15 @@ function editWorkflowName() {
 async function openEditor() {
   if (pipeline !== 'image') setPipeline('image');
   await loadImageWorkflows();
+  // The preset chosen in Settings, as it was saved; else the Qwen-Image 2.1 edit workflow at the image's own size.
+  const preset = SETTINGS.edit_preset && (presets.image || []).find(p => p.name === SETTINGS.edit_preset);
+  if (preset) {
+    applyPreset('image', preset.name);
+    syncImageForm();
+    saveImageForm();
+    backToGenerate();
+    return;
+  }
   const name = editWorkflowName();
   if (!name) { showFormError(`Save Qwen-Image 2.1's edit workflow in ComfyUI as ${EDIT_WORKFLOW.replace('.json', '')} to edit images here.`); }
   else $('imageWorkflow').value = name;
@@ -4778,9 +4815,17 @@ function downloadImages(id, positions) {
 }
 // --- The image viewer: one picture over a dimmed page, with Download, Delete and Close ---
 let viewing = null;
-const UPSCALE_MOST_SIDE = 1440;
+const UPSCALE_MOST_SIDE = 1440, TILED_MOST_SIDE = 4096;
+// As the server's (panel/image.py upscale_problem): SeedVR2 and Hires fix take the whole image at once.
+function upscaleProblem(method, width, height) {
+  if (['seedvr2', 'hires'].includes(method) && Math.min(width, height) > UPSCALE_MOST_SIDE)
+    return `Too big for this one: ${Math.min(width, height)}px on its shorter side, past ${UPSCALE_MOST_SIDE}px.`;
+  if (!['seedvr2', 'hires'].includes(method) && Math.max(width, height) > TILED_MOST_SIDE)
+    return `Too big: ${Math.max(width, height)}px on its longer side, past ${TILED_MOST_SIDE}px.`;
+  return '';
+}
 function viewerMetadata(item) {
-  const lines = [...(item.loras || []).map(lora => `LoRA: ${lora}`), h3Description(item)].filter(Boolean);
+  const lines = [...(item.loras || []).map(lora => `LoRA: ${lora}`), h3Description(item), item.upscaled && `Upscaled: ${item.upscaled}`].filter(Boolean);
   const button = $('viewerMeta'), details = $('viewerMetaDetails');
   button.textContent = [item.model, item.llm].filter(Boolean).join(' · ') || (lines.length ? 'Details' : '');
   button.hidden = !button.textContent;
@@ -4865,6 +4910,7 @@ function openFilm(name, filmFolder = folder) {
   $('viewerVariations').title = 'Open the settings it was made with in Generate';
   $('viewerVariations').setAttribute('aria-label', 'Open its settings');
   $('viewerUpscale').hidden = !canUpscale;
+  $('viewerUpscale').classList.remove('dim');
   $('viewerPrompts').hidden = !canPrompt;
   $('viewerRes').textContent = film.resolution || '';
   $('viewerCount').textContent = films.length > 1 ? `${at + 1} of ${films.length}` : '';
@@ -4904,7 +4950,8 @@ function openViewer(id, position) {
   const at = set.images.indexOf(picture);
   setViewerTitle(picture.title);
   $('viewerCount').textContent = set.images.length > 1 ? `${at + 1} of ${set.images.length}` : '';
-  viewerMetadata(set);
+  // This picture's own upscale, not another of the set's.
+  viewerMetadata({ ...set, upscaled: picture.upscaled || null });
   $('viewerDownload').href = `${url}&download=1`;
   $('viewerRes').textContent = picture.resolution || '';
   if (!$('imageViewer').open) $('imageViewer').showModal();
@@ -4913,8 +4960,8 @@ $('viewerImage').addEventListener('load', () => {
   const img = $('viewerImage');
   if (img.dataset.full && !String(img.src).endsWith(img.dataset.full)) return;  // The small picture, while the full one comes
   $('viewerRes').textContent = viewing && !viewing.film && img.naturalWidth ? `${img.naturalWidth} × ${img.naturalHeight}` : '';
-  // Twice the size of a 1440p image is past what SeedVR2 and the viewer can sensibly hold.
-  $('viewerUpscale').hidden = Math.min(img.naturalWidth, img.naturalHeight) > UPSCALE_MOST_SIDE;
+  // Past 1440p on its shorter side, SeedVR2 and Hires fix can't take it: greyed, but the other ways still can.
+  $('viewerUpscale').classList.toggle('dim', !!viewing && !viewing.film && Math.min(img.naturalWidth, img.naturalHeight) > UPSCALE_MOST_SIDE);
 });
 // The image before or after this one in its set: a swipe, or the arrow keys.
 function stepViewer(by) {
@@ -5153,7 +5200,7 @@ function filmHtml(v, filmFolder = folder) {
   return `
   <div class="image-set film" data-name="${name}">
     <div class="image-set-heading"><h3>${v.title || v.topic ? esc(v.title || v.topic) : filmFolder === 'video' ? name : '<span style="color:var(--muted)">No topic recorded</span>'}</h3>${filmFolder === 'video' ? nsfwButton('video', v.name, !!v.nsfw) : ''}</div>
-    <div class="meta" title="${name}">${[v.model && esc(v.model), v.resolution && esc(v.resolution), v.duration != null && fmt(Math.round(v.duration)), v.size_mb != null && `${v.size_mb} MB`].filter(Boolean).join(' · ')}</div>${lorasLine(v.loras)}${h3Line(v)}
+    <div class="meta" title="${name}">${[v.model && esc(v.model), v.resolution && esc(v.resolution), v.duration != null && fmt(Math.round(v.duration)), v.size_mb != null && `${v.size_mb} MB`].filter(Boolean).join(' · ')}</div>${lorasLine(v.loras)}${h3Line(v)}${upscaledLine(v)}
     <div class="image-set-row album">
       <a href="/videos/${filmFolder}/${url}" class="album-cover film-cover" data-play-film="${name}" data-film-folder="${filmFolder}" title="Play"><img loading="lazy" alt="" src="${v.run && filmFolder === 'video' ? `/runs/${encodeURIComponent(v.run)}/image` : `/posters/${filmFolder}/${url}`}" onerror="this.onerror=null;this.src='/posters/${filmFolder}/${url}'"><span class="play">▶</span></a>
       <div class="album-side">${actions}</div>
@@ -5181,6 +5228,26 @@ document.addEventListener('click', e => {
   if (button.dataset.seedPick) setSeed($(button.dataset.seedPick), randomSeed());
   else setSeed($(button.dataset.seedClear), '');
 });
+// Same seed: the seed the picture Generate was opened from was made with. Lit while the seed box holds it.
+const SAME_SEED_ICON = '<svg class="icon" viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22c4-3 7-6.5 7-11a7 7 0 0 0-14 0c0 4.5 3 8 7 11z"/><path d="M9 11h6M9 14h6"/></svg>';
+let sameSeed = null;
+$('imageSeedSame').innerHTML = SAME_SEED_ICON;
+function offerSameSeed(seed) {
+  sameSeed = seed == null || seed === '' ? null : String(seed);
+  $('imageSeedSame').hidden = sameSeed == null;
+  $('imageSeedSame').title = sameSeed == null ? '' : `Use the same seed as the picture (${sameSeed})`;
+  $('imageSeedSame').setAttribute('aria-label', $('imageSeedSame').title || 'Same seed');
+  showSameSeed();
+}
+function showSameSeed() {
+  $('imageSeedSame').setAttribute('aria-pressed', String(sameSeed != null && $('imageSeed').value === sameSeed));
+}
+$('imageSeedSame').addEventListener('click', () => {
+  if (sameSeed == null) return;
+  setSeed($('imageSeed'), $('imageSeed').value === sameSeed ? '' : sameSeed);
+});
+$('imageSeed').addEventListener('input', showSameSeed);
+$('imageSeed').addEventListener('change', showSameSeed);
 // Digits only: anything else isn't a seed.
 document.addEventListener('input', e => {
   if (e.target.name === 'seed' || e.target.dataset.seed !== undefined) {

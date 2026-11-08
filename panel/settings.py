@@ -48,7 +48,9 @@ def load():
             "reserve_ram_gb": _gigabytes(saved.get("reserve_ram_gb")) or DEFAULT_RESERVE_GB,
             "h3_model": model,
             "local_llm_model": local if local in H3_MODELS else DEFAULTS["local_llm_model"],
-            "default_workflow": {side: str(workflows.get(side) or "") for side in SIDES}}
+            "default_workflow": {side: str(workflows.get(side) or "") for side in SIDES},
+            # The image preset the viewer's Edit (pen) opens Generate with; empty: the Qwen-Image 2.1 edit workflow.
+            "edit_preset": str(saved.get("edit_preset") or "")[:200]}
 
 
 def update(changes):
@@ -67,6 +69,8 @@ def update(changes):
             if changes["local_llm_model"] not in H3_MODELS:
                 raise ValueError("Unknown local LLM model.")
             current["local_llm_model"] = changes["local_llm_model"]
+        if "edit_preset" in changes:
+            current["edit_preset"] = str(changes["edit_preset"] or "")[:200]
         if isinstance(changes.get("default_workflow"), dict):
             for side in SIDES:
                 if side in changes["default_workflow"]:

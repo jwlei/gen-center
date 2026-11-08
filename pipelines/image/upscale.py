@@ -156,8 +156,13 @@ def upscale(state, position, comfy, method="seedvr2", strength=1.0, resolution=0
         path = comfy._download(entry, os.path.join(state.output_dir, stem), IMAGE_EXTENSIONS, "an image")
     how = {"seedvr2": "upscaled", "fast": "upscaled fast", "ultrasharp": "upscaled with UltraSharp",
            "hires": "upscaled with Hires fix", "usdu": "upscaled with Ultimate SD"}[method]
+    # What made it bigger, for the gallery's "Upscaled:" line.
+    used = {"seedvr2": f"SeedVR2, {resolution}p" if method == "seedvr2" and resolution else "SeedVR2",
+            "fast": f"Superscale-SP, strength {strength:g}", "ultrasharp": f"4x-UltraSharp, strength {strength:g}",
+            "hires": f"Hires fix, denoise {denoise:g}" if denoise is not None else "Hires fix",
+            "usdu": f"Ultimate SD, denoise {denoise:g}" if denoise is not None else "Ultimate SD"}[method]
     made = {**{key: value for key, value in shot.items() if key not in ("redo",)},
-            "title": f"{shot['title']} · {how}", "file": os.path.basename(path), "upscaled_from": position}
+            "title": f"{shot['title']} · {how}", "file": os.path.basename(path), "upscaled_from": position, "upscaled_with": used}
     state.shots.insert(position, made)
     state.save()
     with Image.open(path) as image:

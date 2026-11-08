@@ -786,6 +786,21 @@ class PanelTest(unittest.TestCase):
         self.assertEqual(added[0]["detail"], "Hires fix, twice the size, denoise 0.45")
         self.assertEqual(added[1]["argv"][added[1]["argv"].index("--denoise") + 1], "0.3", "Ultimate SD's usual")
 
+    def test_a_big_image_takes_the_ways_that_fit_and_says_how_it_was_upscaled(self):
+        from panel import image as image_panel
+        self.assertIsNotNone(image_panel.upscale_problem("seedvr2", 1568, 2784))
+        self.assertIsNotNone(image_panel.upscale_problem("hires", 1568, 2784))
+        for method in ("usdu", "ultrasharp", "fast"):
+            self.assertIsNone(image_panel.upscale_problem(method, 1568, 2784), method)
+        self.assertIsNotNone(image_panel.upscale_problem("usdu", 3000, 5000))
+        self.make(count="1", aspect="1:1", megapixels="0.5")
+        run = self.only_run()
+        self.assertTrue(self.client.post(f"/image-runs/{run.id}/upscale/1?method=ultrasharp&strength=0.75").get_json()["ok"])
+        self.wait_idle()
+        listed = image_panel.describe_run(self.only_run())
+        self.assertEqual([image["upscaled"] for image in listed["images"]], [None, "4x-UltraSharp, strength 0.75"])
+        self.assertEqual(listed["upscaled"], "4x-UltraSharp, strength 0.75")
+
     def test_trying_one_first_makes_one_and_stops(self):
         self.make(count="3", try_first="1")
         run = self.only_run()

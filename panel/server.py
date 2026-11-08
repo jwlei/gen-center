@@ -2263,7 +2263,8 @@ def queue_edit_upscale(item_id):
                 return {"ok": False, "error": "The original image is no longer available."}, 409
             try:
                 with Image.open(state.image_path(shot)) as source:
-                    shorter = min(source.size)
+                    size = source.size
+                    shorter = min(size)
             except OSError:
                 return {"ok": False, "error": "The original image could not be read."}, 409
             method = data.get("method")
@@ -2274,7 +2275,10 @@ def queue_edit_upscale(item_id):
                 return {"ok": False, "error": "Choose a valid strength and resolution."}, 400
             if method not in image_panel.UPSCALE_METHODS or not math.isfinite(strength) or not 0 <= strength <= 1:
                 return {"ok": False, "error": "Choose a valid upscale method and strength."}, 400
-            if shorter > image_panel.UPSCALE_MOST_SIDE or (method == "seedvr2" and resolution and
+            problem = image_panel.upscale_problem(method, *size)
+            if problem:
+                return {"ok": False, "error": problem}, 400
+            if (method == "seedvr2" and resolution and
                     (resolution not in image_panel.UPSCALE_RESOLUTIONS or resolution <= shorter)):
                 return {"ok": False, "error": "Choose a supported resolution larger than the original image."}, 400
             if method != "seedvr2":

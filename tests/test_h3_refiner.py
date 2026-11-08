@@ -249,6 +249,8 @@ class H3RefinerTest(unittest.TestCase):
             self.assertEqual((h3_refiner.local_llm_model(), h3_refiner.selected_model()), ("gemma-4-12b", "qwen3-14b"))
             with self.assertRaisesRegex(ValueError, "Unknown local LLM"):
                 settings.update({"local_llm_model": "missing"})
+            self.assertEqual(settings.load()["edit_preset"], "", "the Qwen edit workflow until a preset is chosen")
+            self.assertEqual(settings.update({"edit_preset": "My edit"})["edit_preset"], "My edit")
             with mock.patch.object(h3_refiner, "_paths", return_value=("root", "python", "server", "model", None)):
                 self.assertEqual(h3_refiner.Refiner(model_id=h3_refiner.local_llm_model()).model_id, "gemma-4-12b", "writing prompts")
                 self.assertEqual(h3_refiner.Refiner().model_id, "qwen3-14b", "OpenH3-IR")

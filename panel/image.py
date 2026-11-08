@@ -177,8 +177,32 @@ def image_files(state):
                 app.logger.warning("Could not read image metadata for %s: %s", path, error)
                 resolution = None
             files.append({"position": position, "title": shot["title"], "version": version,
-                          "resolution": resolution, "size_bytes": stat.st_size, "mtime": stat.st_mtime})
+                          "resolution": resolution, "size_bytes": stat.st_size, "mtime": stat.st_mtime,
+                          "upscaled": upscaled_with(shot) or upscaled_in_generation(state)})
     return files
+
+
+# Upscaled before this was kept: the method, from the end of its title ("· upscaled fast").
+UPSCALED_TITLES = {"upscaled": "SeedVR2", "upscaled fast": "Superscale-SP", "upscaled with UltraSharp": "4x-UltraSharp",
+                   "upscaled with Hires fix": "Hires fix", "upscaled with Ultimate SD": "Ultimate SD"}
+
+
+def upscaled_with(shot):
+    """How an image the viewer upscaled was made bigger, or None."""
+    if shot.get("upscaled_with"):
+        return shot["upscaled_with"]
+    if shot.get("upscaled_from") is None:
+        return None
+    return UPSCALED_TITLES.get(str(shot.get("title") or "").rsplit(" · ", 1)[-1], "yes")
+
+
+def upscaled_in_generation(state):
+    """Upscale under Resolution, as the set was made with it, or None."""
+    method = (state.options or {}).get("image_upscale")
+    if not method or method == workflow_options.NO_IMAGE_UPSCALE:
+        return None
+    denoise = (state.options or {}).get("image_upscale_denoise")
+    return f"{method}, denoise {denoise}" if denoise and method != "UltraSharp" else method
 
 
 def describe_run(state):
@@ -192,6 +216,7 @@ def describe_run(state):
     return {"id": state.id, "pipeline": "image", "label": state.title or state.brief, "detail": " · ".join(parts),
             "model": shorthand(state.workflow, "image"), "outcome": read_outcome(state.folder), "loras": workflow_options.loras_used(state.workflow, state.options, "image"),
             "llm": state.llm, "size_bytes": size_bytes, "resolutions": resolutions,
+            "upscaled": upscaled_in_generation(state) or ", ".join(dict.fromkeys(image["upscaled"] for image in files if image["upscaled"])) or None,
             "when": saved_at(state.path), "mtime": max((image["mtime"] for image in files), default=0), "clips": done, "finished": state.finished, "total": total, "images": files,
             "size": f"{state.width}x{state.height}", "estimate": RunEta(resume_argv(state), env, IMAGE_TIMINGS).plan()["total"]}
 
@@ -656,7 +681,19 @@ def upscale_detail(method, strength, resolution, denoise=None):
         return f"SeedVR2, {resolution}p" if resolution else "SeedVR2, twice the size"
     name = "4x-UltraSharp" if method == "ultrasharp" else "Superscale-SP"
     return f"{name}, twice the size, strength {round(strength * 100)}%"
-UPSCALE_MOST_SIDE = 1440  # The shorter side of an image that can still be upscaled, as the viewer's button
+UPSCALE_MOST_SIDE = 1440  # SeedVR2 and Hires fix: the shorter side they still take, as the whole image goes through at once
+TILED_MOST_SIDE = 4096  # The others: the longer side, so twice it stays within what an image here can be (8192)
+WHOLE_IMAGE_UPSCALES = ("seedvr2", "hires")
+
+
+def upscale_problem(method, width, height):
+    """Why this image is too big for this way of upscaling, or None. The page greys out the same (UPSCALE_LIMITS)."""
+    if method in WHOLE_IMAGE_UPSCALES and min(width, height) > UPSCALE_MOST_SIDE:
+        return (f"It's already {min(width, height)}px on its shorter side: {'SeedVR2' if method == 'seedvr2' else 'Hires fix'} "
+                f"takes up to {UPSCALE_MOST_SIDE}px. Ultimate SD, UltraSharp or Fast can still upscale it.")
+    if method not in WHOLE_IMAGE_UPSCALES and max(width, height) > TILED_MOST_SIDE:
+        return f"It's already {max(width, height)}px on its longer side: images past {TILED_MOST_SIDE}px aren't upscaled."
+    return None
 
 
 @app.route("/image-runs/<run_id>/upscale/<int:position>", methods=["POST"])
@@ -670,14 +707,16 @@ def upscale_image(run_id, position):
         return {"ok": False, "error": "That image isn't made yet."}, 400
     try:
         with Image.open(state.image_path(state.shots[position - 1])) as image:
-            shorter = min(image.size)
+            size = image.size
     except OSError:
-        shorter = 0
-    if shorter > UPSCALE_MOST_SIDE:
-        return {"ok": False, "error": f"It's already {shorter}px on its shorter side: images past {UPSCALE_MOST_SIDE}px aren't upscaled."}, 400
+        size = (0, 0)
+    shorter = min(size)
     method = request.args.get("method") or (request.get_json(silent=True) or {}).get("method") or "seedvr2"
     if method not in UPSCALE_METHODS:
         return {"ok": False, "error": "Unknown way to upscale."}, 400
+    problem = upscale_problem(method, *size)
+    if problem:
+        return {"ok": False, "error": problem}, 400
     try:
         strength = float(request.args.get("strength") or (request.get_json(silent=True) or {}).get("strength") or 1)
     except ValueError:
