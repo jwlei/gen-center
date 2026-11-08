@@ -1,6 +1,6 @@
 # Image
 
-The Image pipeline of [ComfyUI auto-gen](../README.md). It has no upload: images are downloaded, or found in `output/image`.
+The Image pipeline of [gen-center](../README.md). It has no upload: images are downloaded, or found in `output/image`.
 
 Makes a set of images, from text alone or by editing an image you give it. An LLM writes one prompt per image from a
 short brief, or your own prompt goes in word for word.

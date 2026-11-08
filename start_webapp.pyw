@@ -1,5 +1,5 @@
 """
-Double-click to open the ComfyUI auto-gen panel.
+Double-click to open the gen-center panel.
 
 Starts the web UI in the background if it isn't already running (no console
 window; its output goes to logs/webapp.log) and opens it in your default

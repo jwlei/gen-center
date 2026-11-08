@@ -1,4 +1,4 @@
-# ComfyUI auto-gen
+# gen-center
 
 Makes videos and images with ComfyUI from one panel, with three pipelines behind a **Shorts | Video | Image** switch.
 
@@ -9,6 +9,21 @@ Makes videos and images with ComfyUI from one panel, with three pipelines behind
 | Workflows | Those saved in ComfyUI ending in `_shorts`, which need a Load Audio node | Every other workflow saved in ComfyUI | Those saved in ComfyUI starting `image_` |
 | Publishing | Uploads to YouTube | Download only | Download only |
 | Details | [docs/shorts.md](docs/shorts.md) | [docs/video.md](docs/video.md) | [docs/image.md](docs/image.md) |
+
+## Screenshots
+
+On a desktop, Status, Generate and the finished films or images sit side by side:
+
+![The panel on a desktop, Video side](docs/screenshots/desktop-video.png)
+
+![The panel on a desktop, Image side](docs/screenshots/desktop-image.png)
+
+On a phone, one section shows at a time, chosen in the footer:
+
+<p>
+  <img src="docs/screenshots/mobile-video.png" alt="The panel on a phone, Video side" width="300">
+  <img src="docs/screenshots/mobile-image.png" alt="The panel on a phone, Image side" width="300">
+</p>
 
 On a phone, the navigation shows one section at a time: Status, Generate or the videos and images, with a small bar
 for what's running when you're elsewhere. Log and Quota are icons at the top of Settings; Finished is beside the
@@ -44,7 +59,7 @@ Fill in `.env`. `APP_PASSWORD` lets you reach the panel from a phone. `COMFYUI_L
 powershell -ExecutionPolicy Bypass -File scripts/create_shortcut.ps1
 ```
 
-That makes a **ComfyUI auto-gen** shortcut, which starts the panel and opens it at http://localhost:8800. `/shorts`,
+That makes a **gen-center** shortcut, which starts the panel and opens it at http://localhost:8800. `/shorts`,
 `/video` and `/image` open each side directly. **Shut down** in Settings stops it. Or run `python webapp.py --host 0.0.0.0 --port 8800`.
 
 **From your phone, anywhere:** install [Tailscale](https://tailscale.com/download) on this PC and your phone and sign

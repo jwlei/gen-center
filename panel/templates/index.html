@@ -1,5 +1,7 @@
 {% extends "base.html" %}
 {% block body %}
+{# A dropdown's list is drawn by the system and shows only text: a shape mark stands in for the drawn box. #}
+{% macro shape_mark(w, h) %}{{ '□' if w == h else ('▭' if w > h else '▯') }}{% endmacro %}
 {% macro trash_icon() %}<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7h16"/><path d="M10 11v6M14 11v6"/><path d="M6 7l1 13h10l1-13"/><path d="M9 7V4h6v3"/></svg>{% endmacro %}
 <style>
   .status { display: flex; align-items: center; gap: 9px; font-size: .9rem; margin-bottom: 12px; }
@@ -484,10 +486,12 @@
   /* Resolution on one line: the shape, then megapixels a tenth at a time, then the size that makes. */
   .resolution-line { display: flex; align-items: center; gap: 8px; }
   .resolution-line select { flex: 1 1 auto; min-width: 0; margin: 0; }
-  .count-stepper.mp-stepper { flex: none; gap: 4px; }
+  .count-stepper.mp-stepper { margin-top: 8px; }
   .count-stepper.mp-stepper.hidden { display: none; }
-  .count-stepper.mp-stepper button { width: 36px; }
-  .count-stepper.mp-stepper input[type=text] { width: 58px; margin: 0; text-align: center; font-variant-numeric: tabular-nums; cursor: pointer; }
+  /* The number as the box beside How many images shows it, with "MP" greyed after it. */
+  .count-stepper .mp-field { width: 65px; margin: 0; padding: 13px 4px; background: var(--panel-2); border: 1px solid var(--line); border-radius: 10px;
+    color: var(--text); font-size: inherit; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .count-stepper .mp-field .mp-unit { margin-left: 2px; color: var(--muted); font-size: .8em; }
   .resolution-size { color: var(--muted); font-size: .78rem; font-variant-numeric: tabular-nums; white-space: nowrap; }
   /* The chosen shape, drawn: at most 22 by 22, outlined. */
   .aspect-box { flex: none; box-sizing: border-box; border: 1.5px solid var(--muted); border-radius: 2px; }
@@ -1384,7 +1388,7 @@
     <select id="sizePreset">
       <option value="">Same shape as image 1</option>
       <optgroup label="Aspect ratio">
-        {% for value, label in image_aspects %}<option value="{{ value }}">{{ label }}</option>{% endfor %}
+        {% for value, label in image_aspects %}{% set wh = value.split(':') %}<option value="{{ value }}">{{ shape_mark(wh[0]|int, wh[1]|int) }} {{ label }}</option>{% endfor %}
       </optgroup>
       <optgroup label="Landscape 16:9">
         {% for name, width, height in size_presets %}<option value="{{ width }}x{{ height }}">{{ name }} ({{ width }}x{{ height }}) · {{ "%.3f"|format(width * height / 1000000) }} MP</option>{% endfor %}
@@ -1395,11 +1399,11 @@
       <option value="custom">Custom size</option>
     </select>
     <span class="aspect-box" id="videoAspectBox" aria-hidden="true"></span>
+    </div>
     <div class="count-stepper mp-stepper" id="videoMegapixelsBox">
       <button type="button" id="videoMegapixelsDown" aria-label="0.1 megapixels fewer">−</button>
-      <input type="text" id="videoMegapixelsValue" readonly aria-label="Megapixels" title="Tap for 480p's pixel count">
+      <button type="button" class="mp-field" id="videoMegapixelsValue" aria-label="Megapixels" title="Tap for 480p's pixel count"></button>
       <button type="button" id="videoMegapixelsUp" aria-label="0.1 megapixels more">+</button>
-    </div>
     </div>
     <input id="size" name="size" placeholder="Such as 1280x736, rounded to multiples of 32" autocomplete="off" style="margin-top:8px" hidden>
 
@@ -1564,7 +1568,7 @@
           <select id="imageAspect" name="aspect" aria-label="Aspect ratio or screen">
             <option value="image">Same as the image</option>
             <optgroup label="Aspect ratio">
-              {% for value, label in image_aspects %}<option value="{{ value }}">{{ label }}</option>{% endfor %}
+              {% for value, label in image_aspects %}{% set wh = value.split(':') %}<option value="{{ value }}">{{ shape_mark(wh[0]|int, wh[1]|int) }} {{ label }}</option>{% endfor %}
             </optgroup>
             <optgroup label="Desktop">
               {% for name, width, height in image_desktop_sizes %}<option value="{{ width }}x{{ height }}">{{ name }} ({{ width }}x{{ height }}) · {{ "%.3f"|format(width * height / 1000000) }} MP</option>{% endfor %}
@@ -1575,13 +1579,13 @@
             <option value="custom">Exact size</option>
           </select>
         <span class="aspect-box" id="imageAspectBox" aria-hidden="true"></span>
+      </div>
         <div class="count-stepper mp-stepper" id="imageMegapixelsBox">
           <input type="hidden" id="imageMegapixels" name="megapixels" value="image">
           <button type="button" id="imageMegapixelsDown" aria-label="0.1 megapixels fewer">−</button>
-          <input type="text" id="imageMegapixelsValue" readonly aria-label="Megapixels" title="Tap for the image's own size">
+          <button type="button" class="mp-field" id="imageMegapixelsValue" aria-label="Megapixels" title="Tap for the image's own size"></button>
           <button type="button" id="imageMegapixelsUp" aria-label="0.1 megapixels more">+</button>
         </div>
-      </div>
       <input id="imageSize" name="size" placeholder="Such as 1920x1080" autocomplete="off" style="margin-top:8px" hidden>
     </div>
     <label for="imageCount">How many images</label>
@@ -1703,7 +1707,7 @@
   <div class="settings-actions">
     <button type="button" id="restartPanel" title="Start the panel again, to load new code. Not while a run or upload is going."><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 11a8 8 0 1 0-2.3 5.7"/><path d="M20 4v7h-7"/></svg><span>Restart panel</span></button>
     <button type="button" id="restartComfy" title="Start fresh: closes local ComfyUI processes, including work started outside the panel. Not while a panel run is going."><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="2"/><rect x="9.5" y="9.5" width="5" height="5" rx=".5"/><path d="M9 2.5v3M15 2.5v3M9 18.5v3M15 18.5v3M2.5 9h3M2.5 15h3M18.5 9h3M18.5 15h3"/></svg><span>Restart ComfyUI</span></button>
-    <button type="button" id="shutdown" title="Shut down: force-stops everything, then the panel's server. Start it again with start_webapp.pyw or the ComfyUI auto-gen shortcut."><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M12 3v9"/><path d="M6.3 7.3a8 8 0 1 0 11.4 0"/></svg><span>Shut down</span></button>
+    <button type="button" id="shutdown" title="Shut down: force-stops everything, then the panel's server. Start it again with start_webapp.pyw or the gen-center shortcut."><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M12 3v9"/><path d="M6.3 7.3a8 8 0 1 0 11.4 0"/></svg><span>Shut down</span></button>
   </div>
   <div class="hint settings-note" id="settingsNote" hidden></div>
   <div class="settings-row reserve-row"><label for="reserveRam">Reserve free RAM</label><b id="reserveRamValue"></b><button type="button" id="reserveSet">Set</button><input type="range" id="reserveRam" min="3" max="12" step="1"></div>
@@ -2903,7 +2907,7 @@ function syncSize() {
   $('videoPixelSize').textContent = shown && shown.length === 2 && shown.every(n => n > 0) ? shown.join('×') : '';
   drawAspect($('videoAspectBox'), ...(shown && shown.length === 2 ? shown : [0, 0]));
   const mp = videoArea() / 1e6;
-  $('videoMegapixelsValue').value = `${mp.toFixed(1)}MP`;
+  $('videoMegapixelsValue').innerHTML = `${mp.toFixed(1)}<span class="mp-unit">MP</span>`;
   $('videoMegapixelsDown').disabled = mp <= 0.1 + 1e-9;
   $('videoMegapixelsUp').disabled = mp + 0.1 > videoMostPixels() / 1e6 + 1e-9;
 }
@@ -3691,7 +3695,7 @@ function shownMegapixels() {
 }
 function syncMegapixels() {
   const own = $('imageMegapixels').value === 'image', mp = own ? shownMegapixels() : +$('imageMegapixels').value;
-  $('imageMegapixelsValue').value = `${mp.toFixed(1)}MP`;
+  $('imageMegapixelsValue').innerHTML = `${mp.toFixed(1)}<span class="mp-unit">MP</span>`;
   $('imageMegapixelsValue').title = own ? 'The image\'s own size, within what the model makes well' : 'Tap for the image\'s own size';
   const model = imageModel(), most = (model && model.most_megapixels) || MOST_MEGAPIXELS;
   $('imageMegapixelsDown').disabled = mp <= MP_STEP;
@@ -7000,7 +7004,7 @@ $('shutdown').addEventListener('click', async e => {
   if (!confirmTap('shutdown', 'Shut down')) return;
   const body = await (await fetch('/shutdown', { method: 'POST' })).json();
   if (!body.ok) { alert(body.error || 'Could not shut down.'); return; }
-  document.body.innerHTML = '<div class="wrap"><h1>ComfyUI auto-gen</h1><p class="sub">The control panel has shut down. Start it again with <b>start_webapp.pyw</b> or the <b>ComfyUI auto-gen</b> shortcut.</p></div>';
+  document.body.innerHTML = '<div class="wrap"><h1>gen-center</h1><p class="sub">The control panel has shut down. Start it again with <b>start_webapp.pyw</b> or the <b>gen-center</b> shortcut.</p></div>';
 });
 
 // The section under the header, lit up in it.

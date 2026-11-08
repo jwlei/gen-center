@@ -1,6 +1,6 @@
 # Shorts
 
-The Shorts pipeline of [ComfyUI auto-gen](../README.md).
+The Shorts pipeline of [gen-center](../README.md).
 
 Automated faceless YouTube Shorts: AI script, natural narration, stock footage and a lip-synced AI presenter.
 
@@ -82,7 +82,7 @@ auto-yt-shorts/
 
 ```bash
 git clone https://github.com/jwlei/auto-yt-shorts.git
-cd ComfyUI auto-gen-AI
+cd gen-center
 
 ```
 
@@ -217,7 +217,7 @@ Every upload ticks YouTube's **Altered or synthetic content** box (`containsSynt
 Schedule a daily short with cron:
 
 ```cron
-0 9 * * * cd /path/to/ComfyUI auto-gen-AI && /usr/bin/python3 main.py >> run.log 2>&1
+0 9 * * * cd /path/to/gen-center && /usr/bin/python3 main.py >> run.log 2>&1
 ```
 
 ---

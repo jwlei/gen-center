@@ -1,6 +1,6 @@
 # Video
 
-The Video pipeline of [ComfyUI auto-gen](../README.md). It has no YouTube upload: films are downloaded, or found in `output/video`.
+The Video pipeline of [gen-center](../README.md). It has no YouTube upload: films are downloaded, or found in `output/video`.
 
 Turns one image and a short prompt into a film, from a single 5-second clip up to 10 minutes. An LLM looks at the image and writes a detailed
 prompt per shot, ComfyUI renders each shot as a clip, and ffmpeg joins them. It runs from a web panel or the
@@ -37,7 +37,7 @@ In `.env`, set at least one LLM key:
 
 ## The panel
 
-Double-click **ComfyUI auto-gen** on the desktop. To create that shortcut:
+Double-click **gen-center** on the desktop. To create that shortcut:
 
 ```
 powershell -ExecutionPolicy Bypass -File scripts\create_shortcut.ps1

@@ -7,7 +7,7 @@ desktop or a phone, at home or anywhere over Tailscale. panel/shorts.py,
 panel/video.py and panel/image.py hold what is particular to each.
 
     python webapp.py --host 0.0.0.0 --port 8800
-    (or double-click start_webapp.pyw / the "ComfyUI auto-gen" desktop shortcut)
+    (or double-click start_webapp.pyw / the "gen-center" desktop shortcut)
 
 Set APP_PASSWORD to expose it beyond localhost. Without it the server refuses
 any host but 127.0.0.1: an open instance lets anyone spend your API quota and GPU.
@@ -2710,7 +2710,7 @@ def main():
             stream.reconfigure(encoding="utf-8", errors="replace")
     logging.getLogger("werkzeug").addFilter(_QuietPolling())
 
-    parser = argparse.ArgumentParser(description="The ComfyUI auto-gen panel.")
+    parser = argparse.ArgumentParser(description="The gen-center panel.")
     parser.add_argument("--host", default="127.0.0.1", help="Bind address (default: 127.0.0.1; 0.0.0.0 for your phone).")
     parser.add_argument("--port", type=int, default=8800, help="Port (default: 8800).")
     parser.add_argument("--debug", action="store_true")
