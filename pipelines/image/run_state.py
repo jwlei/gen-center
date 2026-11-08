@@ -6,6 +6,7 @@ import time
 from dataclasses import asdict, dataclass
 from datetime import datetime
 
+from core.paths import SAVED_WORKFLOWS_DIR, moved
 from pipelines.image import paths
 
 STAGES = ("Prompts", "Images")
@@ -56,6 +57,8 @@ class RunState:
             with open(os.path.join(paths.RUNS_DIR, run_id, "state.json"), "r", encoding="utf-8") as f:
                 saved = json.load(f)
             state = cls(**{name: value for name, value in saved.items() if name in cls.__dataclass_fields__})
+            # Saved with the project's folder in it: moved or renamed, the workflow is found where it is now.
+            state.workflow = moved(state.workflow, SAVED_WORKFLOWS_DIR)
             for shot in state.shots or []:
                 if shot.get("file") and not os.path.exists(state.image_path(shot)):
                     shot["file"] = None

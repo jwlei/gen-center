@@ -434,6 +434,9 @@ class PanelTest(unittest.TestCase):
                     self.assertNotIn('value="claude"', select)
                     self.assertIn('value="local"', select)
                     self.assertIn(">Local model</option>", select)
+                    # A reset form (editing a queued run) or a choice it can't put back lands here, not on the first one.
+                    self.assertRegex(select, r'value="local"[^>]* selected>')
+                    self.assertNotRegex(select, r'value="gemini"[^>]* selected>')
                 self.assertIn('const IMAGE_DEFAULTS = { llm: "local"', html)
                 self.assertIn('const VIDEO_DEFAULTS = { llm: "local"', html)
         self.assertIn("claude", dict(video_panel.planner.LLMS))

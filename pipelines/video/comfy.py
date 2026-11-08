@@ -7,7 +7,7 @@ import time
 import requests
 from PIL import Image
 
-from pipelines.video import h3_multishot, h3_prompt, wan_prompt
+from pipelines.video import h3_infinite, h3_multishot, h3_prompt, wan_prompt
 from core import director, seeds, workflow_options
 from core.paths import WORKFLOWS_DIR, comfyui_client_id as client_id
 from core.saved_workflows import MOST_REFERENCES_FIELD, frames_for, image_slots, media_slots, takes
@@ -161,6 +161,38 @@ class ComfyClient:
     def render_take(self, prompts, images, seconds, width, height, save_as, seed, first_frame=False, steps=20):
         workflow = h3_multishot.build(self.workflow, prompts, images, seconds, width, height, seed, first_frame, steps)
         return self._download(self._run(workflow, seed), save_as)
+
+    def infinite_nodes(self):
+        """ComfyUI's description of H3 Infinite's nodes, or an error saying how to install them."""
+        info = {}
+        try:
+            for node in h3_infinite.NODES:
+                response = requests.get(f"{self.url}/object_info/{node}", timeout=30)
+                response.raise_for_status()
+                info[node] = response.json().get(node)
+        except (requests.RequestException, ValueError) as e:
+            raise RuntimeError(f"Could not ask ComfyUI about {h3_infinite.PACK}: {e}") from e
+        missing = [node for node, entry in info.items() if not entry]
+        if missing:
+            raise RuntimeError(f"Install {h3_infinite.PACK} in ComfyUI (ComfyUI Manager), then restart ComfyUI. "
+                               f"Missing: {', '.join(missing)}.")
+        return info
+
+    def render_continuation(self, run_id, index, prompt, seconds, width, height, save_as, seed, first_frame=None,
+                            last_frame=None, previous=None):
+        """Clip index + 1 of an H3 Infinite chain: its latent saved in ComfyUI for the next, the clip downloaded."""
+        workflow = h3_infinite.build_clip(self.workflow, self.infinite_nodes(), run_id, index, prompt, seconds, width,
+                                          height, seed, first_frame, last_frame, previous)
+        return self._download(self._run(workflow, seed), save_as)
+
+    def stitch_continuation(self, run_id, count, save_as):
+        """The film from the chain's saved latents, stitched in ComfyUI by the suite and downloaded as save_as.mp4."""
+        # A name of its own each time, so the stitcher's numbering starts at 1 and the file is known.
+        prefix = f"{h3_infinite.latent_folder(run_id)}/film_{int(time.time())}"
+        self._run(h3_infinite.build_stitch(self.workflow, self.infinite_nodes(), run_id, count, prefix))
+        subfolder, name = prefix.rsplit("/", 1)
+        made = {"filename": f"{name}_00001_.mp4", "subfolder": subfolder, "type": "output"}
+        return self._download({"outputs": {"stitch": {"videos": [made]}}}, save_as)
 
     def render(self, prompt, images, seconds, width, height, save_as, audio=None, ref_videos=(), ref_audios=(), seed=None,
                h3_refined=False):

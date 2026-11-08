@@ -222,11 +222,12 @@ length is not yet known in the form. Changing back to multiple clips restores yo
 | **Separate moments** | Your image | A short fade | Leaves the others alone |
 | **H3 Motion Director** | The previous clip's last frame | Nothing: it flows | Also redoes every shot after it |
 | **H3 Multishot** | The previous shot's last frame | The sampler joins the shots | Renders the entire take again |
+| **H3 Infinite continuation** | The previous clip's video and sound, carried over in place | The suite crossfades the seam | Also redoes every shot after it |
 
 If a continuous take drifts away from how your image looks, try separate moments.
 Ordinary multi-image workflows use separate moments. The H3 choices appear only for compatible saved workflows:
 select the adapted **`video_Minimax_H3_T2V_I2V_R2V`** workflow for Motion Director, or a supported H3
-reference-to-video workflow for Multishot.
+reference-to-video workflow for Multishot or H3 Infinite continuation.
 
 **H3 Motion Director** continuous takes require exactly one image. It is the first frame of the first clip;
 the last frame of each clip becomes the next clip's first frame. Clips remain individually saved and resumable.
@@ -244,6 +245,20 @@ reference images are resized and centre-cropped to the output dimensions. Refere
 the first-clip preview are unavailable in this mode. Stopping, retrying or changing a shot requires rendering the
 whole take again; individual shots cannot be resumed. Exact-prompt mode deliberately repeats the same prompt for
 every shot; choose an LLM prompt source for distinct planned actions.
+
+**H3 Infinite continuation** uses [Herrgotts H3 Infinite Continuation Suite](https://github.com/HerrgottMargott/Herrgotts-H3-Infinite-Continuation-Suite)
+(v1.4; install it with ComfyUI Manager, or clone it into `ComfyUI/custom_nodes`, then restart ComfyUI). Clip 1 is
+made by its Start node and every clip after by its Continue node, which copies the last 39 frames of the clip before,
+with their sound, into the new clip and keeps them (Native Masked AV), so motion and dialogue carry on across the
+seam. Each clip saves its full video and audio latent under `ComfyUI/output/autogen_h3_infinite/<run>/`, numbered,
+so a stopped run continues where it was; the suite's Saved Chain stitcher then makes the film from them, trimming
+each carried-over head and crossfading the seams. It needs a ComfyUI build with MiniMax H3's native AV masks
+(ComfyUI PR #15375, in 0.43) and the H3 first/last-frame model `minimax_h3_fl2va_pruned_int8_convrot.safetensors`.
+Your H3 reference workflow gives the text encoder and VAEs; the model, sampler (Sigma Shift 12/3, res_multistep,
+15 steps) and clip length are the suite's (Net New Content: a clip's length is its new footage, after the carried
+head). Image 1 is the first frame of clip 1; image 2 is where clip 1 ends, image 3 where clip 2 ends, and so on, as
+in the suite's own workflows. It makes its own sound, so narration, an audio file, reference media and OpenH3-IR are
+off in this mode.
 
 **Workflow options**, under Generation, are the chosen workflow's own switches and settings, such as a sampler's steps
 or a switched group, as the [Image side](image.md#workflow-options) has them. A run keeps them, so the rest of its clips and
@@ -290,7 +305,7 @@ python -m pipelines.video.main harbour.jpg "a storm rolls in over the harbour" -
 |---|---|
 | `--duration` | Film length: `90`, `3m` or `2m30`. From 5 seconds to 10 minutes, default `2m`. It's split into clips as long as the video model makes them. |
 | `--llm` | `local`, `gemini` or `claude`. Default: `LLM_PROVIDER`, else `local`. |
-| `--start` | `chain` for a normal continuous take (default), `image` for separate moments, `director` for H3 Motion Director chaining, or `multishot` for an H3 Multishot take. |
+| `--start` | `chain` for a normal continuous take (default), `image` for separate moments, `director` for H3 Motion Director chaining, `multishot` for an H3 Multishot take, or `infinite` for H3 Infinite continuation. |
 | `--h3-first-frame`, `--h3-multishot-steps N` | For Multishot: use image 1 as the first frame and a reference; set sampling steps (default 20). Multishot also requires `--fixed-clips --clip-seconds N-N`. |
 | `--reference IMAGE` | Another image, repeatable. The first one is image 2. |
 | `--ref-video FILE`, `--ref-audio FILE` | A reference video or audio clip every clip gets, repeatable, on a workflow that takes them such as MiniMax H3. |
@@ -301,7 +316,7 @@ python -m pipelines.video.main harbour.jpg "a storm rolls in over the harbour" -
 | `--plan-only` | Writes the prompts and stops, so you can read them before spending the GPU time. |
 | `--upload`, `--privacy` | Uploads when the film is done. Private by default. |
 | `--resume RUN` | Continues a saved run. |
-| `--redo SHOT` | With `--resume`: renders that shot again. In a chain, every shot after it too; Multishot only accepts `1` and rerenders the entire take. |
+| `--redo SHOT` | With `--resume`: renders that shot again. In a chain or H3 Infinite continuation, every shot after it too; Multishot only accepts `1` and rerenders the entire take. |
 | `--list` | Lists saved runs. |
 | `--check` | Checks ffmpeg, the LLM key and ComfyUI, and makes nothing. |
 

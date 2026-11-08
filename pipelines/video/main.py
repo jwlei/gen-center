@@ -17,7 +17,7 @@ from core import workflow_options
 from core.audio import AudioEngine
 from core.paths import LOGS_DIR
 from core.saved_workflows import shorthand, title_words, unique_name
-from pipelines.video import h3_multishot, h3_prompt, media, paths, planner, roles
+from pipelines.video import h3_infinite, h3_multishot, h3_prompt, media, paths, planner, roles
 from pipelines.video.comfy import ComfyClient
 from pipelines.video.run_state import STAGES, RunState, list_runs
 
@@ -77,8 +77,10 @@ def parse_args(argv=None):
     parser.add_argument("--duration", type=parse_duration, default="2m",
                         help="Film length: 90, 3m or 2m30 (default 2m, from 5 seconds to 10 minutes). Each clip is as long as "
                              "the video model makes them: 5-10 s on LTX, 5-15 s on MiniMax H3, 3-5 s on Wan.")
-    parser.add_argument("--start", choices=("chain", "image", "multishot", "director"), default="chain",
-                        help="Start each clip on the last frame of the one before (chain, default), or on the input image.")
+    parser.add_argument("--start", choices=("chain", "image", "multishot", "director", "infinite"), default="chain",
+                        help="Start each clip on the last frame of the one before (chain, default), or on the input image. "
+                             "infinite: H3 Infinite Continuation Suite, each clip continuing the one before's video and "
+                             "audio; image 1 is the first frame and each image after it where the next clip ends.")
     parser.add_argument("--h3-first-frame", action="store_true", help="Use image 1 as the Multishot first frame as well as a reference.")
     parser.add_argument("--h3-multishot-steps", type=int, default=20, choices=range(1, 51), metavar="1-50",
                         help="Sampling steps for H3 Multishot (default: 20).")
@@ -119,6 +121,9 @@ def parse_args(argv=None):
         parser.error("H3 Multishot needs --fixed-clips and a fixed --clip-seconds N-N.")
     if args.start == "multishot" and (args.first_only or args.h3_enhance != "off" or args.ref_video or args.ref_audio):
         parser.error("H3 Multishot does not support first-clip-only, OpenH3-IR, reference video or reference audio.")
+    if args.start == "infinite" and (args.h3_enhance != "off" or args.ref_video or args.ref_audio or args.audio or args.narration):
+        parser.error("H3 Infinite continuation makes its own sound and does not support OpenH3-IR, reference video, "
+                     "reference audio, --audio or --narration.")
     if len(args.ref_video_role) > len(args.ref_video) or len(args.ref_audio_role) > len(args.ref_audio):
         parser.error("--ref-video-role and --ref-audio-role go with a --ref-video or --ref-audio each.")
     if args.no_image and args.reference:
@@ -260,6 +265,10 @@ def plan_run(args, stages):
         if args.h3_first_frame and not images:
             raise RuntimeError("Choose image 1 to use it as the first frame.")
         start = "multishot"
+    elif args.start == "infinite":
+        if not h3_infinite.supports(comfy.workflow):
+            raise RuntimeError("H3 Infinite continuation needs a supported H3 reference-to-video workflow, for its text encoder and VAEs.")
+        start = "infinite"
     elif args.start == "director":
         adapted = comfy.workflow.get(director.INPUTS_ID, {}).get("class_type") == director.INPUTS
         if not adapted or not any(node.get("class_type") == director.DIRECTOR for node in comfy.workflow.values()) or len(images) != 1:
@@ -282,7 +291,7 @@ def plan_run(args, stages):
     state.options = workflow_options.chosen_in_env() or None
     state.h3_mode, state.h3_creativity, state.image_roles = args.h3_enhance, args.h3_creativity, args.image_roles
     state.h3_first_frame, state.h3_multishot_steps = args.h3_first_frame, args.h3_multishot_steps
-    state.connection_mode = args.start if args.start in ("director", "multishot") else start
+    state.connection_mode = args.start if args.start in ("director", "multishot", "infinite") else start
     state.direct, state.seed, state.plan_only, state.first_only = args.direct, args.seed, args.plan_only, args.first_only
     state.clip_seconds = list(args.clip_seconds) if args.clip_seconds else None
     if (not args.direct and llm == "local") or args.h3_enhance != "off":
@@ -351,9 +360,26 @@ def plan_run(args, stages):
 
 
 def clip_images(state, index):
+    if state.start == "infinite":
+        return infinite_frames(state, index)
     if state.start == "chain" and index > 0:
         return [media.last_frame(state.clip_path(index - 1), state.frame_path)]
     return state.image_paths
+
+
+def infinite_frames(state, index):
+    """H3 Infinite: image 1 is clip 1's first frame, and image n + 1 is where clip n ends. Either may be missing."""
+    first = state.image_paths[0] if index == 0 and state.image_paths else None
+    last = state.image_paths[index + 1] if index + 1 < len(state.image_paths) else None
+    return [first, last]
+
+
+def previous_clip(state, index):
+    """Which version of the clip before this one continues from: a redo makes a new one."""
+    if not index or index - 1 not in state.clips:
+        return None
+    path = state.clip_path(index - 1)
+    return f"{state.clips[index - 1]}@{os.stat(path).st_mtime_ns}" if os.path.exists(path) else state.clips[index - 1]
 
 
 def refine_shot(refiner, state, shot, images, workflow):
@@ -417,7 +443,11 @@ def render_shot(state, comfy, index, images, audio=None, references=((), ())):
         print(f"      🌱 Seed {seed}")
         try:
             kwargs = {"h3_refined": True} if state.h3_mode != "off" else {}
-            clip = comfy.render(shot["prompt"], images, shot["seconds"], state.width, state.height, save_as, audio, *references, seed=seed, **kwargs)
+            if state.start == "infinite":
+                clip = comfy.render_continuation(state.id, index, shot["prompt"], shot["seconds"], state.width, state.height,
+                                                 save_as, seed, *images, previous=previous_clip(state, index))
+            else:
+                clip = comfy.render(shot["prompt"], images, shot["seconds"], state.width, state.height, save_as, audio, *references, seed=seed, **kwargs)
         except (RuntimeError, OSError, ValueError) as e:
             print(f"      ❌ {e} (attempt {attempt}/{CLIP_ATTEMPTS}).")
             continue
@@ -461,8 +491,13 @@ def render_clips(state, comfy, most=None):
         else:
             enhanced = None
         try:
-            images = [comfy.upload(path, f"autocomfyui_{state.id}{'' if number == 1 else f'_{number}'}.png")
-                      for number, path in enumerate(image_paths, 1)]
+            if state.start == "infinite":
+                # [first frame, last frame], either None.
+                images = [path and comfy.upload(path, f"autocomfyui_{state.id}_{role}_{index + 1}.png")
+                          for role, path in zip(("first", "last"), image_paths)]
+            else:
+                images = [comfy.upload(path, f"autocomfyui_{state.id}{'' if number == 1 else f'_{number}'}.png")
+                          for number, path in enumerate(image_paths, 1)]
             # Once a run: they're the same for every clip.
             references = references or upload_references(state, comfy)
         except (OSError, ffmpeg.Error, requests.RequestException) as e:
@@ -495,6 +530,10 @@ def stitch_film(state):
     output = os.path.join(paths.OUTPUT_DIR, f"{state.film_name}.mp4")
     if state.start == "multishot":
         shutil.copyfile(os.path.join(state.parts_dir, state.take_file), output)
+    elif state.start == "infinite":
+        # The suite stitches its own chain: it trims each clip's carried-over head and smooths the seams.
+        print(f"   🧵 H3 Infinite is stitching {len(state.shots)} saved clips in ComfyUI...")
+        ComfyClient().stitch_continuation(state.id, len(state.shots), os.path.splitext(output)[0])
     else:
         clips = [state.clip_path(i) for i in range(len(state.shots))]
         media.stitch(clips, state.parts_dir, output, state.width, state.height, state.start == "chain")
@@ -563,7 +602,7 @@ def run(args):
             return 0
         # Only stitching left needs no ComfyUI. Saved after this, or a ComfyUI that's
         # down would cost a redo's clips without rendering anything.
-        preflight(needs_comfy=state.next_stage() == "Clips")
+        preflight(needs_comfy=state.next_stage() == "Clips" or state.start == "infinite")
         state.save()
         print(f"🗂️ Run folder: {state.id}")
         print(f"🎞️ Continuing {state.title}")

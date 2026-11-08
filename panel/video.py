@@ -12,7 +12,7 @@ from core import director, h3_refiner, run_form, seeds, workflow_options
 from panel.server import (read_outcome, form_options, PIPELINES, VIDEO_TIMINGS, _runs_cache, active_runs, app, busy_runs, item_images, job,
                           password_required, safe_video_path, saved_at, run_queue, saved_runs, saved_workflows, queue_form_snapshot)
 from panel.shorts import VOICES
-from pipelines.video import h3_multishot, media, output_metadata, paths, planner, roles
+from pipelines.video import h3_infinite, h3_multishot, media, output_metadata, paths, planner, roles
 from pipelines.video.comfy import workflow_model
 from pipelines.video.main import BUILT_IN
 from pipelines.video.run_eta import RunEta
@@ -107,7 +107,7 @@ def build_options(form):
         flags.append("--fixed-clips")
 
     start = form.get("start") or "chain"
-    if start not in ("chain", "image", "director", "multishot"):
+    if start not in ("chain", "image", "director", "multishot", "infinite"):
         return None, "Unknown start mode."
     flags += ["--start", start]
     if start == "multishot":
@@ -166,6 +166,8 @@ def build_options(form):
         flags += ["--h3-enhance", mode, "--h3-creativity", creativity]
     if start == "multishot" and (form.get("try_first") or mode != "off"):
         return None, "H3 Multishot renders the whole take and does not support preview runs or OpenH3-IR."
+    if start == "infinite" and mode != "off":
+        return None, "H3 Infinite continuation does not support OpenH3-IR."
     return flags, None
 
 
@@ -261,6 +263,8 @@ def generate():
     start = option(flags, "--start")
     if start == "multishot" and not h3_multishot.supports_path(env.get("COMFYUI_WORKFLOW")):
         return {"ok": False, "error": "H3 Multishot needs a supported H3 reference-to-video workflow."}, 400
+    if start == "infinite" and not h3_infinite.supports_path(env.get("COMFYUI_WORKFLOW")):
+        return {"ok": False, "error": "H3 Infinite continuation needs a supported H3 reference-to-video workflow."}, 400
     if start == "director":
         try:
             with open(env.get("COMFYUI_WORKFLOW") or "", encoding="utf-8") as file:
@@ -314,6 +318,10 @@ def generate():
         return {"ok": False, "error": "Choose image 1 to use it as the first frame."}, 400
     if start == "multishot" and any(name.startswith("ref_media") and upload.filename for name, upload in request.files.items()):
         return {"ok": False, "error": "H3 Multishot does not yet support reference video or audio."}, 400
+    if start == "infinite" and (any(name.startswith("ref_media") and upload.filename for name, upload in request.files.items())
+                                or narration or (audio_upload and audio_upload.filename)):
+        return {"ok": False, "error": "H3 Infinite continuation makes its own sound: it takes no reference video, "
+                                     "reference audio, narration or audio file."}, 400
     if llm == "local" and uploads and h3_refiner.selected_model() == "qwen3-14b":
         return {"ok": False, "error": "Qwen3 14B is text-only and cannot analyze attached images. Choose Gemma 4 in Settings."}, 400
     try:
@@ -406,7 +414,7 @@ def run_to_continue(prompt, flags, env, takes, images, audio=None, references=()
                 and (not option(flags, "--llm") or state.llm == option(flags, "--llm"))
                 and state.h3_mode == option(flags, "--h3-enhance", "off")
                 and state.h3_creativity == option(flags, "--h3-creativity", "balanced")
-                and (state.connection_mode or state.start) == (start if start in ("director", "multishot") or takes["max_images"] == 1 else "image")
+                and (state.connection_mode or state.start) == (start if start in ("director", "multishot", "infinite") or takes["max_images"] == 1 else "image")
                 and (start != "multishot" or (state.h3_first_frame == ("--h3-first-frame" in flags)
                      and state.h3_multishot_steps == int(option(flags, "--h3-multishot-steps", 20))))):
             return state

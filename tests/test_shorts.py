@@ -461,6 +461,38 @@ class SeedTest(unittest.TestCase):
         self.assertEqual(len(sent), 2, "then, rejected, a new one")
 
 
+class ProgressActionTest(unittest.TestCase):
+    def test_a_started_local_model_says_what_it_is_doing_not_that_it_is_starting(self):
+        job = webapp.Job()
+        job.pipeline, job.eta = "image", mock.Mock()
+        job._track("▶ Stage 1/2: Prompts")
+        job._track("🧠 Local model is writing 15 prompts...")
+        job._track("🧠 Starting the local OpenH3-IR model...")
+        self.assertEqual(job.progress["action"], "Starting local model")
+        job._track("   llama.cpp: loading weights")
+        job._track("🧠 Local model ready.")
+        self.assertEqual(job.progress["action"], "Generating prompts", "back to what it was started for")
+        job._track("🧠 Starting the local OpenH3-IR model...")
+        job._track("🧠 Local model ready.")
+        job._track("🧠 OpenH3-IR: writing a brief (balanced)...")
+        self.assertEqual(job.progress["action"], "Enhancing prompt")
+
+
+class MovedProjectTest(unittest.TestCase):
+    def test_a_film_saved_under_the_old_project_folder_is_found_where_it_is_now(self):
+        from core.paths import moved
+
+        with tempfile.TemporaryDirectory() as folder:
+            film = os.path.join(folder, "Film.mp4")
+            open(film, "wb").close()
+            old = r"C:\Projects\ComfyUI-auto-gen\output\video\Film.mp4"
+            self.assertEqual(moved(old, folder), film, "renamed project: the same file, where it is now")
+            self.assertEqual(moved(film, folder), film)
+            gone = r"C:\Projects\ComfyUI-auto-gen\output\video\Gone.mp4"
+            self.assertEqual(moved(gone, folder), gone, "nothing of that name: left as it was, so it reads as missing")
+            self.assertIsNone(moved(None, folder))
+
+
 class RenderEtaTest(unittest.TestCase):
     def test_failed_and_rejected_avatar_renders_do_not_teach_the_eta(self):
         from pipelines.shorts.run_eta import RunEta

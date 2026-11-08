@@ -86,8 +86,9 @@
   .stopped-fold[open] .stopped-body, .queue-list:not([hidden]) { animation: fold-open .25s ease; }
   @keyframes fold-open { from { opacity: 0; transform: translateY(-6px); } to { opacity: 1; transform: none; } }
   details.fold-opening > :not(summary) { animation: fold-open .25s ease; }
-  @media (prefers-reduced-motion: reduce) { .stopped-fold[open] .stopped-body, .queue-list:not([hidden]) { animation: none; } .queue-fold-toggle .chev { transition: none; } .queue-item.dragging { transform: none; } }
-  .queue-item.dragging { cursor: grabbing; }
+  @media (prefers-reduced-motion: reduce) { .stopped-fold[open] .stopped-body, .queue-list:not([hidden]) { animation: none; } .queue-fold-toggle .chev { transition: none; } .queue-item.dragging { transform: none; scale: none; } }
+  .queue-item.dragging { cursor: grabbing; scale: 1.02; }
+  .queue-item.selected, .queue-item.selected * { user-select: none; -webkit-user-select: none; }
   .queue-item .hint { margin-top: 0; }
   .queue-item .when { color: var(--muted); font-size: .78rem; white-space: nowrap; font-variant-numeric: tabular-nums; }
   .queue button { width: auto; margin: 0; padding: 4px 10px; font-size: .78rem; background: var(--panel-2); border: 1px solid var(--line); color: var(--text); }
@@ -357,6 +358,11 @@
   .result.failed .result-mark { color: var(--err); }
   .result.stopped .result-mark, .result.skipped .result-mark { color: var(--warn); }
   .results .result:hover .result-label { text-decoration: underline; }
+  .finished-foot { display: flex; justify-content: flex-end; margin-top: 2px; }
+  .finished-clear { width: 5.5em; margin: 0; padding: 3px 8px; background: none; border: 0; border-radius: 6px; color: var(--muted);
+    font-size: .74rem; font-weight: 500; opacity: .7; }
+  .finished-clear:hover, .finished-clear:focus-visible { opacity: 1; color: var(--text); }
+  .finished-clear.armed { opacity: 1; color: var(--err); }
   .result-type { flex: none; padding: 0 6px; border: 1px solid var(--line); border-radius: 6px; font-size: .7rem; color: var(--text); }
   .result-label { flex: 1 1 0; min-width: 0; overflow-wrap: anywhere; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; overflow: hidden; text-align: left; }
   .finished .failed { color: var(--err); }
@@ -639,6 +645,12 @@
   #promptEditorEnhance svg, #promptEditorCopy svg, #promptEditorClear svg { width: 18px; height: 18px; }
   .prompt-copy[hidden] { display: none; }
   .prompt-editor-foot .panel-close { align-self: auto; }
+  /* While the LLM writes: a bar along the inside top of the box, and the write button pulsing. */
+  #promptEditorProgress { top: 1px; left: 1px; max-width: calc(100% - 2px); border-radius: 8px 8px 0 0; z-index: 1; }
+  @keyframes prompt-writing-icon { 50% { opacity: .35; transform: scale(.82) rotate(-14deg); } }
+  .prompt-write.working, #promptEditorEnhance.working { color: var(--accent); opacity: 1; }
+  .prompt-write.working svg, #promptEditorEnhance.working svg { animation: prompt-writing-icon 1.1s ease-in-out infinite; }
+  @media (prefers-reduced-motion: reduce) { .prompt-write.working svg, #promptEditorEnhance.working svg { animation: none; } }
   /* The image viewer: the picture as large as fits, its buttons under it. */
   dialog.viewer { width: auto; max-width: calc(100vw - 24px); max-height: calc(100dvh - 24px); background: transparent; border: 0;
     display: none; flex-direction: column; align-items: center; gap: 10px; overflow: visible; }
@@ -775,10 +787,9 @@
   .image-set-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; }
   .image-set-heading h3 { flex: 1; min-width: 0; }
   .image-set-heading .nsfw-button { flex: none; width: 34px; height: 28px; padding: 0; margin: 0; display: inline-flex; align-items: center; justify-content: center; background: var(--panel-2); color: var(--muted); }
-  body.nsfw-view .videos-card #imageSets, body.nsfw-view .videos-card #videos { display: block !important; }
-  body.nsfw-view .videos-card #videos { margin-top: 12px; }
-  body.nsfw-view .videos-card #videos:has(~ #imageSets .image-set) .image-set:last-child { border-bottom: 1px solid var(--line); margin-bottom: 8px; }
-  body.nsfw-view .videos-card .vhead, body.nsfw-view .videos-card .cnav { display: none !important; }
+  /* NSFW: films and image sets in one list, newest first (renderImageSets). */
+  body.nsfw-view .videos-card #imageSets { display: block !important; }
+  body.nsfw-view .videos-card #videos, body.nsfw-view .videos-card .vhead, body.nsfw-view .videos-card .cnav { display: none !important; }
   /* A run that made nothing: a small word at the end of its title's line, and why under a fold. */
   .run-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; min-width: 0; }
   .run-head .what { min-width: 0; }
@@ -876,6 +887,22 @@
   /* How far along can't be told: it says it's working, not how much is done. */
   .bar.busy > div { animation: slide 1.4s ease-in-out infinite; }
   @keyframes slide { from { margin-left: -30%; } to { margin-left: 100%; } }
+  /* Work going on: a soft light passes slowly along what is done, then rests. Like the running dot, but quieter.
+     Only the live bars and the stage under way: a finished stage or the disk meter stays still. */
+  #runProgressBar, #runStripBar, #comfyBar, #uploadProgressBar, #uploadStripBar, #queuePendingBar { position: relative; overflow: hidden; }
+  #runProgressBar::after, #runStripBar::after, #comfyBar::after, #uploadProgressBar::after, #uploadStripBar::after, #queuePendingBar::after {
+    content: ""; position: absolute; top: 0; bottom: 0; left: 0; width: 40%; pointer-events: none;
+    background: linear-gradient(90deg, transparent, rgba(255, 255, 255, .2), transparent); transform: translateX(-100%);
+    animation: bar-sheen 3.6s ease-in-out infinite; }
+  @keyframes bar-sheen { 0% { transform: translateX(-100%); } 55%, 100% { transform: translateX(250%); } }
+  .step { position: relative; }
+  .step.now::before { content: ""; position: absolute; top: -3px; left: 0; right: 0; height: 3px; pointer-events: none;
+    background: linear-gradient(90deg, transparent, rgba(255, 255, 255, .3), transparent) no-repeat; background-size: 40% 100%;
+    animation: step-sheen 3.6s ease-in-out infinite; }
+  @keyframes step-sheen { 0% { background-position: -70% 0; } 55%, 100% { background-position: 170% 0; } }
+  @media (prefers-reduced-motion: reduce) {
+    #runProgressBar::after, #runStripBar::after, #comfyBar::after, #uploadProgressBar::after, #uploadStripBar::after,
+    #queuePendingBar::after, .step.now::before { animation: none; display: none; } }
   .dashboard .card { scroll-margin-top: 8px; }
   .options-col { min-width: 0; }
   .form-actions { margin-top: 16px; }
@@ -892,9 +919,6 @@
     font-size: .95rem; font-weight: 600; text-align: left; overflow-wrap: anywhere; cursor: pointer; }
   .current-work[hidden] { display: none; }
   .current-work-size { margin: -5px 0 8px; color: var(--muted); font-size: .75rem; }
-  /* A right-pointing chevron, drawn with two borders so no font can turn it into another glyph. */
-  .current-work::after { content: ""; display: inline-block; width: .42em; height: .42em; margin-left: .5em; vertical-align: .1em;
-    border-top: 2px solid var(--muted); border-right: 2px solid var(--muted); transform: rotate(45deg); }
   /* What the run renders with: a small box over the blurred page. */
   dialog.run-facts { width: min(360px, calc(100vw - 24px)); }
   .run-facts-list { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 6px 14px; margin: 0; font-size: .88rem; }
@@ -1432,6 +1456,7 @@
         <option value="image">Separate moments: each clip starts on your image, with a fade between</option>
         <option id="startDirector" value="director">Continuous take: H3 Motion Director (one image)</option>
         <option id="startMultishot" value="multishot">Continuous take: H3 Multishot</option>
+        <option id="startInfinite" value="infinite">Continuous clips: H3 Infinite continuation (video and sound carry on)</option>
       </select>
       <select id="startUnavailable" aria-label="How clips connect" disabled hidden>
         <option>Separate moments: clips are generated independently, with a fade between</option>
@@ -1458,7 +1483,7 @@
     <div id="videoLlmBox">
     <label for="llm">Model</label>
     <select id="llm" name="llm">
-      {% for llm in llms %}<option value="{{ llm.name }}" {% if not llm.ready %}disabled{% endif %}>{{ llm.label }}{% if not llm.ready %} (no key in .env){% endif %}</option>{% endfor %}
+      {% for llm in llms %}<option value="{{ llm.name }}" {% if not llm.ready %}disabled{% endif %}{% if llm.name == default_llm %} selected{% endif %}>{{ llm.label }}{% if not llm.ready %} (no key in .env){% endif %}</option>{% endfor %}
     </select>
     </div>
     <div class="prompt-label-row"><label for="prompt" id="videoPromptLabel">Prompt</label><span class="prompt-actions" hidden><button type="button" id="clearVideoPrompt" aria-label="Clear video prompt">Clear</button><button type="button" class="prompt-write" id="writeVideoPrompt" aria-label="Write video prompt" title="Write prompt" disabled></button></span></div>
@@ -1606,7 +1631,7 @@
     <div id="imageLlmBox">
       <label for="imageLlm">Model</label>
       <select id="imageLlm" name="llm">
-        {% for llm in image_llms %}<option value="{{ llm.name }}" {% if not llm.ready %}disabled{% endif %}>{{ llm.label }}{% if not llm.ready %} (no key in .env){% endif %}</option>{% endfor %}
+        {% for llm in image_llms %}<option value="{{ llm.name }}" {% if not llm.ready %}disabled{% endif %}{% if llm.name == default_llm %} selected{% endif %}>{{ llm.label }}{% if not llm.ready %} (no key in .env){% endif %}</option>{% endfor %}
       </select>
       <div id="imageToPromptSlot"></div>
     </div>
@@ -1811,6 +1836,7 @@
   <div class="prompt-editor-head"><div class="panel-dialog-title" id="promptEditorTitle">Prompt</div><span class="hint" id="promptEditorCount" aria-live="polite"></span></div>
   <div class="prompt-editor-box">
     <textarea id="promptEditorText" aria-labelledby="promptEditorTitle" spellcheck="true"></textarea>
+    <div class="prompt-progress" id="promptEditorProgress" hidden></div>
   </div>
   <div class="prompt-editor-foot">
     <button type="button" class="prompt-copy prompt-enhance" id="promptEditorEnhance" aria-label="Write it with the LLM" title="Write it with the LLM: your idea becomes a full prompt" hidden></button>
@@ -2241,7 +2267,9 @@ function renderVideos() {
   if ($('videos').dataset.key !== key) {
     const was = (slides()[currentSlide()] || {}).dataset;
     $('videos').classList.add('as-list');
-    $('videos').innerHTML = videos.length && !(choosingFor && outputFilter === NSFW_FILTER) ? videos.map(v => filmHtml(v, outputFilter === NSFW_FILTER ? 'video' : folder)).join('')
+    // NSFW: the films are listed with the image sets, in the order they were made (renderImageSets).
+    $('videos').innerHTML = outputFilter === NSFW_FILTER ? ''
+      : videos.length ? videos.map(v => filmHtml(v, folder)).join('')
       : `<div class="empty">${folder === 'uploaded' ? 'Nothing uploaded yet.' : folder === 'video' ? 'No films yet. Press Generate to make one.' : 'No videos waiting. Press Generate to make one.'}</div>`;
     $('videos').dataset.key = key;
     const back = was && slides().findIndex(s => s.dataset.name === was.name);
@@ -2330,7 +2358,8 @@ function secondTap(button) {
   return false;
 }
 
-$('videos').addEventListener('click', async e => {
+// A film's buttons, in Videos, or among the image sets in the NSFW view.
+const onFilmClick = async e => {
   const play = e.target.closest && e.target.closest('[data-play-film]');
   if (play) {
     e.preventDefault();
@@ -2363,7 +2392,8 @@ $('videos').addEventListener('click', async e => {
     if (!confirm(`Upload ${d.up} to YouTube ${privacyNote()}${when}?`)) return;
     startUpload(topic ? { video: d.up, topic } : { video: d.up }, e.target);
   }
-});
+};
+$('videos').addEventListener('click', onFilmClick);
 $('uploadAll').addEventListener('click', () => {
   const videos = unclaimedVideos();
   const missing = videos.filter(v => !v.topic).length;
@@ -2554,7 +2584,9 @@ function syncImageInput() {
   $('addImage').hidden = shown >= room || !last || !last.querySelector('input').files.length;
   const second = imageBoxes()[1];
   $('imagesHint').hidden = !(second && !second.hidden && second.querySelector('input').files.length);
-  $('imagesHint').textContent = high === 1
+  $('imagesHint').textContent = $('start').value === 'infinite' && !$('start').disabled
+    ? 'Image 1 is the first frame of clip 1. Image 2 is where clip 1 ends, image 3 where clip 2 ends, and so on: a clip without one goes where its prompt takes it.'
+    : high === 1
     ? 'This workflow gives its clips one image, so the video model never sees image 2. The LLM looks at it and puts what matters into the prompts in words.'
     : 'Every clip gets all of these images, and the LLM is told what each one is for.' + (shown === room && room < MOST_IMAGES ? ` This workflow takes ${room} at most.` : '');
   const workflow = $('videoWorkflow').value, chain = high === 1, director = !!workflowDirector[workflow],
@@ -2562,9 +2594,11 @@ function syncImageInput() {
   $('startChain').disabled = !chain;
   $('startDirector').disabled = !director;
   $('startMultishot').disabled = !multishot;
+  // H3 Infinite takes its text encoder and VAEs from the same H3 reference workflows as Multishot.
+  $('startInfinite').disabled = !multishot;
   const available = chain || director || multishot;
   if (available && (($('start').value === 'chain' && !chain) || ($('start').value === 'director' && !director)
-      || ($('start').value === 'multishot' && !multishot))) $('start').value = 'image';
+      || (['multishot', 'infinite'].includes($('start').value) && !multishot))) $('start').value = 'image';
   $('start').disabled = !available;
   $('start').hidden = !available;
   $('startUnavailable').hidden = available;
@@ -2572,6 +2606,7 @@ function syncImageInput() {
     ? 'This workflow cannot start a clip on the previous clip’s last frame. Each clip is generated separately. Select an H3 reference or adapted Motion Director workflow for H3 continuous modes.'
     : $('start').value === 'director' ? 'Motion Director requires exactly one image. Redoing a shot also redoes the shots after it.'
     : $('start').value === 'multishot' ? 'H3 Multishot renders all shots together as one take.'
+    : $('start').value === 'infinite' ? 'Herrgotts H3 Infinite Continuation Suite: each clip carries on the motion and sound of the one before, on the H3 first/last-frame model, and the suite stitches the film. It makes its own sound. Redoing a shot also redoes the shots after it.'
     : 'Redoing a shot in a continuous take also redoes the ones after it.';
 }
 
@@ -2626,7 +2661,7 @@ function syncMediaInput() {
   const videos = takes.max_videos || 0, audios = takes.max_audios || 0;
   const images = imageBoxes().filter(box => !box.hidden && box.querySelector('input').files.length).length;
   const room = Math.max(0, Math.min(MOST_MEDIA, videos + audios, (takes.max_references ?? videos + audios + images) - images));
-  $('mediaSection').hidden = !(videos + audios);
+  $('mediaSection').hidden = !(videos + audios) || ($('start').value === 'infinite' && !$('start').disabled);
   const shown = mediaShown = Math.min(Math.max(room, 1), Math.max(mediaShown, 1));
   for (let number = mediaBoxes().length + 1; number <= shown; number++) $('mediaBoxes').insertAdjacentHTML('beforeend', mediaBoxHtml(number));
   mediaBoxes().forEach((box, i) => {
@@ -2975,7 +3010,11 @@ function syncVideoForm() {
   syncVideoClips();
   // Your prompt as it is, for every clip, or the LLM writing one per clip from it.
   const direct = $('videoPromptMode').value === 'direct';
-  syncH3Controls('video', !multishot && !!workflowH3[$('videoWorkflow').value]);
+  const infinite = !single && $('start').value === 'infinite' && !!workflowMultishot[$('videoWorkflow').value];
+  // It makes its own sound, from the clip before's: no narration, audio file or reference media.
+  if (infinite && $('audioMode').value !== 'none') { $('audioMode').value = 'none'; syncAudio(); }
+  $('audioMode').disabled = infinite;
+  syncH3Controls('video', !multishot && !infinite && !!workflowH3[$('videoWorkflow').value]);
   $('videoLlmBox').classList.toggle('hidden', direct);
   $('videoPromptHint').textContent = direct ? (multishot ? 'Every shot gets it as you wrote it.' : 'Every clip gets it as you wrote it, each on its own seed.') : 'A sentence or two is enough.';
   syncOptions('videoOptions', 'videoOptionsBox', (workflowTakes[$('videoWorkflow').value] || {}).options || [], $('videoWorkflow').value);
@@ -4031,13 +4070,26 @@ function imageSetHtml(set) {
     ${row}
   </div>`;
 }
+// When a set or film was made: its run's start, in its id (image_20261108_043935, run_20261108_035819). A file's own
+// time moves when it is made again, as a film stitched anew, and would list it among the newest.
+function madeAt(id, mtime) {
+  const m = /(\d{4})(\d{2})(\d{2})_(\d{2})(\d{2})(\d{2})/.exec(id || '');
+  return m ? new Date(+m[1], m[2] - 1, +m[3], +m[4], +m[5], +m[6]).getTime() / 1000 : mtime || 0;
+}
 function renderImageSets() {
   const sets = filtered(imageSets);
-  const key = outputFilter + JSON.stringify(sets.map(set => [set.id, set.label, set.total, set.images, set.model, set.loras, set.resolutions, set.size_bytes, set.generating, set.llm, set.h3_mode, set.h3_creativity]));
+  const nsfw = outputFilter === NSFW_FILTER;
+  // NSFW: films too, so both are in one list in the order they were made (choosing an image for a box: images only).
+  const films = nsfw && !choosingFor ? visibleFilms() : [];
+  const key = outputFilter + JSON.stringify(sets.map(set => [set.id, set.label, set.total, set.images, set.model, set.loras, set.resolutions, set.size_bytes, set.generating, set.llm, set.h3_mode, set.h3_creativity, set.nsfw, set.mtime]))
+    + JSON.stringify(films.map(v => [v.name, v.mtime, v.topic, v.title, v.model, v.resolution, v.duration, v.size_mb, v.loras, v.h3_mode, v.h3_creativity, v.run]));
   // Only when it changed, so a poll doesn't reload the pictures.
   if ($('imageSets').dataset.key === key) return;
   $('imageSets').dataset.key = key;
-  $('imageSets').innerHTML = sets.length ? sets.map(imageSetHtml).join('') : '<div class="empty">No images yet. Press Generate to make some.</div>';
+  const items = [...sets.map(set => [madeAt(set.id, set.mtime), imageSetHtml(set)]), ...films.map(v => [madeAt(v.run || v.name, v.mtime), filmHtml(v, 'video')])];
+  if (nsfw) items.sort((a, b) => b[0] - a[0]);
+  $('imageSets').innerHTML = items.length ? items.map(item => item[1]).join('')
+    : `<div class="empty">${nsfw ? 'Nothing is tagged NSFW.' : 'No images yet. Press Generate to make some.'}</div>`;
 }
 // --- The same again: a set's settings back in Generate, its images too, to change before pressing it ---
 // With position: more like that one image: its own prompt, word for word, four times on new seeds.
@@ -4692,6 +4744,7 @@ $('viewerDelete').addEventListener('click', async () => {
   poll();
 });
 $('imageSets').addEventListener('click', async e => {
+  if (e.target.closest && e.target.closest('.film')) return onFilmClick(e);
   const view = e.target.closest && e.target.closest('[data-view-set]');
   if (view) {
     e.preventDefault();
@@ -4816,7 +4869,7 @@ function shotsHtml(run) {
     : run.pending ? 'Save changes here, then start this run from Pending.'
     : !film ? ''
     : run.start === 'multishot' ? 'H3 Multishot renders the whole take at once. Saving edits does not change a rendered take: render the whole take again to apply them. Only the first seed controls the take.'
-    : run.start === 'chain' ? 'A continuous take: rendering a shot again also renders every shot after it, because they start from it.' : '';
+    : ['chain', 'infinite'].includes(run.start) ? 'A continuous take: rendering a shot again also renders every shot after it, because they start from it.' : '';
   const action = !film ? (left === run.shots.length ? 'Make the images' : `Make the ${left} left`)
     : run.start === 'multishot' && run.take_rendered ? 'Finish the film' : left === run.shots.length ? 'Render the film' : left ? `Render the ${left} left` : 'Stitch the film';
   const done = film ? run.finished : !left;
@@ -4944,7 +4997,7 @@ $('shotsBody').addEventListener('click', async e => {
     if (!confirm(`Generate image ${d.redo} again on ${seed ? `seed ${seed}` : 'a new seed'}? The new one replaces it.`)) return;
     if (await saveShots()) runSaved(`${runUrl(shotsRun.id)}/redo/${d.redo}`, button);
   } else if (d.redo) {
-    const after = shotsRun.start === 'chain' ? shotsRun.shots.length - d.redo : 0;
+    const after = ['chain', 'infinite'].includes(shotsRun.start) ? shotsRun.shots.length - d.redo : 0;
     const also = after ? ` and the ${after} after it` : '';
     const seed = $(`seed_${d.redo}`).value.trim();
     const what = shotsRun.start === 'multishot' ? 'the whole take' : `shot ${d.redo}${also}`;
@@ -5623,12 +5676,19 @@ function setupQueueScroll(section, selector, rowSelector, top = 0) {
   }
 }
 // Every run and upload that has ended, in one list, newest first.
-const FINISHED_SHOWN = 5;  // The last five; a restart starts it empty
+const FINISHED_SHOWN = 20;  // The last twenty, kept over a restart until Clear
 function queueDetail(item) {
   const detail = (item.detail || '').split(' · ').filter(part => part !== 'renders straight away' && part !== 'renders at once');
   const size = item.facts && item.facts.resolution;
   if (size && !detail.includes(size)) detail.push(size);
   return detail.join(' · ');
+}
+// Kept over a restart, so one from another day says which.
+function finishedWhen(r) {
+  if (!r.t) return r.at || '';
+  const date = new Date(r.t * 1000);
+  return date.toDateString() === new Date().toDateString() ? r.at || ''
+    : `${date.toLocaleDateString(undefined, { day: 'numeric', month: 'short' })} ${r.at || ''}`;
 }
 function renderFinished(runs, uploads, madeNow = []) {
   // Whole jobs, and what the one going now has made so far, such as each image of a set.
@@ -5652,7 +5712,9 @@ function renderFinished(runs, uploads, madeNow = []) {
   }
   const list = all.map(r => `<button type="button" class="result ${esc(r.outcome)}" style="--side:${SIDE_COLOURS[r.side] || SIDE_COLOURS.shorts}" data-goto="${esc(r.side)}"${r.tab ? ` data-tab="${r.tab}"` : ''}${r.run_id ? ` data-run-id="${esc(r.run_id)}"` : ''}${r.job_id != null ? ` data-job-id="${esc(String(r.job_id))}"` : ''}${r.position ? ` data-position="${r.position}"` : ''}${r.film ? ` data-film="${esc(r.film)}"` : ''}${r.outcome === 'failed' && r.type !== 'Upload' ? ' data-failed="1"' : ''}>`
     + `<span class="result-mark">${RESULT_MARKS[r.outcome]}</span><span class="result-type">${r.type}</span>`
-    + `<span class="result-label">${esc(r.label)}${r.note ? ` (${esc(r.note)})` : ''}</span><span class="when">${r.at}</span></button>`).join('');
+    + `<span class="result-label">${esc(r.label)}${r.note ? ` (${esc(r.note)})` : ''}</span><span class="when">${finishedWhen(r)}</span></button>`).join('')
+    // Quietly at the end: tapped once it asks, tapped again it empties the list.
+    + '<div class="finished-foot"><button type="button" class="finished-clear" data-clear-finished="1" title="Clear Finished: what was made stays">Clear</button></div>';
   if ($('finishedList').dataset.html !== list) { $('finishedList').innerHTML = list; $('finishedList').dataset.html = list; }
 }
 // --- Finished, Log and Quota: each opens in a box over the page ---
@@ -5726,7 +5788,19 @@ function goToOutput(side, tab) {
   resetOutputFilter();
   if (WIDE.matches) $('videosCard').scrollIntoView({ behavior: 'smooth' }); else showPage('output');
 }
-$('finishedList').addEventListener('click', e => {
+$('finishedList').addEventListener('click', async e => {
+  const clear = e.target.closest && e.target.closest('[data-clear-finished]');
+  if (clear && clear.dataset.clearFinished) {
+    if (!secondTap(clear)) return;
+    try {
+      const response = await fetch('/queue/finished/clear', { method: 'POST' });
+      if (!response.ok) throw new Error();
+    } catch (error) {
+      alert('Could not clear Finished. Check the connection and try again.');
+    }
+    poll();
+    return;
+  }
   const result = e.target.closest && e.target.closest('[data-goto]');
   if (!result) return;
   const d = result.dataset;
@@ -5950,15 +6024,18 @@ for (const id of ['stoppedRuns', 'failedRuns']) {
 // then sends the new order; the next poll draws what the server has.
 function queueOrder(el) { return [...el.querySelectorAll('.queue-item[data-id]')].map(node => Number(node.dataset.id)); }
 // Rows that change place glide there instead of jumping (FLIP: note where they were, move, play from the old spot).
+// A row still gliding when the order changes again starts from where it shows, not where it was headed: one glide
+// stacked on another made rows jump while dragging.
 function glide(el, move) {
   const rows = [...el.querySelectorAll('.queue-item[data-id]')];
   const before = new Map(rows.map(row => [row, row.getBoundingClientRect().top]));
+  for (const row of rows) for (const animation of row.getAnimations ? row.getAnimations() : []) animation.cancel();
   move();
   if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
   for (const row of rows) {
     const shift = before.get(row) - row.getBoundingClientRect().top;
-    if (!shift || row.classList.contains('dragging')) continue;
-    row.animate([{ transform: `translateY(${shift}px)` }, { transform: 'none' }], { duration: 200, easing: 'cubic-bezier(.2,.8,.2,1)' });
+    if (!shift) continue;
+    row.animate([{ transform: `translateY(${shift}px)` }, { transform: 'none' }], { duration: 220, easing: 'cubic-bezier(.2,.8,.2,1)' });
   }
 }
 async function sendOrder(el) {
@@ -5980,36 +6057,41 @@ async function sendOrder(el) {
 }
 function dragQueue(el) {
   let drag = null;
-  const placeDragged = () => {
-    const top = drag.row.getBoundingClientRect().top - drag.offset;
-    drag.offset = drag.y - drag.grab - top;
-    drag.row.style.transform = `translateY(${drag.offset}px)`;
-  };
   const moveRow = y => {
     const rows = [...el.querySelectorAll('.queue-item[data-id]')].filter(row => row !== drag.row);
     const after = rows.find(row => { const box = row.getBoundingClientRect(); return y < box.top + box.height / 2; });
     if (after) { if (drag.row.nextElementSibling !== after) glide(el, () => after.before(drag.row)); }
     else if (rows.length && rows[rows.length - 1].nextElementSibling !== drag.row) glide(el, () => rows[rows.length - 1].after(drag.row));
   };
+  // Held against the top or bottom, it scrolls: the queue's own list while it can, then the page. The deeper into
+  // the edge the faster, and the longer it is held there the faster still.
   const scrollDrag = now => {
     if (!drag) return;
     drag.frame = 0;
-    const list = drag.row.parentElement;
-    if (!list.classList.contains('queue-list')) return;
-    const box = list.getBoundingClientRect();
-    const edge = Math.min(60, box.height / 3);
-    const strength = drag.y < box.top + edge ? -Math.min(1, (box.top + edge - drag.y) / edge)
-      : drag.y > box.bottom - edge ? Math.min(1, (drag.y - box.bottom + edge) / edge) : 0;
-    if (!strength) { drag.lastFrame = null; return; }
+    const list = drag.row.parentElement && drag.row.parentElement.classList.contains('queue-list') ? drag.row.parentElement : null;
+    const inner = list && list.scrollHeight > list.clientHeight + 1 ? list : null;
+    const stick = $('stick'), footer = stick && stick.getBoundingClientRect ? stick.getBoundingClientRect() : null;
+    const screenBottom = footer && footer.height && footer.top < window.innerHeight ? footer.top : window.innerHeight;
+    const box = inner ? inner.getBoundingClientRect() : null;
+    const top = Math.max(0, box ? box.top : 0), bottom = Math.min(screenBottom, box ? box.bottom : screenBottom);
+    const edge = Math.max(24, Math.min(80, (bottom - top) / 3));
+    const strength = drag.y < top + edge ? -Math.min(1, (top + edge - drag.y) / edge)
+      : drag.y > bottom - edge ? Math.min(1, (drag.y - bottom + edge) / edge) : 0;
+    if (!strength) { drag.lastFrame = drag.edgeSince = null; return; }
     const elapsed = drag.lastFrame == null ? 16 : Math.min(50, now - drag.lastFrame);
     drag.lastFrame = now;
-    const before = list.scrollTop;
-    list.scrollTop += strength * 480 * elapsed / 1000;
-    if (list.scrollTop !== before) {
-      moveRow(drag.y);
-      placeDragged();
-      drag.frame = requestAnimationFrame(scrollDrag);
-    } else drag.lastFrame = null;
+    if (drag.edgeSince == null) drag.edgeSince = now;
+    const held = (now - drag.edgeSince) / 1000;
+    const speed = (180 + 1100 * strength * strength) * Math.min(4, 1 + held * 1.2);
+    drag.carry += Math.sign(strength) * speed * elapsed / 1000;
+    const step = Math.trunc(drag.carry);
+    drag.carry -= step;
+    let moved = !step;
+    if (step && inner) { const before = inner.scrollTop; inner.scrollTop += step; moved = inner.scrollTop !== before; }
+    if (step && !moved) { const before = window.scrollY; window.scrollBy(0, step); moved = window.scrollY !== before; }
+    if (!moved) { drag.lastFrame = drag.edgeSince = null; drag.carry = 0; return; }
+    moveRow(drag.y);
+    drag.frame = requestAnimationFrame(scrollDrag);
   };
   const select = target => {
     if (el._dragging || el._ordering) return false;
@@ -6021,51 +6103,48 @@ function dragQueue(el) {
     return true;
   };
   el.addEventListener('click', e => {
-    if (el._dragClick) { el._dragClick = false; e.preventDefault(); return; }
+    if (el._dragClick) { el._dragClick = false; e.preventDefault(); e.stopImmediatePropagation(); return; }
     select(e.target);
   });
+  // Once a job is selected, the whole box is its handle: pressed, it is held at once, and as it is dragged up or down
+  // it takes the place under the pointer, the others gliding aside. Its buttons stay buttons. Let go, it is let go.
   el.addEventListener('pointerdown', e => {
     if (!e.target.closest || e.target.closest('button') || e.button > 0 || el._ordering) return;
     const row = e.target.closest('.queue-item');
     if (!row || row.dataset.id !== el._selected) return;
+    e.preventDefault();
     drag = { row, pointer: e.pointerId, before: queueOrder(el).join(), nodes: [...el.querySelectorAll('.queue-item[data-id]')],
-      y: e.clientY, startX: e.clientX, startY: e.clientY, active: false, grab: e.clientY - row.getBoundingClientRect().top, offset: 0, frame: 0, lastFrame: null };
+      y: e.clientY, frame: 0, lastFrame: null, edgeSince: null, carry: 0 };
+    // From the press on, a poll leaves the queue as it is, so the row held stays the row on the page.
+    el._dragging = true;
+    row.classList.add('dragging');
+    try { el.setPointerCapture(e.pointerId); } catch (err) {}
   });
   el.addEventListener('pointermove', e => {
     if (!drag || e.pointerId !== drag.pointer) return;
-    if (!drag.active) {
-      if (Math.hypot(e.clientX - drag.startX, e.clientY - drag.startY) < 5) return;
-      drag.active = true;
-      el.setPointerCapture(e.pointerId);
-      drag.row.classList.add('dragging');
-    }
-    el._dragging = true;
     drag.y = e.clientY;
     moveRow(drag.y);
-    placeDragged();
     if (!drag.frame) drag.frame = requestAnimationFrame(scrollDrag);
   });
   const drop = e => {
     if (!drag || e.pointerId !== drag.pointer) return;
-    if (!drag.active) { drag = null; return; }
     if (drag.frame) cancelAnimationFrame(drag.frame);
     drag.row.classList.remove('dragging');
-    drag.row.style.transform = '';
-    const cancelled = e.type !== 'pointerup';
+    const cancelled = e.type === 'pointercancel';
     if (cancelled) {
       const parent = drag.row.parentElement;
       glide(el, () => { for (const row of drag.nodes) parent.appendChild(row); });
     }
     const moved = !cancelled && queueOrder(el).join() !== drag.before;
-    drag = null;
-    el._dragging = false;
-    el._selected = null;
+    // Let go, the job is let go too, dragged or only tapped. Held, the click after it lands on the queue, not the
+    // job, so the drop does it, and that click does nothing more.
+    if (!cancelled) el._selected = null;
     if (!cancelled) {
       el._dragClick = true;
       setTimeout(() => { el._dragClick = false; }, 0);
     }
-    for (const row of el.querySelectorAll('.queue-item.selected')) row.classList.remove('selected');
-    for (const title of el.querySelectorAll('.what[role="button"]')) title.setAttribute('aria-pressed', 'false');
+    drag = null;
+    el._dragging = false;
     if (moved) sendOrder(el); else renderQueue(el, ...el._last);
   };
   el.addEventListener('pointerup', drop);
@@ -6869,6 +6948,7 @@ async function writePrompt(side) {
   error.hidden = true;
   if (!original.trim()) { error.textContent = 'Enter an idea first.'; error.hidden = false; return; }
   button.disabled = true;
+  button.classList.add('working');
   field.readOnly = true;
   syncPromptWriter(side);
   box.classList.add('busy');
@@ -6909,6 +6989,7 @@ async function writePrompt(side) {
     clearInterval(timer);
     bar.hidden = eta.hidden = true;
     bar.style.width = '0%';
+    button.classList.remove('working');
     field.readOnly = false;
     syncPromptWriter(side);
     box.classList.remove('busy');
@@ -7205,6 +7286,11 @@ $('promptEditorClear').addEventListener('click', () => {
 function setPromptEditorBusy(busy) {
   $('promptEditorText').readOnly = busy || !!(promptField && promptField.readOnly);
   for (const id of ['promptEditorEnhance', 'promptEditorClear', 'promptEditorSave']) $(id).disabled = busy;
+  $('promptEditorEnhance').classList.toggle('working', busy);
+  $('promptEditorEnhance').setAttribute('aria-busy', String(busy));
+  const bar = $('promptEditorProgress');
+  bar.hidden = !busy;
+  if (!busy) bar.style.width = '0%';
 }
 async function enhanceInEditor() {
   const side = promptSide(promptField), text = $('promptEditorText'), idea = text.value;
@@ -7221,7 +7307,9 @@ async function enhanceInEditor() {
     const start = performance.now();
     const update = () => {
       if (promptWriting !== writing) return;
-      const remaining = estimate.seconds - (performance.now() - start) / 1000;
+      const elapsed = (performance.now() - start) / 1000, remaining = estimate.seconds - elapsed;
+      // Up to 95% on the estimate: the last of it is when the prompt is in.
+      $('promptEditorProgress').style.width = `${Math.min(95, Math.max(0, elapsed / estimate.seconds * 100))}%`;
       $('promptEditorCount').textContent = remaining > 0 ? `Writing · ${fmtEta(remaining)} left` : 'Writing · taking longer than estimated';
     };
     update();
@@ -7306,6 +7394,24 @@ function foldDetails(details) {
   });
 }
 document.querySelectorAll('details.section, details.h3-help').forEach(foldDetails);
+// Collapsing a header (a section, the queue, Pending or Failed) makes the page shorter. Scrolled down, the browser
+// then left the top of the screen black until the next scroll: what slid into view was never repainted. A scroll of
+// 1px and back, a frame apart, has it paint, as scrolling by hand did.
+if (window.ResizeObserver) {
+  let lastHeight = document.documentElement.scrollHeight, nudging = false;
+  new ResizeObserver(() => {
+    const height = document.documentElement.scrollHeight;
+    if (height < lastHeight && window.scrollY > 0 && !nudging) {
+      nudging = true;
+      requestAnimationFrame(() => {
+        const y = window.scrollY;
+        window.scrollTo(0, Math.max(0, y - 1));
+        requestAnimationFrame(() => { window.scrollTo(0, y); nudging = false; });
+      });
+    }
+    lastHeight = height;
+  }).observe(document.body);
+}
 
 {
   let page = 'generate';

@@ -14,3 +14,14 @@ COMFYUI_CLIENT_ID = "comfyui-auto-gen"
 
 def comfyui_client_id():
     return os.getenv("COMFYUI_CLIENT_ID") or COMFYUI_CLIENT_ID
+
+
+def moved(path, folder):
+    """
+    A saved absolute path, found again after the project folder was moved or renamed: the file of that name in the
+    folder it belongs in now. The path as it was if it is still there, or if there is nothing of that name.
+    """
+    if not path or os.path.exists(path):
+        return path
+    here = os.path.join(folder, os.path.basename(path.replace("\\", os.sep)))
+    return here if os.path.exists(here) else path

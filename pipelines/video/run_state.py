@@ -6,6 +6,7 @@ import time
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
 
+from core.paths import SAVED_WORKFLOWS_DIR, moved
 from pipelines.video import paths, roles
 from pipelines.video.media import on_grid
 
@@ -181,7 +182,8 @@ class RunState:
         if self.start == "multishot":
             self.take_file = None
             self.clips = {}
-        elif self.start == "chain":
+        elif self.start in ("chain", "infinite"):
+            # H3 Infinite: each clip continues from the latent the one before saved.
             self.clips = {i: name for i, name in self.clips.items() if i < index}
         else:
             self.clips.pop(index, None)
@@ -204,6 +206,9 @@ class RunState:
             self.take_file = None
         for index in [i for i in sorted(self.clips) if not os.path.exists(self.clip_path(i))]:
             self.redo(index)
+        # Saved with the project's folder in them: moved or renamed, the film and workflow are found where they are now.
+        self.final = moved(self.final, paths.OUTPUT_DIR)
+        self.workflow = moved(self.workflow, SAVED_WORKFLOWS_DIR)
         if self.final and not os.path.exists(self.final):
             self.final = None
 

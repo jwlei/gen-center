@@ -271,10 +271,14 @@ class Job:
         (re.compile(r"Rejected: |❌ .*\(attempt \d+/\d+\)"), "Retrying"),
         (re.compile(r"Preparing clip \d+/\d+"), "Preparing clips"),
         (re.compile(r"Processing Scene \d+"), "Composing scenes"),
+        (re.compile(r"H3 Infinite is stitching"), "Stitching in ComfyUI"),
         (re.compile(r"Stitching"), "Stitching"),
         (re.compile(r"Upscaling"), "Upscaling"),
         (re.compile(r"Uploading to YouTube"), "Uploading"),
     ]
+
+    MODEL_STARTING = "Starting local model"
+    MODEL_READY = re.compile(r"Local model ready")
 
     # Lines that start or end something the ETA times on its own (core/eta_keys.py LocalModelTimer).
     EVENTS = [
@@ -291,8 +295,13 @@ class Job:
         if self.eta is not None and hasattr(self.eta, "event"):
             self.eta.event(next((kind for kind, pattern in self.EVENTS if pattern.search(line)), "line"))
         action = next((label for pattern, label in self.ACTIONS if pattern.search(line)), None)
+        if action == self.MODEL_STARTING and p.get("action") != self.MODEL_STARTING:
+            p["action_before_model"] = p.get("action")
         if action:
             p["action"] = action
+        elif self.MODEL_READY.search(line) and p.get("action") == self.MODEL_STARTING:
+            # Started: it is now doing what it was started for (writing the prompts, say), not starting any more.
+            p["action"] = p.pop("action_before_model", None) or "Local model working"
         if self.pipeline == "video" and line.startswith("✅ Upscaled: "):
             p["upscaled_file"] = os.path.basename(line.removeprefix("✅ Upscaled: ").strip())
         for kind, pattern in self.PATTERNS[self.pipeline]:
@@ -398,7 +407,7 @@ class JobQueue:
     a Shut down or crash, on hold for the same reason.
     """
 
-    KEPT_RESULTS = 5  # Finished shows the last five, and starts empty after a restart
+    KEPT_RESULTS = 20  # Finished keeps the last twenty, saved beside the queue so they outlast a restart
 
     def __init__(self, job, prepare, blocked=lambda: False, path=None):
         self.job = job
@@ -414,15 +423,43 @@ class JobQueue:
         self.watcher = None
         self._restore()
 
+    @property
+    def results_path(self):
+        return os.path.splitext(self.path)[0] + "_finished.json" if self.path else None
+
     def _restore(self):
+        try:
+            with open(self.results_path, "r", encoding="utf-8") as f:
+                self.results = [result for result in json.load(f) if isinstance(result, dict) and "label" in result][-self.KEPT_RESULTS:]
+        except (OSError, ValueError, TypeError):
+            self.results = []  # Nothing saved yet, or a broken file: Finished starts empty
+        # A job's number stays its own: a saved result's failure is dismissed by it.
+        self.next_id = max((result.get("job_id") or 0 for result in self.results if isinstance(result.get("job_id"), int)), default=0) + 1
         try:
             with open(self.path, "r", encoding="utf-8") as f:
                 items = [{**item, "waited": True} for item in json.load(f)]
-            self.next_id = max((item["id"] for item in items), default=0) + 1
+            self.next_id = max([self.next_id - 1] + [item["id"] for item in items]) + 1
         except (OSError, ValueError, TypeError, KeyError):
             return  # Nothing saved, or a broken file: an empty queue
         self.items = items
         self.held = bool(items)
+
+    def _save_results(self):
+        if not self.results_path:
+            return
+        try:
+            os.makedirs(os.path.dirname(self.results_path), exist_ok=True)
+            with open(self.results_path + ".tmp", "w", encoding="utf-8") as f:
+                json.dump(self.results, f, ensure_ascii=False)
+            os.replace(self.results_path + ".tmp", self.results_path)
+        except OSError as e:
+            self.job.log(f"⚠️ Could not save Finished, it won't survive a restart: {e}")
+
+    def clear_results(self):
+        """Empties Finished. Saved runs and their files stay: only the list goes."""
+        with self.lock:
+            self.results = []
+            self._save_results()
 
     def _save(self):
         # Once closed, the file keeps what was queued at Shut down.
@@ -560,6 +597,7 @@ class JobQueue:
                              "run_id": run_id, "film": film, "position": position, "job_id": item.get("id"),
                              "at": datetime.now().strftime("%H:%M"), "t": time.time()})
         del self.results[:-self.KEPT_RESULTS]
+        self._save_results()
 
     def dismiss_failure(self, job_id):
         """Forgets a failure that has no saved run to retry. Returns whether there was one."""
@@ -568,6 +606,8 @@ class JobQueue:
                     if not (result["job_id"] == job_id and result["outcome"] == "failed" and not result["run_id"])]
             dismissed = len(kept) != len(self.results)
             self.results = kept
+            if dismissed:
+                self._save_results()
             return dismissed
 
     def hold(self):
@@ -1044,6 +1084,13 @@ COMFY_LABELS = {
     "VAEDecodeTiled": "Decoding frames", "LTXVAudioVAEDecode": "Decoding audio",
     "VHS_VideoCombine": "Saving the video", "TextEncodeQwenImageEditPlus": "Reading the prompt", "KSampler": "Generating the image",
     "VAEEncode": "Encoding the image", "VAEDecode": "Decoding the image", "PreviewImage": "Saving the image",
+    "VAEDecodeAudio": "Decoding audio", "MiniMaxH3SigmaShift": "Setting up the sampler", "ImageScale": "Sizing the image",
+    # Herrgotts H3 Infinite Continuation Suite (pipelines/video/h3_infinite.py)
+    "H3ContinuousStartV14": "Preparing the first clip", "H3ContinuousLoadLatent": "Loading the clip before",
+    "H3ContinuousContinueV14": "Carrying on from the clip before",
+    "H3ContinuousAnalyzeHandoverV14": "Finding where the next clip takes over",
+    "H3ContinuousSaveLatent": "Saving the clip for the next one", "H3ContinuousStitchOutputV14": "Trimming the clip",
+    "H3ContinuousStitchSavedChainV14": "Stitching the clips",
 }
 
 
@@ -1551,6 +1598,9 @@ MOST_WHY_LINES = 4
 
 # The failures that come up, in plain words with what to do: the first whose pattern is in the run's log.
 FAILURES = (
+    (r"Masked AV requires a current ComfyUI build",
+     "H3 Infinite continuation could not confirm ComfyUI's MiniMax H3 masks. Update ComfyUI and restart it; another "
+     "H3 node pack wrapping MiniMax H3 can also hide them from the suite's check. Then continue: clip 1 is kept."),
     (r"out of memory|OutOfMemoryError|CUDA error: out of memory|not enough (GPU )?memory|allocation on device",
      "Out of GPU memory. Try a smaller size (1 MP), fewer references, or turn off SeedVR2 or the 2nd pass under Workflow options."),
     (r"Needs the node [^,]+, which isn't installed|missing_node_type|node type .* not found|does not exist in the node",
@@ -1845,6 +1895,15 @@ def queue_remove(lane, item_id):
     if lane not in QUEUES:
         abort(404)
     return {"ok": QUEUES[lane].remove(item_id)}
+
+
+@app.route("/queue/finished/clear", methods=["POST"])
+@password_required
+def clear_finished():
+    """Empties Finished, runs and uploads alike. What they made stays where it is."""
+    for queue in QUEUES.values():
+        queue.clear_results()
+    return {"ok": True}
 
 
 @app.route("/queue/<lane>/failed/<int:job_id>/dismiss", methods=["POST"])

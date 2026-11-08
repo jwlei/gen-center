@@ -13,6 +13,7 @@ DEFAULT_TIMINGS = {
     "Plan | direct": 1,
     "part": 6,  # One clip evened out for stitching
     "part | multishot": 2,  # The take is already one file: copied, and given its audio if it has any
+    "part | infinite": 25,  # H3 Infinite: ComfyUI decodes each clip's saved latent again and joins it to the last
 }
 # An H3 Multishot take per second of film at full size and 20 steps, as measured on this card (2026-11-07).
 DEFAULT_TAKE_SECONDS = 176
@@ -111,6 +112,10 @@ class RunEta:
         take_options = {key: value for key, value in (self.options or {}).items() if key != "steps"}
         self.take_keys = [SEPARATOR.join(("multishot", key))
                           for key in render_keys(self.workflow or DEFAULT_WORKFLOW, take_options, self.size)]
+        if self.start == "infinite":
+            # H3 Infinite renders with its own FL2VA model and sampler, so its clips are timed apart too.
+            self.render_keys = [SEPARATOR.join(("infinite", key))
+                                for key in render_keys(self.workflow or DEFAULT_WORKFLOW, take_options, self.size)]
         self.local_mark = 0.0
         self.planned = False
 
@@ -229,7 +234,7 @@ class RunEta:
         elif self.name == "Stitching" and self.multishot:
             self.timings.learn_step("part | multishot", now - self.stage_started)
         elif self.name == "Stitching":
-            self.timings.learn_step("part", (now - self.stage_started) / max(1, self.shots))
+            self.timings.learn_step(self._part_key(), (now - self.stage_started) / max(1, self.shots))
         elif self.name == "Plan":
             if not self.planned:  # Your prompt as it is: no plan line, so the whole stage less the local model
                 self.timings.learn_step(self._plan_keys(), max(0.0, now - self.stage_started - (self.local.spent - self.local_mark)))
@@ -241,6 +246,10 @@ class RunEta:
         self.timings.save()
 
     # --- Estimating ---
+
+    def _part_key(self):
+        """Stitching, per clip: H3 Infinite's is done in ComfyUI, from the saved latents, and takes far longer."""
+        return "part | infinite" if self.start == "infinite" else "part"
 
     def _render_seconds(self, film_seconds):
         return self.timings.render(self.render_keys, DEFAULT_RENDER_SECONDS) * self.size_share * film_seconds
@@ -269,7 +278,7 @@ class RunEta:
                 left = min(left, self.film_seconds / max(1, self.shots))
             return self._render_seconds(left) + self._clips_left(left) * self._enhance_per_clip()
         if name == "Stitching":
-            return self.timings.step("part | multishot") if self.multishot else self.shots * self.timings.step("part")
+            return self.timings.step("part | multishot") if self.multishot else self.shots * self.timings.step(self._part_key())
         if name == "Plan":
             plan = self.timings.step(self._plan_keys(), 0 if self.direct else None)
             if self.llm == "local":

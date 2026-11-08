@@ -735,6 +735,11 @@ assert(/\.results \.result \{ display: flex; align-items: center;/.test(html) &&
   && /\.result-label \{[^}]*-webkit-line-clamp: 2/.test(html), 'outlined, text left, the time quietly at the right');
 assert(/id="skip"[^>]*>Cancel<\/button>/.test(html) && /id="stop"[^>]*>Stop<\/button>/.test(html) && /\.run-actions \{ display: flex; justify-content: center;/.test(html), 'Cancel and Stop, small and centred');
 assert(/data-goto="shorts" data-tab="uploaded">[\s\S]*?<span class="result-type">Upload</.test(els.finishedList.innerHTML), 'an upload goes to what was uploaded');
+// Kept over a restart: a quiet Clear at the end, and one from another day says which.
+assert(/<div class="finished-foot"><button type="button" class="finished-clear" data-clear-finished="1"[^>]*>Clear<\/button><\/div>$/.test(els.finishedList.innerHTML), 'a discreet Clear closes the list');
+assert(/data-clear-finished[\s\S]{0,120}if \(!secondTap\(clear\)\) return;[\s\S]{0,120}fetch\('\/queue\/finished\/clear', \{ method: 'POST' \}\)/.test(html), 'Clear asks first, then empties it');
+assert.strictEqual(run(`finishedWhen({ at: '17:05', t: Date.now() / 1000 })`), '17:05', 'today: the time alone');
+assert(run(`finishedWhen({ at: '17:05', t: Date.now() / 1000 - 3 * 86400 })`).endsWith(' 17:05') && run(`finishedWhen({ at: '17:05', t: Date.now() / 1000 - 3 * 86400 })`) !== '17:05', 'another day: its date too');
 // One tap takes you to that side's output.
 run("goToOutput('image')");
 assert.strictEqual(run('pipeline'), 'image');
@@ -1029,6 +1034,13 @@ assert(/nextUp \? workHeading\(ready\[0\], ready\[0\]\.pipeline\)/.test(script),
   for (const [id, el] of saved) els[id] = el;
 }
 assert(/<button type="button" class="current-work" id="currentWork" aria-haspopup="dialog"/.test(html) && /<dialog id="runFacts" class="panel-dialog run-facts"/.test(html), 'the run title opens what it renders with');
+assert(!html.includes('.current-work::after'), 'the clickable run title has no chevron after it');
+assert(/<textarea id="promptEditorText"[^>]*><\/textarea>\s*<div class="prompt-progress" id="promptEditorProgress" hidden><\/div>/.test(html), 'the prompt editor has a progress bar inside the top of its box');
+assert(/#promptEditorEnhance\.working svg \{ animation: prompt-writing-icon/.test(html) && /\$\('promptEditorEnhance'\)\.classList\.toggle\('working', busy\)/.test(html), 'the write button animates while the LLM writes');
+assert(/button\.classList\.add\('working'\)/.test(html) && /button\.classList\.remove\('working'\)/.test(html), 'the form write button animates too');
+assert(/#comfyBar::after[^{]*\{[^}]*animation: bar-sheen 3\.6s/.test(html) && /\.step\.now::before \{[^}]*animation: step-sheen 3\.6s/.test(html), 'live bars and the stage under way have a slow, quiet sheen');
+assert(!/\.disk \.bar > div::after/.test(html), 'the disk meter does not flash');
+assert(/new ResizeObserver\(\(\) => \{[\s\S]{0,200}height < lastHeight && window\.scrollY > 0[\s\S]{0,300}window\.scrollTo\(0, y\)/.test(html), 'a page made shorter by a fold is repainted, not left black at the top');
 assert(/workItem = running \? queue\.current : nextUp \? ready\[0\] : null;/.test(script) && script.includes("[['Workflow', facts.workflow], ['Resolution', facts.resolution], ...(facts.prompt ? [['Prompt', facts.prompt]] : [])]"));
 assert.strictEqual(run("workHeading({label: '1 video: A film'}, 'video')"), 'Video: A film');
 assert.strictEqual(run("workHeading({label: '1 video'}, 'video')"), 'Video:');
@@ -1224,9 +1236,21 @@ context.document.body.classList.toggle = (name, value) => { if (name === 'nsfw-v
 run(`outputFilter = NSFW_FILTER; syncFilter(lastVideos.video); renderVideos(); renderImageSets()`);
 assert.deepStrictEqual(JSON.parse(run('JSON.stringify(visibleFilms().map(v => v.name))')), ['private.mp4']);
 assert(els.imageSets.innerHTML.includes('data-nsfw-image="image_private"') && els.imageSets.innerHTML.includes('Remove NSFW tag'));
-assert(els.videos.innerHTML.includes('data-nsfw-video="private.mp4"') && els.videos.innerHTML.includes('data-film-folder="video"'));
-assert(nsfwView && html.includes('body.nsfw-view .videos-card #imageSets, body.nsfw-view .videos-card #videos'), 'the combined Image and Video view is active');
-assert(html.includes('#videos:has(~ #imageSets .image-set) .image-set:last-child { border-bottom: 1px solid var(--line)'), 'a divider separates the last video from the images below it');
+assert(els.imageSets.innerHTML.includes('data-nsfw-video="private.mp4"') && els.imageSets.innerHTML.includes('data-film-folder="video"'), 'films are listed with the image sets');
+assert.strictEqual(els.videos.innerHTML, '', 'the NSFW view has one list, not a films list above an images list');
+assert(nsfwView && html.includes('body.nsfw-view .videos-card #imageSets { display: block !important; }'), 'the combined Image and Video view is active');
+// Newest first, whatever kind: a set made between two films is listed between them.
+run(`lastVideos.video.push({ name: 'older.mp4', model: 'wan', mtime: 1, nsfw: true }); imageSets[0].mtime = 2; renderImageSets()`);
+const nsfwOrder = ['data-nsfw-video="private.mp4"', 'data-nsfw-image="image_private"', 'data-nsfw-video="older.mp4"'].map(s => els.imageSets.innerHTML.indexOf(s));
+assert(nsfwOrder.every(i => i >= 0) && nsfwOrder[0] < nsfwOrder[1] && nsfwOrder[1] < nsfwOrder[2], 'the NSFW view is in the order things were made, not grouped by kind');
+assert(/\$\('imageSets'\)\.addEventListener\('click', async e => \{\n  if \(e\.target\.closest && e\.target\.closest\('\.film'\)\) return onFilmClick\(e\);/.test(html), "a film's buttons work among the image sets");
+run(`lastVideos.video = lastVideos.video.filter(v => v.name !== 'older.mp4')`);
+// In the order they were made, by their run, even when a film's file is newer (stitched again later).
+run(`lastVideos.video.push({ name: 'restitched.mp4', model: 'wan', mtime: 9e9, run: 'run_20261108_020000', nsfw: true });
+  imageSets = [{ ...imageSets[0], id: 'image_20261108_010000' }, { ...imageSets[0], id: 'image_20261108_030000' }]; renderImageSets()`);
+const madeOrder = ['data-nsfw-image="image_20261108_030000"', 'data-nsfw-video="restitched.mp4"', 'data-nsfw-image="image_20261108_010000"'].map(s => els.imageSets.innerHTML.indexOf(s));
+assert(madeOrder.every(i => i >= 0) && madeOrder[0] < madeOrder[1] && madeOrder[1] < madeOrder[2], 'image, video, image made in that order stay in that order');
+run(`lastVideos.video = lastVideos.video.filter(v => v.name !== 'restitched.mp4'); imageSets = [imageSets[0]]`);
 context.document.body.classList.toggle = bodyToggle;
 run(`renderFinished([], [], []);`);
 assert.strictEqual(els.finishedList.innerHTML, '', 'an open Finished list is cleared when nothing remains');
@@ -1624,7 +1648,7 @@ assert(els.comfyFacts.innerHTML.includes('Generating the image · 3/8') && els.c
     section.setPointerCapture = id => { section.captured = id; };
     section.querySelectorAll = selector => selector === '.queue-item[data-id]' ? order : [];
     section._last = [{ items: [] }, 0];
-    const list = { classList: { contains: name => name === 'queue-list' }, scrollTop: 50,
+    const list = { classList: { contains: name => name === 'queue-list' }, scrollTop: 50, scrollHeight: 300, clientHeight: 200,
       getBoundingClientRect: () => ({ top: 0, bottom: 200, height: 200 }),
       appendChild(row) { order.splice(order.indexOf(row), 1); order.push(row); } };
     for (let i = 1; i <= 3; i++) {
@@ -1648,19 +1672,20 @@ assert(els.comfyFacts.innerHTML.includes('Generating the image · 3/8') && els.c
     context.cancelAnimationFrame = () => {};
     run('var savedSendOrder = sendOrder; sendOrder = el => { testSent.push(queueOrder(el)); }; dragQueue(dragTest)');
     context.testSent = sent;
-    section.listeners.pointerdown({ target, button: 0, pointerId: 7, clientX: 0, clientY: 0 });
+    section.listeners.pointerdown({ target, button: 0, pointerId: 7, clientX: 0, clientY: 0, preventDefault() {} });
     section.listeners.pointermove({ pointerId: 7, clientX: 0, clientY: 210 });
     assert.deepStrictEqual(order.map(row => row.dataset.id), ['2', '3', '1'], 'dragging pushes crossed items upward');
-    assert(order[2].style.transform.startsWith('translateY('), 'dragged item follows the pointer');
+    assert(order[2].classList.contains('dragging'), 'held from the press, it takes each place it is dragged to');
     assert(order[0].animations > 0, 'displaced items animate');
     frames.shift()(16);
     assert(list.scrollTop > 50, 'holding near the bottom scrolls the list');
     section.listeners.pointerup({ type: 'pointerup', pointerId: 7 });
-    assert.strictEqual(section._selected, null, 'dropping deactivates the handle');
+    assert.strictEqual(section._selected, null, 'released, it is let go');
     assert.deepStrictEqual(Array.from(sent[0]), [2, 3, 1], 'drop sends the new order');
     frames.length = 0;
+    list.scrollTop = 50;
     section._selected = '1';
-    section.listeners.pointerdown({ target, button: 0, pointerId: 8, clientX: 0, clientY: 160 });
+    section.listeners.pointerdown({ target, button: 0, pointerId: 8, clientX: 0, clientY: 160, preventDefault() {} });
     section.listeners.pointermove({ pointerId: 8, clientX: 0, clientY: -10 });
     assert.deepStrictEqual(order.map(row => row.dataset.id), ['1', '2', '3'], 'dragging upward pushes crossed items down');
     frames.shift()(16);
@@ -1668,6 +1693,33 @@ assert(els.comfyFacts.innerHTML.includes('Generating the image · 3/8') && els.c
     section.listeners.pointercancel({ type: 'pointercancel', pointerId: 8 });
     assert.deepStrictEqual(order.map(row => row.dataset.id), ['2', '3', '1'], 'cancel restores the original order');
     assert.strictEqual(sent.length, 1, 'cancel does not submit an order');
+    // A list with nothing left to scroll hands it to the page, faster the longer it is held there.
+    frames.length = 0;
+    const savedWindow = { scrollBy: context.window.scrollBy, scrollY: context.window.scrollY };
+    context.window.scrollY = 100000;
+    context.window.scrollBy = (x, y) => { context.window.scrollY = Math.max(0, context.window.scrollY + y); };
+    list.scrollTop = 0;
+    list.scrollHeight = list.clientHeight;  // All of it in view: nothing of its own to scroll
+    section._selected = '1';
+    section.listeners.pointerdown({ target, button: 0, pointerId: 9, clientX: 0, clientY: 160, preventDefault() {} });
+    section.listeners.pointermove({ pointerId: 9, clientX: 0, clientY: 5 });
+    const steps = [];
+    for (let t = 16, last = context.window.scrollY; t <= 16 * 120 && frames.length; t += 16) {
+      frames.shift()(t);
+      steps.push(last - context.window.scrollY);
+      last = context.window.scrollY;
+    }
+    assert(context.window.scrollY < 100000 && list.scrollTop === 0, 'held at the top with the list at its top, the page scrolls up');
+    assert(steps[steps.length - 1] > steps[1] * 1.5, 'and speeds up the longer it is held');
+    section.listeners.pointercancel({ type: 'pointercancel', pointerId: 9 });
+    Object.assign(context.window, savedWindow);
+    // A tap on the selected job, without dragging, lets it go.
+    section._selected = '1';
+    section.listeners.pointerdown({ target, button: 0, pointerId: 10, clientX: 0, clientY: 50, preventDefault() {} });
+    section.listeners.pointerup({ type: 'pointerup', pointerId: 10 });
+    assert.strictEqual(section._selected, null, 'a tap without dragging lets it go');
+    list.scrollHeight = 300;
+    section.listeners.pointercancel({ type: 'pointercancel', pointerId: 9 });
     section._selected = '1';
     const title = { closest: selector => selector === '.queue-item' ? order[2] : null, focus() {} };
     section.listeners.keydown({ key: 'ArrowUp', target: { closest: selector => selector === '.what[role="button"]' ? title : null }, preventDefault() {} });

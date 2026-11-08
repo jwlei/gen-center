@@ -177,7 +177,7 @@ def image_files(state):
                 app.logger.warning("Could not read image metadata for %s: %s", path, error)
                 resolution = None
             files.append({"position": position, "title": shot["title"], "version": version,
-                          "resolution": resolution, "size_bytes": stat.st_size})
+                          "resolution": resolution, "size_bytes": stat.st_size, "mtime": stat.st_mtime})
     return files
 
 
@@ -192,7 +192,7 @@ def describe_run(state):
     return {"id": state.id, "pipeline": "image", "label": state.title or state.brief, "detail": " · ".join(parts),
             "model": shorthand(state.workflow, "image"), "outcome": read_outcome(state.folder), "loras": workflow_options.loras_used(state.workflow, state.options, "image"),
             "llm": state.llm, "size_bytes": size_bytes, "resolutions": resolutions,
-            "when": saved_at(state.path), "clips": done, "finished": state.finished, "total": total, "images": files,
+            "when": saved_at(state.path), "mtime": max((image["mtime"] for image in files), default=0), "clips": done, "finished": state.finished, "total": total, "images": files,
             "size": f"{state.width}x{state.height}", "estimate": RunEta(resume_argv(state), env, IMAGE_TIMINGS).plan()["total"]}
 
 

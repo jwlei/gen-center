@@ -53,6 +53,12 @@ CONTINUITY = {
     Give each clip a different action that follows the preceding action, rather than restarting or
     repeating it. Plan the end of each clip as the starting point for the next.
     End each shot on a clear, steady moment that the next one can continue from.""",
+    "infinite": """Each clip continues the clip before it with no cut: the end of the previous clip's
+    motion and sound carries straight on into the next, so this is one continuous take. Every shot picks up exactly
+    where the previous one ended. A new place can only be reached by moving there on screen: the subject walks, the
+    camera travels. Give each clip a different action that follows the preceding action, rather than restarting or
+    repeating it. The first image is the opening frame. Any images after it are, in order, where clip 1, clip 2 and
+    so on end: plan each of those clips to arrive at its image.""",
     "image": """Every clip starts again from the attached image, with a fade between clips. So each
     shot is its own moment growing out of that same opening frame: a different action, a different
     camera move, a different development of the idea, in an order that still builds.""",
