@@ -66,7 +66,7 @@ the existing workflow-specific planner. Gemma can analyze attached images; Qwen 
 The local model unloads before rendering and needs an idle, reachable ComfyUI. Large plans can take substantial
 time and may exceed the local model's context or output limits.
 The panel defaults to Local model. A selected prompt model is remembered in this browser, and a default preset can
-override it. Opening a previous film brings back every setting it was made with, its prompt model included: the
+override it. A workflow's own prompt enhancer is offered but never picked by itself. Opening a previous film brings back every setting it was made with, its prompt model included: the
 whole Generate form is kept with each run. The CLI follows `LLM_PROVIDER`, else the local model.
 
 **OpenH3-IR (MiniMax H3).** The Prompt section offers this optional compiler on supported H3 workflows. It is off

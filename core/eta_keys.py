@@ -104,6 +104,10 @@ class Timings:
                 return self.steps[key]
         return next((self.steps[key] for key in keys if key in self.steps), default)
 
+    def timed_step(self, keys):
+        """The first of keys actually timed, or None: no defaults."""
+        return next((self.steps[key] for key in ([keys] if isinstance(keys, str) else keys) if key in self.timed_steps), None)
+
     def learn_step(self, keys, value):
         for key in [keys] if isinstance(keys, str) else keys:
             self.steps[key] = self._moved(self.steps.get(key) if key in self.timed_steps else None, value)

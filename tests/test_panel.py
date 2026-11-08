@@ -843,6 +843,42 @@ class PanelTest(unittest.TestCase):
         self.wait_idle()
         self.assertEqual(self.status()["queue"]["items"], [], "started, it ran")
 
+    def test_queueing_a_pending_job_only_queues_it_and_its_play_runs_it_now(self):
+        for prompt in ("first", "second"):
+            self.assertTrue(self.generate(prompt=prompt, start_later="1").get_json()["ok"])
+        first, second = self.status()["queue"]["items"]
+        webapp.run_queue.hold()
+        self.assertTrue(self.client.post(f"/queue/run/start/{first['id']}").get_json()["ok"])
+        items = self.status()["queue"]["items"]
+        self.assertFalse(webapp.job.running, "on hold, the queue icon only queues it: nothing starts")
+        self.assertEqual([(item["id"], bool(item["later"])) for item in items], [(first["id"], False), (second["id"], True)])
+        self.comfy.script = ["ok"] * 16
+        self.assertTrue(self.client.post(f"/queue/run/run-now/{second['id']}").get_json()["ok"], "play: it runs now")
+        self.wait_idle()
+        items = self.status()["queue"]["items"]
+        self.assertEqual([item["id"] for item in items], [first["id"]], "the rest stay as they were, on hold")
+        self.assertTrue(self.status()["queue"]["held"])
+
+    def test_cancelled_edit_goes_back_where_it_came_from(self):
+        for prompt in ("first", "second"):
+            self.assertTrue(self.generate(prompt=prompt, start_later="1").get_json()["ok"])
+        first, second = self.status()["queue"]["items"]
+        webapp.run_queue.hold()
+        for item in (first, second):
+            self.assertTrue(self.client.post(f"/queue/run/start/{item['id']}").get_json()["ok"])
+        edit = self.client.post(f"/queue/run/edit/{first['id']}").get_json()
+        self.assertTrue(self.status()["queue"]["items"][0]["later"], "while edited, it waits in Pending")
+        self.assertTrue(self.client.post(f"/queue/run/edit/{first['id']}/cancel", json={"token": edit["token"]}).get_json()["ok"])
+        items = self.status()["queue"]["items"]
+        self.assertEqual([(item["id"], bool(item["later"])) for item in items], [(first["id"], False), (second["id"], False)],
+                         "cancelled, it is back in the queue, in its place")
+        # One that was pending goes back to Pending.
+        self.assertTrue(self.generate(prompt="third", start_later="1").get_json()["ok"])
+        third = self.status()["queue"]["items"][-1]
+        edit = self.client.post(f"/queue/run/edit/{third['id']}").get_json()
+        self.assertTrue(self.client.post(f"/queue/run/edit/{third['id']}/cancel", json={"token": edit["token"]}).get_json()["ok"])
+        self.assertTrue(self.status()["queue"]["items"][-1]["later"])
+
     def test_edit_queued_generation_keeps_inputs_and_replaces_at_front(self):
         self.assertTrue(self.generate(prompt="original", start_later="1").get_json()["ok"])
         original = self.status()["queue"]["items"][0]
@@ -1677,7 +1713,7 @@ class QueueUpscaleEditTest(unittest.TestCase):
         self.assertEqual(replacement["argv"][-6:], ["--film", "film.mp4", "--scale", "3", "--quality", "STREAMING_ULTRA"])
         edit = self.client.post("/queue/run/edit/6").get_json()
         self.assertTrue(self.client.post("/queue/run/edit/6/cancel", json={"token": edit["token"]}).get_json()["ok"])
-        self.assertTrue(replacement["later"])
+        self.assertFalse(replacement.get("later"), "it was in the queue when opened, so Cancel puts it back there")
         self.assertNotIn("edit_token", replacement)
 
 

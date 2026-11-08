@@ -93,7 +93,7 @@ assert(!run(`remembered({ name: 'image_5_role', type: 'select-one' })`));
     assert.strictEqual(select.value, 'local', `${side} defaults to local`);
     context.localStorage = { getItem: name => name === key ? JSON.stringify({ llm: 'gemini' }) : null };
     run(`${loader}()`);
-    assert.strictEqual(select.value, 'gemini', `${side} preserves an explicit saved selection`);
+    assert.strictEqual(select.value, 'gemini', `${side} brings back the model picked last in this browser`);
     form.elements = original;
   }
   context.localStorage = savedStorage;
@@ -321,6 +321,8 @@ assert.strictEqual(els.etaDetail.hidden, true, 'on track: nothing to explain');
 run(`renderEtaDetail({ changes: [{ text: 'Clip <b>3</b> was slow', seconds: 120 }], original_total: 600, adjusted_total: 720 })`);
 assert(!els.etaDetail.hidden && els.etaDetail.innerHTML.includes('<details') && els.etaDetail.innerHTML.includes('+2 min') && !els.etaDetail.innerHTML.includes('<b>3'));
 assert(!els.etaDetail.innerHTML.includes(': why'), 'the ETA summary omits why');
+assert(/<span id="runProgressRight"><\/span><\/div>\s*<div class="hint eta-detail" id="etaDetail" hidden><\/div>\s*<div class="bar"><div id="runProgressBar">/.test(html)
+  && /\.eta-detail \{ margin: 2px 0 0; text-align: right; \}/.test(html), 'the first estimate sits under the time left, over the bar, at the right');
 
 // Shorts in YouTube red; the phone addresses are in the settings box, with copy buttons; no voice hint.
 assert(/body\.on-shorts \{ --accent: #ff0033; \}/.test(html));
@@ -708,6 +710,11 @@ assert(box.innerHTML.includes('data-shots="run_1"') && box.innerHTML.includes('d
 assert(box.innerHTML.indexOf('data-start="7"') < box.innerHTML.indexOf('data-shots="run_1"'), 'pending start is left of prompts');
 assert(box.innerHTML.includes(`data-shots="run_1" aria-label="Prompts" title="View prompts">${run('ICONS.enhanced')}</button>`), 'pending prompts use the star');
 assert(box.innerHTML.includes('class="icon-btn start-item continue-item" data-start="7"') && box.innerHTML.includes('class="icon-btn start-item" data-start="8"') && box.innerHTML.includes('class="icon-btn start-item" data-start="9"'), 'only the continued job is green');
+assert(box.innerHTML.includes(`data-start="8" aria-label="Add to the queue" title="Add to the queue: it starts when the queue gets to it">${run('ICONS.queue')}</button>`), 'pending: the queue icon, which only queues');
+assert(!box.innerHTML.includes('data-run-now'), 'with the queue running or busy, no play: it would only queue too');
+run(`renderStopped([], [{ id: 8, pipeline: 'image', label: 'new', detail: '', continuation: false }], [], true)`);
+assert(box.innerHTML.includes(`data-run-now="8" aria-label="Run this now"`) && box.innerHTML.indexOf('data-start="8"') < box.innerHTML.indexOf('data-run-now="8"'),
+  'on hold and idle: a play to the right of the queue icon, to run it now');
 run('renderStopped([])');
 assert.strictEqual(box.hidden, true);
 run(`renderStopped([{ id: 'run_failed', pipeline: 'video', label: 'Failed', detail: 'Stopped', clips: 0, estimate: 60, outcome: { outcome: 'failed', why: 'Error' } }])`);
@@ -1047,6 +1054,32 @@ assert(/button\.classList\.add\('working'\)/.test(html) && /button\.classList\.r
 assert(/#comfyBar::after[^{]*\{[^}]*animation: bar-sheen 3\.6s/.test(html) && /\.step\.now::before \{[^}]*animation: step-sheen 3\.6s/.test(html), 'live bars and the stage under way have a slow, quiet sheen');
 assert(!/\.disk \.bar > div::after/.test(html), 'the disk meter does not flash');
 assert(/new ResizeObserver\(\(\) => \{[\s\S]{0,200}height < lastHeight && window\.scrollY > 0[\s\S]{0,300}window\.scrollTo\(0, y\)/.test(html), 'a page made shorter by a fold is repainted, not left black at the top');
+// A fold that shrinks the page under a scrolled screen: scrolled to the new end by the page first, then let go, and the
+// whole page drawn again, so nothing is left black at the top.
+{
+  const root = context.document.documentElement, body = context.document.body, win = context.window;
+  const saved = { scrollY: win.scrollY, scrollTo: win.scrollTo, raf: context.requestAnimationFrame };
+  const frames = [], scrolls = [], opacities = [];
+  Object.defineProperty(root, 'scrollHeight', { configurable: true, get: () => Math.max(1500, parseFloat(body.style.minHeight) || 0) });
+  body.style.minHeight = '';
+  let opacity = '';
+  Object.defineProperty(body.style, 'opacity', { configurable: true, get: () => opacity, set: v => { opacity = v; opacities.push(v); } });
+  win.scrollY = 1600;
+  win.scrollTo = (x, y) => { scrolls.push(y); win.scrollY = y; };
+  context.requestAnimationFrame = fn => { frames.push(fn); return frames.length; };
+  run('holdHeight()');
+  assert.strictEqual(body.style.minHeight, '1500px', 'held at its height while it folds');
+  body.style.minHeight = '2400px';  // as it was before the fold, scrolled to 1600
+  run('releaseHeight()');
+  assert.deepStrictEqual(scrolls, [700], 'scrolled to where the page now ends (1500 - 800) before it shrinks');
+  assert.strictEqual(body.style.minHeight, '2400px', 'and only then let go, a frame later');
+  while (frames.length) frames.shift()(0);
+  assert.strictEqual(body.style.minHeight, '', 'let go');
+  assert.deepStrictEqual(opacities, ['.999', ''], 'the page drawn again once, unseen');
+  delete root.scrollHeight;
+  Object.assign(win, { scrollY: saved.scrollY, scrollTo: saved.scrollTo });
+  context.requestAnimationFrame = saved.raf;
+}
 assert(/workItem = running \? queue\.current : nextUp \? ready\[0\] : null;/.test(script) && script.includes("[['Workflow', facts.workflow], ['Resolution', facts.resolution], ...(facts.prompt ? [['Prompt', facts.prompt]] : [])]"));
 assert.strictEqual(run("workHeading({label: '1 video: A film'}, 'video')"), 'Video: A film');
 assert.strictEqual(run("workHeading({label: '1 video'}, 'video')"), 'Video:');
@@ -1078,7 +1111,7 @@ assert(els.viewerMetaDetails.hidden && els.viewerMeta.disabled, 'no metadata lea
 run(`renderStopped([{ id: 'run_1', pipeline: 'video', label: 'Jungle Flight', detail: 'Plan ready', when: 'now', estimate: 60, clips: 0,
   outcome: { outcome: 'not rendered', why: 'Asked to read\\n<b>x', at: 5 } }, { id: 'run_2', pipeline: 'video', label: 'Fine', detail: 'd', when: 'now', estimate: 1, clips: 0 }])`);
 const stoppedHtml = els.stoppedRuns.innerHTML;
-assert(/<div class="run-head"><div class="what">Jungle Flight<\/div><span class="run-tag">not rendered<\/span><\/div>/.test(stoppedHtml), 'on the same line as its title');
+assert(/<div class="run-head"><div class="what"><span class="queue-title" data-title-key="run-run_1">Jungle Flight<\/span><\/div><span class="run-tag">not rendered<\/span><\/div>/.test(stoppedHtml), 'on the same line as its title');
 assert(/<details class="why"><summary>Why<\/summary><div class="why-text">Asked to read\n&lt;b&gt;x<\/div><\/details>/.test(stoppedHtml), 'why, escaped, under a fold');
 assert.strictEqual((stoppedHtml.match(/run-tag/g) || []).length, 1, 'nothing to say for one you stopped yourself');
 assert(!script.includes('failed_films') && !script.includes('filmsHtml'), 'Output lists what was made, nothing else');
@@ -1286,7 +1319,8 @@ assert(/const PRESET_SKIP = \['prompt', 'narration', 'seed', 'topic', 'output', 
 assert((html.match(/<input type="checkbox" name="try_first" id="previewRun">/g) || []).length === 1, 'one Preview run, under the button, for whichever form it is in');
 assert(/<button type="button" class="start-later" id="goLater"[^>]*>Start later<\/button>/.test(html) && !html.includes('type="time"'), 'Start later: a quiet button, no clock');
 assert(!html.includes('id="toast"') && !script.includes('announceResults'), 'nothing pops up when something ends: Finished has it');
-assert(/class="icon-btn start-item\$\{item\.continuation/.test(script) && script.includes('ICONS.play'), 'one pending has a play button');
+assert(script.includes('} else if (d.runNow) {') && script.includes('fetch(`/queue/run/run-now/${d.runNow}`'), 'its play runs it now');
+assert(/<button type="button" class="start-later" id="cancelQueueEdit"[^>]*>Cancel editing<\/button>/.test(html) && /#cancelQueueEdit \{ display: block; margin: 6px auto 0; \}/.test(html), 'Cancel editing sits centred under the button');
 
 assert(/\.output-filter-line \{ display: flex; justify-content: center;/.test(html) && /\.output-filter-line select \{ width: 220px;/.test(html), 'the filter: centred, one size');
 
@@ -1384,6 +1418,7 @@ assert(!html.includes('Write prompt uses the text only') && !script.includes('ca
 assert(/<details class="h3-help"><summary>OpenH3-IR<\/summary><div class="hint">Before review/.test(html), 'OpenH3 explanation opens from its heading');
 assert(/\.count-stepper \{[^}]*align-items: stretch/.test(html) && /\.count-stepper button \{[^}]*width: 48px;/.test(html), 'stepper buttons are wider and stretch to the input height');
 assert(script.includes("const ROLE_LABELS = { image_to_prompt: 'Image to prompt', prompt_enhancer: 'Prompt Enhancer' };"));
+assert(!script.includes("select.value = 'prompt_enhancer'"), 'a workflow with a prompt enhancer offers it, and never picks it by itself');
 assert(!html.includes('id="imageResolution"') && /id="imageGeneration"[\s\S]*?id="imageAspect"[\s\S]*?<\/details>/.test(html), 'Resolution in Generation');
 assert(/id="imageHow">[\s\S]*?id="imageReview"[\s\S]*?id="imageSeed"/.test(html) && /id="videoHow">[\s\S]*?id="review"[\s\S]*?id="videoSeed"/.test(html), 'review and seed under Other');
 for (const [field, down, up, min, max, step] of [['runs', 'runsDown', 'runsUp', 1, 10, 1], ['imageCount', 'imageCountDown', 'imageCountUp', 1, 20, 1], ['duration', 'durationDown', 'durationUp', 5, 600, 5]]) {
@@ -1518,6 +1553,7 @@ assert.deepStrictEqual(lines(els.comfyMeta), { first: 'scene 3, 6s lipsync', cou
 run(`renderNow({ ...atStage('Clip 6 of 8: The Descent to Knees, 5s', true), pipeline: 'video', progress: { stage: [2, 3, 'Clips'], detail: 'Clip 6 of 8: The Descent to Knees, 5s', action: 'Rendering clip' } })`);
 assert.strictEqual(lines(els.comfyMeta).first, 'Rendering clip - The Descent to Knees, 5s', 'action - title, duration');
 assert.strictEqual(lines(els.comfyMeta).count, 'Clip 6 of 8');
+assert.strictEqual(els.comfySteps.textContent, 'Step 3 of 8', 'steps start with a capital');
 assert.strictEqual(els.stageDetail.innerHTML, '', 'and not said again above it');
 run(`renderNow(atStage('Clip 2 of 5 - scene 3, 6s lipsync', false))`);
 assert.deepStrictEqual(lines(els.stageDetail), { first: 'scene 3, 6s lipsync', count: 'Clip 2 of 5', time: '', twoLines: true }, 'no box up yet: it still says it');
@@ -1582,8 +1618,23 @@ assert(queue.innerHTML.includes('aria-label="Resume queue"') && !queue.innerHTML
 run(`renderQueue(queue, { items: [{ id: 4, label: 'continue', detail: 'd', pipeline: 'video', resume: 'run_1' }], held: true }, 0)`);
 assert(queue.innerHTML.includes('data-shots="run_1"'), 'continued jobs in the queue expose their prompts');
 assert(queue.innerHTML.includes(`data-shots="run_1" aria-label="Prompts" title="View prompts">${run('ICONS.enhanced')}</button>`), 'queued prompts use the star');
-assert(/class="queue-item run-card"[^>]*>[\s\S]*class="queue-item-top"[\s\S]*class="what"[\s\S]*class="hint"[\s\S]*<\/div><\/div><div class="queue-item-actions">[\s\S]*data-shots="run_1"[\s\S]*data-edit="4"[\s\S]*data-pause="4"[\s\S]*data-remove="4"/.test(queue.innerHTML), 'run details and actions occupy separate rows in a card');
-assert(/\.queue-item\.run-card \{[^}]*background: var\(--panel-2\); border: 1px solid var\(--line\); border-radius: 10px/.test(html) && /\.queue-item\.run-card \.queue-item-actions \{ display: flex; flex-wrap: wrap/.test(html), 'run cards match Pending and their controls can wrap');
+assert(/class="queue-item run-card"[^>]*>[\s\S]*class="queue-item-top"[\s\S]*class="what"[\s\S]*class="hint"[\s\S]*<\/div><\/div><div class="queue-item-actions">\s*<span class="acts-side">[\s\S]*data-pause="4"[\s\S]*<\/span><span class="when">[^<]*<\/span><span class="acts-side acts-end">[\s\S]*data-shots="run_1"[\s\S]*data-edit="4"[\s\S]*data-remove="4"/.test(queue.innerHTML), 'run details and actions occupy separate rows in a card: Pending on the left, the time in the middle, the rest on the right');
+assert(/\.queue-item\.run-card \{[^}]*background: var\(--panel-2\); border: 1px solid var\(--line\); border-radius: 10px/.test(html) && /\.stopped-actions, \.queue-item\.run-card \.queue-item-actions \{ display: grid; grid-template-columns: minmax\(0, 1fr\) auto minmax\(0, 1fr\);/.test(html)
+  && /\.acts-side \{ display: flex; flex-wrap: wrap;/.test(html), 'run cards match Pending: the time centred between buttons that can wrap');
+// Under the running job's title: its workflow on the left, its size on the right.
+assert(/<div class="current-work-size" id="currentWorkSize" hidden><span id="currentWorkflow"><\/span><span id="currentResolution"><\/span><\/div>/.test(html)
+  && /#currentWorkSize \{ display: flex; justify-content: space-between;/.test(html), 'workflow left, resolution right');
+assert(script.includes("$('currentWorkflow').textContent = facts.workflow || '';") && script.includes("$('currentResolution').textContent = facts.resolution || '';"));
+assert(/\.status-head #statusText:empty \{ display: none; \}/.test(html) && /\.status-head \.status \+ \.status-times \{ margin-left: -4px; \}/.test(html), 'the timers sit close to the status light');
+// Titles in the queues: two lines and "…", opened by a tap when cut, kept open when the list is drawn again.
+assert(queue.innerHTML.includes('<span class="queue-title" data-title-key="queue-4"><span class="queue-pos">1.</span> Video: continue</span>'), 'a queue title is cut to two lines, titled as the running one, its place greyed');
+assert(/\.queue-pos \{ color: var\(--muted\);/.test(html), 'the place in the queue is grey');
+run(`renderQueue(queue, { items: [{ id: 5, label: '1 video: a storm', detail: 'd', pipeline: 'video' }, { id: 6, label: '3 images: cats', detail: 'd', pipeline: 'image', facts: { count: 3 } }], held: true }, 0)`);
+assert(queue.innerHTML.includes('<span class="queue-pos">1.</span> Video: a storm</span>') && queue.innerHTML.includes('<span class="queue-pos">2.</span> Image(3): cats</span>'),
+  '"1 video" is just Video:, three images are Image(3):');
+assert(/\.queue-title \{ display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2;/.test(html) && /\.queue-title\.expanded \{ display: block;/.test(html));
+run(`openTitles.add('queue-4'); renderQueue(queue, { items: [{ id: 4, label: 'continue', detail: 'd', pipeline: 'video', resume: 'run_1' }], held: true }, 0); openTitles.clear()`);
+assert(queue.innerHTML.includes('<span class="queue-title expanded" data-title-key="queue-4">'), 'one opened stays open');
 assert(/\.queue \.queue-item-actions button, \.queue \.stopped-actions button \{\s*flex: none; width: 34px; height: 28px; padding: 0;/.test(html), 'queue and pending action buttons use the same remove-button dimensions');
 assert(queue.innerHTML.includes('class="icon-btn" data-pause="4"') && queue.innerHTML.includes('class="icon-btn" data-remove="4"'), 'queue pause feedback and delete confirmation fit the fixed-size buttons');
 assert(queue.innerHTML.includes(`data-remove="4" aria-label="Remove from the queue" title="Remove from the queue (tap twice)">${run('ICONS.trash')}</button>`), 'queue removal uses the shared trash icon');
@@ -1595,10 +1646,10 @@ assert(/\.queue \.run-item \{[^}]*color: var\(--text\)/.test(html) && /\.queue \
 assert(!/class="queue-item run-card"/.test(written), 'Pending remains separate from the queue');
 assert(!/id="stopAfter"/.test(html), 'pause moved out of the run actions');
 assert(!script.includes('ComfyUI is making each image.'), 'the redundant image stage hint is not shown');
-assert(/\.queue \.queue-head button\[data-queue-toggle\] \{ width: 30px; height: 30px;/.test(html), 'the queue header control is smaller');
 assert(queue.innerHTML.includes('data-fold-queue="1" aria-expanded="true"') && queue.innerHTML.includes('class="queue-list" tabindex="0"'), 'run queue has a separate collapsible scrollable list');
 assert(/class="queue-head run-queue-head"[\s\S]*class="queue-fold-toggle queue-fold-title"[\s\S]*data-queue-toggle="1"[\s\S]*class="queue-fold-toggle queue-fold-arrow" data-fold-queue="1" aria-expanded="true" aria-label="Collapse queue"/.test(queue.innerHTML), 'queue-wide control stays on the right');
-assert(/\.queue-head\.run-queue-head \{ display: grid; grid-template-columns: minmax\(0, 1fr\) auto 30px 20px; \}/.test(html) && /\.run-queue-head \[data-queue-toggle\] \{ grid-column: 3; \}/.test(html), 'queue-wide control and chevron stay right of the title');
+assert(/\.queue-head\.run-queue-head \{ display: grid; grid-template-columns: minmax\(0, 1fr\) auto 26px 20px; \}/.test(html) && /\.run-queue-head \[data-queue-toggle\] \{ grid-column: 3; \}/.test(html), 'queue-wide control and chevron stay right of the title');
+assert(/\.queue \.queue-head button\[data-queue-toggle\] \{ width: 26px; height: 26px; padding: 0; display: inline-flex; align-items: center;/.test(html), 'the queue play is small, its icon centred');
 assert(/\.queue-head \.queue-fold-arrow \{[^}]*justify-content: flex-end/.test(html) && /\.queue-fold-toggle \.chev \{[^}]*transition: transform \.25s ease; margin-right: 4px/.test(html), 'queue chevron aligns and turns like Pending and Failed');
 queue._open = false;
 run(`renderQueue(queue, { items: [{ id: 1, label: 'new', detail: '', pipeline: 'image' }] }, 0)`);
@@ -1690,6 +1741,7 @@ assert(els.comfyFacts.innerHTML.includes('Generating the image · 3/8') && els.c
     section.listeners.pointermove({ pointerId: 7, clientX: 0, clientY: 210 });
     assert.deepStrictEqual(order.map(row => row.dataset.id), ['2', '3', '1'], 'dragging pushes crossed items upward');
     assert(order[2].classList.contains('dragging'), 'held from the press, it takes each place it is dragged to');
+    assert(/\.queue-item\.dragging \{[^}]*outline-style: solid;/.test(html) && !/\.queue-item\.dragging \{[^}]*0 0 0 1px var\(--accent\)/.test(html), 'held, the dotted outline turns solid, with no second line');
     assert(order[0].animations > 0, 'displaced items animate');
     frames.shift()(16);
     assert(list.scrollTop > 50, 'holding near the bottom scrolls the list');

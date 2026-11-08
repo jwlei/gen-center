@@ -161,7 +161,10 @@ class RunEta:
         if kind == "planned" and self.name == "Plan" and not self.planned:
             # Planning alone, by its LLM's model: without starting the local model, and before any OpenH3-IR review.
             self.planned = True
-            self.timings.learn_step(self._plan_keys(), max(0.0, now - self.stage_started - (self.local.spent - self.local_mark)))
+            seconds = max(0.0, now - self.stage_started - (self.local.spent - self.local_mark))
+            self.timings.learn_step(self._plan_keys(), seconds)
+            if not self.direct:
+                self.timings.learn_step(self._per_shot_keys(), seconds / max(1, self.shots))
             learned = True
         elif kind == "enhanced" and self.attempt_started is not None:
             # The clip's own render starts once OpenH3-IR has written its prompt: that is timed as Enhance.
@@ -214,6 +217,17 @@ class RunEta:
             return ["Plan | direct"]
         return [*llm_keys("Plan", self.llm, self.local_model), "Plan"]
 
+    def _per_shot_keys(self):
+        """One shot's share of the plan, per LLM model, then per LLM: the LLM writes every shot, so more take longer."""
+        return [SEPARATOR.join((key, "per shot")) for key in llm_keys("Plan", self.llm, self.local_model)]
+
+    def _plan_seconds(self):
+        """The LLM writing the plan: its time per shot times how many, once that is timed; before, as timed at all."""
+        if self.direct:
+            return self.timings.step(self._plan_keys(), 0)
+        per = self.timings.timed_step(self._per_shot_keys())
+        return per * max(1, self.shots) if per is not None else self.timings.step(self._plan_keys())
+
     def _finish_attempt(self, now):
         if self.attempt_started is not None and self.attempt_seconds:
             # As if at full size, or a 360p film would make the next 720p estimate far too short.
@@ -237,7 +251,10 @@ class RunEta:
             self.timings.learn_step(self._part_key(), (now - self.stage_started) / max(1, self.shots))
         elif self.name == "Plan":
             if not self.planned:  # Your prompt as it is: no plan line, so the whole stage less the local model
-                self.timings.learn_step(self._plan_keys(), max(0.0, now - self.stage_started - (self.local.spent - self.local_mark)))
+                seconds = max(0.0, now - self.stage_started - (self.local.spent - self.local_mark))
+                self.timings.learn_step(self._plan_keys(), seconds)
+                if not self.direct:
+                    self.timings.learn_step(self._per_shot_keys(), seconds / max(1, self.shots))
         else:
             self.timings.learn_step(self.name, now - self.stage_started)
         self._save()
@@ -280,7 +297,7 @@ class RunEta:
         if name == "Stitching":
             return self.timings.step("part | multishot") if self.multishot else self.shots * self.timings.step(self._part_key())
         if name == "Plan":
-            plan = self.timings.step(self._plan_keys(), 0 if self.direct else None)
+            plan = self._plan_seconds()
             if self.llm == "local":
                 plan += self.local.start_seconds()
             if self.h3_mode == "review":

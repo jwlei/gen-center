@@ -8,6 +8,9 @@ from pipelines.image.run_state import STAGES, RunState
 # Used until a finished step has been timed. An image's time is learned per megapixel, under its model, workflow,
 # options and size (core/eta_keys.py): they differ by minutes.
 DEFAULT_PROMPTS_SECONDS = 45
+# Writing prompts takes longer the more there are: every one is written out, each 80-250 words (a workflow's own
+# enhancer even writes them one by one). Until it is timed, this per prompt.
+DEFAULT_SECONDS_PER_PROMPT = 15
 DEFAULT_IMAGE_SECONDS = 120
 SMALL_DRIFT_SECONDS = 60
 
@@ -49,10 +52,12 @@ class RunEta:
         self.workflow = (env or {}).get("COMFYUI_WORKFLOW")
         try:
             self.images = int(_option(argv, "--count", 1))
+            # The prompts are written for the whole set, even when only the first is rendered now.
+            self.prompts = self.images
             if "--first-only" in argv:
                 self.images = min(self.images, 1)  # The rest wait to be asked for
         except ValueError:
-            self.images = 1
+            self.images = self.prompts = 1
         self.size_share = _size_share(argv)
         self.kept = 0
         self.prompts_kept = False
@@ -92,13 +97,21 @@ class RunEta:
         self.original_total = self.plan()["total"]
 
     def _prompt_keys(self):
-        """Writing the prompts is timed per LLM model and number of images, then per model, per LLM, and at all."""
+        """Writing this many prompts, timed per LLM model, then per LLM: "Prompts | local:gemma-4-12b | 5 images"."""
         by_model = llm_keys("Prompts", self.llm, self.local_model)
-        count = f"{self.images} images"
-        keys = [SEPARATOR.join((by_model[0], count)), by_model[0]]
-        if len(by_model) > 1:  # Then the LLM at all: what was timed before each of its models was
-            keys += [SEPARATOR.join((by_model[1], count)), by_model[1]]
-        return [*keys, "Prompts"]
+        return [SEPARATOR.join((key, f"{self.prompts} images")) for key in by_model]
+
+    def _per_prompt_keys(self):
+        """One prompt's share of the writing, per LLM model, then per LLM, then at all: for a count not timed yet."""
+        return [SEPARATOR.join((key, "per prompt")) for key in llm_keys("Prompts", self.llm, self.local_model)] + ["Prompts | per prompt"]
+
+    def _prompts_seconds(self):
+        """As timed for this many, else the time per prompt times how many are written."""
+        exact = self.timings.timed_step(self._prompt_keys())
+        if exact is not None:
+            return exact
+        per = self.timings.timed_step(self._per_prompt_keys())
+        return (DEFAULT_SECONDS_PER_PROMPT if per is None else per) * max(1, self.prompts)
 
     def event(self, kind):
         """A line of the run's log (panel/server.py Job.EVENTS): the local model starting is timed on its own."""
@@ -147,8 +160,11 @@ class RunEta:
         if self.name == "Images":
             self._finish_image(now)
         elif not self.direct:
-            # The LLM's own time: without starting the local model, which is timed apart.
-            self.timings.learn_step(self._prompt_keys(), max(0.0, now - self.stage_started - (self.local.spent - self.local_mark)))
+            # The LLM's own time: without starting the local model, which is timed apart. Learned for this many
+            # prompts, and per prompt, for when another number is asked for.
+            seconds = max(0.0, now - self.stage_started - (self.local.spent - self.local_mark))
+            self.timings.learn_step(self._prompt_keys(), seconds)
+            self.timings.learn_step(self._per_prompt_keys(), seconds / max(1, self.prompts))
             self.timings.save()
 
     # --- Estimating ---
@@ -160,7 +176,7 @@ class RunEta:
         if name == "Prompts":
             if self.direct or self.prompts_kept:
                 return 0
-            return self.timings.step(self._prompt_keys()) + (self.local.start_seconds() if self.llm == "local" else 0)
+            return self._prompts_seconds() + (self.local.start_seconds() if self.llm == "local" else 0)
         return self._image_seconds() * max(self.images - self.kept, 0)
 
     def plan(self):

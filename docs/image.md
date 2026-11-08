@@ -34,7 +34,7 @@ with the workflow's existing planning instructions. Gemma can analyze attached i
 it is text-only. ComfyUI must be reachable and idle while the local model plans; it unloads before rendering.
 Large sets may exceed the local model's context or output limits.
 The panel defaults to Local model. A selected prompt model is remembered in this browser, and a default preset can
-override it. Opening a previous set brings back every setting it was made with, its prompt model included, when
+override it. A workflow's own prompt enhancer is offered but never picked by itself. Opening a previous set brings back every setting it was made with, its prompt model included, when
 that model is available for the chosen workflow. The CLI follows `LLM_PROVIDER`, else the local model.
 
 | Choice | What each image gets |

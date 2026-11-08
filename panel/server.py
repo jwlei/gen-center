@@ -626,7 +626,10 @@ class JobQueue:
             self._advance()
 
     def start(self, item_id):
-        """Starts a pending job: at the end of the queue, or right away when nothing is queued ahead of it."""
+        """
+        Puts a pending job in the queue, at its end: it starts when the queue gets to it, and waits while the queue is
+        on hold. Starting it right away is run_now's.
+        """
         with self.lock:
             item = next((item for item in self.items if item["id"] == item_id), None)
             if not item:
@@ -635,18 +638,9 @@ class JobQueue:
                 return False
             item.pop("later", None)
             self.items.remove(item)
-            ahead = any(not waiting.get("later") for waiting in self.items)
             # Ahead of those still pending, which stay at the end.
             at = next((i for i, waiting in enumerate(self.items) if waiting.get("later")), len(self.items))
             self.items.insert(at, item)
-            # On hold with nothing ahead of it, this is what starts; the pending ones stay on hold.
-            if self.held and not ahead and self.job.idle and not self.current and not self.blocked():
-                self.held = len(self.items) > 1
-                self.items.remove(item)
-                item["waited"] = False
-                self._save()
-                self._start(item)
-                return True
             self._advance()
             self._save()
             return True
@@ -2010,6 +2004,8 @@ def queue_edit(item_id):
         if item.get("resume") and not upscale:
             return {"ok": False, "error": "Setup for a continued run cannot be edited here. The job was not changed."}, 409
         if upscale:
+            # Where it was, Queue or Pending, so Cancel puts it back there.
+            item["edit_from_queue"] = not item.get("later")
             item["later"] = True
             item["edit_token"] = secrets.token_urlsafe(24)
             run_queue._save()
@@ -2022,6 +2018,7 @@ def queue_edit(item_id):
         missing = [name for name, path in files.items() if not os.path.isfile(path)]
         if missing:
             return {"ok": False, "error": "A queued input file is missing. The job was not changed."}, 409
+        item["edit_from_queue"] = not item.get("later")
         item["later"] = True
         item["edit_token"] = secrets.token_urlsafe(24)
         run_queue._save()
@@ -2147,7 +2144,12 @@ def queue_edit_cancel(item_id):
         if not item or not item.get("edit_token") or not secrets.compare_digest(item["edit_token"], token):
             return {"ok": False, "error": "That editing session is no longer active."}, 409
         item.pop("edit_token")
+        # Back where it came from: in the queue, at the place it held (its place in the list never changed), or in
+        # Pending.
+        if item.pop("edit_from_queue", False):
+            item.pop("later", None)
         run_queue._save()
+        run_queue._advance()
         return {"ok": True}
 
 

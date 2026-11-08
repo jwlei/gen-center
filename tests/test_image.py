@@ -283,17 +283,17 @@ class EtaTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as folder:
             path = os.path.join(folder, "timings.json")
             with open(path, "w", encoding="utf-8") as f:
-                json.dump({"steps": {"Prompts | claude": 90, "Prompts | gemini | 3 images": 12, "Prompts": 30}}, f)
+                json.dump({"steps": {"Prompts | claude | per prompt": 30, "Prompts | gemini | 3 images": 12, "Prompts | per prompt": 6}}, f)
             prompts = lambda *argv: RunEta(["--plan-only", *argv], {}, path).plan()["total"]
-            self.assertEqual(prompts("--llm", "gemini", "--count", "3"), 12)
-            self.assertEqual(prompts("--llm", "claude", "--count", "3"), 90)
-            self.assertEqual(prompts("--llm", "gemini", "--count", "5"), 30, "nothing timed for gemini at 5 yet")
+            self.assertEqual(prompts("--llm", "gemini", "--count", "3"), 12, "as timed for this many")
+            self.assertEqual(prompts("--llm", "claude", "--count", "3"), 90, "claude's time per prompt, times three")
+            self.assertEqual(prompts("--llm", "gemini", "--count", "5"), 30, "nothing timed for gemini at 5 yet: any LLM's per prompt, times five")
 
     def test_each_workflow_learns_its_own_time(self):
         with tempfile.TemporaryDirectory() as folder:
             path = os.path.join(folder, "timings.json")
             with open(path, "w", encoding="utf-8") as f:
-                json.dump({"steps": {"Prompts": 30}, "renders": {"fast": 10, "slow": 200}}, f)
+                json.dump({"steps": {"Prompts | per prompt": 10}, "renders": {"fast": 10, "slow": 200}}, f)
             count = ["--count", "3"]
             self.assertEqual(RunEta(count, {"COMFYUI_WORKFLOW": "x/fast.json"}, path).plan()["total"], 30 + 30)
             self.assertEqual(RunEta(count, {"COMFYUI_WORKFLOW": "x/slow.json"}, path).plan()["total"], 30 + 600)

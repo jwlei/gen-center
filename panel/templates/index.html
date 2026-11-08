@@ -29,8 +29,10 @@
   .estimate-line b { color: var(--text); font-weight: 600; }
   #estimateDetail { text-align: right; }
   .estimate .err { margin: 0; }
-  .eta-detail { margin: -6px 0 10px; }
+  /* Under the time left, over the bar, at the right: how the estimate moved, a tap away from why. */
+  .eta-detail { margin: 2px 0 0; text-align: right; }
   .eta-detail summary { font-size: .78rem; font-weight: 400; color: var(--muted); }
+  .eta-detail .changes { text-align: left; }
   .eta-detail .changes { max-height: 7.5em; overflow-y: auto; margin-top: 4px; }
   #uploadBox .status { margin-bottom: 8px; }
   #stopUpload { width: auto; margin: 0 0 0 auto; padding: 4px 10px; font-size: .8rem; }
@@ -50,7 +52,7 @@
   .queue-head b { font-weight: 600; }
   .queue-foot { display: flex; justify-content: flex-end; margin-top: 8px; }
   .queue-head .when { color: var(--muted); font-size: .78rem; }
-  .queue-head.run-queue-head { display: grid; grid-template-columns: minmax(0, 1fr) auto 30px 20px; }
+  .queue-head.run-queue-head { display: grid; grid-template-columns: minmax(0, 1fr) auto 26px 20px; }
   .run-queue-head .when { grid-column: 2; min-width: 0; }
   .run-queue-head [data-queue-toggle] { grid-column: 3; }
   .queue-head .queue-fold-toggle { padding: 2px 0; border: 0; background: transparent; text-align: left; }
@@ -65,14 +67,16 @@
   .queue-item.run-card .queue-item-top { display: flex; align-items: center; gap: 10px; }
   .queue-item.run-card .what { font-weight: 600; }
   .queue-item.run-card .hint { margin-top: 2px; font-weight: 400; }
-  .queue-item.run-card .queue-item-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 6px; margin-top: 8px; }
-  .queue-item.run-card .queue-item-actions .when { margin-right: auto; }
-  .queue-item.run-card .queue-item-actions .run-item { margin-right: auto; }
-  .queue-item.run-card .queue-item-actions .run-item ~ .when { margin-right: 0; }
+  /* Every title in the queues: two lines at most, "…" where it is cut; a tap opens it in full, another closes it. */
+  .queue-title { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; overflow: hidden; overflow-wrap: anywhere; }
+  .queue-title.expanded { display: block; -webkit-line-clamp: unset; line-clamp: none; overflow: visible; }
+  /* Its place in the queue, quietly: the title is what matters. */
+  .queue-pos { color: var(--muted); font-weight: 500; }
   .queue .queue-item.run-card .queue-item-actions button { background: var(--panel); }
   .queue-item.selected { outline: 2px dotted var(--ok); outline-offset: -2px; cursor: grab; touch-action: none; }
-  .queue-item.dragging { position: relative; z-index: 2; background: var(--panel-2); border-radius: 8px;
-    box-shadow: 0 8px 22px rgba(0, 0, 0, .5), 0 0 0 1px var(--accent); }
+  /* Held, its dotted outline turns solid: the same line, no second one. */
+  .queue-item.dragging { position: relative; z-index: 2; background: var(--panel-2); border-radius: 8px; outline-style: solid;
+    box-shadow: 0 8px 22px rgba(0, 0, 0, .5); }
   .queue-item { transition: background .15s ease; }
   .queue-item:hover { background: color-mix(in srgb, var(--panel-2) 60%, transparent); }
   .stopped-fold > summary { display: flex; align-items: center; justify-content: space-between; gap: 10px; cursor: pointer; list-style: none; padding: 2px 0; font-size: .84rem; }
@@ -94,8 +98,10 @@
   .queue button { width: auto; margin: 0; padding: 4px 10px; font-size: .78rem; background: var(--panel-2); border: 1px solid var(--line); color: var(--text); }
   .queue .queue-head .queue-fold-toggle { padding: 2px 0; border: 0; background: transparent; }
   .queue .queue-head .queue-fold-arrow { width: 20px; }
-  .queue .queue-head button[data-queue-toggle] { width: 30px; height: 30px; padding: 5px; font-size: .7rem; }
-  .queue .queue-head button[data-queue-toggle] svg { width: 14px; height: 14px; }
+  /* Play or pause for the whole queue: small, its icon in the middle of it. */
+  .queue .queue-head button[data-queue-toggle] { width: 26px; height: 26px; padding: 0; display: inline-flex; align-items: center;
+    justify-content: center; line-height: 1; font-size: .62rem; }
+  .queue .queue-head button[data-queue-toggle] svg { display: block; width: 12px; height: 12px; }
   .queue-item .what[role="button"] { cursor: pointer; }
   .queue .results { margin-top: 6px; }
   /* A stopped run in a box of its own: what it is, how far it got, then what you can do with it. */
@@ -117,11 +123,13 @@
   .stopped-run.highlight { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent); }
   .stopped-run .what { overflow-wrap: anywhere; font-weight: 600; }
   .stopped-run .hint { margin-top: 2px; }
-  .stopped-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 8px; }
-  .stopped-actions.unsaved-actions { justify-content: flex-end; }
-  .stopped-actions .when { margin-right: auto; color: var(--muted); font-size: .78rem; white-space: nowrap; font-variant-numeric: tabular-nums; }
-  .stopped-actions [data-continue], .stopped-actions [data-start] { margin-right: auto; }
-  .stopped-actions [data-continue] ~ .when, .stopped-actions [data-start] ~ .when { margin-right: 0; }
+  /* A job's buttons: what moves it on the left, how long it takes in the middle, the rest on the right. */
+  .stopped-actions, .queue-item.run-card .queue-item-actions { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+    align-items: center; gap: 6px; margin-top: 8px; }
+  .acts-side { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; min-width: 0; }
+  .acts-side.acts-end { justify-content: flex-end; }
+  .stopped-actions .when, .queue-item-actions .when { color: var(--muted); font-size: .78rem; white-space: nowrap; font-variant-numeric: tabular-nums; text-align: center; }
+  .stopped-actions.unsaved-actions { display: flex; justify-content: flex-end; }
   .queue .stopped-run button { background: var(--panel); }
   .queue .stopped-actions .icon-btn:not(.continue-item) { color: var(--muted); }
   .queue .queue-item-actions button, .queue .stopped-actions button {
@@ -922,12 +930,20 @@
   .go-under .preview-run { margin: 0; font-size: .8rem; color: var(--muted); }
   .go-under .preview-run input { width: 16px; height: 16px; margin: 0; }
   .start-later { width: auto; margin: 0 0 0 auto; padding: 2px 8px; background: none; border: 0; color: var(--muted); font-size: .8rem; font-weight: 600; }
+  /* Under the button, centred: leaving an edit puts the job back where it was. */
+  #cancelQueueEdit { display: block; margin: 6px auto 0; }
+  #cancelQueueEdit[hidden] { display: none; }
   body.on-shorts .not-shorts { display: none !important; }
   .log-box { margin-top: 8px; font-size: .85rem; }
   .current-work { display: block; width: auto; margin: 0 0 8px; padding: 0; background: none; border: 0; border-radius: 0; color: var(--text);
     font-size: .95rem; font-weight: 600; text-align: left; overflow-wrap: anywhere; cursor: pointer; }
   .current-work[hidden] { display: none; }
   .current-work-size { margin: -5px 0 8px; color: var(--muted); font-size: .75rem; }
+  /* Under the running job's title: the workflow it renders with on the left, its size on the right. */
+  #currentWorkSize { display: flex; justify-content: space-between; gap: 10px; }
+  #currentWorkSize[hidden] { display: none; }
+  #currentWorkflow { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+  #currentResolution { margin-left: auto; white-space: nowrap; font-variant-numeric: tabular-nums; }
   /* What the run renders with: a small box over the blurred page. */
   dialog.run-facts { width: min(360px, calc(100vw - 24px)); }
   .run-facts-list { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 6px 14px; margin: 0; font-size: .88rem; }
@@ -939,6 +955,9 @@
   .status-head .status { margin: 0; font-size: .78rem; gap: 6px; white-space: nowrap; }
   .status-times { display: flex; gap: 8px; font-size: .78rem; white-space: nowrap; font-variant-numeric: tabular-nums; color: var(--muted); }
   .status-times[hidden] { display: none; }
+  /* While it runs the light says it: no empty word holding the timers away from it. */
+  .status-head #statusText:empty { display: none; }
+  .status-head .status + .status-times { margin-left: -4px; }
   /* ComfyUI as an icon with a dot for its state; a tap shows the rest. */
   .comfy-status { position: relative; display: inline-flex; align-items: center; justify-content: center; width: 36px; height: 36px; padding: 0;
     margin: -6px -6px -6px auto; background: none; border: 0; border-radius: 8px; color: var(--muted); cursor: pointer; }
@@ -1161,12 +1180,12 @@
   <div class="status-main">
   <div class="hint gpu" id="gpuLine"></div>
   <button type="button" class="current-work" id="currentWork" aria-haspopup="dialog" title="What it renders with" hidden></button>
-  <div class="current-work-size" id="currentWorkSize" hidden></div>
+  <div class="current-work-size" id="currentWorkSize" hidden><span id="currentWorkflow"></span><span id="currentResolution"></span></div>
   <div class="progress" id="runProgress" hidden>
     <div class="strip-head"><b id="runProgressText"></b><span id="runProgressRight"></span></div>
+    <div class="hint eta-detail" id="etaDetail" hidden></div>
     <div class="bar"><div id="runProgressBar"></div></div>
   </div>
-  <div class="hint eta-detail" id="etaDetail" hidden></div>
   <div id="now" class="hidden">
     <div class="stepper" id="stepper"></div>
     <div class="hint status-lines" id="stageDetail"></div>
@@ -1714,7 +1733,7 @@
     <label class="check preview-run not-shorts" id="previewRunLabel"><input type="checkbox" name="try_first" id="previewRun"><span>Preview run</span></label>
     <button type="button" class="start-later" id="goLater" title="Into the queue, to start when you start it">Start later</button>
   </div>
-  <button type="button" class="start-later" id="cancelQueueEdit" hidden>Cancel editing (keep in Pending)</button>
+  <button type="button" class="start-later" id="cancelQueueEdit" title="Put it back where it was, unchanged" hidden>Cancel editing</button>
   <div class="err" id="formError" hidden></div>
   <div class="hint" id="formNote" hidden></div>
   <div class="estimate" id="estimate" hidden>
@@ -2441,6 +2460,10 @@ const VIDEO_DEFAULTS = { llm: {{ default_llm | tojson }}, review: false, duratio
 // What belongs to one film rather than being the way you like to work.
 // A seed is for one run: kept, it would quietly make the next film the same.
 const NOT_REMEMBERED = ['prompt', 'size', 'narration', 'seed', 'areas', 'source_seed'];
+// What this browser chose last, over the defaults (the local prompt model first among them).
+function savedForm(key) {
+  try { return JSON.parse(localStorage.getItem(key)) || {}; } catch (e) { return {}; }
+}
 // A file input also throws if you set its value. An image's role goes with that image.
 // A workflow's own options start as it was saved, each time it's chosen.
 function remembered(el) { return el.id !== 'startSingle' && el.name && el.type !== 'file' && !NOT_REMEMBERED.includes(el.name) && !/^(image_\d+|ref_media(_\d+)?)_role$/.test(el.name) && !el.name.startsWith('opt_'); }
@@ -2455,9 +2478,7 @@ function saveVideoForm() {
   try { localStorage.setItem(VIDEO_STORE_KEY, JSON.stringify(data)); } catch (e) {}
 }
 function loadVideoForm(skip = []) {
-  let data = {};
-  try { data = JSON.parse(localStorage.getItem(VIDEO_STORE_KEY)); } catch (e) {}
-  data = { ...VIDEO_DEFAULTS, ...data };
+  const data = { ...VIDEO_DEFAULTS, ...savedForm(VIDEO_STORE_KEY) };
   for (const el of $('formVideo').elements) {
     if (!remembered(el) || !(el.name in data) || skip.includes(el.name)) continue;
     // A checkbox is put back even while disabled: it is only disabled until its mode is chosen, as Multishot's first frame.
@@ -3073,9 +3094,7 @@ function saveImageForm() {
   try { localStorage.setItem(IMAGE_STORE_KEY, JSON.stringify(data)); } catch (e) {}
 }
 function loadImageForm() {
-  let data = {};
-  try { data = JSON.parse(localStorage.getItem(IMAGE_STORE_KEY)); } catch (e) {}
-  data = { ...IMAGE_DEFAULTS, ...data };
+  const data = { ...IMAGE_DEFAULTS, ...savedForm(IMAGE_STORE_KEY) };
   for (const el of $('formImage').elements) {
     if (!remembered(el) || !(el.name in data)) continue;
     if (el.type === 'checkbox') el.checked = !!data[el.name];
@@ -3905,9 +3924,8 @@ function syncImageLlm() {
   for (const role of [...roles].sort((a, b) => order.indexOf(a.id) - order.indexOf(b.id))) {
     select.insertAdjacentHTML('beforeend', `<option value="${esc(role.id)}" data-role="1">${esc(ROLE_LABELS[role.id] || role.label)}</option>`);
   }
-  // Keep an explicitly selected local model when switching workflows.
-  if (roles.some(role => role.id === 'prompt_enhancer') && !ROLE_LABELS[wanted] && wanted !== 'local') select.value = 'prompt_enhancer';
-  else if ([...(select.options || [])].some(option => option.value === wanted)) select.value = wanted;
+  // What was chosen stays chosen: a workflow with its own prompt enhancer offers it, and never picks it by itself.
+  if ([...(select.options || [])].some(option => option.value === wanted)) select.value = wanted;
   else if (ROLE_LABELS[wanted]) select.value = IMAGE_DEFAULTS.llm;
 }
 function imageRole() { return ROLE_LABELS[$('imageLlm').value] && $('imagePromptMode').value === 'llm' ? $('imageLlm').value : null; }
@@ -4016,6 +4034,8 @@ const ICONS = {
   upload: ICON_SVG('<path d="M12 20V9"/><path d="m7 14 5-5 5 5"/><path d="M5 4h14"/>'),
   again: ICON_SVG('<path d="M4 12a8 8 0 0 1 13.7-5.7L20 8.5"/><path d="M20 4v4.5h-4.5"/><path d="M20 12a8 8 0 0 1-13.7 5.7L4 15.5"/><path d="M4 20v-4.5h4.5"/>'),
   play: ICON_SVG('<path d="M7 4.5v15l12-7.5z" fill="currentColor"/>'),
+  // Into the queue: a list with one more being added.
+  queue: ICON_SVG('<path d="M4 6h12M4 12h12M4 18h7"/><path d="M17 15v6M14 18h6"/>'),
   config: ICON_SVG('<path d="M4 7h10M18 7h2M4 17h2M10 17h10"/><circle cx="16" cy="7" r="2"/><circle cx="8" cy="17" r="2"/>'),
   category: ICON_SVG('<circle cx="5" cy="12" r="1" fill="currentColor"/><circle cx="12" cy="12" r="1" fill="currentColor"/><circle cx="19" cy="12" r="1" fill="currentColor"/>'),
   // Clearing text, not deleting a thing: the bin stays for delete.
@@ -5263,7 +5283,7 @@ function renderNow(data) {
   if (comfyBusy) {
     $('comfyLabel').textContent = c.label || 'Working';
     const hasSteps = c.max && c.value != null;
-    $('comfySteps').textContent = hasSteps ? `step ${c.value} of ${c.max}` : '';
+    $('comfySteps').textContent = hasSteps ? `Step ${c.value} of ${c.max}` : '';
     $('comfyBar').style.width = hasSteps ? `${Math.round(100 * c.value / c.max)}%` : '0';
     const [counter, what] = splitCount(clip);
     const queued = c.queue > 1 ? `${counter ? ' · ' : ''}${c.queue - 1} more queued` : '';
@@ -5611,6 +5631,24 @@ function renderUpload(up) {
 // --- Queues ---
 const RESULT_MARKS = { done: '✔', failed: '✖ failed', stopped: '■ stopped', skipped: '– skipped' };
 const LEAVE_MS = 380;
+// A title in the queues, cut to two lines; the ones opened stay open when the list is drawn again.
+const openTitles = new Set();
+// position: its place in the queue, said quietly before the title.
+function queueTitle(key, text, position = null) {
+  return `<span class="queue-title${openTitles.has(key) ? ' expanded' : ''}" data-title-key="${esc(key)}">`
+    + `${position != null ? `<span class="queue-pos">${position}.</span> ` : ''}${esc(text)}</span>`;
+}
+// Tapped, a title that is cut opens in full, and an open one closes. One that fits is left to what a tap on its job
+// does, such as selecting it to move. A job held to move is left alone.
+document.addEventListener('click', e => {
+  const title = e.target.closest && e.target.closest('.queue-title');
+  if (!title || (title.closest('.queue-item') && title.closest('.queue-item').classList.contains('selected'))) return;
+  const open = title.classList.contains('expanded');
+  if (!open && title.scrollHeight <= title.clientHeight + 1) return;
+  e.stopPropagation();
+  title.classList.toggle('expanded', !open);
+  if (open) openTitles.delete(title.dataset.titleKey); else openTitles.add(title.dataset.titleKey);
+}, true);
 function renderQueue(el, q, doneIn, moving = false, idle = false) {
   // What has finished is under Finished: this is what's waiting. The one moving to start has left it already.
   el._last = [q, doneIn, moving, idle];
@@ -5646,14 +5684,15 @@ function renderQueue(el, q, doneIn, moving = false, idle = false) {
   const canRunNow = el.dataset.lane === 'run' && q.held && idle;
   const items = waiting.map((item, i) => `
     <div class="queue-item${el.dataset.lane === 'run' ? ' run-card' : ''}${String(item.id) === el._selected ? ' selected' : ''}" data-id="${esc(String(item.id))}" data-motion-key="queue-${esc(String(item.id))}">
-      ${el.dataset.lane === 'run' ? '<div class="queue-item-top">' : ''}<div class="what"${waiting.length > 1 ? ` role="button" tabindex="0" aria-pressed="${String(item.id) === el._selected}" aria-label="Select ${esc(item.label)} to drag or use arrow keys to reorder"` : ''}>${i + 1}. ${esc(item.label)}<div class="hint">${el.dataset.lane === 'run' ? `${SIDE_NAMES[item.pipeline] || 'Shorts'} · ` : ''}${esc(queueDetail(item))}</div></div>${el.dataset.lane === 'run' ? '</div><div class="queue-item-actions">' : ''}
-      ${canRunNow ? `<button type="button" class="run-item${item.continuation ? ' continue-item' : ''}" data-run="${item.id}" aria-label="Run this generation now" title="Run this now">
-          <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 2.8a.8.8 0 0 1 1.2-.7l8 5a1 1 0 0 1 0 1.7l-8 5A.8.8 0 0 1 4 13.1z" fill="currentColor"/></svg></button>` : ''}
-      ${!canRunNow && item.estimate ? `<span class="when">${fmtEta(item.estimate)}</span>` : ''}
-      ${el.dataset.lane === 'run' && item.resume && item.pipeline !== 'shorts' ? `<button type="button" class="icon-btn" data-shots="${esc(item.resume)}" aria-label="Prompts" title="View prompts">${ICONS.enhanced}</button>` : ''}
-      ${el.dataset.lane === 'run' ? `<button type="button" class="icon-btn" data-edit="${item.id}" aria-label="Go to setup" title="Edit this queued job">${ICONS.config}</button>` : ''}
-      ${el.dataset.lane === 'run' ? `<button type="button" class="icon-btn" data-pause="${item.id}" aria-label="Pause: move to Pending" title="Pause: take it out of the queue and make it pending">❚❚</button>` : ''}
-      <button type="button"${el.dataset.lane === 'run' ? ' class="icon-btn"' : ''} data-remove="${item.id}" aria-label="Remove from the queue" title="Remove from the queue (tap twice)">${el.dataset.lane === 'run' ? ICONS.trash : '✕'}</button>
+      ${el.dataset.lane === 'run' ? '<div class="queue-item-top">' : ''}<div class="what"${waiting.length > 1 ? ` role="button" tabindex="0" aria-pressed="${String(item.id) === el._selected}" aria-label="Select ${esc(item.label)} to drag or use arrow keys to reorder"` : ''}>${queueTitle(`queue-${item.id}`, el.dataset.lane === 'run' ? workHeading(item, item.pipeline) : item.label, i + 1)}<div class="hint">${el.dataset.lane === 'run' ? `${SIDE_NAMES[item.pipeline] || 'Shorts'} · ` : ''}${esc(queueDetail(item))}</div></div>${el.dataset.lane === 'run' ? '</div><div class="queue-item-actions">' : ''}
+      ${el.dataset.lane === 'run' ? `<span class="acts-side"><button type="button" class="icon-btn" data-pause="${item.id}" aria-label="Pause: move to Pending" title="Pause: take it out of the queue and make it pending">❚❚</button>`
+        + (canRunNow ? `<button type="button" class="run-item${item.continuation ? ' continue-item' : ''}" data-run="${item.id}" aria-label="Run this generation now" title="Run this now">
+          <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 2.8a.8.8 0 0 1 1.2-.7l8 5a1 1 0 0 1 0 1.7l-8 5A.8.8 0 0 1 4 13.1z" fill="currentColor"/></svg></button>` : '')
+        + `</span><span class="when">${item.estimate ? fmtEta(item.estimate) : ''}</span><span class="acts-side acts-end">`
+        + (item.resume && item.pipeline !== 'shorts' ? `<button type="button" class="icon-btn" data-shots="${esc(item.resume)}" aria-label="Prompts" title="View prompts">${ICONS.enhanced}</button>` : '')
+        + `<button type="button" class="icon-btn" data-edit="${item.id}" aria-label="Go to setup" title="Edit this queued job">${ICONS.config}</button>`
+        + `<button type="button" class="icon-btn" data-remove="${item.id}" aria-label="Remove from the queue" title="Remove from the queue (tap twice)">${ICONS.trash}</button></span>`
+        : `${item.estimate ? `<span class="when">${fmtEta(item.estimate)}</span>` : ''}<button type="button" data-remove="${item.id}" aria-label="Remove from the queue" title="Remove from the queue (tap twice)">✕</button>`}
       ${el.dataset.lane === 'run' ? '</div>' : ''}
     </div>`).join('');
   // Resume under what it lets go, where a thumb ends up after reading the list.
@@ -5923,42 +5962,40 @@ function renderRunSections(draw) {
     }
   });
 }
-function renderStopped(runs, parked = [], results = []) {
+// canRunNow: the queue is on hold and nothing is running, so a pending job can be started on its own, at once.
+function renderStopped(runs, parked = [], results = [], canRunNow = false) {
   const failed = runs.filter(run => run.outcome && run.outcome.outcome === 'failed');
   const idle = runs.filter(run => !failed.includes(run));
   const tag = run => run.outcome ? `<span class="run-tag">${esc(run.outcome.outcome === 'failed' ? 'Failed' : run.outcome.outcome)}</span>` : '';
   const runRow = (run, isFailed = false) => `
     <div class="stopped-run" data-run-id="${esc(run.id)}" data-motion-key="run-${esc(run.id)}">
-      <div class="run-head"><div class="what">${esc(run.label)}</div>${tag(run)}</div>
+      <div class="run-head"><div class="what">${queueTitle(`run-${run.id}`, run.label)}</div>${tag(run)}</div>
       <div class="hint">${SIDE_NAMES[run.pipeline] || 'Shorts'} · ${esc(run.detail)}${run.size && !String(run.detail).includes(run.size) ? ` · ${esc(run.size)}` : ''}</div>
       ${run.when ? `<div class="hint">${esc(run.when)}</div>` : ''}
       ${run.outcome ? whyHtml(run.outcome) : ''}
       <div class="stopped-actions">
-        ${isFailed ? `<button type="button" class="icon-btn" data-continue="${esc(run.id)}" aria-label="Retry" title="Retry from where it got to">${ICONS.again}</button>`
-          : `<button type="button" class="icon-btn start-item continue-item" data-continue="${esc(run.id)}" aria-label="${run.pipeline !== 'shorts' && !run.clips ? 'Render' : 'Continue'}" title="${run.pipeline !== 'shorts' && !run.clips ? 'Render' : 'Continue'}">${ICONS.play}</button>`}
+        <span class="acts-side">${isFailed ? `<button type="button" class="icon-btn" data-continue="${esc(run.id)}" aria-label="Retry" title="Retry from where it got to">${ICONS.again}</button>`
+          : `<button type="button" class="icon-btn start-item continue-item" data-continue="${esc(run.id)}" aria-label="${run.pipeline !== 'shorts' && !run.clips ? 'Render' : 'Continue'}" title="${run.pipeline !== 'shorts' && !run.clips ? 'Render' : 'Continue'}">${ICONS.play}</button>`}</span>
         <span class="when">${fmtEta(run.estimate)}</span>
-        ${run.pipeline !== 'shorts' ? `<button type="button" class="icon-btn" data-shots="${esc(run.id)}" aria-label="Prompts" title="View prompts">${ICONS.enhanced}</button>` : ''}
-        <button type="button" class="icon-btn" data-config="${esc(run.id)}" data-pipeline="${esc(run.pipeline)}" aria-label="Change settings" title="Back to Generate with its settings, to change them">${ICONS.config}</button>
-        <button type="button" class="icon-btn" data-discard="${esc(run.id)}" data-pipeline="${esc(run.pipeline)}" data-clips="${run.clips}" aria-label="Discard this run" title="Discard what it has still to do: anything it made stays (tap twice)">${ICONS.trash}</button>
+        <span class="acts-side acts-end">${run.pipeline !== 'shorts' ? `<button type="button" class="icon-btn" data-shots="${esc(run.id)}" aria-label="Prompts" title="View prompts">${ICONS.enhanced}</button>` : ''}<button type="button" class="icon-btn" data-config="${esc(run.id)}" data-pipeline="${esc(run.pipeline)}" aria-label="Change settings" title="Back to Generate with its settings, to change them">${ICONS.config}</button><button type="button" class="icon-btn" data-discard="${esc(run.id)}" data-pipeline="${esc(run.pipeline)}" data-clips="${run.clips}" aria-label="Discard this run" title="Discard what it has still to do: anything it made stays (tap twice)">${ICONS.trash}</button></span>
       </div>
     </div>`;
   // Waiting to be started: put there by Start later or Pause, and not in the queue until you start it.
   const parkedRow = item => `
     <div class="stopped-run" data-motion-key="queue-${esc(String(item.id))}">
-      <div class="run-head"><div class="what">${esc(item.label)}</div></div>
+      <div class="run-head"><div class="what">${queueTitle(`queue-${item.id}`, workHeading(item, item.pipeline))}</div></div>
       <div class="hint">${SIDE_NAMES[item.pipeline] || 'Shorts'} · ${esc(queueDetail(item))}</div>
       <div class="stopped-actions">
-        ${item.editing ? '<span class="when">Editing</span>' : `<button type="button" class="icon-btn start-item${item.continuation ? ' continue-item' : ''}" data-start="${item.id}" aria-label="Start" title="Start: at the end of the queue, or now if nothing is queued">${ICONS.play}</button>`}
-        ${item.estimate ? `<span class="when">${fmtEta(item.estimate)}</span>` : ''}
-        ${item.resume && item.pipeline !== 'shorts' ? `<button type="button" class="icon-btn" data-shots="${esc(item.resume)}" aria-label="Prompts" title="View prompts">${ICONS.enhanced}</button>` : ''}
-        <button type="button" class="icon-btn" data-edit="${item.id}" aria-label="Go to setup" title="Edit this pending job">${ICONS.config}</button>
-        <button type="button" class="icon-btn" data-remove="${item.id}" aria-label="Remove it" title="Remove it (tap twice)">${ICONS.trash}</button>
+        <span class="acts-side">${item.editing ? '<span class="when">Editing</span>' : `<button type="button" class="icon-btn start-item${item.continuation ? ' continue-item' : ''}" data-start="${item.id}" aria-label="Add to the queue" title="Add to the queue: it starts when the queue gets to it">${ICONS.queue}</button>`
+          + (canRunNow ? `<button type="button" class="icon-btn start-item${item.continuation ? ' continue-item' : ''}" data-run-now="${item.id}" aria-label="Run this now" title="Run this now: the rest of the queue stays on hold">${ICONS.play}</button>` : '')}</span>
+        <span class="when">${item.estimate ? fmtEta(item.estimate) : ''}</span>
+        <span class="acts-side acts-end">${item.resume && item.pipeline !== 'shorts' ? `<button type="button" class="icon-btn" data-shots="${esc(item.resume)}" aria-label="Prompts" title="View prompts">${ICONS.enhanced}</button>` : ''}<button type="button" class="icon-btn" data-edit="${item.id}" aria-label="Go to setup" title="Edit this pending job">${ICONS.config}</button><button type="button" class="icon-btn" data-remove="${item.id}" aria-label="Remove it" title="Remove it (tap twice)">${ICONS.trash}</button></span>
       </div>
     </div>`;
   const unsavedFailures = results.filter(result => result.outcome === 'failed' && !result.run_id && result.job_id != null);
   const unsavedRow = result => `
     <div class="stopped-run" data-job-id="${esc(String(result.job_id))}">
-      <div class="run-head"><div class="what">${esc(result.label)}</div><span class="run-tag">Failed</span></div>
+      <div class="run-head"><div class="what">${queueTitle(`failed-${result.job_id}`, result.label)}</div><span class="run-tag">Failed</span></div>
       <div class="hint">${SIDE_NAMES[result.pipeline] || 'Shorts'} · No saved run to retry</div>
       ${result.note ? whyHtml({ why: result.note }) : ''}
       <div class="stopped-actions unsaved-actions">
@@ -6015,6 +6052,10 @@ for (const id of ['stoppedRuns', 'failedRuns']) {
       url = `/queue/run/failed/${encodeURIComponent(d.dismissJob)}/dismiss`;
     } else if (d.edit) {
       await editQueued(d.edit, button);
+      return;
+    } else if (d.runNow) {
+      const data = await queueRequest(button, async () => (await fetch(`/queue/run/run-now/${d.runNow}`, { method: 'POST' })).json(), 'Started', 'Starting…');
+      if (data) poll();
       return;
     } else if (d.start || d.remove) {
       if (d.remove && !secondTap(button)) return;
@@ -6195,7 +6236,8 @@ for (const id of ['runQueue', 'uploadQueue']) {
         control.setAttribute('aria-expanded', String(el._open));
         if (control.classList.contains('queue-fold-arrow')) control.setAttribute('aria-label', el._open ? 'Collapse queue' : 'Expand queue');
       }
-      if (list) list.hidden = !el._open;
+      if (list && !el._open) { holdHeight(); list.hidden = true; requestAnimationFrame(releaseHeight); }
+      else if (list) list.hidden = false;
       el.dataset.html = el.dataset.html
         .replace(/aria-expanded="(?:true|false)"/g, `aria-expanded="${el._open}"`)
         .replace(/aria-label="(?:Collapse|Expand) queue"/, `aria-label="${el._open ? 'Collapse' : 'Expand'} queue"`)
@@ -6300,7 +6342,7 @@ function runFactRows() {
   if (p.detail) rows.push(['Now', p.detail]);
   if (p.eta && d.running && p.eta.total_left != null) rows.push(['Estimate', `${fmtEta(p.eta.total_left)} left, done around ${clockIn(p.eta.total_left)}`]);
   if (c.connected) {
-    const steps = c.max && c.value != null ? ` · step ${c.value} of ${c.max}` : '';
+    const steps = c.max && c.value != null ? ` · Step ${c.value} of ${c.max}` : '';
     rows.push(['ComfyUI', `${c.active ? c.label || 'Working' : 'Idle'}${steps}${c.queue > 1 ? ` · ${c.queue - 1} more queued` : ''}`]);
   }
   if (d.command) rows.push(['Command', d.command]);
@@ -6537,7 +6579,7 @@ async function pollOnce(generation) {
   safely(() => renderUpload(data.upload));
   safely(() => renderRunSections(() => {
     safely(() => renderQueue($('runQueue'), { ...queue, items: ready, running, pipeline: data.pipeline, stopAfter: data.stop_after }, queue.held ? 0 : queueAhead, nextUp, !running && !queue.current));
-    safely(() => renderStopped(data.stopped_runs, parked, queue.results));
+    safely(() => renderStopped(data.stopped_runs, parked, queue.results, queue.held && !running && !queue.current));
   }));
   safely(() => renderFinished(data.finished_results || queue.results, upq.results, data.made_now || []));
   $('dot').className = 'dot' + (running || nextUp ? ' on' : '');
@@ -6547,11 +6589,12 @@ async function pollOnce(generation) {
   if (!submitting) $('go').textContent = $('goStick').textContent = queueEdit ? 'Save to queue' : goLabel(running);
   workItem = running ? queue.current : nextUp ? ready[0] : null;
   lastStatus = data;
-  const workSize = workItem && workItem.facts && workItem.facts.resolution;
+  const facts = (workItem && workItem.facts) || {};
   showWork(running ? workHeading(queue.current, data.pipeline)
     : nextUp ? workHeading(ready[0], ready[0].pipeline) : '');
-  $('currentWorkSize').hidden = !workItem || !workSize;
-  $('currentWorkSize').textContent = workSize || '';
+  $('currentWorkSize').hidden = !workItem || !(facts.workflow || facts.resolution);
+  $('currentWorkflow').textContent = facts.workflow || '';
+  $('currentResolution').textContent = facts.resolution || '';
   // A job on the other side still has the GPU, so the switch says so.
   for (const [id, side] of [['switchShorts', 'shorts'], ['switchVideo', 'video'], ['switchImage', 'image']]) {
     $(id).querySelector('.dot').classList.toggle('hidden', !(running && data.pipeline === side && side !== pipeline));
@@ -7383,6 +7426,29 @@ if (window.visualViewport) {
   window.visualViewport.addEventListener('resize', fitPromptEditor);
   window.visualViewport.addEventListener('scroll', fitPromptEditor);
 }
+// After a fold, a phone's browser left what slid into view at the top unpainted, black until the next scroll. It
+// happens when the page shrinks under a scrolled screen and the browser pulls the scroll back itself.
+// The page drawn again, once: a change of opacity for two frames, too small to see, makes it paint all of it.
+function repaintPage() {
+  document.body.style.opacity = '.999';
+  requestAnimationFrame(() => requestAnimationFrame(() => { document.body.style.opacity = ''; }));
+}
+// Holds the page at its height before something folds away, so the scroll isn't pulled back mid-fold.
+function holdHeight() {
+  if (!document.body.style.minHeight) document.body.style.minHeight = `${document.documentElement.scrollHeight}px`;
+}
+// Lets the page take its new height. Scrolled past where it now ends, the page is scrolled there first, by us, so the
+// browser never has to pull it back.
+function releaseHeight() {
+  const held = document.body.style.minHeight;
+  if (!held) return;
+  document.body.style.minHeight = '';
+  const end = Math.max(0, document.documentElement.scrollHeight - window.innerHeight);
+  if (window.scrollY <= end) { repaintPage(); return; }
+  document.body.style.minHeight = held;
+  window.scrollTo(0, end);
+  requestAnimationFrame(() => { document.body.style.minHeight = ''; repaintPage(); });
+}
 // A header opens and closes the way the queue does: its height moves, so what is below slides rather than jumps.
 function foldDetails(details) {
   const summary = details.querySelector(':scope > summary');
@@ -7398,7 +7464,7 @@ function foldDetails(details) {
     if (details._fold) details._fold.cancel();
     // Closing, the page keeps its height until the fold is done: shrinking under the screen frame by frame made the
     // browser pull the scroll back each time, and what it hadn't painted yet showed black at the top.
-    document.body.style.minHeight = opening ? '' : `${document.documentElement.scrollHeight}px`;
+    if (opening) document.body.style.minHeight = ''; else holdHeight();
     details.open = false;
     const closed = details.getBoundingClientRect().height;
     details.open = true;
@@ -7417,7 +7483,7 @@ function foldDetails(details) {
       if (opening) revealQueueSection(details);
       else {
         // Closed, the page shrinks once, and the header stays in sight.
-        document.body.style.minHeight = '';
+        releaseHeight();
         if (summary.getBoundingClientRect().top < 0) summary.scrollIntoView({ block: 'start' });
       }
     };
@@ -7437,6 +7503,7 @@ if (window.ResizeObserver) {
         const y = window.scrollY;
         window.scrollTo(0, Math.max(0, y - 1));
         requestAnimationFrame(() => { window.scrollTo(0, y); nudging = false; });
+        repaintPage();
       });
     }
     lastHeight = height;
