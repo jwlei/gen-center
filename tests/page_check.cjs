@@ -2573,3 +2573,7 @@ for (const fn of ['sameAgain', 'sameAgainFilm', 'sameAgainShorts', 'editQueued',
   els.imageAspect.value = '1:1';
   run('imageStep = null; imageMadeAt = null');
 }
+
+// Upscale starts off on each page load, whatever was chosen last time; its box is as dark as the queue's.
+assert(/was = first \? 'Off' : \$\('imageUpscale'\)\.value/.test(script) && /was = first \? 'Off' : \$\('videoLatentUpscale'\)\.value/.test(script), 'upscale defaults to off');
+assert(/\.res-block \{[^}]*background: var\(--bg\)/.test(html), 'the block is dark like the queue');

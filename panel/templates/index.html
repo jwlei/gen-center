@@ -525,7 +525,7 @@
   .count-stepper .mp-field .mp-unit { margin-left: 2px; color: var(--muted); font-size: .8em; }
   span.mp-field { display: inline-flex; align-items: center; justify-content: center; box-sizing: border-box; }
   /* Resolution, upscale and the megapixel stepper: one block. */
-  .res-block { margin: 4px 0 12px; padding: 10px 12px 12px; border: 1px solid var(--line); border-radius: 12px; background: color-mix(in srgb, var(--panel-2) 45%, transparent); }
+  .res-block { margin: 4px 0 12px; padding: 10px 12px 12px; border: 1px solid var(--line); border-radius: 12px; background: var(--bg); }
   .res-block[hidden], .res-block .hidden { display: none; }
   .res-block .range-head { margin-top: 0; }
   .res-block .res-sub { margin-top: 12px; }
@@ -3255,7 +3255,7 @@ function syncVideoLatent(options) {
   }
   const key = JSON.stringify([preset.choices, mp.min, mp.max]);
   if (box.dataset.key !== key) {
-    const first = !box.dataset.key, saved = savedLatent(), was = first ? saved.preset : $('videoLatentUpscale').value;
+    const first = !box.dataset.key, saved = savedLatent(), was = first ? 'Off' : $('videoLatentUpscale').value;
     box.dataset.key = key;
     box.dataset.min = mp.min;
     box.dataset.max = mp.max;
@@ -4356,7 +4356,7 @@ function syncImageUpscale(options) {
   if (choice) {
     const key = JSON.stringify(choice.choices);
     if (box.dataset.key !== key) {
-      const first = !box.dataset.key, saved = savedImageUpscale(), was = first ? saved.method : $('imageUpscale').value;
+      const first = !box.dataset.key, saved = savedImageUpscale(), was = first ? 'Off' : $('imageUpscale').value;
       box.dataset.key = key;
       $('imageUpscale').innerHTML = choice.choices.map(value => `<option>${esc(value)}</option>`).join('');
       $('imageUpscale').value = choice.choices.includes(was) ? was : choice.default;
