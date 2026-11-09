@@ -2602,3 +2602,20 @@ assert(/\.pipeline-form \.option-row\[hidden\] \{ display: none; \}/.test(html),
   els.imageUpscaleFactor.value = '2';
   run('imageStep = null; imageMadeAt = null');
 }
+
+// A typed size, stepped without an upscale (as after turning one off): the box follows the stepper.
+{
+  els.imageUpscaleBox.hidden = true;
+  els.imageUpscale.value = 'Off';
+  els.imageAspect.value = 'custom';
+  els.imageSize.value = '784x1392';
+  run('imageStep = null; imageMadeAt = null; syncImageSize()');
+  run('stepMegapixels(MP_STEP)');
+  assert.notStrictEqual(els.imageSize.value, '784x1392', 'the box moves with the stepper');
+  assert.strictEqual(els.imageSize.value, els.imagePixelSize.textContent.replace('×', 'x'), 'and agrees with Resolution');
+  assert.strictEqual(els.imageMegapixels.value, 'image', 'the box goes as it is');
+  const once = els.imageSize.value;
+  run('stepMegapixels(MP_STEP)');
+  assert.notStrictEqual(els.imageSize.value, once, 'and keeps moving');
+  els.imageAspect.value = '1:1';
+}

@@ -4117,7 +4117,17 @@ function imageResolution() {
   if (screen || typed) {
     if (isExact) {
       const mp = exact[0] * exact[1] / MEGAPIXEL;
-      if (step != null) { const m = Math.min(step, cap); sides = shapedSize(exact[0] / exact[1], m); send = m.toFixed(1); }
+      if (step != null) {
+        const m = Math.min(step, cap);
+        sides = shapedSize(exact[0] / exact[1], m);
+        send = m.toFixed(1);
+        // A typed size, stepped: the box holds the new size, and goes as it is (as video's does).
+        if (typed && document.activeElement !== $('imageSize')) {
+          $('imageSize').value = sides.join('x');
+          send = 'image';
+          imageStep = null;
+        }
+      }
       else if (mp > cap + 1e-9) {
         const m = tenthBelow(cap);
         sides = shapedSize(exact[0] / exact[1], m);
