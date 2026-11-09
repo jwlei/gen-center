@@ -1531,11 +1531,12 @@ class PanelTest(unittest.TestCase):
         self.assertEqual((copy.clips, copy.final, copy.inputs), ({}, None, None))
         self.assertTrue(RunState.load(state.id).final, "the original stays as it is")
 
-    def test_private_mode_tags_new_creations_nsfw_for_this_session(self):
-        self.addCleanup(webapp._private.update, on=False)
+    def test_private_mode_tags_new_creations_nsfw_and_is_kept(self):
+        self.addCleanup(lambda: webapp.settings.update({"private_mode": False}))
         self.assertFalse(self.client.get("/api/private").get_json()["on"])
         self.assertTrue(self.client.post("/api/private", json={"on": True}).get_json()["on"])
         self.assertTrue(self.client.get("/api/status").get_json()["private"])
+        self.assertTrue(webapp.settings.load()["private_mode"], "saved, so a restarted panel keeps it")
         self.assertTrue(self.generate().get_json()["ok"])
         self.wait_idle()
         run_id = self.only_run().id
@@ -1544,7 +1545,7 @@ class PanelTest(unittest.TestCase):
         self.assertFalse(self.client.post("/api/private", json={"on": False}).get_json()["on"])
         later = {"pipeline": "video", "label": "x", "argv": [], "resume": run_id}
         with mock.patch.object(webapp.run_queue, "_advance"), mock.patch.object(webapp.run_queue, "_save"):
-            webapp._private["on"] = True
+            webapp.settings.update({"private_mode": True})
             with webapp.app.test_request_context():
                 webapp.run_queue.add(later)
             webapp.run_queue.items.remove(later)

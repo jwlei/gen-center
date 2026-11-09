@@ -898,6 +898,7 @@
   .pipeline-form .option-choice { display: inline-block; width: auto; max-width: 100%; margin: 4px 0 0 8px; padding: 3px 6px; font-size: .85rem; text-overflow: ellipsis; }
   .pipeline-form .option-strength { display: inline-block; width: 5.5em; margin-left: 8px; padding: 3px 6px; font-size: .85rem; }
   .pipeline-form .option-row { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; margin-top: 6px; }
+  .pipeline-form .option-row[hidden] { display: none; }
   .pipeline-form .option-row > label { margin: 0; }
   .pipeline-form .option-row > input[type=number] { width: 6em; }
   .pipeline-form .option-row .option-choice, .pipeline-form .option-row .option-strength { margin: 0; }
@@ -1745,6 +1746,8 @@
       <select id="imageUpscale" name="opt_image_upscale" aria-label="Upscale" disabled></select>
       <div class="option-row" id="imageUpscaleDenoiseRow" hidden style="margin-top:8px"><label for="imageUpscaleDenoise">Denoise</label>
         <input type="number" id="imageUpscaleDenoise" name="opt_image_upscale_denoise" min="0.05" max="1" step="0.05" value="0.3" disabled></div>
+      <div class="option-row" id="imageUpscaleFactorRow" hidden style="margin-top:8px"><label for="imageUpscaleFactor">Upscale by</label>
+        <select id="imageUpscaleFactor" class="option-choice"><option value="2">2×</option><option value="3">3×</option><option value="4">4×</option></select></div>
       <input type="hidden" id="imageUpscaleFinal" name="opt_image_upscale_size" disabled>
       <input type="hidden" id="imageUpscaleScale" name="opt_image_upscale_scale" disabled>
       <input type="hidden" id="imageUpscaleMp" name="opt_image_upscale_mp" disabled>
@@ -1882,7 +1885,7 @@
     <div class="count-stepper"><button type="button" id="reserveDown" aria-label="Less free RAM">−</button><span class="mp-field" id="reserveRamValue" aria-live="polite"></span><button type="button" id="reserveUp" aria-label="More free RAM">+</button></div>
   </div>
   <label class="settings-check"><input type="checkbox" id="lowPriority"><span>Run generation at lower priority<small>The pipeline and ComfyUI give way to your other programs, so the PC stays responsive while it renders.</small></span></label>
-  <label class="settings-check"><input type="checkbox" id="privateMode"><span>Private mode<small>This session only: what you make now is tagged NSFW, and Output opens on the NSFW filter.</small></span></label>
+  <label class="settings-check"><input type="checkbox" id="privateMode"><span>Private mode<small>What you make is tagged NSFW, and Output opens on the NSFW filter. Stays on until you turn it off.</small></span></label>
   <label class="settings-check"><input type="checkbox" id="poweroff"><span>Shut down the PC when the queue is empty<small id="poweroffNote">This session only: it isn't saved. You get a minute to cancel it.</small></span></label>
   <div class="settings-group" id="localLlmTitle">Local LLM model</div>
   <div class="settings-row"><select id="localLlmModel" aria-labelledby="localLlmTitle"><option value="gemma-4-12b">Gemma 4 12B (vision)</option><option value="qwen3-14b">Qwen3 14B (text only)</option></select></div>
@@ -4134,6 +4137,10 @@ function imageResolution() {
 // (twice as big each way), within what the upscale starts from on this card. A screen or exact size is where it ends
 // unless the stepper says otherwise.
 const UPSCALE_AREA = 4, UPSCALE_LEAST = 0.4, UPSCALE_USUAL = 4;
+// How many times the pixels it ends with: SeedVR2's 2×, 3× or 4× each way, the others twice each way.
+function imageUpscaleArea() {
+  return $('imageUpscale').value === 'SeedVR2' ? (Number($('imageUpscaleFactor').value) || 2) ** 2 : UPSCALE_AREA;
+}
 // typed: the exact size box holds the size it is made at, and the end follows it (four times the pixels) until stepped.
 function upscaledResolution(exact, cap, limit, typed = false) {
   const [w, h] = sourceSize || [1, 1], parts = $('imageAspect').value.split(':');
@@ -4142,10 +4149,11 @@ function upscaledResolution(exact, cap, limit, typed = false) {
   if (limit.shorter) top = Math.min(top, limit.shorter ** 2 * Math.max(ratio, 1 / ratio) / MEGAPIXEL);
   top = tenthBelow(top);
   const exactMp = exact ? exact[0] * exact[1] / MEGAPIXEL : null;
-  const wanted = Number($('imageUpscaleMp').value) || (typed && exactMp ? exactMp * UPSCALE_AREA : exactMp) || UPSCALE_USUAL;
+  const area = imageUpscaleArea();
+  const wanted = Number($('imageUpscaleMp').value) || (typed && exactMp ? exactMp * area : exactMp) || UPSCALE_USUAL;
   const mp = Math.min(top, Math.max(UPSCALE_LEAST, Math.round(wanted * 10) / 10));
   const note = wanted > top + 0.05 ? `Held to ${top.toFixed(1)} MP: past that, ${$('imageUpscale').value} would very likely run out of memory on this card.` : '';
-  const base = Math.min(cap, Math.max(MP_STEP, mp / UPSCALE_AREA));
+  const base = Math.min(cap, Math.max(MP_STEP, mp / area));
   const sides = shapedSize(ratio, base);
   const end = exact && !typed && Math.abs(mp - exactMp) < 0.05 ? exact : shapedSize(ratio, mp);
   // The box shows the size it is made at, as the stepper moves it; not while it's being typed in.
@@ -4346,7 +4354,7 @@ function savedImageUpscale() {
   try { return JSON.parse(localStorage.getItem(IMAGE_UPSCALE_KEY) || '{}') || {}; } catch (e) { return {}; }
 }
 function rememberImageUpscale() {
-  try { localStorage.setItem(IMAGE_UPSCALE_KEY, JSON.stringify({ method: $('imageUpscale').value, denoise: $('imageUpscaleDenoise').value })); } catch (e) {}
+  try { localStorage.setItem(IMAGE_UPSCALE_KEY, JSON.stringify({ method: $('imageUpscale').value, denoise: $('imageUpscaleDenoise').value, factor: $('imageUpscaleFactor').value })); } catch (e) {}
 }
 function syncImageUpscale(options) {
   const choice = options.find(option => option.id === 'image_upscale'), box = $('imageUpscaleBox');
@@ -4361,6 +4369,7 @@ function syncImageUpscale(options) {
       $('imageUpscale').innerHTML = choice.choices.map(value => `<option>${esc(value)}</option>`).join('');
       $('imageUpscale').value = choice.choices.includes(was) ? was : choice.default;
       if (first && saved.denoise) $('imageUpscaleDenoise').value = saved.denoise;
+      if (first && saved.factor) $('imageUpscaleFactor').value = saved.factor;
     }
   }
   showImageUpscale();
@@ -4368,7 +4377,9 @@ function syncImageUpscale(options) {
 }
 function showImageUpscale() {
   const method = $('imageUpscale').value;
+  // Only what goes with the upscale chosen: Ultimate SD's denoise, SeedVR2's 2×, 3× or 4×.
   $('imageUpscaleDenoiseRow').hidden = method !== 'Ultimate SD';
+  $('imageUpscaleFactorRow').hidden = method !== 'SeedVR2';
   showResHint('imageUpscaleInfo', IMAGE_UPSCALE_HINTS[method] || '');
 }
 // Upscale off: back to the size it was being made at, 500×1000 for an upscale that ended at 1000×2000.
@@ -4383,6 +4394,12 @@ $('imageUpscale').addEventListener('change', () => {
   syncImageSize();
 });
 $('imageUpscaleDenoise').addEventListener('change', rememberImageUpscale);
+// Another factor keeps the size it's made at, and ends that many times bigger.
+$('imageUpscaleFactor').addEventListener('change', () => {
+  if (imageMadeAt != null) $('imageUpscaleMp').value = (imageMadeAt * imageUpscaleArea()).toFixed(2);
+  rememberImageUpscale();
+  syncImageSize();
+});
 // The workflow writing its own prompts: its prompt enhancer, or image to prompt.
 const ROLE_LABELS = { image_to_prompt: 'Image to prompt', prompt_enhancer: 'Prompt Enhancer' };
 function syncImageLlm() {
@@ -7878,7 +7895,7 @@ $('shutdown').addEventListener('click', async e => {
 const JUMPS = [...$('jump').querySelectorAll('a')];
 // A phone shows one section at a time, the one chosen in the footer. A desktop shows them all, with no footer.
 const PAGE_KEY = 'comfyui-auto-gen.page';
-// Private mode (this session only, kept by the panel): new creations are tagged NSFW, and Output opens on them.
+// Private mode (saved with the settings): new creations are tagged NSFW, and Output opens on them.
 let privateMode = false;
 function renderPrivate(on) {
   if (typeof on !== 'boolean') return;

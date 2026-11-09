@@ -50,7 +50,9 @@ def load():
             "local_llm_model": local if local in H3_MODELS else DEFAULTS["local_llm_model"],
             "default_workflow": {side: str(workflows.get(side) or "") for side in SIDES},
             # The image preset the viewer's Edit (pen) opens Generate with; empty: the Qwen-Image 2.1 edit workflow.
-            "edit_preset": str(saved.get("edit_preset") or "")[:200]}
+            "edit_preset": str(saved.get("edit_preset") or "")[:200],
+            # Private mode: what is made is tagged NSFW, and Output opens on the NSFW filter. Kept over restarts.
+            "private_mode": bool(saved.get("private_mode"))}
 
 
 def update(changes):
@@ -69,6 +71,8 @@ def update(changes):
             if changes["local_llm_model"] not in H3_MODELS:
                 raise ValueError("Unknown local LLM model.")
             current["local_llm_model"] = changes["local_llm_model"]
+        if "private_mode" in changes:
+            current["private_mode"] = bool(changes["private_mode"])
         if "edit_preset" in changes:
             current["edit_preset"] = str(changes["edit_preset"] or "")[:200]
         if isinstance(changes.get("default_workflow"), dict):

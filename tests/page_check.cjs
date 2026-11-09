@@ -2577,3 +2577,28 @@ for (const fn of ['sameAgain', 'sameAgainFilm', 'sameAgainShorts', 'editQueued',
 // Upscale starts off on each page load, whatever was chosen last time; its box is as dark as the queue's.
 assert(/was = first \? 'Off' : \$\('imageUpscale'\)\.value/.test(script) && /was = first \? 'Off' : \$\('videoLatentUpscale'\)\.value/.test(script), 'upscale defaults to off');
 assert(/\.res-block \{[^}]*background: var\(--bg\)/.test(html), 'the block is dark like the queue');
+
+// Only what goes with the upscale chosen shows: Ultimate SD's denoise, SeedVR2's factor; a hidden row stays hidden.
+assert(/\.pipeline-form \.option-row\[hidden\] \{ display: none; \}/.test(html), 'a hidden option row is hidden');
+{
+  els.imageUpscaleBox.hidden = false;
+  els.imageUpscale.disabled = false;
+  els.imageUpscaleBox.limits = { SeedVR2: { base: 4, final: 8.3, shorter: 2160 }, 'Ultimate SD': { base: 2, final: 16 } };
+  for (const [method, denoise, factor] of [['Off', true, true], ['Ultimate SD', false, true], ['SeedVR2', true, false]]) {
+    els.imageUpscale.value = method;
+    run('showImageUpscale()');
+    assert.strictEqual(els.imageUpscaleDenoiseRow.hidden, denoise, `${method}: denoise`);
+    assert.strictEqual(els.imageUpscaleFactorRow.hidden, factor, `${method}: factor`);
+  }
+  // SeedVR2 at 3x: made at a ninth of the pixels it ends with.
+  els.imageAspect.value = '1:1';
+  els.imageUpscaleFactor.value = '3';
+  els.imageUpscaleMp.value = '4.5';
+  run('sourceSize = null; syncMegapixels()');
+  const made = els.imagePixelSize.textContent.split('×').map(Number), ends = els.imageUpscaleSize.textContent.split('×').map(Number);
+  assert(Math.abs(ends[0] / made[0] - 3) < 0.1, `three times each way: ${els.imagePixelSize.textContent} → ${els.imageUpscaleSize.textContent}`);
+  els.imageUpscaleBox.hidden = true;
+  els.imageUpscale.value = 'Off';
+  els.imageUpscaleFactor.value = '2';
+  run('imageStep = null; imageMadeAt = null');
+}

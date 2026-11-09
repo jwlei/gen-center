@@ -1004,12 +1004,12 @@ def _read_nsfw():
     return data
 
 
-# Private mode: for this session only (never saved), what is made is tagged NSFW, and Output opens on the NSFW filter.
-_private = {"on": False}
-
-
+# Private mode (Settings, saved): what is made is tagged NSFW, and Output opens on the NSFW filter.
 def private_mode():
-    return _private["on"]
+    try:
+        return settings.load()["private_mode"]
+    except (OSError, ValueError):
+        return False
 
 
 def tag_run_nsfw(pipeline, run_id):
@@ -1036,10 +1036,13 @@ def tag_run_nsfw(pipeline, run_id):
 @app.route("/api/private", methods=["GET", "POST"])
 @password_required
 def api_private():
-    """Private mode, on or off: for this session only, so a restarted panel starts without it."""
+    """Private mode, on or off: saved with the settings, so it stays on over a restart."""
     if request.method == "POST":
-        _private["on"] = bool((request.get_json(silent=True) or {}).get("on"))
-    return {"ok": True, "on": _private["on"]}
+        try:
+            settings.update({"private_mode": bool((request.get_json(silent=True) or {}).get("on"))})
+        except (OSError, ValueError) as e:
+            return {"ok": False, "error": f"Could not save it: {e}"}, 500
+    return {"ok": True, "on": private_mode()}
 
 
 def _video_nsfw_key(name, films=None):
