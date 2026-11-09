@@ -197,9 +197,11 @@ ComfyUI is restarted once more for the next job.
 
 **Latent upscale** (under Resolution, for H3 reference-to-video workflows with the
 [Minimax H3 latent upscaler](https://github.com/LBH-123-AI/Comfyui_Minimax_h3_latent_Upscaler) installed): the clip is
-made at the resolution above, its latent is enlarged to the megapixels set under it, and a short second pass draws it
-in at that size. *Clean* sharpens it as it was, *Hires fix* adds detail (about a 0.35 denoise), *Heavy* reworks more
-(about 0.45). Set the resolution low (0.4 MP or so) and the upscale higher. A finished film can be latent-upscaled
+made at the resolution, its latent is enlarged to the size the megapixel stepper sets (with latent upscale on, the
+stepper sets where it ends, held to what the workflow makes well), and a short second pass draws it in at that size.
+Resolution, latent upscale and the stepper are one block; the stepper scales any resolution, screens too, and a size past
+what the workflow makes well is held to the nearest below. Tap Latent upscale's heading for what the chosen preset does. *Clean* sharpens it as it was, *Hires fix* adds detail (about a 0.35 denoise), *Heavy* reworks more
+(about 0.45). Set the resolution low (0.4 MP or so) and the stepper higher. A finished film can be latent-upscaled
 from its viewer (Upscale → **Latent**): a copy of its run is made again on the seeds each clip was made with, then
 upscaled, as a new film named `<film>_latent`. It takes about as long as the film took to make. Workflows using H3's first/last-frame model
 also offer **H3 model: FastVideo 4-step** under Advanced, which runs at 4 steps without a turbo LoRA.

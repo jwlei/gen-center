@@ -493,26 +493,32 @@ def _h3_latent_upscale(api, info, chosen):
 SPLICED_NODES = ("MinimaxH3LatentUpscaler3D", "LTXVSeparateAVLatent", "LTXVConcatAVLatent", "ManualSigmas", "KSamplerSelect",
                  "UNETLoader", "UpscaleModelLoader", "ImageUpscaleWithModel", "ImageScaleBy", "VAEEncode", "VAEDecode",
                  "LatentUpscaleBy", "SplitSigmasDenoise", "UltimateSDUpscale", "UltimateSDUpscaleCustomSample",
-                 "UltimateSDUpscaleGuider")
+                 "UltimateSDUpscaleGuider", "ImageScale", "FreeMemoryImage", "SeedVR2LoadDiTModel", "SeedVR2LoadVAEModel",
+                 "SeedVR2VideoUpscaler")
 
 
-# In Generate, each image upscaled as it is made (pipelines/image/refine_upscale.py): 4x-UltraSharp alone, a Hires
-# fix second pass, or Ultimate SD Upscale's tiles, with the set's own model and prompt. Each needs its nodes and model.
+# In Generate, each image upscaled as it is made (pipelines/image/refine_upscale.py): Ultimate SD Upscale's tiles with
+# the set's own model and prompt, 4x-UltraSharp alone, or SeedVR2. Each needs its nodes and model. The page sizes it:
+# image_upscale_size is where it ends, image_upscale_scale about how many times bigger that is.
 NO_IMAGE_UPSCALE = "Off"
-IMAGE_UPSCALE_NEEDS = {"UltraSharp": ("UpscaleModelLoader", "ImageUpscaleWithModel", "ImageScaleBy"),
-                       "Hires fix": ("VAEEncode", "LatentUpscaleBy"),
-                       "Ultimate SD": ("UpscaleModelLoader",)}
+IMAGE_UPSCALE_NEEDS = {"UltraSharp": ("UpscaleModelLoader", "ImageUpscaleWithModel", "ImageScale"),
+                       "Ultimate SD": ("UpscaleModelLoader", "ImageScale"),
+                       "SeedVR2": ("SeedVR2LoadDiTModel", "SeedVR2LoadVAEModel", "SeedVR2VideoUpscaler", "ImageScale")}
 
 
 def _image_upscale(api, info, chosen):
     from pipelines.image import refine_upscale as ru
+    from pipelines.image.upscale import DIT_MODEL
     sharp = ru.UPSCALE_MODEL in _combo(info, "UpscaleModelLoader", "model_name")
+    free = "FreeMemoryImage" in info
     offered = []
     for label, method in ru.IN_GENERATION.items():
-        if not all(name in info for name in IMAGE_UPSCALE_NEEDS[label]) or (label != "Hires fix" and not sharp):
+        if not all(name in info for name in IMAGE_UPSCALE_NEEDS[label]):
+            continue
+        if (label != "SeedVR2" and not sharp) or (label == "SeedVR2" and DIT_MODEL not in _combo(info, "SeedVR2LoadDiTModel", "model")):
             continue
         try:
-            trial = ru.in_generation(copy.deepcopy(api), method)
+            trial = ru.in_generation(copy.deepcopy(api), method, (2048, 2048), free_memory=free)
         except ru.Unsupported:
             continue
         # Ultimate SD's node for this sampler (plain, custom-sample or guider) has to be installed too.
@@ -523,12 +529,18 @@ def _image_upscale(api, info, chosen):
         offered.append(label)
     if not offered:
         return []
-    options = [{"id": "image_upscale", "kind": "choice", "label": "Upscale", "choices": [NO_IMAGE_UPSCALE, *offered], "default": NO_IMAGE_UPSCALE},
-               {"id": "image_upscale_denoise", "kind": "number", "label": "Denoise", "parent": "image_upscale", "default": "0.35",
-                "min": 0.05, "max": 1, "step": 0.05}]
+    options = [{"id": "image_upscale", "kind": "choice", "label": "Upscale", "choices": [NO_IMAGE_UPSCALE, *offered], "default": NO_IMAGE_UPSCALE,
+                "limits": {label: ru.LIMITS[label] for label in offered}},
+               {"id": "image_upscale_denoise", "kind": "number", "label": "Denoise", "parent": "image_upscale", "default": "0.3",
+                "min": 0.05, "max": 1, "step": 0.05},
+               {"id": "image_upscale_size", "kind": "text", "label": "Upscale to", "parent": "image_upscale", "default": ""},
+               {"id": "image_upscale_scale", "kind": "number", "label": "Upscale by", "parent": "image_upscale", "default": "2",
+                "min": 1, "max": ru.MOST_SCALE, "step": 0.01}]
     label = chosen.get("image_upscale", NO_IMAGE_UPSCALE)
-    if label in offered:
-        ru.in_generation(api, ru.IN_GENERATION[label], float(chosen.get("image_upscale_denoise", 0.35)))
+    final = ru.parse_final(chosen.get("image_upscale_size"))
+    if label in offered and final:
+        ru.in_generation(api, ru.IN_GENERATION[label], final, float(chosen.get("image_upscale_scale", 2)),
+                         float(chosen.get("image_upscale_denoise", ru.DENOISE["usdu"])), free_memory=free)
     return options
 
 
@@ -680,6 +692,12 @@ def convert(ui, info, chosen=None, pipeline="image"):
     options += _tune(api, info, chosen)
     if pipeline == "image":
         options += _image_upscale(api, info, chosen)
+        # SeedVR2 is in Upscale now: the workflow's own SeedVR2 switch (Krea 2 SFW/NSFW's group) stays as saved, off
+        # the form. Kept among the options, so a set made with it can still be made again.
+        if any(option["id"] == "image_upscale" and "SeedVR2" in option["choices"] for option in options):
+            for option in options:
+                if "seedvr2" in option["id"].lower() and option["id"] != "image_upscale":
+                    option["moved"] = "Upscale"
     if pipeline == "image":
         return api, sw.find_image_fields(api, info), sw.image_model(api), options
     return api, sw.find_fields(api, info, needs_audio=pipeline == "shorts"), None, options

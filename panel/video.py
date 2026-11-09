@@ -727,7 +727,7 @@ def latent_upscale_film(name, path):
     copy = latent_copy(state, preset, megapixels)
     argv = resume_argv(copy)
     item = {"pipeline": "video", "label": queue_label(f"Latent upscale: {name}"), "detail": f"Latent upscale, {preset}, {megapixels:g} MP",
-            "argv": argv, "env": {}, "resume": copy.id, "resolution": f"{state.width}x{state.height}",
+            "argv": argv, "env": {}, "resume": copy.id, "new_run": True, "resolution": f"{state.width}x{state.height}",
             "estimate": RunEta(argv, VIDEO_TIMINGS).plan()["total"]}
     queued = run_queue.add(item)
     _runs_cache["at"] = 0.0

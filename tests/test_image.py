@@ -772,24 +772,29 @@ class PanelTest(unittest.TestCase):
         sent = self.comfy.prompts[prompts]["prompt"]
         self.assertEqual(next(n for n in sent.values() if n["class_type"] == "UpscaleModelLoader")["inputs"]["model_name"], "4x-UltraSharp.pth")
 
-    def test_hires_and_ultimate_sd_are_queued_with_their_denoise(self):
+    def test_ultimate_sd_is_queued_with_its_denoise_and_hires_fix_is_gone(self):
         self.make(count="1", aspect="1:1", megapixels="0.5")
         run = self.only_run()
         added = []
         with mock.patch.object(webapp.run_queue, "add", lambda item: added.append(item) or 1):
-            self.assertEqual(self.client.post(f"/image-runs/{run.id}/upscale/1?method=hires&denoise=2").status_code, 400)
-            self.assertTrue(self.client.post(f"/image-runs/{run.id}/upscale/1?method=hires&denoise=0.45").get_json()["ok"])
+            self.assertEqual(self.client.post(f"/image-runs/{run.id}/upscale/1?method=hires").status_code, 400)
+            self.assertEqual(self.client.post(f"/image-runs/{run.id}/upscale/1?method=usdu&denoise=2").status_code, 400)
+            self.assertTrue(self.client.post(f"/image-runs/{run.id}/upscale/1?method=usdu&denoise=0.45").get_json()["ok"])
             self.assertTrue(self.client.post(f"/image-runs/{run.id}/upscale/1?method=usdu").get_json()["ok"])
-        self.assertEqual(added[0]["argv"][added[0]["argv"].index("--method") + 1], "hires")
-        self.assertIn("--denoise", added[0]["argv"])
         self.assertEqual(added[0]["argv"][added[0]["argv"].index("--denoise") + 1], "0.45")
-        self.assertEqual(added[0]["detail"], "Hires fix, twice the size, denoise 0.45")
+        self.assertEqual(added[0]["detail"], "Ultimate SD Upscale, twice the size, denoise 0.45")
         self.assertEqual(added[1]["argv"][added[1]["argv"].index("--denoise") + 1], "0.3", "Ultimate SD's usual")
+
+    def test_a_screen_stepped_goes_as_its_shape_at_that_many_megapixels(self):
+        from panel import image as image_panel
+        self.assertEqual(image_panel.size_flags({"aspect": "1272x2772", "megapixels": "image"})[0], ["--size", "1272x2772"])
+        self.assertEqual(image_panel.size_flags({"aspect": "1272x2772", "megapixels": "2.0"})[0], ["--aspect", "1272:2772", "--megapixels", "2.0"])
+        self.assertEqual(image_panel.size_flags({"aspect": "custom", "size": "1000x500", "megapixels": "1.5"})[0],
+                         ["--aspect", "1000:500", "--megapixels", "1.5"])
 
     def test_a_big_image_takes_the_ways_that_fit_and_says_how_it_was_upscaled(self):
         from panel import image as image_panel
         self.assertIsNotNone(image_panel.upscale_problem("seedvr2", 1568, 2784))
-        self.assertIsNotNone(image_panel.upscale_problem("hires", 1568, 2784))
         for method in ("usdu", "ultrasharp", "fast"):
             self.assertIsNone(image_panel.upscale_problem(method, 1568, 2784), method)
         self.assertIsNotNone(image_panel.upscale_problem("usdu", 3000, 5000))

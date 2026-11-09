@@ -508,6 +508,9 @@ class JobQueue:
         # Generate's "Start later": it waits in the queue until it's started.
         if has_request_context() and request.path.startswith("/generate/") and request.form.get("start_later"):
             item["later"] = True
+        # New creations only: an upscale or continuation of something made before keeps that one's tag.
+        if self is run_queue and private_mode() and item.get("pipeline") in ("image", "video") and (not item.get("resume") or item.get("new_run")):
+            item["private"] = True
         with self.lock:
             self._ensure_watcher()
             if edit_id is not None:
@@ -550,6 +553,11 @@ class JobQueue:
                 self._advance()
 
     def _advance(self):
+        # Made in private mode: its run is tagged NSFW as soon as it has one, so it never shows outside the NSFW filter.
+        if self.current and self.current.get("private") and not self.current.get("private_tagged"):
+            run_id = (self.job.progress or {}).get("run_id") or self.current.get("resume")
+            if run_id and tag_run_nsfw(self.current.get("pipeline"), run_id):
+                self.current["private_tagged"] = True
         if self.current and self.job.idle:
             self._finish_current()
         if not self.items:
@@ -656,7 +664,7 @@ class JobQueue:
         self._save_results()
 
     # What a job picks up while it waits or runs, and that a recovered copy must start without.
-    TRANSIENT_KEYS = ("id", "waited", "error", "later", "edit_token", "edit_from_queue", "aimdo_retried")
+    TRANSIENT_KEYS = ("id", "waited", "error", "later", "edit_token", "edit_from_queue", "aimdo_retried", "private_tagged")
 
     def recoverable(self):
         """The failed jobs that can still go back to Pending: their inputs must outlast the cleanup of old uploads."""
@@ -994,6 +1002,44 @@ def _read_nsfw():
     if not isinstance(sources, dict) or not all(isinstance(k, str) and isinstance(v, str) for k, v in sources.items()):
         raise ValueError("Invalid NSFW video sources.")
     return data
+
+
+# Private mode: for this session only (never saved), what is made is tagged NSFW, and Output opens on the NSFW filter.
+_private = {"on": False}
+
+
+def private_mode():
+    return _private["on"]
+
+
+def tag_run_nsfw(pipeline, run_id):
+    """Tags a run NSFW: an image set by its id, a film by the run that makes it. Returns whether it is tagged."""
+    key = {"image": "image", "video": "video"}.get(pipeline)
+    if not key or not run_id:
+        return False
+    try:
+        with _nsfw_lock:
+            tags = _read_nsfw()
+            if run_id not in tags[key]:
+                tags[key] = sorted({*tags[key], run_id})
+                os.makedirs(os.path.dirname(NSFW_PATH), exist_ok=True)
+                temp = NSFW_PATH + ".tmp"
+                with open(temp, "w", encoding="utf-8") as f:
+                    json.dump(tags, f, ensure_ascii=False, indent=2)
+                os.replace(temp, NSFW_PATH)
+        return True
+    except (OSError, ValueError) as e:
+        app.logger.error("Could not tag a private run NSFW: %s", e)
+        return False
+
+
+@app.route("/api/private", methods=["GET", "POST"])
+@password_required
+def api_private():
+    """Private mode, on or off: for this session only, so a restarted panel starts without it."""
+    if request.method == "POST":
+        _private["on"] = bool((request.get_json(silent=True) or {}).get("on"))
+    return {"ok": True, "on": _private["on"]}
 
 
 def _video_nsfw_key(name, films=None):
@@ -2286,7 +2332,7 @@ def queue_edit_upscale(item_id):
             denoise = None
             if method in image_panel.REFINE_UPSCALES:
                 try:
-                    denoise = float(data.get("denoise") or (0.35 if method == "hires" else 0.3))
+                    denoise = float(data.get("denoise") or 0.3)
                 except (TypeError, ValueError):
                     return {"ok": False, "error": "Denoise is a number from 0.05 to 1."}, 400
                 if not math.isfinite(denoise) or not 0.05 <= denoise <= 1:
@@ -2729,6 +2775,7 @@ def status():
                           **(comfy_monitor.snapshot() if comfy_monitor else {})}
     payload["gpu"] = gpu_stats()
     payload["poweroff"] = poweroff_state()
+    payload["private"] = private_mode()
     payload["quota"] = cached_quota()
     return payload
 

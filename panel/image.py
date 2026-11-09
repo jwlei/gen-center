@@ -230,6 +230,11 @@ def size_flags(form):
     aspect = form.get("aspect") or media.FROM_IMAGE
     # An exact size is typed in, or one of the screens on the list.
     size = (form.get("size") or "").strip().lower() if aspect == "custom" else aspect if media.parse_size(aspect) else None
+    # A screen or an exact size, stepped to another pixel count: its shape, at that many megapixels.
+    stepped = form.get("megapixels") or media.FROM_IMAGE
+    if size and media.parse_size(size) and stepped != media.FROM_IMAGE and media.parse_megapixels(stepped):
+        width, height = media.parse_size(size)
+        return ["--aspect", f"{width}:{height}", "--megapixels", stepped], None
     if aspect == "custom" and not size:
         # Exact, with nothing typed (the box isn't remembered across a reload): square, one megapixel.
         return ["--aspect", FALLBACK_ASPECT, "--megapixels", str(media.DEFAULT_MEGAPIXELS)], None
@@ -668,8 +673,8 @@ UPSCALE = [sys.executable, "-m", "pipelines.image.upscale"]
 UPSCALE_SECONDS = 180  # About what SeedVR2 takes for one image on this card
 FAST_UPSCALE_SECONDS = 20  # Superscale-SP: seconds, as Kokon measured it (13 s for 1472² on a 5070 Ti)
 UPSCALE_RESOLUTIONS = (720, 1080, 1440, 2160)  # SeedVR2's shorter side, as the Krea 2 workflow's 720p, 1080p, 1440p and 4K
-UPSCALE_METHODS = ("seedvr2", "fast", "ultrasharp", "hires", "usdu")
-REFINE_UPSCALES = {"hires": "Hires fix", "usdu": "Ultimate SD Upscale"}  # Drawn again with the set's model: denoise, not strength
+UPSCALE_METHODS = ("seedvr2", "fast", "ultrasharp", "usdu")
+REFINE_UPSCALES = {"usdu": "Ultimate SD Upscale"}  # Drawn again with the set's model: denoise, not strength
 REFINE_UPSCALE_SECONDS = 90
 
 
@@ -681,15 +686,15 @@ def upscale_detail(method, strength, resolution, denoise=None):
         return f"SeedVR2, {resolution}p" if resolution else "SeedVR2, twice the size"
     name = "4x-UltraSharp" if method == "ultrasharp" else "Superscale-SP"
     return f"{name}, twice the size, strength {round(strength * 100)}%"
-UPSCALE_MOST_SIDE = 1440  # SeedVR2 and Hires fix: the shorter side they still take, as the whole image goes through at once
+UPSCALE_MOST_SIDE = 1440  # SeedVR2: the shorter side it still takes, as the whole image goes through at once
 TILED_MOST_SIDE = 4096  # The others: the longer side, so twice it stays within what an image here can be (8192)
-WHOLE_IMAGE_UPSCALES = ("seedvr2", "hires")
+WHOLE_IMAGE_UPSCALES = ("seedvr2",)
 
 
 def upscale_problem(method, width, height):
     """Why this image is too big for this way of upscaling, or None. The page greys out the same (UPSCALE_LIMITS)."""
     if method in WHOLE_IMAGE_UPSCALES and min(width, height) > UPSCALE_MOST_SIDE:
-        return (f"It's already {min(width, height)}px on its shorter side: {'SeedVR2' if method == 'seedvr2' else 'Hires fix'} "
+        return (f"It's already {min(width, height)}px on its shorter side: SeedVR2 "
                 f"takes up to {UPSCALE_MOST_SIDE}px. Ultimate SD, UltraSharp or Fast can still upscale it.")
     if method not in WHOLE_IMAGE_UPSCALES and max(width, height) > TILED_MOST_SIDE:
         return f"It's already {max(width, height)}px on its longer side: images past {TILED_MOST_SIDE}px aren't upscaled."
@@ -734,7 +739,7 @@ def upscale_image(run_id, position):
         if not state.workflow:
             return {"ok": False, "error": f"{REFINE_UPSCALES[method]} draws it again with the set's workflow, and this set has none saved."}, 400
         try:
-            denoise = float(request.args.get("denoise") or (0.35 if method == "hires" else 0.3))
+            denoise = float(request.args.get("denoise") or 0.3)
         except ValueError:
             return {"ok": False, "error": "Denoise is a number from 0.05 to 1."}, 400
         if not 0.05 <= denoise <= 1:

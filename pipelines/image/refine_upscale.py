@@ -1,13 +1,14 @@
 """
-Upscales that draw again with the set's own model and prompt: the image made bigger, then redrawn a little.
+Upscales spliced into the set's own workflow, after its last sampler (KSampler, ClownsharKSampler (RES4LYF),
+SamplerCustom or SamplerCustomAdvanced with a guider):
 
-    hires: "Hires fix". The image back into a latent (VAE Encode), that made twice as big (Latent Upscale By), then a
-           second pass of the set's own sampler at a low denoise: skin, hair and texture that weren't there.
-    usdu:  Ultimate SD Upscale. 4x-UltraSharp makes it bigger, then the set's model redraws it in tiles at a low
-           denoise, so a big image never has to fit on the card at once.
+    usdu:       Ultimate SD Upscale. 4x-UltraSharp makes it bigger, then the set's model redraws it in tiles at a low
+                denoise, so a big image never has to fit on the card at once.
+    ultrasharp: 4x-UltraSharp alone: the picture as it is, bigger, with crisper edges.
+    seedvr2:    SeedVR2, which draws finer detail, as the Krea 2 workflow runs it on a 12 GB card.
 
-Both start from the workflow the set was made with, filled in as for its own image, and splice in after its last
-sampler: KSampler, ClownsharKSampler (RES4LYF), SamplerCustom or SamplerCustomAdvanced with a guider.
+In Generate each ends at the exact size chosen. (A Hires fix second pass was tried and left out: on these turbo
+models a partial denoise came out noisy.)
 """
 SAMPLERS = ("KSampler", "KSamplerAdvanced", "ClownsharKSampler_Beta", "ClownsharKSampler", "SamplerCustom", "SamplerCustomAdvanced")
 DECODERS = ("VAEDecode", "VAEDecodeTiled")
@@ -15,7 +16,7 @@ UPSCALE_MODEL = "4x-UltraSharp.pth"
 # What KSampler (and so Ultimate SD Upscale) knows: a sampler of another kind, such as RES4LYF's, is run as euler.
 KSAMPLER_SAMPLERS = ("euler", "euler_ancestral", "dpmpp_2m", "dpmpp_2m_sde", "dpmpp_sde", "res_multistep", "uni_pc", "ddim", "lcm", "er_sde")
 KSAMPLER_SCHEDULERS = ("simple", "normal", "karras", "exponential", "sgm_uniform", "beta", "linear_quadratic", "ddim_uniform")
-DENOISE = {"hires": 0.35, "usdu": 0.3}
+DENOISE = {"usdu": 0.3}
 TILE = 768
 
 
@@ -61,43 +62,9 @@ def _denoised_sigmas(api, sigmas, denoise):
     return ["ru_split", 1]
 
 
-def _second_pass(api, sampler_id, vae, image, scale, denoise):
-    """
-    Hires fix on an image: into a latent, that made bigger, then a copy of the set's sampler drawing it again at a low
-    denoise, decoded. Returns the link to the image it makes.
-    """
-    api["ru_encode"] = {"class_type": "VAEEncode", "inputs": {"pixels": image, "vae": vae}, "_meta": {"title": "Hires fix: encode"}}
-    api["ru_latent"] = {"class_type": "LatentUpscaleBy", "inputs": {"samples": ["ru_encode", 0], "upscale_method": "bislerp", "scale_by": scale},
-                        "_meta": {"title": "Hires fix: upscale latent"}}
-    kind = api[sampler_id]["class_type"]
-    sampler = {**api[sampler_id]["inputs"], "latent_image": ["ru_latent", 0]}
-    if "denoise" in sampler or kind in ("KSampler", "ClownsharKSampler_Beta", "ClownsharKSampler"):
-        sampler["denoise"] = denoise
-    elif kind == "KSamplerAdvanced":
-        steps = sampler.get("steps")
-        if not isinstance(steps, int):
-            raise Unsupported("Its sampler's steps come from elsewhere, so a denoise can't be set on it.")
-        sampler["start_at_step"] = round(steps * (1 - denoise))
-        sampler["add_noise"] = "enable"
-    elif isinstance(sampler.get("sigmas"), list):
-        sampler["sigmas"] = _denoised_sigmas(api, sampler["sigmas"], denoise)
-    else:
-        raise Unsupported("Its sampler has no denoise to set.")
-    api["ru_pass"] = {"class_type": kind, "inputs": sampler, "_meta": {"title": "Hires fix: second pass"}}
-    api["ru_decode"] = {"class_type": "VAEDecode", "inputs": {"samples": ["ru_pass", 0], "vae": vae}, "_meta": {"title": "Hires fix: decode"}}
-    return ["ru_decode", 0]
-
-
 def _load(api, uploaded):
     api["ru_load"] = {"class_type": "LoadImage", "inputs": {"image": uploaded}, "_meta": {"title": "Image to upscale"}}
     return ["ru_load", 0]
-
-
-def hires(api, uploaded, scale=2.0, denoise=DENOISE["hires"]):
-    """The set's workflow as a Hires fix of the uploaded image."""
-    decoder, sampler_id = last_sampler(api)
-    _show_only(api, _second_pass(api, sampler_id, api[decoder]["inputs"]["vae"], _load(api, uploaded), scale, denoise))
-    return api
 
 
 def _number(api, value, default):
@@ -155,40 +122,83 @@ def usdu(api, uploaded, scale=2.0, denoise=DENOISE["usdu"], seed=777):
     return api
 
 
-SPLICES = {"hires": hires, "usdu": usdu}
+SPLICES = {"usdu": usdu}
 
 
-def _sharpened(api, image, scale):
-    """4x-UltraSharp, then down to scale: the picture as it was, bigger, with crisper edges."""
+def _sharpened(api, image):
+    """4x-UltraSharp: the picture as it was, four times as big, with crisper edges."""
     api["ru_model"] = {"class_type": "UpscaleModelLoader", "inputs": {"model_name": UPSCALE_MODEL}, "_meta": {"title": "4x-UltraSharp"}}
     api["ru_sharp"] = {"class_type": "ImageUpscaleWithModel", "inputs": {"upscale_model": ["ru_model", 0], "image": image},
                        "_meta": {"title": "UltraSharp"}}
-    api["ru_scale"] = {"class_type": "ImageScaleBy", "inputs": {"image": ["ru_sharp", 0], "upscale_method": "lanczos", "scale_by": scale / 4},
-                       "_meta": {"title": "UltraSharp: to size"}}
-    return ["ru_scale", 0]
+    return ["ru_sharp", 0]
 
 
-# In Generate: each image of the set upscaled as it is made, before the workflow saves it.
-IN_GENERATION = {"UltraSharp": "ultrasharp", "Hires fix": "hires", "Ultimate SD": "usdu"}
+# SeedVR2 as pipelines/image/upscale.py runs it on this 12 GB card: the 7B model, 36 blocks swapped to the CPU, tiled VAE.
+SEEDVR2 = ("SeedVR2LoadDiTModel", "SeedVR2LoadVAEModel", "SeedVR2VideoUpscaler")
 
 
-def in_generation(api, method, denoise=None, scale=2.0):
+def _seedvr2(api, image, shorter):
+    from pipelines.image.upscale import DIT_MODEL, VAE_MODEL
+    api["ru_dit"] = {"class_type": "SeedVR2LoadDiTModel", "_meta": {"title": "SeedVR2: model"}, "inputs": {
+        "model": DIT_MODEL, "device": "cuda:0", "blocks_to_swap": 36, "swap_io_components": False,
+        "offload_device": "cpu", "cache_model": False, "attention_mode": "sageattn_2"}}
+    api["ru_vae"] = {"class_type": "SeedVR2LoadVAEModel", "_meta": {"title": "SeedVR2: VAE"}, "inputs": {
+        "model": VAE_MODEL, "device": "cuda:0", "encode_tiled": True, "encode_tile_size": 1024, "encode_tile_overlap": 128,
+        "decode_tiled": True, "decode_tile_size": 1024, "decode_tile_overlap": 128, "tile_debug": "false",
+        "offload_device": "cpu", "cache_model": False}}
+    api["ru_seedvr2"] = {"class_type": "SeedVR2VideoUpscaler", "_meta": {"title": "SeedVR2"}, "inputs": {
+        "image": image, "dit": ["ru_dit", 0], "vae": ["ru_vae", 0], "seed": 777, "resolution": shorter, "max_resolution": 0,
+        "batch_size": 1, "uniform_batch_size": False, "color_correction": "lab", "temporal_overlap": 0, "prepend_frames": 0,
+        "input_noise_scale": 0.0, "latent_noise_scale": 0.0, "offload_device": "cpu", "enable_debug": False}}
+    return ["ru_seedvr2", 0]
+
+
+# In Generate: each image of the set upscaled as it is made, before the workflow saves it. {what the page says: method}
+IN_GENERATION = {"Ultimate SD": "usdu", "UltraSharp": "ultrasharp", "SeedVR2": "seedvr2"}
+# What a 12 GB card takes without running out of memory (or stalling long enough for Windows to reset the driver, as a
+# 4x-UltraSharp pass over a 3.6 MP Krea 2 image did with Krea 2 still loaded): the most megapixels the image may be
+# before (4x-UltraSharp works at four times its size), the most it may end at, and for SeedVR2 its shorter side.
+LIMITS = {"Ultimate SD": {"base": 2.0, "final": 16.0}, "UltraSharp": {"base": 2.0, "final": 16.0},
+          "SeedVR2": {"base": 4.0, "final": 8.3, "shorter": 2160}}
+MOST_SCALE = 4.0
+
+
+def parse_final(text):
+    """'2560x1440' as (2560, 1440), or None."""
+    try:
+        width, height = (int(side) for side in str(text).lower().split("x"))
+    except (TypeError, ValueError):
+        return None
+    return (width, height) if 64 <= width <= 8192 and 64 <= height <= 8192 else None
+
+
+def in_generation(api, method, final, scale=2.0, denoise=None, free_memory=True):
     """
-    The set's workflow with its image upscaled before it is saved: what read the decoded image (its save, and anything
-    after such as a sharpen or SeedVR2) reads the upscaled one instead. Raises Unsupported.
+    The set's workflow with its image upscaled to final (width, height) before it is saved: what read the decoded
+    image (its save, and anything after it such as a sharpen) reads the upscaled one instead. scale is about how many
+    times bigger that is, for Ultimate SD's tiles. free_memory: the set's model unloaded first (FreeMemoryImage), so
+    the upscaler never shares the card with it. Raises Unsupported.
     """
     decoder, sampler_id = last_sampler(api)
     made = [decoder, 0]
     readers = [(node, name) for node in api.values() for name, value in node["inputs"].items() if value == made]
     vae = api[decoder]["inputs"]["vae"]
+    image = made
+    if free_memory:
+        api["ru_free"] = {"class_type": "FreeMemoryImage", "inputs": {"image": made, "aggressive": False}, "_meta": {"title": "Free VRAM"}}
+        image = ["ru_free", 0]
+    scale = min(MOST_SCALE, max(1.0, float(scale)))
     if method == "ultrasharp":
-        image = _sharpened(api, made, scale)
-    elif method == "hires":
-        image = _second_pass(api, sampler_id, vae, made, scale, DENOISE["hires"] if denoise is None else denoise)
+        image = _sharpened(api, image)
     elif method == "usdu":
-        image = _tiled(api, sampler_id, vae, made, scale, DENOISE["usdu"] if denoise is None else denoise)
+        image = _tiled(api, sampler_id, vae, image, scale, DENOISE["usdu"] if denoise is None else denoise)
+    elif method == "seedvr2":
+        image = _seedvr2(api, image, min(final))
     else:
         raise Unsupported(f"No upscale called {method}.")
+    # Exactly the size chosen: each of these comes out near it, on its own grid.
+    api["ru_size"] = {"class_type": "ImageScale", "inputs": {"image": image, "upscale_method": "lanczos", "width": final[0],
+                                                             "height": final[1], "crop": "center"}, "_meta": {"title": "Upscale: to size"}}
     for node, name in readers:
-        node["inputs"][name] = image
+        node["inputs"][name] = ["ru_size", 0]
     return api

@@ -150,16 +150,19 @@ with one chosen from your images; one that would repeat it is swapped for anothe
 **Out of memory**, ComfyUI is told to free its memory and the image is tried again, then once more a size smaller and
 enlarged after, rather than failing.
 
-**Upscale** under Resolution in Generate makes each image of a set twice as big as it comes out, before it is saved:
-**UltraSharp**, **Hires fix** or **Ultimate SD**, as below, with a denoise for the last two.
+**Resolution** in Generate is one block: the resolution (an aspect ratio, a screen, or an exact size), **Upscale**, then
+the megapixel stepper. The stepper scales whatever resolution is picked, screens too. With Upscale on (**Ultimate SD**,
+**UltraSharp** or **SeedVR2**) the image is made at the resolution and the stepper sets the size it ends at; tap
+Upscale's heading for what the chosen one does. A pixel count that would very likely run out of memory on a 12 GB card
+is held to the nearest below, and a note says so: past what the model makes well, and for an upscale past 2 MP to start
+from (16 MP to end at; SeedVR2 up to 4K on its shorter side). Hires fix was taken out: on these turbo models its partial
+denoise came out noisy. SeedVR2 moved here from Krea 2 SFW/NSFW's own workflow options.
 
 **Upscale**, under an image in the viewer: **Fast** is Superscale-SP, in seconds, and adds no new detail; its strength
 mixes it with a plain resize, to tone down texture it invents. **UltraSharp** is the same with 4x-UltraSharp: the
-picture as it is, with crisper edges. **SeedVR2** takes minutes and draws finer detail. **Hires fix** puts the image back
-into a latent, makes it twice as big, and has the set's own model and prompt draw it again at a low denoise (0.35 by
-default; 0.3 is subtle, 0.45 a heavy rework), adding skin, hair and texture. **Ultimate SD** enlarges it with
+picture as it is, with crisper edges. **SeedVR2** takes minutes and draws finer detail. **Ultimate SD** enlarges it with
 4x-UltraSharp, then has the set's model redraw it in 768px tiles (Chess, mask blur 16, denoise 0.3), so a big image
-never has to fit on the card at once. Both work on every image workflow here: KSampler, RES4LYF's ClownsharKSampler
+never has to fit on the card at once. It works on every image workflow here: KSampler, RES4LYF's ClownsharKSampler
 (Krea 2 SFW/NSFW, run as euler there), SamplerCustom and SamplerCustomAdvanced (through Ultimate SD's guider node). Each is
 a new image in the set. The button is only there while the image's shorter side is 1440px or less.
 

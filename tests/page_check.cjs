@@ -301,9 +301,13 @@ assert.strictEqual(els.size.value, '', 'the default sends no size, so it follows
 run("workflowMost = { capped: 960 * 544 }; $('videoWorkflow').value = 'capped'");
 els.sizePreset.value = '1280x736';
 run('syncSize()');
-assert(els.sizePreset.options.find(o => o.value === '1280x736').disabled, 'a size over the workflow limit is off');
-assert(!els.sizePreset.options.find(o => o.value === '960x544').disabled);
-assert.strictEqual(els.size.value, '', 'and a chosen one falls back to the default');
+// A size past the workflow's limit would very likely run out of memory: its shape, at the nearest pixel count below.
+assert(!els.sizePreset.options.find(o => o.value === '1280x736').disabled, 'every size stays pickable');
+const [heldW, heldH] = els.size.value.split('x').map(Number);
+assert(heldW * heldH <= 960 * 544 && heldW % 32 === 0 && Math.abs(heldW / heldH - 1280 / 736) < 0.05, `held to the nearest below: ${els.size.value}`);
+assert(!els.videoResNote.hidden && /nearest below/.test(els.videoResNote.textContent), 'and it says so');
+// The stepper is there for a screen too, and scales it.
+assert(!/videoMegapixelsBox'\)\.classList\.toggle/.test(script) && /class="count-stepper mp-stepper" id="videoMegapixelsBox"/.test(html), 'never hidden');
 run("workflowMost = {}");
 
 // The film length allows single-second input within the server's limits.
@@ -583,7 +587,7 @@ const picked = (aspect, megapixels, source) => {
   els.imageAspect.value = aspect;
   els.imageMegapixels.value = megapixels;
   run(`sourceSize = ${JSON.stringify(source)}`);
-  return run('pickedSize().join("x")');
+  return run(`pickedSize(${megapixels === 'image' ? 'null' : megapixels}).join("x")`);
 };
 assert.strictEqual(picked('1:1', '1', null), '1024x1024');
 assert.strictEqual(picked('16:9', '1', null), '1360x768');
@@ -602,12 +606,13 @@ els.imageMegapixels.options = [{ value: 'image' }, { value: '1' }, { value: '2' 
 run(`imageWorkflows = { 'fibo.json': imageWorkflowList[2], 'krea.json': imageWorkflowList[0] }`);
 els.imageWorkflow.value = 'fibo.json';
 const fiboLimit = run('syncImageLimits()');
-assert.deepStrictEqual(els.imageAspect.options.map(o => o.disabled), [true, false, true, undefined], 'Fibo 2.0: no screen over 1.1 MP');
+// Every screen stays pickable: past the model's pixel count it is made at the nearest below (imageResolution).
+assert.deepStrictEqual(els.imageAspect.options.map(o => o.disabled), [false, false, false, undefined], 'Fibo 2.0: screens held, not greyed');
 assert.deepStrictEqual(els.imageMegapixels.options.map(o => o.disabled), [undefined, false, true, true]);
 assert(fiboLimit.includes('Fibo 2.0 makes images up to 1.1 MP'));
 els.imageWorkflow.value = 'krea.json';
 run('syncImageLimits()');
-assert.deepStrictEqual(els.imageAspect.options.map(o => o.disabled), [false, false, true, undefined], 'Krea-2: 1080p yes, 4K no');
+assert.deepStrictEqual(els.imageAspect.options.map(o => o.disabled), [false, false, false, undefined], 'Krea-2: 4K pickable, held below');
 assert.deepStrictEqual(els.imageMegapixels.options.map(o => o.disabled), [undefined, false, false, true]);
 els.imageWorkflow.value = '';
 run('imageWorkflows = {}; imageWorkflowList = []');
@@ -634,9 +639,17 @@ assert(/<label for="opt_steps">Steps<\/label>/.test(optionsHtml) && /name="opt_s
 assert(!run("remembered({ name: 'opt_steps', type: 'number' })"), 'each workflow starts as it was saved');
 for (const size of ['1920x1080', '2560x1440', '3840x2160', '1272x2772']) assert(html.includes(`<option value="${size}">`), size);
 els.imageAspect.value = '1920x1080';
-els.imageMegapixels.value = '1';
+els.imageMegapixels.value = 'image';
 run('syncImageSize()');
 assert.strictEqual(els.imagePixelSize.textContent, '1920×1080', 'the size it makes, beside the heading');
+// The stepper scales a screen too: its shape, at the pixel count stepped to, sent as an aspect and megapixels.
+els.imageMegapixels.value = '1';
+run('syncImageSize()');
+const [stepW, stepH] = els.imagePixelSize.textContent.split('×').map(Number);
+assert(Math.abs(stepW * stepH - 1e6) < 0.06e6 && Math.abs(stepW / stepH - 16 / 9) < 0.03, `a screen, stepped: ${els.imagePixelSize.textContent}`);
+assert.strictEqual(els.imageMegapixels.value, '1.0');
+run('imageStep = null');
+els.imageMegapixels.value = 'image';
 assert(!html.includes('id="imageSizeHint"') && !/21:9/.test(html), 'no size hint, and no 21:9');
 assert(/<select id="sizePreset">[\s\S]*?<optgroup label="Aspect ratio">[\s\S]*?<optgroup label="Landscape 16:9">/.test(html), 'video: aspect ratios, then its presets');
 run("setPipeline('image', false)");
@@ -1181,7 +1194,7 @@ assert(/\.switch button \{[^}]*padding: 4px 12px; font-size: \.78rem;/.test(html
   assert.strictEqual(steps.value, '20', "another workflow's settings are its own");
   context.localStorage = { getItem: () => null, setItem() {} };
 }
-assert(/syncOptions\('imageOptions', 'imageOptionsBox', options\.filter\([^)]*\)\), baseImageTakes\(\)\.name\)/.test(script), "Automatic's pick by its name");
+assert(/syncOptions\('imageOptions', 'imageOptionsBox', options\.filter\(.*\), baseImageTakes\(\)\.name\)/.test(script), "Automatic's pick by its name");
 
 // Why Generate was turned down shows beside the footer's button too, where it was pressed.
 run("showFormError('This workflow makes images from text alone: leave the image out.')");

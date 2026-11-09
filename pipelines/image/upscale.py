@@ -67,7 +67,7 @@ FAST_MOST_EDGE = 8192
 # 4x-UltraSharp keeps the picture as it is, just bigger and with crisper edges ("Method 1", the AI model upscale).
 MODEL_METHODS = {"fast": (FAST_MODEL, "Superscale-SP"), "ultrasharp": ("4x-UltraSharp.pth", "4x-UltraSharp")}
 # The ways that draw it again with the set's own model and prompt (pipelines/image/refine_upscale.py).
-REFINE_METHODS = {"hires": "Hires fix", "usdu": "Ultimate SD Upscale"}
+REFINE_METHODS = {"usdu": "Ultimate SD Upscale"}
 METHODS = ("seedvr2", *MODEL_METHODS, *REFINE_METHODS)
 
 
@@ -106,7 +106,7 @@ def target_resolution(width, height):
 
 
 def refined(state, shot, uploaded, method, denoise, save_as):
-    """Hires fix or Ultimate SD Upscale: the set's own workflow, filled in as for this image, with the upscale spliced in."""
+    """Ultimate SD Upscale: the set's own workflow, filled in as for this image, with the upscale spliced in."""
     from pipelines.image import refine_upscale
     from pipelines.image.comfy import ImageClient
     from pipelines.image.main import upload_images
@@ -155,11 +155,10 @@ def upscale(state, position, comfy, method="seedvr2", strength=1.0, resolution=0
         entry = comfy._run(upscale_workflow(uploaded, resolution), 777)
         path = comfy._download(entry, os.path.join(state.output_dir, stem), IMAGE_EXTENSIONS, "an image")
     how = {"seedvr2": "upscaled", "fast": "upscaled fast", "ultrasharp": "upscaled with UltraSharp",
-           "hires": "upscaled with Hires fix", "usdu": "upscaled with Ultimate SD"}[method]
+           "usdu": "upscaled with Ultimate SD"}[method]
     # What made it bigger, for the gallery's "Upscaled:" line.
     used = {"seedvr2": f"SeedVR2, {resolution}p" if method == "seedvr2" and resolution else "SeedVR2",
             "fast": f"Superscale-SP, strength {strength:g}", "ultrasharp": f"4x-UltraSharp, strength {strength:g}",
-            "hires": f"Hires fix, denoise {denoise:g}" if denoise is not None else "Hires fix",
             "usdu": f"Ultimate SD, denoise {denoise:g}" if denoise is not None else "Ultimate SD"}[method]
     made = {**{key: value for key, value in shot.items() if key not in ("redo",)},
             "title": f"{shot['title']} · {how}", "file": os.path.basename(path), "upscaled_from": position, "upscaled_with": used}
@@ -180,7 +179,7 @@ def main(argv=None):
                              "ultrasharp: 4x-UltraSharp, seconds, the picture as it is with crisper edges.")
     parser.add_argument("--strength", type=float, default=1.0, help="With fast or ultrasharp: how much of the model's result, 0-1, the rest a plain resize.")
     parser.add_argument("--denoise", type=float, default=None,
-                        help="With hires or usdu: how much is drawn again, 0-1 (0.35 and 0.3 unless set).")
+                        help="With usdu: how much is drawn again, 0-1 (0.3 unless set).")
     parser.add_argument("--resolution", type=int, default=0, metavar="PX",
                         help="With seedvr2: the shorter side to make it, as the Krea 2 workflow's 720p/1080p/1440p/4K. 0: twice what it is.")
     args = parser.parse_args(argv)

@@ -1531,6 +1531,25 @@ class PanelTest(unittest.TestCase):
         self.assertEqual((copy.clips, copy.final, copy.inputs), ({}, None, None))
         self.assertTrue(RunState.load(state.id).final, "the original stays as it is")
 
+    def test_private_mode_tags_new_creations_nsfw_for_this_session(self):
+        self.addCleanup(webapp._private.update, on=False)
+        self.assertFalse(self.client.get("/api/private").get_json()["on"])
+        self.assertTrue(self.client.post("/api/private", json={"on": True}).get_json()["on"])
+        self.assertTrue(self.client.get("/api/status").get_json()["private"])
+        self.assertTrue(self.generate().get_json()["ok"])
+        self.wait_idle()
+        run_id = self.only_run().id
+        with webapp._nsfw_lock:
+            self.assertIn(run_id, webapp._read_nsfw()["video"], "made in private mode: tagged NSFW")
+        self.assertFalse(self.client.post("/api/private", json={"on": False}).get_json()["on"])
+        later = {"pipeline": "video", "label": "x", "argv": [], "resume": run_id}
+        with mock.patch.object(webapp.run_queue, "_advance"), mock.patch.object(webapp.run_queue, "_save"):
+            webapp._private["on"] = True
+            with webapp.app.test_request_context():
+                webapp.run_queue.add(later)
+            webapp.run_queue.items.remove(later)
+        self.assertNotIn("private", later, "a continuation of something made before keeps that one's tag")
+
     def test_poweroff_is_per_session_and_cancellable(self):
         calls = []
         with mock.patch.object(webapp, "_run_shutdown", lambda cancel=False: calls.append(cancel)), \

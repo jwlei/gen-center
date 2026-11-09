@@ -524,6 +524,21 @@
     color: var(--text); font-size: inherit; font-variant-numeric: tabular-nums; white-space: nowrap; }
   .count-stepper .mp-field .mp-unit { margin-left: 2px; color: var(--muted); font-size: .8em; }
   span.mp-field { display: inline-flex; align-items: center; justify-content: center; box-sizing: border-box; }
+  /* Resolution, upscale and the megapixel stepper: one block. */
+  .res-block { margin: 4px 0 12px; padding: 10px 12px 12px; border: 1px solid var(--line); border-radius: 12px; background: color-mix(in srgb, var(--panel-2) 45%, transparent); }
+  .res-block[hidden], .res-block .hidden { display: none; }
+  .res-block .range-head { margin-top: 0; }
+  .res-block .res-sub { margin-top: 12px; }
+  .res-block .count-stepper.mp-stepper { margin-top: 12px; }
+  .res-info { width: auto; margin: 0; padding: 0; display: inline-flex; align-items: center; gap: 6px; background: transparent; border: 0;
+    color: var(--text); font: inherit; font-weight: 600; font-size: .85rem; }
+  .res-info-mark { width: 16px; height: 16px; border-radius: 50%; border: 1px solid var(--muted); color: var(--muted); display: inline-flex;
+    align-items: center; justify-content: center; font-size: .65rem; font-style: italic; font-weight: 700; line-height: 1; }
+  .res-info[aria-expanded="true"] .res-info-mark { color: var(--accent); border-color: var(--accent); }
+  .res-hint { margin: 6px 0 2px; padding: 8px 10px; border-radius: 8px; background: var(--panel-2); }
+  .res-hint[hidden] { display: none; }
+  .res-note { margin-top: 8px; color: var(--warn, #e0a84a); }
+  .res-note[hidden] { display: none; }
   /* Latent upscale's own settings, for Custom: folded under its stepper. */
   .latent-custom { margin-top: 8px; border: 1px solid var(--line); border-radius: 10px; padding: 0 10px; }
   .latent-custom[hidden] { display: none; }
@@ -1499,6 +1514,7 @@
     </div>
     <div class="hint" id="audioHint" hidden>The film is as long as the audio. A workflow with Load Audio gets it per clip.</div>
 
+    <div class="res-block" id="videoResBlock">
     <div class="range-head"><label for="sizePreset">Resolution</label><output class="resolution-size" id="videoPixelSize"></output></div>
     <div class="resolution-line">
     <select id="sizePreset">
@@ -1516,21 +1532,12 @@
     </select>
     <span class="aspect-box" id="videoAspectBox" aria-hidden="true"></span>
     </div>
-    <div class="count-stepper mp-stepper" id="videoMegapixelsBox">
-      <button type="button" id="videoMegapixelsDown" aria-label="0.1 megapixels fewer">−</button>
-      <button type="button" class="mp-field" id="videoMegapixelsValue" aria-label="Megapixels" title="Tap for 480p's pixel count"></button>
-      <button type="button" id="videoMegapixelsUp" aria-label="0.1 megapixels more">+</button>
-    </div>
     <input id="size" name="size" placeholder="Such as 1280x736, rounded to multiples of 32" autocomplete="off" style="margin-top:8px" hidden>
     <div id="videoLatentBox" hidden>
-      <div class="range-head" style="margin-top:12px"><label for="videoLatentUpscale">Latent upscale</label><output class="resolution-size" id="videoLatentSize"></output></div>
-      <select id="videoLatentUpscale" name="opt_latent_upscale" disabled></select>
+      <div class="range-head res-sub"><button type="button" class="res-info" id="videoLatentInfo" aria-expanded="false" aria-controls="videoLatentHint" title="What it does"><span>Latent upscale</span><span class="res-info-mark" aria-hidden="true">i</span></button><output class="resolution-size" id="videoLatentSize"></output></div>
+      <div class="hint res-hint" id="videoLatentHint" hidden></div>
+      <select id="videoLatentUpscale" name="opt_latent_upscale" aria-label="Latent upscale" disabled></select>
       <input type="hidden" id="videoLatentMp" name="opt_latent_upscale_mp" value="1" disabled>
-      <div class="count-stepper mp-stepper hidden" id="videoLatentMpBox">
-        <button type="button" id="videoLatentDown" aria-label="0.1 megapixels fewer">−</button>
-        <span class="mp-field" id="videoLatentMpValue" aria-live="polite"></span>
-        <button type="button" id="videoLatentUp" aria-label="0.1 megapixels more">+</button>
-      </div>
       <div class="latent-custom open" id="videoLatentCustom" hidden>
         <button type="button" class="latent-custom-head" id="videoLatentCustomToggle" aria-expanded="true">Custom settings</button>
         <div class="latent-custom-body">
@@ -1543,7 +1550,14 @@
         <label class="check"><input type="hidden" name="opt_latent_upscale_chunking" value="0" id="videoLatentChunkingOff" disabled><input type="checkbox" id="videoLatentChunking" name="opt_latent_upscale_chunking" value="1" checked disabled><span>Temporal chunking (less VRAM)</span></label>
         </div>
       </div>
-      <div class="hint" id="videoLatentHint"></div>
+      <div class="hint res-note" id="videoLatentNote" hidden></div>
+    </div>
+    <div class="count-stepper mp-stepper" id="videoMegapixelsBox">
+      <button type="button" id="videoMegapixelsDown" aria-label="0.1 megapixels fewer">−</button>
+      <button type="button" class="mp-field" id="videoMegapixelsValue" aria-label="Megapixels" title="Tap for 480p's pixel count"></button>
+      <button type="button" id="videoMegapixelsUp" aria-label="0.1 megapixels more">+</button>
+    </div>
+    <div class="hint res-note" id="videoResNote" hidden></div>
     </div>
 
     <div id="durationBox">
@@ -1638,6 +1652,7 @@
     <label for="videoSeed">Seed</label>
     <div class="seed-line">
       <input id="videoSeed" name="seed" inputmode="numeric" autocomplete="off" placeholder="Random" pattern="[0-9]*">
+      <button type="button" class="ghost" id="videoSeedSame" data-seed-same="videoSeed" aria-pressed="false" disabled></button>
       <button type="button" class="ghost" data-seed-pick="videoSeed" title="Pick a random seed to keep" aria-label="Pick a random seed to keep"></button>
       <button type="button" class="ghost" data-seed-clear="videoSeed" title="Back to random" aria-label="Back to a random seed every time">✕</button>
     </div>
@@ -1703,6 +1718,7 @@
       </select>
     </div>
 
+    <div class="res-block" id="imageResBlock">
     <div id="imageSizeBox">
       <div class="range-head"><label for="imageAspect">Resolution</label><output class="resolution-size" id="imagePixelSize"></output></div>
       <div class="resolution-line">
@@ -1721,20 +1737,25 @@
           </select>
         <span class="aspect-box" id="imageAspectBox" aria-hidden="true"></span>
       </div>
-        <div class="count-stepper mp-stepper" id="imageMegapixelsBox">
+      <input id="imageSize" name="size" placeholder="Such as 1920x1080" autocomplete="off" style="margin-top:8px" hidden>
+    </div>
+    <div id="imageUpscaleBox" hidden>
+      <div class="range-head res-sub"><button type="button" class="res-info" id="imageUpscaleInfo" aria-expanded="false" aria-controls="imageUpscaleHint" title="What it does"><span>Upscale</span><span class="res-info-mark" aria-hidden="true">i</span></button><output class="resolution-size" id="imageUpscaleSize"></output></div>
+      <div class="hint res-hint" id="imageUpscaleHint" hidden></div>
+      <select id="imageUpscale" name="opt_image_upscale" aria-label="Upscale" disabled></select>
+      <div class="option-row" id="imageUpscaleDenoiseRow" hidden style="margin-top:8px"><label for="imageUpscaleDenoise">Denoise</label>
+        <input type="number" id="imageUpscaleDenoise" name="opt_image_upscale_denoise" min="0.05" max="1" step="0.05" value="0.3" disabled></div>
+      <input type="hidden" id="imageUpscaleFinal" name="opt_image_upscale_size" disabled>
+      <input type="hidden" id="imageUpscaleScale" name="opt_image_upscale_scale" disabled>
+      <input type="hidden" id="imageUpscaleMp" name="opt_image_upscale_mp" disabled>
+    </div>
+    <div class="count-stepper mp-stepper" id="imageMegapixelsBox">
           <input type="hidden" id="imageMegapixels" name="megapixels" value="image">
           <button type="button" id="imageMegapixelsDown" aria-label="0.1 megapixels fewer">−</button>
           <button type="button" class="mp-field" id="imageMegapixelsValue" aria-label="Megapixels" title="Tap for the image's own size"></button>
           <button type="button" id="imageMegapixelsUp" aria-label="0.1 megapixels more">+</button>
         </div>
-      <input id="imageSize" name="size" placeholder="Such as 1920x1080" autocomplete="off" style="margin-top:8px" hidden>
-    </div>
-    <div id="imageUpscaleBox" hidden>
-      <div class="range-head" style="margin-top:12px"><label for="imageUpscale">Upscale</label><output class="resolution-size" id="imageUpscaleSize"></output></div>
-      <select id="imageUpscale" name="opt_image_upscale" disabled></select>
-      <div class="option-row" id="imageUpscaleDenoiseRow" hidden style="margin-top:8px"><label for="imageUpscaleDenoise">Denoise</label>
-        <input type="number" id="imageUpscaleDenoise" name="opt_image_upscale_denoise" min="0.05" max="1" step="0.05" value="0.35" disabled></div>
-      <div class="hint" id="imageUpscaleHint"></div>
+    <div class="hint res-note" id="imageResNote" hidden></div>
     </div>
     <label for="imageCount">How many images</label>
     <div class="count-stepper">
@@ -1778,7 +1799,7 @@
     <label for="imageSeed">Seed</label>
     <div class="seed-line">
       <input id="imageSeed" name="seed" inputmode="numeric" autocomplete="off" placeholder="Random" pattern="[0-9]*">
-      <button type="button" class="ghost" id="imageSeedSame" aria-pressed="false" hidden></button>
+      <button type="button" class="ghost" id="imageSeedSame" data-seed-same="imageSeed" aria-pressed="false" disabled></button>
       <button type="button" class="ghost" data-seed-pick="imageSeed" title="Pick a random seed to keep" aria-label="Pick a random seed to keep"></button>
       <button type="button" class="ghost" data-seed-clear="imageSeed" title="Back to random" aria-label="Back to a random seed every time">✕</button>
     </div>
@@ -1861,6 +1882,7 @@
     <div class="count-stepper"><button type="button" id="reserveDown" aria-label="Less free RAM">−</button><span class="mp-field" id="reserveRamValue" aria-live="polite"></span><button type="button" id="reserveUp" aria-label="More free RAM">+</button></div>
   </div>
   <label class="settings-check"><input type="checkbox" id="lowPriority"><span>Run generation at lower priority<small>The pipeline and ComfyUI give way to your other programs, so the PC stays responsive while it renders.</small></span></label>
+  <label class="settings-check"><input type="checkbox" id="privateMode"><span>Private mode<small>This session only: what you make now is tagged NSFW, and Output opens on the NSFW filter.</small></span></label>
   <label class="settings-check"><input type="checkbox" id="poweroff"><span>Shut down the PC when the queue is empty<small id="poweroffNote">This session only: it isn't saved. You get a minute to cancel it.</small></span></label>
   <div class="settings-group" id="localLlmTitle">Local LLM model</div>
   <div class="settings-row"><select id="localLlmModel" aria-labelledby="localLlmTitle"><option value="gemma-4-12b">Gemma 4 12B (vision)</option><option value="qwen3-14b">Qwen3 14B (text only)</option></select></div>
@@ -2017,7 +2039,6 @@
   <div class="upscale-methods" id="upscaleMethods">
     <button type="button" data-method="fast" data-for="image" title="Superscale-SP: seconds, and adds no new detail">Fast</button>
     <button type="button" data-method="ultrasharp" data-for="image" title="4x-UltraSharp: seconds, the picture as it is with crisper edges">UltraSharp</button>
-    <button type="button" data-method="hires" data-for="image" title="Hires fix: the set's own model draws it again twice as big, adding skin, hair and texture">Hires fix</button>
     <button type="button" data-method="usdu" data-for="image" title="Ultimate SD Upscale: 4x-UltraSharp, then the set's own model redraws it in tiles">Ultimate SD</button>
     <button type="button" data-method="seedvr2" data-for="image" title="SeedVR2: minutes, and draws finer detail">SeedVR2</button>
     <button type="button" data-method="vsr" data-for="film" title="NVIDIA RTX Video Super Resolution">RTX VSR</button>
@@ -2046,7 +2067,7 @@
     </div>
   </div>
   <div class="upscale-row hint" data-show="latent" id="filmLatentHint"></div>
-  <div class="upscale-row" data-show="hires usdu">
+  <div class="upscale-row" data-show="usdu">
     <select id="viewerUpscaleDenoise" aria-label="Denoise" title="How much the set's model draws again: 0.3 is subtle, 0.45 a heavy rework.">
       <option value="0.25">Denoise 0.25 · subtle</option><option value="0.3">Denoise 0.3</option><option value="0.35">Denoise 0.35</option>
       <option value="0.45">Denoise 0.45 · heavy</option>
@@ -2072,7 +2093,7 @@
   <div class="upscale-row" id="queueUpscaleMethodRow">
     <select id="queueUpscaleMethod" aria-label="Upscale method">
       <option value="fast">Superscale-SP</option><option value="ultrasharp">4x-UltraSharp</option><option value="seedvr2">SeedVR2</option>
-      <option value="hires">Hires fix</option><option value="usdu">Ultimate SD Upscale</option>
+      <option value="usdu">Ultimate SD Upscale</option>
     </select>
   </div>
   <div class="upscale-row" id="queueUpscaleStrengthRow">
@@ -3098,35 +3119,74 @@ function videoImageShape() {
   return preview && preview.naturalWidth && !preview.classList.contains('hidden') ? [preview.naturalWidth, preview.naturalHeight] : [1280, 736];
 }
 // Rounded down onto the grid, so the pixel count stays within the model's.
-function videoSized(ratio) {
-  const area = videoArea(), side = value => Math.max(VIDEO_STEP, Math.floor(value / VIDEO_STEP) * VIDEO_STEP);
+function videoSized(ratio, area = videoArea()) {
+  const side = value => Math.max(VIDEO_STEP, Math.floor(value / VIDEO_STEP) * VIDEO_STEP);
   return [side(Math.sqrt(area * ratio)), side(Math.sqrt(area / ratio))];
 }
+function videoLatentOn() {
+  return !$('videoLatentBox').hidden && !$('videoLatentUpscale').disabled && $('videoLatentUpscale').value !== 'Off';
+}
+// Resolution, latent upscale and the stepper as one: the resolution is what the clip is made at (a screen exactly, an
+// aspect ratio at 480p's pixel count); the stepper scales it, whatever was picked. With latent upscale on, the stepper
+// sets the size it ends at instead. Past what the workflow makes well it would very likely run out of memory: held to
+// the nearest below.
+let videoBase = null;
 function syncSize() {
-  const most = workflowMost[$('videoWorkflow').value] || 0;
-  [...$('sizePreset').options].forEach(o => {
-    const sides = o.value.split('x').map(Number);
-    o.disabled = !!most && sides.length === 2 && sides[0] * sides[1] > most;
-  });
-  if ($('sizePreset').selectedOptions[0].disabled) $('sizePreset').value = '';
-  $('size').placeholder = most ? `Up to ${(most / 1e6).toFixed(2)} megapixels, such as 960x544` : 'Such as 1280x736, rounded to multiples of 32';
+  const most = videoMostPixels(), on = videoLatentOn();
+  $('size').placeholder = `Up to ${(most / 1e6).toFixed(2)} megapixels, such as 960x544`;
   const preset = $('sizePreset').value, custom = preset === 'custom', fixed = /^\d+x\d+$/.test(preset), shape = /^\d+:\d+$/.test(preset);
   $('size').hidden = !custom;
-  $('videoMegapixelsBox').classList.toggle('hidden', custom || fixed);
-  let sides = null;
-  if (fixed) sides = preset.split('x').map(Number);
-  else if (shape) { const [w, h] = preset.split(':').map(Number); sides = videoSized(w / h); }
-  else if (!custom) { const [w, h] = videoImageShape(); sides = videoSized(w / h); }
-  if (!custom) $('size').value = fixed || shape || videoMegapixels != null ? sides.join('x') : '';
-  const shown = custom ? $('size').value.trim().split('x').map(Number) : sides;
-  $('videoPixelSize').textContent = shown && shown.length === 2 && shown.every(n => n > 0) ? shown.join('×') : '';
-  drawAspect($('videoAspectBox'), ...(shown && shown.length === 2 ? shown : [0, 0]));
-  const mp = videoArea() / 1e6;
+  const stepped = !on && videoMegapixels != null;
+  const area = on ? Math.min(VIDEO_DEFAULT_AREA, most) : videoArea();
+  let sides = null, note = '';
+  const held = (w, h) => {
+    sides = videoSized(w / h, most);
+    note = `${w}×${h} is past the ${(most / 1e6).toFixed(2)} MP this workflow makes well: made at ${sides.join('×')}, the nearest below.`;
+  };
+  if (fixed) {
+    const [w, h] = preset.split('x').map(Number);
+    if (stepped) sides = videoSized(w / h, area);
+    else if (w * h > most) held(w, h);
+    else sides = [w, h];
+  } else if (shape) { const [w, h] = preset.split(':').map(Number); sides = videoSized(w / h, area); }
+  else if (!custom) { const [w, h] = videoImageShape(); sides = videoSized(w / h, area); }
+  else {
+    const typed = /^(\d+)x(\d+)$/i.exec($('size').value.trim());
+    if (typed) {
+      const [w, h] = [+typed[1], +typed[2]];
+      if (stepped) { sides = videoSized(w / h, area); $('size').value = sides.join('x'); videoMegapixels = null; }
+      else if (w * h > most) { held(w, h); $('size').value = sides.join('x'); }
+      else sides = [w, h];
+    }
+  }
+  if (!custom) $('size').value = fixed || shape || stepped || note ? sides.join('x') : '';
+  videoBase = sides;
+  const base = sides ? sides[0] * sides[1] / 1e6 : area / 1e6;
+  let mp, least = 0.1, top = most / 1e6;
+  if (on) {
+    // The size it ends at: above the one it is made at, within what the workflow makes well.
+    least = Math.ceil((base + 0.05) * 10) / 10;
+    top = Math.floor(most / 1e6 * 10) / 10;
+    const wanted = Number($('videoLatentMp').value) || top;
+    mp = Math.min(top, Math.max(least, wanted));
+    if (wanted > top + 1e-9) note = `Held to ${top.toFixed(1)} MP: past what this workflow makes well, it would very likely run out of memory.`;
+    if (least > top) { mp = top; note = 'The resolution is already as big as this workflow makes well: set it lower to upscale.'; }
+    $('videoLatentMp').value = mp.toFixed(1);
+  } else mp = base;
+  const end = on && sides ? videoSized(sides[0] / sides[1], mp * 1e6) : null;
+  $('videoPixelSize').textContent = sides ? sides.join('×') + (end ? ` → ${end.join('×')}` : '') : '';
+  $('videoLatentSize').textContent = end ? end.join('×') : '';
+  drawAspect($('videoAspectBox'), ...(sides || [0, 0]));
   $('videoMegapixelsValue').innerHTML = `${mp.toFixed(1)}<span class="mp-unit">MP</span>`;
-  $('videoMegapixelsDown').disabled = mp <= 0.1 + 1e-9;
-  $('videoMegapixelsUp').disabled = mp + 0.1 > videoMostPixels() / 1e6 + 1e-9;
+  $('videoMegapixelsValue').title = on ? 'The size it ends at. Tap for the most this workflow makes well' : 'Tap for the resolution as picked';
+  $('videoMegapixelsValue').setAttribute('aria-label', on ? 'Megapixels it ends at' : 'Megapixels');
+  $('videoMegapixelsDown').disabled = mp <= least + 1e-9;
+  $('videoMegapixelsUp').disabled = mp + 0.1 > top + 1e-9;
+  $('videoResNote').textContent = note;
+  $('videoResNote').hidden = !note;
   showVideoLatent();
 }
+$('sizePreset').addEventListener('change', () => { videoMegapixels = null; });
 // Latent upscale, under Resolution: the clip is made at the size above, its latent made this big, then refined.
 const LATENT_OPTIONS = ['latent_upscale', 'latent_upscale_mp', 'latent_upscale_denoise', 'latent_upscale_steps', 'latent_upscale_chunking', 'latent_upscale_sampler'];
 const LATENT_FIELDS = ['videoLatentUpscale', 'videoLatentMp', 'videoLatentDenoise', 'videoLatentSteps', 'videoLatentSampler', 'videoLatentChunking', 'videoLatentChunkingOff'];
@@ -3155,12 +3215,13 @@ function syncVideoLatent(options) {
   box.classList.toggle('unavailable', !!unavailable);
   for (const id of LATENT_FIELDS) $(id).disabled = box.hidden || !!unavailable;
   if (box.hidden) return;
+  $('videoLatentNote').textContent = unavailable ? `Not available with ${unavailable}: it makes its clips without a latent to upscale.` : '';
+  $('videoLatentNote').hidden = !unavailable;
   if (!preset) {
     $('videoLatentUpscale').innerHTML = '<option>Off</option>';
-    $('videoLatentMpBox').classList.add('hidden');
     $('videoLatentCustom').hidden = true;
     $('videoLatentSize').textContent = '';
-    $('videoLatentHint').textContent = `Not available with ${unavailable}: it makes its clips without a latent to upscale.`;
+    showResHint('videoLatentInfo', '');
     return;
   }
   const sampler = options.find(option => option.id === 'latent_upscale_sampler');
@@ -3187,58 +3248,43 @@ function syncVideoLatent(options) {
     }
   }
   if (unavailable) $('videoLatentUpscale').value = 'Off';
-  showVideoLatent();
-  if (unavailable) $('videoLatentHint').textContent = `Not available with ${unavailable}: it makes its clips without a latent to upscale.`;
+  syncSize();
 }
+const LATENT_HINTS = {
+  Off: 'The clip is made at the resolution, as it is.',
+  Clean: 'Made at the resolution, its latent enlarged to the size the stepper sets, then one light refine step: sharper, the clip as it was.',
+  'Hires fix': 'Made at the resolution, enlarged to the size the stepper sets, then refined over two steps (about a 0.35 denoise): skin, hair and texture drawn in.',
+  Heavy: 'Made at the resolution, enlarged, then refined over three steps (about 0.45): more new detail, a little drift from the clip.',
+  Custom: 'Made at the resolution, enlarged to the size the stepper sets, then refined as set below: more denoise draws in more.',
+};
 function showVideoLatent() {
-  const box = $('videoLatentBox');
-  if (box.hidden) return;
-  const on = $('videoLatentUpscale').value !== 'Off', least = Number(box.dataset.min) || 0.5, most = Number(box.dataset.max) || 4;
-  const mp = Math.min(most, Math.max(least, Number($('videoLatentMp').value) || 1));
-  $('videoLatentMp').value = mp.toFixed(1);
-  $('videoLatentMpBox').classList.toggle('hidden', !on);
-  $('videoLatentCustom').hidden = $('videoLatentUpscale').value !== 'Custom';
-  $('videoLatentMpValue').innerHTML = `${mp.toFixed(1)}<span class="mp-unit">MP</span>`;
-  $('videoLatentDown').disabled = mp <= least + 1e-9;
-  $('videoLatentUp').disabled = mp >= most - 1e-9;
-  // The size it ends at: the shape of the one above, at this many pixels, on the 32 grid.
-  const sides = ($('videoPixelSize').textContent || '').split('×').map(Number);
-  const shaped = sides.length === 2 && sides.every(n => n > 0);
-  const ratio = shaped ? sides[0] / sides[1] : 16 / 9, height = Math.sqrt(mp * 1e6 / ratio);
-  $('videoLatentSize').textContent = on ? `${Math.round(height * ratio / 32) * 32}×${Math.round(height / 32) * 32}` : '';
-  const small = shaped && mp * 1e6 <= sides[0] * sides[1];
-  $('videoLatentHint').textContent = !on ? ''
-    : small ? 'Set this above the resolution: the clip is made at the resolution, then upscaled to this.'
-    : $('videoLatentUpscale').value === 'Custom' ? 'Made at the resolution above, then upscaled to this and refined as set below: more denoise draws in more.'
-    : 'Made at the resolution above, then upscaled to this and refined. Clean keeps it as it was; Hires fix and Heavy draw in more detail.';
+  if ($('videoLatentBox').hidden) return;
+  $('videoLatentCustom').hidden = $('videoLatentUpscale').value !== 'Custom' || $('videoLatentUpscale').disabled;
+  showResHint('videoLatentInfo', LATENT_HINTS[$('videoLatentUpscale').value] || '');
 }
-function stepVideoLatent(by) {
-  $('videoLatentMp').value = (Math.round((Number($('videoLatentMp').value) + by) * 10) / 10).toFixed(1);
-  showVideoLatent();
-  rememberLatent();
-  $('videoLatentMp').dispatchEvent(new Event('change', { bubbles: true }));
-}
-$('videoLatentDown').addEventListener('click', () => stepVideoLatent(-0.1));
-$('videoLatentUp').addEventListener('click', () => stepVideoLatent(0.1));
-// A tap on the number goes back to 1 MP.
-$('videoLatentMpValue').addEventListener('click', () => { $('videoLatentMp').value = '1.0'; showVideoLatent(); rememberLatent(); });
-$('videoLatentUpscale').addEventListener('change', () => { showVideoLatent(); rememberLatent(); });
+$('videoLatentUpscale').addEventListener('change', () => { syncSize(); rememberLatent(); });
 $('videoLatentCustom').addEventListener('change', rememberLatent);
 $('videoLatentCustomToggle').addEventListener('click', () => {
   const open = $('videoLatentCustom').classList.toggle('open');
   $('videoLatentCustomToggle').setAttribute('aria-expanded', String(open));
 });
 function stepVideoMegapixels(by) {
-  const next = Math.round((videoArea() / 1e6 + by) * 10) / 10;
-  videoMegapixels = Math.min(videoMostPixels() / 1e6, Math.max(0.1, next));
+  if (videoLatentOn()) {
+    $('videoLatentMp').value = (Math.round((Number($('videoLatentMp').value) + by) * 10) / 10).toFixed(1);
+    rememberLatent();
+  } else {
+    const from = videoBase ? videoBase[0] * videoBase[1] / 1e6 : videoArea() / 1e6;
+    videoMegapixels = Math.min(videoMostPixels() / 1e6, Math.max(0.1, Math.round((from + by) * 10) / 10));
+  }
   syncSize();
   $('size').dispatchEvent(new Event('change', { bubbles: true }));
 }
 $('videoMegapixelsDown').addEventListener('click', () => stepVideoMegapixels(-0.1));
 $('videoMegapixelsUp').addEventListener('click', () => stepVideoMegapixels(0.1));
-// A tap on the number goes back to the default: 480p's pixel count.
+// A tap on the number: the resolution as picked; with latent upscale on, the most the workflow makes well.
 $('videoMegapixelsValue').addEventListener('click', () => {
-  videoMegapixels = null;
+  if (videoLatentOn()) { $('videoLatentMp').value = (videoMostPixels() / 1e6).toFixed(1); rememberLatent(); }
+  else videoMegapixels = null;
   syncSize();
   $('size').dispatchEvent(new Event('change', { bubbles: true }));
 });
@@ -3980,15 +4026,16 @@ $('paintDone').addEventListener('click', async () => {
 });
 $('paintAreas').addEventListener('click', openPaint);
 function onGrid(value) { return Math.max(256, Math.round(value / SIZE_STEP) * SIZE_STEP); }
-// As the pipeline works it out, so you see the size before you press Generate.
-function pickedSize() {
-  const aspect = $('imageAspect').value, megapixels = $('imageMegapixels').value;
+// As the pipeline works it out, so you see the size before you press Generate. mp: the megapixels asked for, or null for
+// the image's own (within cap) or one megapixel.
+function pickedSize(mp = null, cap = null) {
+  const aspect = $('imageAspect').value;
   const [width, height] = sourceSize || [1, 1];
   const parts = aspect.split(':');
-  const ratio = aspect === 'image' ? width / height : +parts[0] / +parts[1];
+  const ratio = aspect === 'image' || !/^[\d.]+:[\d.]+$/.test(aspect) ? width / height : +parts[0] / +parts[1];
   const model = imageModel();
-  const cap = (model && model.most_megapixels || MOST_MEGAPIXELS) * MEGAPIXEL;
-  const area = megapixels === 'image' ? (sourceSize ? Math.min(width * height, cap) : MEGAPIXEL) : +megapixels * MEGAPIXEL;
+  const most = (cap || (model && model.most_megapixels) || MOST_MEGAPIXELS) * MEGAPIXEL;
+  const area = mp == null ? (sourceSize ? Math.min(width * height, most) : Math.min(MEGAPIXEL, most)) : mp * MEGAPIXEL;
   return [onGrid(Math.sqrt(area * ratio)), onGrid(Math.sqrt(area / ratio))];
 }
 // Greys out the sizes and pixel counts a model doesn't make well. Returns what the hint should say about it.
@@ -4000,7 +4047,7 @@ function syncImageLimits() {
   for (const group of [...($('imageAspect').querySelectorAll ? $('imageAspect').querySelectorAll('optgroup') : [])]) group.hidden = plain && group.label !== 'Aspect ratio';
   for (const option of [...($('imageAspect').options || [])]) {
     const sides = /^(\d+)x(\d+)$/.exec(option.value);
-    if (sides) option.disabled = plain || tooBig(+sides[1], +sides[2]);
+    if (sides) option.disabled = plain;
     else if (option.value === 'custom') { option.disabled = plain; option.hidden = plain; }
   }
   for (const option of [...($('imageMegapixels').options || [])]) {
@@ -4014,48 +4061,112 @@ function syncImageLimits() {
   return most ? ` ${model.label} makes images up to ${most} MP.` : '';
 }
 const MP_STEP = 0.1;
-function shownMegapixels() {
-  const [width, height] = pickedSize();
-  return Math.round(width * height / MEGAPIXEL * 10) / 10;
+// Resolution, Upscale and the stepper as one block. The resolution is what the model makes (a screen exactly, an aspect
+// ratio at the image's own pixel count or 1 MP); the stepper scales it, whatever was picked. With Upscale on, the
+// stepper sets the size it ends at. A pixel count that would very likely run out of memory is held to the nearest below.
+let imageStep = null;  // The megapixels the stepper set for the resolution, or null for it as picked
+function imageUpscaleOn() {
+  return !$('imageUpscaleBox').hidden && !$('imageUpscale').disabled && !!$('imageUpscale').value && $('imageUpscale').value !== 'Off';
+}
+function imageLimit() { return ($('imageUpscaleBox').limits || {})[$('imageUpscale').value] || {}; }
+function shapedSize(ratio, mp) { return [onGrid(Math.sqrt(mp * MEGAPIXEL * ratio)), onGrid(Math.sqrt(mp * MEGAPIXEL / ratio))]; }
+const tenthBelow = mp => Math.floor(mp * 10 + 1e-6) / 10;
+function imageResolution() {
+  const model = imageModel(), modelMost = (model && model.most_megapixels) || MOST_MEGAPIXELS;
+  const on = imageUpscaleOn(), limit = imageLimit(), cap = on && limit.base ? Math.min(modelMost, limit.base) : modelMost;
+  const capSays = on ? `the ${cap} MP ${$('imageUpscale').value} starts from on this card` : `the ${cap} MP this model makes well`;
+  const aspect = $('imageAspect').value, typed = aspect === 'custom', screen = /^\d+x\d+$/.test(aspect);
+  const step = on ? null : imageStep;
+  let sides = null, send = 'image', note = '';
+  if (screen || typed) {
+    const exact = screen ? aspect.split('x').map(Number) : ((/^(\d+)x(\d+)$/i.exec($('imageSize').value.trim()) || []).slice(1).map(Number));
+    if (exact.length === 2 && exact.every(n => n > 0)) {
+      const mp = exact[0] * exact[1] / MEGAPIXEL;
+      if (step != null) { const m = Math.min(step, cap); sides = shapedSize(exact[0] / exact[1], m); send = m.toFixed(1); }
+      else if (mp > cap + 1e-9) {
+        const m = tenthBelow(cap);
+        sides = shapedSize(exact[0] / exact[1], m);
+        send = m.toFixed(1);
+        note = `${exact.join('×')} is ${mp.toFixed(1)} MP, past ${capSays}: made at ${sides.join('×')}, the nearest below.`;
+      } else sides = exact;
+    }
+  } else {
+    const m = step != null ? Math.min(step, cap) : null;
+    sides = pickedSize(m, cap);
+    send = m == null ? 'image' : m.toFixed(1);
+  }
+  return { sides, send, note, cap, on, limit };
 }
 function syncMegapixels() {
-  const own = $('imageMegapixels').value === 'image', mp = own ? shownMegapixels() : +$('imageMegapixels').value;
+  const r = imageResolution();
+  $('imageMegapixels').value = r.send;
+  $('imageMegapixels').dataset.sent = r.send;
+  let note = r.note, mp, least = MP_STEP, top = tenthBelow(r.cap), end = null;
+  const base = r.sides ? r.sides[0] * r.sides[1] / MEGAPIXEL : 0;
+  if (r.on && r.sides) {
+    // The size it ends at: past the one it's made at, within what the upscale takes on a 12 GB card.
+    least = Math.ceil((base + 0.05) * 10) / 10;
+    let most = Math.min(r.limit.final || 16, base * 16);
+    if (r.limit.shorter) most = Math.min(most, r.limit.shorter ** 2 * Math.max(...r.sides) / Math.min(...r.sides) / MEGAPIXEL);
+    top = tenthBelow(most);
+    const wanted = Number($('imageUpscaleMp').value) || Math.min(top, tenthBelow(base * 4));
+    mp = Math.min(top, Math.max(least, wanted));
+    if (wanted > top + 1e-9) note = `Held to ${top.toFixed(1)} MP: past that, ${$('imageUpscale').value} would very likely run out of memory on this card.`;
+    if (least > top) { mp = top; note = 'The resolution is already as big as this upscale goes: set it lower to upscale.'; }
+    end = shapedSize(r.sides[0] / r.sides[1], mp);
+    $('imageUpscaleMp').value = mp.toFixed(1);
+    $('imageUpscaleFinal').value = end.join('x');
+    $('imageUpscaleScale').value = (end[0] / r.sides[0]).toFixed(3);
+  } else mp = r.sides ? base : (imageStep ?? 1);
+  for (const id of ['imageUpscaleFinal', 'imageUpscaleScale', 'imageUpscaleMp']) $(id).disabled = !r.on;
+  $('imagePixelSize').textContent = r.sides ? r.sides.join('×') + (end ? ` → ${end.join('×')}` : '') : '';
+  $('imageUpscaleSize').textContent = end ? `${(end[0] / r.sides[0]).toFixed(2).replace(/\.?0+$/, '')}×` : '';
   $('imageMegapixelsValue').innerHTML = `${mp.toFixed(1)}<span class="mp-unit">MP</span>`;
-  $('imageMegapixelsValue').title = own ? 'The image\'s own size, within what the model makes well' : 'Tap for the image\'s own size';
-  const model = imageModel(), most = (model && model.most_megapixels) || MOST_MEGAPIXELS;
-  $('imageMegapixelsDown').disabled = mp <= MP_STEP;
-  $('imageMegapixelsUp').disabled = mp + MP_STEP > most + 1e-9;
+  $('imageMegapixelsValue').title = r.on ? 'The size it ends at. Tap for four times the resolution' : 'Tap for the resolution as picked';
+  $('imageMegapixelsValue').setAttribute('aria-label', r.on ? 'Megapixels it ends at' : 'Megapixels');
+  $('imageMegapixelsDown').disabled = mp <= least + 1e-9;
+  $('imageMegapixelsUp').disabled = mp + MP_STEP > top + 1e-9;
+  $('imageResNote').textContent = note;
+  $('imageResNote').hidden = !note;
+  return r;
 }
 function stepMegapixels(by) {
-  const model = imageModel(), most = (model && model.most_megapixels) || MOST_MEGAPIXELS;
-  const from = $('imageMegapixels').value === 'image' ? shownMegapixels() : +$('imageMegapixels').value;
-  const next = Math.min(most, Math.max(MP_STEP, Math.round((from + by) * 10) / 10));
-  $('imageMegapixels').value = next.toFixed(1);
-  $('imageMegapixels').dispatchEvent(new Event('change', { bubbles: true }));
+  if (imageUpscaleOn()) {
+    $('imageUpscaleMp').value = (Math.round((Number($('imageUpscaleMp').value) + by) * 10) / 10).toFixed(1);
+  } else {
+    const r = imageResolution(), from = r.sides ? r.sides[0] * r.sides[1] / MEGAPIXEL : (imageStep ?? 1);
+    imageStep = Math.min(tenthBelow(r.cap), Math.max(MP_STEP, Math.round((from + by) * 10) / 10));
+  }
   syncImageSize();
+  $('imageMegapixels').dispatchEvent(new Event('change', { bubbles: true }));
 }
 $('imageMegapixelsDown').addEventListener('click', () => stepMegapixels(-MP_STEP));
 $('imageMegapixelsUp').addEventListener('click', () => stepMegapixels(MP_STEP));
 $('imageMegapixelsValue').addEventListener('click', () => {
-  $('imageMegapixels').value = 'image';
-  $('imageMegapixels').dispatchEvent(new Event('change', { bubbles: true }));
+  if (imageUpscaleOn()) $('imageUpscaleMp').value = '';
+  else imageStep = null;
   syncImageSize();
+  $('imageMegapixels').dispatchEvent(new Event('change', { bubbles: true }));
 });
+// A screen or an exact size starts as itself; an aspect ratio keeps the pixel count stepped to.
+$('imageAspect').addEventListener('change', () => { if (/^\d+x\d+$|^custom$/.test($('imageAspect').value)) imageStep = null; });
 function syncImageSize() {
   const takes = imageTakes();
   const limit = syncImageLimits();
-  const aspect = $('imageAspect').value, typed = aspect === 'custom', screen = /^\d+x\d+$/.test(aspect), exact = typed || screen;
+  // Set from outside (a preset, a set reopened): what it holds is the stepper's now.
+  const held = $('imageMegapixels').value;
+  if (held !== $('imageMegapixels').dataset.sent && !imageUpscaleOn()) imageStep = held === 'image' || !+held ? null : +held;
+  const aspect = $('imageAspect').value, typed = aspect === 'custom';
   const region = ['areas', 'expand'].includes(imageMode());
-  $('imageSizeBox').classList.toggle('hidden', !takes.size || region);
-  if (region) return;
+  const sized = !!takes.size && !region;
+  $('imageSizeBox').classList.toggle('hidden', !sized);
   $('imageSize').hidden = !typed;
-  $('imageMegapixelsBox').classList.toggle('hidden', exact);
-  if (!takes.size) { $('imagePixelSize').textContent = ''; return; }
-  const size = typed ? $('imageSize').value.trim() : screen ? aspect : pickedSize().join('x');
-  // The size it makes, beside the controls: it moves with each step.
-  $('imagePixelSize').textContent = typed ? '' : size.replace('x', '×');
-  drawAspect($('imageAspectBox'), ...(typed ? [0, 0] : size.split('x').map(Number)));
-  syncMegapixels();
+  const upscale = !$('imageUpscaleBox').hidden;
+  $('imageMegapixelsBox').classList.toggle('hidden', !sized && !imageUpscaleOn());
+  $('imageResBlock').hidden = !sized && !upscale;
+  if (!sized && !imageUpscaleOn()) { $('imagePixelSize').textContent = ''; $('imageResNote').hidden = true; return; }
+  const r = syncMegapixels();
+  drawAspect($('imageAspectBox'), ...(r.sides || [0, 0]));
 }
 // A small box in the shape chosen, beside the picker. Nothing to draw for a size still being typed.
 function drawAspect(box, width, height) {
@@ -4169,16 +4280,17 @@ for (const box of ['shortsOptionsBox', 'videoOptionsBox', 'imageOptionsBox']) {
 }
 function syncImageOptions() {
   const options = imageTakes().options || [];
-  syncOptions('imageOptions', 'imageOptionsBox', options.filter(option => !IMAGE_UPSCALE_OPTIONS.includes(option.id)), baseImageTakes().name);
+  syncOptions('imageOptions', 'imageOptionsBox', options.filter(option => !IMAGE_UPSCALE_OPTIONS.includes(option.id) && !option.moved), baseImageTakes().name);
   syncImageUpscale(options);
 }
 // Upscale, under Resolution: each image made twice as big as it comes out, before it is saved.
-const IMAGE_UPSCALE_OPTIONS = ['image_upscale', 'image_upscale_denoise'];
+const IMAGE_UPSCALE_OPTIONS = ['image_upscale', 'image_upscale_denoise', 'image_upscale_size', 'image_upscale_scale', 'image_upscale_mp'];
 const IMAGE_UPSCALE_KEY = 'gen-center.imageUpscale';
 const IMAGE_UPSCALE_HINTS = {
-  UltraSharp: '4x-UltraSharp: the picture as it is, twice as big with crisper edges. Seconds.',
-  'Hires fix': "The set's own model draws it again twice as big at this denoise: skin, hair and texture. 0.3 is subtle, 0.45 a heavy rework.",
-  'Ultimate SD': "4x-UltraSharp, then the set's own model redraws it in tiles at this denoise, so a big image fits on the card.",
+  Off: 'Each image is made at the resolution, as it is.',
+  'Ultimate SD': "Made at the resolution, then 4x-UltraSharp enlarges it and the set's own model redraws it in tiles at this denoise, up to the size the stepper sets. Tiles keep a big image within the card.",
+  UltraSharp: '4x-UltraSharp: the picture as it is, enlarged to the size the stepper sets, with crisper edges. Seconds.',
+  SeedVR2: 'SeedVR2 draws finer detail as it enlarges to the size the stepper sets (up to 4K on its shorter side). Minutes.',
 };
 function savedImageUpscale() {
   try { return JSON.parse(localStorage.getItem(IMAGE_UPSCALE_KEY) || '{}') || {}; } catch (e) { return {}; }
@@ -4190,25 +4302,26 @@ function syncImageUpscale(options) {
   const choice = options.find(option => option.id === 'image_upscale'), box = $('imageUpscaleBox');
   box.hidden = !choice;
   $('imageUpscale').disabled = $('imageUpscaleDenoise').disabled = !choice;
-  if (!choice) return;
-  const key = JSON.stringify(choice.choices);
-  if (box.dataset.key !== key) {
-    const first = !box.dataset.key, saved = savedImageUpscale(), was = first ? saved.method : $('imageUpscale').value;
-    box.dataset.key = key;
-    $('imageUpscale').innerHTML = choice.choices.map(value => `<option>${esc(value)}</option>`).join('');
-    $('imageUpscale').value = choice.choices.includes(was) ? was : choice.default;
-    if (first && saved.denoise) $('imageUpscaleDenoise').value = saved.denoise;
+  box.limits = choice ? choice.limits || {} : {};
+  if (choice) {
+    const key = JSON.stringify(choice.choices);
+    if (box.dataset.key !== key) {
+      const first = !box.dataset.key, saved = savedImageUpscale(), was = first ? saved.method : $('imageUpscale').value;
+      box.dataset.key = key;
+      $('imageUpscale').innerHTML = choice.choices.map(value => `<option>${esc(value)}</option>`).join('');
+      $('imageUpscale').value = choice.choices.includes(was) ? was : choice.default;
+      if (first && saved.denoise) $('imageUpscaleDenoise').value = saved.denoise;
+    }
   }
   showImageUpscale();
+  syncImageSize();
 }
 function showImageUpscale() {
-  const method = $('imageUpscale').value, on = !!method && method !== 'Off';
-  $('imageUpscaleDenoiseRow').hidden = !['Hires fix', 'Ultimate SD'].includes(method);
-  $('imageUpscaleHint').textContent = on ? IMAGE_UPSCALE_HINTS[method] || '' : '';
-  const sides = ($('imagePixelSize') && $('imagePixelSize').textContent || '').split('×').map(Number);
-  $('imageUpscaleSize').textContent = on && sides.length === 2 && sides.every(n => n > 0) ? `${sides[0] * 2}×${sides[1] * 2}` : on ? '2×' : '';
+  const method = $('imageUpscale').value;
+  $('imageUpscaleDenoiseRow').hidden = method !== 'Ultimate SD';
+  showResHint('imageUpscaleInfo', IMAGE_UPSCALE_HINTS[method] || '');
 }
-$('imageUpscale').addEventListener('change', () => { showImageUpscale(); rememberImageUpscale(); });
+$('imageUpscale').addEventListener('change', () => { showImageUpscale(); rememberImageUpscale(); syncImageSize(); });
 $('imageUpscaleDenoise').addEventListener('change', rememberImageUpscale);
 // The workflow writing its own prompts: its prompt enhancer, or image to prompt.
 const ROLE_LABELS = { image_to_prompt: 'Image to prompt', prompt_enhancer: 'Prompt Enhancer' };
@@ -4468,7 +4581,7 @@ async function sameAgain(id, position = null, exact = null) {
   syncImageForm();
   if (exact) $('imageSeed').value = exact.seed || '';
   // From one picture: its seed, a tap away, to make it again with other settings.
-  offerSameSeed(shot ? shot.used_seed ?? shot.seed : null);
+  offerSameSeed('imageSeed', shot ? shot.used_seed ?? shot.seed : null);
   saveImageForm();
   reopened('image');
   showFormError('');
@@ -4582,6 +4695,7 @@ async function sameAgainFilm(id, exact = null) {
   const runModel = [...modelSetting.options].find(o => o.value === s.h3_model);
   showFormError(runModel && modelSetting.value !== s.h3_model
     ? `Made with ${runModel.textContent} as the local model. Settings now has ${modelSetting.selectedOptions[0]?.textContent}.` : '');
+  offerSameSeed('videoSeed', (data.shots && data.shots[0] && (data.shots[0].used_seed ?? data.shots[0].seed)) ?? s.seed);
   saveVideoForm();
   reopened('video');
   if (WIDE.matches) $('optionsCard').scrollIntoView({ behavior: 'smooth' }); else showPage('generate');
@@ -4661,13 +4775,13 @@ function openUpscaleSettings(method) {
   upscaleMethod = method;
   const film = method === 'vsr' || method === 'latent', img = $('viewerImage'), w = img.naturalWidth, h = img.naturalHeight;
   if (method === 'latent') showFilmLatent();
-  $('upscaleTitle').textContent = { fast: 'Fast upscale 2×', ultrasharp: 'UltraSharp upscale 2×', hires: 'Hires fix 2×', usdu: 'Ultimate SD upscale 2×', seedvr2: 'SeedVR2 upscale', vsr: 'RTX VSR upscale', latent: 'Latent upscale' }[method];
+  $('upscaleTitle').textContent = { fast: 'Fast upscale 2×', ultrasharp: 'UltraSharp upscale 2×', usdu: 'Ultimate SD upscale 2×', seedvr2: 'SeedVR2 upscale', vsr: 'RTX VSR upscale', latent: 'Latent upscale' }[method];
   $('upscaleSettingsNote').textContent = film ? ($('viewerRes').textContent || '') : w ? `${w} × ${h}` : '';
   for (const row of $('upscaleSettings').querySelectorAll('[data-show]')) row.hidden = !row.dataset.show.split(' ').includes(method);
   const shorter = Math.min(w, h);
   for (const o of $('viewerUpscaleSize').options) o.disabled = +o.value > 0 && +o.value <= shorter;
   $('viewerUpscaleSize').value = '0';
-  if (method === 'hires' || method === 'usdu') $('viewerUpscaleDenoise').value = method === 'hires' ? '0.35' : '0.3';
+  if (method === 'usdu') $('viewerUpscaleDenoise').value = '0.3';
   $('upscaleSettings').showModal();
   placeOverViewerButtons($('upscaleSettings'));
 }
@@ -4725,7 +4839,7 @@ $('upscaleSettings').addEventListener('click', async e => {
   }
   const { id, position } = viewing;
   const query = upscaleMethod === 'seedvr2' ? `?method=seedvr2&resolution=${encodeURIComponent($('viewerUpscaleSize').value)}`
-    : ['hires', 'usdu'].includes(upscaleMethod) ? `?method=${upscaleMethod}&denoise=${encodeURIComponent($('viewerUpscaleDenoise').value)}`
+    : upscaleMethod === 'usdu' ? `?method=usdu&denoise=${encodeURIComponent($('viewerUpscaleDenoise').value)}`
     : `?method=${upscaleMethod}&strength=${encodeURIComponent($('viewerUpscaleStrength').value)}`;
   body = await queueRequest(button, async () => (await fetch(`/image-runs/${encodeURIComponent(id)}/upscale/${position}${query}`, { method: 'POST' })).json());
   done(body);
@@ -4794,7 +4908,9 @@ function applyOptions(box, options, chosen) {
   if (box === $('imageOptionsBox')) {
     if (chosen.image_upscale) $('imageUpscale').value = chosen.image_upscale;
     if (chosen.image_upscale_denoise) $('imageUpscaleDenoise').value = chosen.image_upscale_denoise;
+    if (chosen.image_upscale_mp) $('imageUpscaleMp').value = chosen.image_upscale_mp;
     showImageUpscale();
+    syncImageSize();
   }
   if (box === $('videoOptionsBox')) {
     if (chosen.latent_upscale) $('videoLatentUpscale').value = chosen.latent_upscale;
@@ -4831,11 +4947,11 @@ function downloadImages(id, positions) {
 // --- The image viewer: one picture over a dimmed page, with Download, Delete and Close ---
 let viewing = null;
 const UPSCALE_MOST_SIDE = 1440, TILED_MOST_SIDE = 4096;
-// As the server's (panel/image.py upscale_problem): SeedVR2 and Hires fix take the whole image at once.
+// As the server's (panel/image.py upscale_problem): SeedVR2 takes the whole image at once.
 function upscaleProblem(method, width, height) {
-  if (['seedvr2', 'hires'].includes(method) && Math.min(width, height) > UPSCALE_MOST_SIDE)
+  if (method === 'seedvr2' && Math.min(width, height) > UPSCALE_MOST_SIDE)
     return `Too big for this one: ${Math.min(width, height)}px on its shorter side, past ${UPSCALE_MOST_SIDE}px.`;
-  if (!['seedvr2', 'hires'].includes(method) && Math.max(width, height) > TILED_MOST_SIDE)
+  if (method !== 'seedvr2' && Math.max(width, height) > TILED_MOST_SIDE)
     return `Too big: ${Math.max(width, height)}px on its longer side, past ${TILED_MOST_SIDE}px.`;
   return '';
 }
@@ -4975,7 +5091,7 @@ $('viewerImage').addEventListener('load', () => {
   const img = $('viewerImage');
   if (img.dataset.full && !String(img.src).endsWith(img.dataset.full)) return;  // The small picture, while the full one comes
   $('viewerRes').textContent = viewing && !viewing.film && img.naturalWidth ? `${img.naturalWidth} × ${img.naturalHeight}` : '';
-  // Past 1440p on its shorter side, SeedVR2 and Hires fix can't take it: greyed, but the other ways still can.
+  // Past 1440p on its shorter side, SeedVR2 can't take it: greyed, but the other ways still can.
   $('viewerUpscale').classList.toggle('dim', !!viewing && !viewing.film && Math.min(img.naturalWidth, img.naturalHeight) > UPSCALE_MOST_SIDE);
 });
 // The image before or after this one in its set: a swipe, or the arrow keys.
@@ -5243,26 +5359,47 @@ document.addEventListener('click', e => {
   if (button.dataset.seedPick) setSeed($(button.dataset.seedPick), randomSeed());
   else setSeed($(button.dataset.seedClear), '');
 });
-// Same seed: the seed the picture Generate was opened from was made with. Lit while the seed box holds it.
+// Same seed: the seed of what Generate was opened from (the sliders on a picture or film), lit while the seed box holds
+// it. Always there; greyed out with nothing to use again.
 const SAME_SEED_ICON = '<svg class="icon" viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22c4-3 7-6.5 7-11a7 7 0 0 0-14 0c0 4.5 3 8 7 11z"/><path d="M9 11h6M9 14h6"/></svg>';
-let sameSeed = null;
-$('imageSeedSame').innerHTML = SAME_SEED_ICON;
-function offerSameSeed(seed) {
-  sameSeed = seed == null || seed === '' ? null : String(seed);
-  $('imageSeedSame').hidden = sameSeed == null;
-  $('imageSeedSame').title = sameSeed == null ? '' : `Use the same seed as the picture (${sameSeed})`;
-  $('imageSeedSame').setAttribute('aria-label', $('imageSeedSame').title || 'Same seed');
-  showSameSeed();
+const sameSeeds = {};
+function offerSameSeed(field, seed) {
+  sameSeeds[field] = seed == null || seed === '' ? null : String(seed);
+  showSameSeed(field);
 }
-function showSameSeed() {
-  $('imageSeedSame').setAttribute('aria-pressed', String(sameSeed != null && $('imageSeed').value === sameSeed));
+function showSameSeed(field) {
+  const button = $(`${field}Same`), seed = sameSeeds[field] ?? null;
+  if (!button) return;
+  button.disabled = seed == null;
+  button.title = seed == null ? 'Use the same seed again: open Generate from a picture or film with its sliders' : `Use the same seed again (${seed})`;
+  button.setAttribute('aria-label', button.title);
+  button.setAttribute('aria-pressed', String(seed != null && $(field).value === seed));
 }
-$('imageSeedSame').addEventListener('click', () => {
-  if (sameSeed == null) return;
-  setSeed($('imageSeed'), $('imageSeed').value === sameSeed ? '' : sameSeed);
+for (const button of document.querySelectorAll('[data-seed-same]')) {
+  const field = button.dataset.seedSame;
+  button.innerHTML = SAME_SEED_ICON;
+  button.addEventListener('click', () => {
+    const seed = sameSeeds[field];
+    if (seed != null) setSeed($(field), $(field).value === seed ? '' : seed);
+  });
+  $(field).addEventListener('input', () => showSameSeed(field));
+  $(field).addEventListener('change', () => showSameSeed(field));
+  showSameSeed(field);
+}
+// Each upscale's header: a tap drops its hint down for the upscale chosen, the next tap folds it away.
+const RES_HINTS = { videoLatentInfo: 'videoLatentHint', imageUpscaleInfo: 'imageUpscaleHint' }, resOpen = {};
+document.addEventListener('click', e => {
+  const info = e.target.closest && e.target.closest('.res-info');
+  if (!info || !RES_HINTS[info.id]) return;
+  resOpen[info.id] = !resOpen[info.id];
+  info.setAttribute('aria-expanded', String(resOpen[info.id]));
+  $(RES_HINTS[info.id]).hidden = !resOpen[info.id] || !$(RES_HINTS[info.id]).textContent;
 });
-$('imageSeed').addEventListener('input', showSameSeed);
-$('imageSeed').addEventListener('change', showSameSeed);
+function showResHint(info, text) {
+  const hint = $(RES_HINTS[info]);
+  hint.textContent = text;
+  hint.hidden = !text || !resOpen[info];
+}
 // Digits only: anything else isn't a seed.
 document.addEventListener('input', e => {
   if (e.target.name === 'seed' || e.target.dataset.seed !== undefined) {
@@ -7084,6 +7221,7 @@ async function pollOnce(generation) {
   syncComfyButton(c);
   lastComfy = { ...c, gpu: data.gpu };
   safely(() => renderPoweroff(data.poweroff));
+  safely(() => renderPrivate(data.private));
   $('comfyDot').className = 'dot ' + (c.online ? 'ok' : c.starting || c.listening ? 'warn' : 'fail');
   $('comfyStatus').title = `ComfyUI: ${comfyState(c)}`;
   $('comfyStatus').setAttribute('aria-label', $('comfyStatus').title);
@@ -7226,7 +7364,7 @@ async function removeQueued(lane, id) {
 function syncQueueUpscale() {
   const image = queueUpscaleEdit.kind === 'image_upscale';
   $('queueUpscaleMethodRow').hidden = !image;
-  $('queueUpscaleStrengthRow').hidden = !image || ['seedvr2', 'hires', 'usdu'].includes($('queueUpscaleMethod').value);
+  $('queueUpscaleStrengthRow').hidden = !image || ['seedvr2', 'usdu'].includes($('queueUpscaleMethod').value);
   $('queueUpscaleResolutionRow').hidden = !image || $('queueUpscaleMethod').value !== 'seedvr2';
   $('queueUpscaleFilmRow').hidden = image;
 }
@@ -7250,7 +7388,7 @@ $('queueUpscaleSave').addEventListener('click', async e => {
   if (!queueUpscaleEdit) return;
   const image = queueUpscaleEdit.kind === 'image_upscale';
   const fields = image
-    ? [$('queueUpscaleMethod'), ...(['hires', 'usdu'].includes($('queueUpscaleMethod').value) ? []
+    ? [$('queueUpscaleMethod'), ...($('queueUpscaleMethod').value === 'usdu' ? []
       : [$('queueUpscaleMethod').value !== 'seedvr2' ? $('queueUpscaleStrength') : $('queueUpscaleResolution')])]
     : [$('queueUpscaleScale'), $('queueUpscaleQuality')];
   if (fields.some(field => !field.value || !field.reportValidity())) return;
@@ -7656,9 +7794,25 @@ $('shutdown').addEventListener('click', async e => {
 const JUMPS = [...$('jump').querySelectorAll('a')];
 // A phone shows one section at a time, the one chosen in the footer. A desktop shows them all, with no footer.
 const PAGE_KEY = 'comfyui-auto-gen.page';
+// Private mode (this session only, kept by the panel): new creations are tagged NSFW, and Output opens on them.
+let privateMode = false;
+function renderPrivate(on) {
+  if (typeof on !== 'boolean') return;
+  const was = privateMode;
+  privateMode = on;
+  $('privateMode').checked = on;
+  if (on && !was) resetOutputFilter();
+}
+$('privateMode').addEventListener('change', async () => {
+  try {
+    const body = await (await fetch('/api/private', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ on: $('privateMode').checked }) })).json();
+    renderPrivate(!!body.on);
+  } catch (e) { settingsNote('Could not reach the panel.', true); }
+});
 function resetOutputFilter() {
-  if (!outputFilter) return;
-  outputFilter = '';
+  const wanted = privateMode && pipeline !== 'shorts' ? NSFW_FILTER : '';
+  if (outputFilter === wanted) return;
+  outputFilter = wanted;
   $('videos').dataset.key = $('imageSets').dataset.key = '';
   renderVideos();
   renderImageSets();
