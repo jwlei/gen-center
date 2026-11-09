@@ -14,7 +14,7 @@ H3_MODELS = ("gemma-4-12b", "qwen3-14b")
 # Free RAM ComfyUI keeps, in GB: 3 unless set (0, from before, meant ComfyUI's own, which had no floor).
 DEFAULT_RESERVE_GB = 3
 DEFAULTS = {"low_priority": False, "reserve_ram_gb": DEFAULT_RESERVE_GB, "h3_model": H3_MODELS[0], "local_llm_model": H3_MODELS[0],
-            "default_workflow": {side: "" for side in SIDES}}
+            "default_workflow": {side: "" for side in SIDES}, "gemini_titles": False}
 _lock = threading.Lock()
 
 
@@ -52,7 +52,9 @@ def load():
             # The image preset the viewer's Edit (pen) opens Generate with; empty: the Qwen-Image 2.1 edit workflow.
             "edit_preset": str(saved.get("edit_preset") or "")[:200],
             # Private mode: what is made is tagged NSFW, and Output opens on the NSFW filter. Kept over restarts.
-            "private_mode": bool(saved.get("private_mode"))}
+            "private_mode": bool(saved.get("private_mode")),
+            # Gemini titles: a new film or set is titled by Gemini from its prompt (core/titles.py).
+            "gemini_titles": bool(saved.get("gemini_titles"))}
 
 
 def update(changes):
@@ -73,6 +75,8 @@ def update(changes):
             current["local_llm_model"] = changes["local_llm_model"]
         if "private_mode" in changes:
             current["private_mode"] = bool(changes["private_mode"])
+        if "gemini_titles" in changes:
+            current["gemini_titles"] = bool(changes["gemini_titles"])
         if "edit_preset" in changes:
             current["edit_preset"] = str(changes["edit_preset"] or "")[:200]
         if isinstance(changes.get("default_workflow"), dict):

@@ -91,18 +91,18 @@ class VideoMetadataTest(unittest.TestCase):
 
 class OutputH3MetadataTest(unittest.TestCase):
     def test_video_captions_include_saved_openh3_settings(self):
-        state = types.SimpleNamespace(id="run_1", workflow="h3.json", options={}, llm="local",
-                                      h3_mode="review", h3_creativity="bold")
+        state = types.SimpleNamespace(id="run_1", brief="Brief", direct=False, workflow="h3.json", options={}, llm="local",
+                                      h3_mode="review", h3_creativity="bold", connection_mode="infinite", start="image", final=None)
         with mock.patch.object(video_panel, "saved_runs", return_value=[{"id": "run_1", "label": "Film", "pipeline": "video"}]), \
              mock.patch.object(video_panel, "films_of_runs", return_value={"film.mp4": state}), \
              mock.patch.object(video_panel, "run_of_film", return_value="run_1"), \
              mock.patch.object(video_panel.workflow_options, "loras_used", return_value=[]):
             caption = video_panel.captions()("film.mp4")
-        self.assertEqual((caption["h3_mode"], caption["h3_creativity"]), ("review", "bold"))
+        self.assertEqual((caption["h3_mode"], caption["h3_creativity"], caption["connection"]), ("review", "bold", "infinite"))
 
     def test_upscaled_video_inherits_source_run_metadata(self):
-        state = types.SimpleNamespace(id="run_20261107_120000", title="Film", brief="Brief", workflow="h3.json", options={"lora": "1"}, llm="local",
-                                      h3_mode="review", h3_creativity="bold")
+        state = types.SimpleNamespace(id="run_20261107_120000", title="Film", brief="Brief", direct=False, workflow="h3.json", options={"lora": "1"}, llm="local",
+                                      h3_mode="review", h3_creativity="bold", connection_mode=None, start="chain", final=None)
         with tempfile.TemporaryDirectory() as temp, \
              mock.patch.object(video_panel, "saved_runs", return_value=[{"id": state.id, "label": "Film", "pipeline": "video"}]), \
              mock.patch.object(video_panel, "films_of_runs", return_value={"film.mp4": state}), \
@@ -118,14 +118,15 @@ class OutputH3MetadataTest(unittest.TestCase):
         original = listed["film.mp4"]
         for name in ("film_upscaled.mp4", "film_upscaled_2.mp4", "film_upscaled_upscaled.mp4"):
             item = listed[name]
-            for key in ("run", "title", "model", "llm", "loras", "h3_mode", "h3_creativity"):
+            for key in ("run", "title", "model", "llm", "loras", "h3_mode", "h3_creativity", "connection"):
                 self.assertEqual(item[key], original[key], (name, key))
             self.assertEqual(item["resolution"], "2048x1024")
+        self.assertEqual(original["connection"], "chain")
         self.assertIsNone(listed["unknown.mp4"]["model"])
 
     def test_upscale_metadata_survives_original_deletion_and_repeat_upscale(self):
-        state = types.SimpleNamespace(id="run_20261107_120000", title="Film", brief="Brief", workflow="h3.json", options={},
-                                      llm="local", h3_mode="render", h3_creativity="bold")
+        state = types.SimpleNamespace(id="run_20261107_120000", title="Film", brief="Brief", direct=False, workflow="h3.json", options={},
+                                      llm="local", h3_mode="render", h3_creativity="bold", connection_mode="director", start="image")
         with tempfile.TemporaryDirectory() as temp, \
              mock.patch.object(paths, "OUTPUT_DIR", temp), \
              mock.patch.dict(webapp.FOLDERS, {"video": temp}), \
@@ -148,6 +149,7 @@ class OutputH3MetadataTest(unittest.TestCase):
             self.assertEqual((listed["title"], listed["model"], listed["llm"], listed["loras"]),
                              ("Film", "h3", "local", ["LoRA A"]))
             self.assertEqual((listed["h3_mode"], listed["h3_creativity"], listed["run"]), ("render", "bold", None))
+            self.assertEqual(listed["connection"], "director", "kept in the upscale's own metadata")
 
             client = mock.Mock()
             client.upload.return_value = "input.mp4"
@@ -167,8 +169,8 @@ class OutputH3MetadataTest(unittest.TestCase):
             self.assertEqual((remaining["title"], remaining["llm"], remaining["loras"]), ("Film", "local", ["LoRA A"]))
 
     def test_upscale_metadata_error_prevents_original_deletion(self):
-        state = types.SimpleNamespace(id="run_20261107_120000", title="Film", brief="Brief", workflow=None, options={},
-                                      llm="local", h3_mode="off", h3_creativity="balanced")
+        state = types.SimpleNamespace(id="run_20261107_120000", title="Film", brief="Brief", direct=False, workflow=None, options={},
+                                      llm="local", h3_mode="off", h3_creativity="balanced", connection_mode=None, start="image", final=None)
         with tempfile.TemporaryDirectory() as temp, \
              mock.patch.object(paths, "OUTPUT_DIR", temp), \
              mock.patch.object(video_panel, "films_of_runs", return_value={"film.mp4": state}), \
@@ -183,8 +185,8 @@ class OutputH3MetadataTest(unittest.TestCase):
             self.assertTrue(os.path.exists(source))
 
     def test_new_upscale_saves_snapshot_before_original_run_is_removed(self):
-        state = types.SimpleNamespace(id="run_20261107_120000", title="Film", brief="Brief", workflow="h3.json",
-                                      options={}, llm="local", h3_mode="review", h3_creativity="bold")
+        state = types.SimpleNamespace(id="run_20261107_120000", title="Film", brief="Brief", direct=False, workflow="h3.json",
+                                      options={}, llm="local", h3_mode="review", h3_creativity="bold", connection_mode=None, start="chain", final=None)
         with tempfile.TemporaryDirectory() as temp, \
              mock.patch.object(output_metadata, "films_of_runs", return_value={"film.mp4": state}) as films, \
              mock.patch.object(output_metadata.workflow_options, "loras_used", return_value=["LoRA A"]), \
@@ -772,17 +774,39 @@ class PanelTest(unittest.TestCase):
         self.assertEqual(self.status()["returncode"], 0)
         self.assertEqual(len(self.comfy.prompts), 9, "only the cut-off clip and those after it were rendered")
 
-    def test_skip_refuses_a_run_with_nothing_saved_yet(self):
+    def test_cancel_before_anything_is_saved_waits_for_it_then_goes_on(self):
         self.comfy.script = ["hang"]
         self.assertTrue(self.generate().get_json()["ok"])
         self.wait_until(lambda: self.comfy.hanging, "the clip to start")
         self.wait_until(lambda: webapp.job.progress.get("run_id"), "the panel to see the run")
         self.assertTrue(self.generate(prompt="next film", review="1").get_json()["queued"])
-        with mock.patch.object(webapp, "saved_runs", return_value=[]):
-            reply = self.client.post("/skip")
-        self.assertEqual(reply.status_code, 409)
-        self.assertTrue(webapp.job.running, "stopping it now would lose it")
-        self.assertFalse(self.status()["queue"]["held"])
+        saved = {"yet": False}
+        with mock.patch.object(webapp, "run_saved", lambda: saved["yet"]):
+            reply = self.client.post("/skip").get_json()
+            self.assertEqual(reply, {"ok": True, "cancelling": True}, "accepted, no error to show")
+            time.sleep(0.8)
+            self.assertTrue(webapp.job.running, "stopping it now would lose it")
+            self.assertTrue(self.status()["cancelling"])
+            self.assertEqual(self.client.post("/skip").get_json(), {"ok": True, "cancelling": True}, "asked twice, still once")
+            saved["yet"] = True
+            self.wait_until(lambda: len(self.claude.requests) == 2, "the next in the queue to start once it is cancelled")
+        self.wait_idle()
+        status = self.status()
+        self.assertFalse(status["queue"]["held"])
+        self.assertFalse(status["cancelling"])
+        self.assertEqual([result["outcome"] for result in status["queue"]["results"]][:1], ["stopped"])
+
+    def test_cancel_keeps_a_held_queue_held(self):
+        self.comfy.script = ["hang"]
+        self.assertTrue(self.generate().get_json()["ok"])
+        self.wait_until(lambda: self.comfy.hanging, "the clip to start")
+        self.assertTrue(self.generate(prompt="next film", review="1").get_json()["queued"])
+        self.client.post("/queue/run/hold")
+        with mock.patch.object(webapp, "run_saved", return_value=True):
+            self.assertTrue(self.client.post("/skip").get_json()["ok"])
+        self.wait_idle()
+        self.assertTrue(self.status()["queue"]["held"], "held before, held after")
+        self.assertEqual(len(self.claude.requests), 1, "the next one waits for Resume")
 
     def test_presets_are_kept_by_name_per_side(self):
         if os.path.exists(webapp.PRESETS_PATH):
@@ -842,6 +866,18 @@ class PanelTest(unittest.TestCase):
         self.assertTrue(self.client.post(f"/queue/run/start/{waiting[0]['id']}").get_json()["ok"])
         self.wait_idle()
         self.assertEqual(self.status()["queue"]["items"], [], "started, it ran")
+
+    def test_add_to_top_of_queue_goes_ahead_of_everything_waiting(self):
+        with mock.patch.object(webapp.run_queue, "blocked", return_value=True):
+            for prompt in ("first", "second"):
+                self.assertTrue(self.generate(prompt=prompt).get_json()["queued"])
+            self.assertTrue(self.generate(prompt="pending", start_later="1").get_json()["ok"])
+            self.assertTrue(self.generate(prompt="top", queue_top="1").get_json()["queued"])
+            items = self.status()["queue"]["items"]
+        self.assertEqual([item["later"] for item in items], [None, None, None, True])
+        self.assertEqual([item["label"] for item in items], ["1 video: top", "1 video: first", "1 video: second", "1 video: pending"])
+        webapp.run_queue.items.clear()
+        webapp.run_queue._save()
 
     def test_queueing_a_pending_job_only_queues_it_and_its_play_runs_it_now(self):
         for prompt in ("first", "second"):
@@ -1353,6 +1389,10 @@ class PanelTest(unittest.TestCase):
             self.assertEqual([r["pipeline"] for r in payload["finished_results"]], ["shorts"])
             self.assertEqual([r["run_id"] for r in payload["made_now"]], ["image_b"])
             self.assertEqual(len(payload["queue"]["results"]), 3, "Failed and queue history remain intact")
+            payload["made_now"] = [{"pipeline": "image", "run_id": "image_a"}]
+            webapp._apply_nsfw(payload, tags, {}, private=True)
+            self.assertEqual([r["pipeline"] for r in payload["finished_results"]], ["image", "video", "shorts"], "Private mode: NSFW stays in Finished")
+            self.assertEqual([r["run_id"] for r in payload["made_now"]], ["image_a"])
             self.assertTrue(post("video", "upscaled.mp4", False).get_json()["ok"])
             self.assertTrue(post("image", "image_a", False).get_json()["ok"])
             self.assertEqual(webapp._read_nsfw(), {"image": [], "video": [], "video_file": [], "video_sources": {}})
@@ -1783,20 +1823,26 @@ class QueueUpscaleEditTest(unittest.TestCase):
         with mock.patch.object(image_panel.RunState, "load", return_value=state):
             edit = self.open(item)
             self.assertEqual(edit["upscale"]["strength"], "0.5")
+            self.assertEqual(edit["upscale"]["size"], [640, 368], "the source's size, for the upscale box's before and after")
             url = "/queue/run/edit/5/upscale"
-            values = {"token": edit["token"], "method": "seedvr2", "strength": "0.5", "resolution": "720"}
+            # 3x of its 368px shorter side, as the preview's 3x makes it, and SeedVR2's denoise.
+            values = {"token": edit["token"], "method": "seedvr2", "strength": "0.5", "resolution": "1104", "denoise": "0.1"}
+            self.assertEqual(self.client.post(url, json={**values, "times": "5"}).status_code, 400)
             self.assertEqual(self.client.post(url, json={**values, "token": "stale"}).status_code, 409)
             self.assertEqual(self.client.post(url, json={**values, "resolution": "100"}).status_code, 400)
+            self.assertEqual(self.client.post(url, json={**values, "resolution": "9000"}).status_code, 400)
+            self.assertEqual(self.client.post(url, json={**values, "denoise": "5"}).status_code, 400)
             os.remove(path)
             self.assertEqual(self.client.post(url, json=values).status_code, 409)
             self.assertIs(webapp.run_queue.items[-1], item)
             Image.new("RGB", (640, 368)).save(path)
-            self.assertTrue(self.client.post(url, json=values).get_json()["ok"])
+            # 3x, as the upscale box sends it: 3 x its 368px shorter side.
+            self.assertTrue(self.client.post(url, json={**{k: v for k, v in values.items() if k != "resolution"}, "times": "3"}).get_json()["ok"])
         replacement = webapp.run_queue.items[0]
         self.assertEqual([entry["id"] for entry in webapp.run_queue.items], [5, 9])
         self.assertEqual(replacement["resume"], state.id)
         self.assertIn("--image", replacement["argv"])
-        self.assertEqual(replacement["argv"][-2:], ["--resolution", "720"])
+        self.assertEqual(replacement["argv"][-4:], ["--resolution", "1104", "--denoise", "0.1"])
         self.assertNotIn("later", replacement)
         self.assertNotIn("edit_token", replacement)
 

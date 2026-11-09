@@ -340,21 +340,44 @@
   .upscale-dialog .upscale-row button { flex: 1 1 0; min-width: 0; }
   .upscale-dialog select[hidden], .upscale-row[hidden], .upscale-methods button[hidden] { display: none; }
   /* The method list grows up out of the Upscale button, as the footer's side menu does. */
-  dialog#viewerUpscaleBar { padding: 5px; gap: 4px; transform-origin: bottom center; animation: menu-in .2s ease; box-shadow: 0 8px 24px rgba(0, 0, 0, .45); }
-  dialog#viewerUpscaleBar::backdrop { background: transparent; }
-  dialog#viewerUpscaleBar.closing { animation: menu-out .15s ease forwards; pointer-events: none; }
+  dialog#viewerUpscaleBar, dialog#moveSheet, dialog#pillsMenu { padding: 5px; gap: 4px; transform-origin: bottom center; animation: menu-in .2s ease; box-shadow: 0 8px 24px rgba(0, 0, 0, .45); }
+  dialog#viewerUpscaleBar::backdrop, dialog#moveSheet::backdrop, dialog#pillsMenu::backdrop { background: transparent; }
+  dialog#viewerUpscaleBar.closing, dialog#moveSheet.closing, dialog#pillsMenu.closing { animation: menu-out .15s ease forwards; pointer-events: none; }
+  /* Its options' text in the middle, + New's icon with it. */
+  dialog#moveSheet .upscale-methods button { text-align: center; }
+  dialog#moveSheet .upscale-methods button.move-new-pick { display: inline-flex; align-items: center; justify-content: center; gap: 6px; color: var(--accent); }
+  dialog#moveSheet .upscale-methods button.move-new-pick svg { width: 14px; height: 14px; }
+  dialog#moveSheet .err { margin: 2px 4px; }
+  /* All of its pills, wrapped and centred: the preview's line stays one line, so its buttons never move. */
+  /* Its heading, quiet: the pills are what it shows. */
+  dialog#pillsMenu .pills-menu-head { justify-content: center; font-size: .68rem; font-weight: 500; color: var(--muted); opacity: .8; letter-spacing: .02em; }
+  dialog#pillsMenu #pillsMenuBody { justify-content: center; padding: 4px 2px 6px; margin: 0; }
+  /* The one tapped: lit while it moves (the others dimmed), its border flashing once it has. */
+  dialog#moveSheet .upscale-methods button { transition: background .15s, opacity .15s, transform .1s; }
+  dialog#moveSheet .upscale-methods button.picked { background: color-mix(in srgb, var(--accent) 30%, var(--panel-2)); border-color: var(--accent); transform: scale(.98); }
+  dialog#moveSheet .upscale-methods button.moved { animation: move-flash .38s ease; }
+  @keyframes move-flash { 0%, 100% { box-shadow: 0 0 0 0 transparent; } 40% { box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 70%, transparent); } }
+  @media (prefers-reduced-motion: reduce) { dialog#moveSheet .upscale-methods button.moved { animation: none; } }
+  dialog#moveSheet.moving .upscale-methods button:not(.picked) { opacity: .4; pointer-events: none; }
+  /* A collection with NSFW in it: a dark red border, so it is never chosen by mistake. */
+  dialog#moveSheet .upscale-methods button.nsfw { border: 1px solid #8b1a1a; }
   .upscale-methods { display: flex; flex-direction: column; gap: 4px; }
   .upscale-dialog .upscale-methods button { width: 100%; padding: 9px 14px; font-size: .85rem; text-align: left; border-radius: 9px; background: var(--panel-2); }
   .upscale-dialog .upscale-methods button:disabled { opacity: .4; cursor: not-allowed; }
-  @media (prefers-reduced-motion: reduce) { dialog#viewerUpscaleBar, dialog#viewerUpscaleBar.closing { animation: none; } }
+  @media (prefers-reduced-motion: reduce) { dialog#viewerUpscaleBar, dialog#viewerUpscaleBar.closing, dialog#moveSheet, dialog#moveSheet.closing,
+    dialog#pillsMenu, dialog#pillsMenu.closing { animation: none; } }
   dialog.upscale-settings { inset: 0; margin: auto; width: min(320px, 90vw); height: fit-content; }
   .viewer-head { position: relative; z-index: 0; width: 100%; }
   dialog.viewer #viewerImage { position: relative; z-index: 1; }
+  /* The picture and its badge share one cell, so the badge sits on the picture's own bottom-right corner. */
+  dialog.viewer #viewerImage, dialog.viewer #viewerVideo, dialog.viewer #viewerUpscaled { grid-area: 1 / 1; }
+  dialog.viewer #viewerUpscaled { position: relative; z-index: 2; align-self: end; justify-self: end; margin: 8px; width: 26px; height: 26px; padding: 5px; }
   .viewer-head .viewer-title { padding: 0 72px; }
   .viewer-count, .viewer-res { position: absolute; top: 0; color: #999; font-size: .72rem; font-variant-numeric: tabular-nums; }
   .viewer-count { left: 0; }
   .viewer-res { right: 0; }
-  .viewer-meta { color: var(--muted); font-size: .72rem; text-align: center; overflow-wrap: anywhere; }
+  /* Full width: centred in the bar, it shrank to its content, and the pills' 90% of that always wrapped the last one. */
+  .viewer-meta { width: 100%; color: var(--muted); font-size: .72rem; text-align: center; overflow-wrap: anywhere; }
   dialog.viewer .viewer-meta button { width: auto; margin: 0; padding: 0; border: 0; background: transparent; color: inherit; font: inherit; }
   dialog.viewer .viewer-meta button:not(:disabled) { cursor: pointer; text-decoration: underline dotted; text-underline-offset: 3px; }
   .viewer-meta-details { white-space: pre-wrap; }
@@ -362,7 +385,25 @@
   /* Each result a box outlined in how it ended, no fill: mark, type and title at the left, when quietly at the right. */
   /* Outlined in the colour of the page that made it (its --side); the mark carries how it ended. The list is moved into a dialog, outside .finished. */
   .results .result { display: flex; align-items: center; gap: 8px; width: 100%; margin: 0 0 6px; padding: 7px 10px; background: none;
-    border: 1px solid var(--side, var(--line)); border-radius: 10px; color: inherit; font: inherit; text-align: left; cursor: pointer; }
+    border: 1px solid var(--side, var(--line)); border-radius: 10px; color: inherit; font: inherit; text-align: left; cursor: pointer;
+    touch-action: pan-y; }
+  /* What it made, small, on the left; a job with nothing to show (an upload, a failure before its run) keeps the space. */
+  .result-thumb { flex: none; width: 34px; height: 34px; border-radius: 6px; overflow: hidden; background: var(--panel-2); }
+  .result-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  /* A swipe to the right takes a result off the list: it follows the finger, slides out, then the gap closes. */
+  /* clip, not hidden: hidden makes the list a scroll box of its own, and inside a dialog (overscroll contained) a
+     swipe up or down on it then scrolled nothing. */
+  #finishedList { overflow-x: clip; }
+  .finished-foot[hidden] { display: none; }
+  /* In the box, Clear sits in the bottom-right corner, on Close's line (the same size of text, padding and border),
+     however far the list is scrolled. */
+  dialog.panel-dialog > .finished-foot { position: absolute; right: 14px; bottom: 12px; margin: 0; }
+  dialog.panel-dialog > .finished-foot .finished-clear { padding: 6px 10px; font-size: .82rem; line-height: normal; border: 1px solid transparent; }
+  .results .result.swipe-back { transition: transform .2s ease, opacity .2s ease; }
+  .results .result.swiped { transition: transform .22s ease, opacity .22s ease; transform: translateX(110%) !important; opacity: 0 !important; }
+  .results .result.collapsing { overflow: hidden; transition: height .2s ease, margin .2s ease, padding .2s ease, border-width .2s ease;
+    height: 0 !important; margin: 0; padding-top: 0; padding-bottom: 0; border-width: 0; }
+  @media (prefers-reduced-motion: reduce) { .results .result.swipe-back, .results .result.swiped, .results .result.collapsing { transition: none; } }
   .result .when, .result-mark { flex: none; white-space: nowrap; }
   .result .when { margin-left: auto; color: var(--muted); font-size: .7rem; opacity: .7; font-variant-numeric: tabular-nums; }
   .result-mark { font-size: .8rem; }
@@ -431,7 +472,12 @@
   .carousel::-webkit-scrollbar { display: none; }
   .carousel.as-list { display: block; overflow: visible; }
   /* Centred, one size whatever is picked: a long workflow name is cut short rather than stretching it. */
-  .output-filter-line { display: flex; justify-content: center; margin-bottom: 10px; }
+  .output-filter-line { position: relative; display: flex; justify-content: center; margin-bottom: 10px; }
+  /* Collections' icon: in the left corner, on the workflow filter's line; lit while they are open. */
+  .collections-toggle { position: absolute; left: 0; top: 50%; transform: translateY(-50%); width: auto; margin: 0; padding: 4px 6px;
+    display: inline-flex; align-items: center; border: 0; background: none; color: var(--neutral); }
+  .collections-toggle[hidden] { display: none; }
+  .collections-toggle.on { color: var(--accent); }
   .output-filter-line select { width: 220px; max-width: 100%; padding: 5px 10px; font-size: .82rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   /* A film's poster says it plays. */
   .film-cover .play { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: #fff;
@@ -458,11 +504,14 @@
   .top-icons { display: flex; gap: 12px; align-items: center; }
   .top-icons a { display: flex; opacity: .7; }
   .top-icons a:hover { opacity: 1; color: var(--text); }
+  /* Private mode's key: lit in the accent while it is on. */
+  .top-icons a#privateToggle.on { opacity: 1; color: var(--accent); }
   .top .sub { margin-bottom: 6px; }
   details summary { cursor: pointer; font-size: .95rem; font-weight: 600; }
   .hidden { display: none !important; }
   .dashboard { display: flex; flex-direction: column; }
   .stepper { display: flex; gap: 4px; margin: 2px 0 12px; }
+  .stepper[hidden], #stageDetail[hidden] { display: none; }
   .step { flex: 1; text-align: center; font-size: .66rem; color: var(--muted); padding-top: 7px; border-top: 3px solid var(--line); line-height: 1.25; }
   .step.done { border-color: var(--ok); color: var(--text); }
   .step.now { border-color: var(--accent); color: var(--text); font-weight: 700; }
@@ -563,9 +612,12 @@
   .count-stepper input::-webkit-inner-spin-button, .count-stepper input::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
   .h3-help { margin-top: 12px; }
   .h3-help summary { color: var(--muted); font-size: .8rem; font-weight: 500; }
-  .prompt-writing { position: relative; overflow: hidden; border-radius: 8px; }
+  .prompt-writing { position: relative; overflow: clip; border-radius: 10px; }
   .prompt-writing textarea { display: block; }
   .prompt-writing.busy textarea { opacity: .5; background: var(--panel-2); padding-top: 30px; }
+  /* The bar runs inside the box's border, its ends following the box's inner corners: a track exactly the inside of
+     the textarea (1px in, corners 9px for its 10px) clips it. */
+  .prompt-progress-track { position: absolute; inset: 1px; border-radius: 9px; overflow: clip; pointer-events: none; z-index: 1; }
   .prompt-progress { position: absolute; top: 0; left: 0; height: 3px; width: 0; background: var(--accent); transition: width 1s linear; }
   .prompt-eta { position: absolute; top: 6px; right: 10px; font-size: .7rem; color: var(--muted); pointer-events: none; }
   @media (prefers-reduced-motion: reduce) { .prompt-progress { transition: none; } }
@@ -715,7 +767,6 @@
   .prompt-copy[hidden] { display: none; }
   .prompt-editor-foot .panel-close { align-self: auto; }
   /* While the LLM writes: a bar along the inside top of the box, and the write button pulsing. */
-  #promptEditorProgress { top: 1px; left: 1px; max-width: calc(100% - 2px); border-radius: 8px 8px 0 0; z-index: 1; }
   @keyframes prompt-writing-icon { 50% { opacity: .35; transform: scale(.82) rotate(-14deg); } }
   .prompt-write.working, #promptEditorEnhance.working { color: var(--accent); opacity: 1; }
   .prompt-write.working svg, #promptEditorEnhance.working svg { animation: prompt-writing-icon 1.1s ease-in-out infinite; }
@@ -773,6 +824,80 @@
   dialog.viewer .viewer-actions > button.plain { flex: 0 1 auto; min-width: 96px; max-width: none; padding: 6px 18px; font-size: .82rem;
     background: var(--panel-2); border: 1px solid var(--line); color: var(--text); }
   .viewer-tools[hidden] { display: none; }
+  /* The grid's button, left of Close: an icon, round as the tools above. */
+  dialog.viewer .viewer-actions > button.viewer-grid { flex: none; width: 44px; padding: 0; background: transparent; color: #ddd; }
+  dialog.viewer .viewer-actions > button.viewer-grid svg { width: 18px; height: 18px; }
+  /* All of a set (or the films), small: as many across as fit, square, the one open now outlined. */
+  .thumb-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(78px, 1fr)); gap: 6px; }
+  /* Smooth to scroll through a hundred: a swipe on a picture scrolls (touch-action), and those out of sight aren't laid
+     out or painted until they come near (content-visibility). */
+  /* clip, not hidden: hidden made each picture a scroll box of its own, and in a dialog (overscroll contained) a swipe
+     starting on one scrolled nothing; only the gaps between them scrolled the grid. */
+  .thumb-grid button { position: relative; display: block; width: 100%; aspect-ratio: 1; margin: 0; padding: 0; overflow: clip;
+    border: 0; border-radius: 8px; background: #000; cursor: pointer; touch-action: pan-y; content-visibility: auto; contain-intrinsic-size: auto 78px; }
+  .thumb-grid-dialog .panel-dialog-body { overflow-y: auto; -webkit-overflow-scrolling: touch; }
+  .thumb-grid button img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  /* Inside the picture, so the grid's edge never clips it. */
+  .thumb-grid button.current { outline: 2px solid var(--accent); outline-offset: -2px; }
+  /* Arrange, in the bottom-left corner on Close's line; lit while arranging. */
+  .thumb-grid-foot { position: relative; display: flex; justify-content: center; }
+  .thumb-grid-arrange { position: absolute; left: 0; top: 50%; transform: translateY(-50%); width: 36px; height: 30px; margin: 0; padding: 0;
+    display: inline-flex; align-items: center; justify-content: center; border: 1px solid var(--line); border-radius: 999px; background: transparent; color: var(--muted); }
+  .thumb-grid-arrange svg { width: 16px; height: 16px; }
+  .thumb-grid-arrange[hidden] { display: none; }
+  .thumb-grid-arrange.on { color: var(--accent); border-color: var(--accent); }
+  /* Arranging: a tap picks one (outlined), which is then dragged; the others glide aside. */
+  /* The one picked up to arrange: a thin dotted outline, inside it as the one open is outlined. */
+  .thumb-grid-dialog.arranging .thumb-grid button.selected { outline: 2px dotted var(--accent); outline-offset: -2px; touch-action: none; }
+  /* While it is dragged, a copy of it floats under the finger; it stays where it will land, outlined. */
+  .thumb-grid-dialog.arranging .thumb-grid button.dragging { outline: 2px dotted var(--accent); outline-offset: -2px; }
+  /* Outside the grid, the copy would take a plain button's look (its colour and padding): none of it, only the picture
+     and a thin dotted outline, darker than the one it was copied from. */
+  .grid-ghost { margin: 0; padding: 0; border: 0; background: #000; border-radius: 8px; overflow: clip; box-shadow: 0 8px 24px rgba(0, 0, 0, .5);
+    opacity: .95; outline: 2px dotted color-mix(in srgb, var(--accent) 55%, #000); outline-offset: -2px; }
+  .grid-ghost .upscaled-badge { display: none; }
+  .grid-ghost img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  .thumb-grid-section { margin: 4px 0 6px; font-size: .78rem; font-weight: 600; color: var(--muted); }
+  .thumb-grid + .thumb-grid-section { margin-top: 12px; }
+  /* Collections: your own batches, above the generated ones, under a header that folds them away. */
+  .collections[hidden] { display: none; }
+  /* Buttons and steppers are pressed, not read: tapping quickly (a stepper's + twice) never selects their text, so no
+     copy menu comes up. Text fields and what is meant to be read keep their selection. */
+  button, [role="button"], .icon-btn, summary, .count-stepper, .count-stepper .mp-field, .pills, .pill {
+    -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
+  /* A button whose request is on its way: it pulses, and can't be pressed again, until the answer is back. */
+  .is-busy { animation: busy-pulse .9s ease-in-out infinite; pointer-events: none; }
+  @keyframes busy-pulse { 0%, 100% { opacity: 1; } 50% { opacity: .4; } }
+  @media (prefers-reduced-motion: reduce) { .is-busy { animation: none; opacity: .6; } }
+  /* Until drawn from a fresh answer (holdOutput), Output's lists keep their place but show nothing: gone at once, and
+     back with a short fade, so the redraw isn't a jolt. */
+  #videos, #imageSets, #collections, #collectionsToggle, #cnav { transition: opacity .25s ease; }
+  body.output-pending #videos, body.output-pending #imageSets, body.output-pending #collections,
+  body.output-pending #collectionsToggle, body.output-pending #cnav { visibility: hidden; opacity: 0; transition: none; }
+  @media (prefers-reduced-motion: reduce) { #videos, #imageSets, #collections, #collectionsToggle, #cnav { transition: none; } }
+  .collections-fold { margin: 0 0 10px; }
+  /* Open, a box of their own where they are: another background and a border, apart from the sets under it. */
+  .collections:not([hidden]) { margin: 0 -11px 12px; padding: 10px 10px 2px; background: var(--bg); border: 1px solid var(--line); border-radius: 12px; }
+  /* A collection folds by its name, with the headings' arrow at the right. */
+  details.image-set.collection > summary.image-set-heading { list-style: none; cursor: pointer; }
+  details.image-set.collection > summary.image-set-heading::-webkit-details-marker { display: none; }
+  details.image-set.collection > summary.image-set-heading::after { content: "\203A"; margin-left: auto; display: inline-block; width: 1em; text-align: center; font-size: 1.2rem; line-height: 1; color: var(--muted);
+    transform: rotate(90deg); transition: transform .15s; }
+  details.image-set.collection:not([open]) > summary.image-set-heading::after { transform: none; }
+  /* Rename: a small pen just after the name, quiet until pointed at. */
+  /* Its name, then at the right the pen beside the chevron, all on one middle line. */
+  .image-set.collection .image-set-heading { justify-content: flex-start; align-items: center; gap: 4px; }
+  .image-set.collection .image-set-heading h3 { flex: 1 1 auto; min-width: 0; margin: 0; line-height: 1.3; }
+  .image-set.collection .image-set-heading .rename-btn { display: inline-flex; align-items: center; justify-content: center; }
+  .image-set.collection .image-set-heading .rename-btn { flex: none; width: auto; height: auto; margin: 0; padding: 3px; border: 0; background: none;
+    color: var(--muted); opacity: .6; }
+  .image-set.collection .image-set-heading .rename-btn:hover, .image-set.collection .image-set-heading .rename-btn:focus-visible { opacity: 1; }
+  .image-set.collection .image-set-heading .rename-btn svg { width: 12px; height: 12px; }
+  .move-new { display: flex; gap: 6px; }
+  .move-new[hidden] { display: none; }
+  .move-new input { flex: 1; min-width: 0; margin: 0; }
+  .move-new button { width: auto; margin: 0; padding: 6px 14px; }
+  .thumb-grid .upscaled-badge { right: 3px; bottom: 3px; width: 16px; height: 16px; padding: 3px; }
   .viewer-tools button { width: 40px; height: 32px; margin: 0; padding: 0; display: inline-flex; align-items: center; justify-content: center; font-size: .78rem; font-weight: 600; border-radius: 999px;
     background: transparent; border: 1px solid var(--line); color: #ddd; }
   .viewer-tools button[hidden] { display: none; }
@@ -869,23 +994,51 @@
   .image-set .meta { color: var(--muted); font-size: .74rem; }
   .meta.loras { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: pointer; }
   .meta.loras.open { white-space: normal; overflow-wrap: anywhere; }
+  /* Pills: what it was made with, on one line; those that tell it apart from its prompt's other runs come first,
+     in its side's colour. A line that holds more says how many, and opens on a tap. */
+  .pills { position: relative; display: flex; flex-wrap: wrap; gap: 4px; max-height: 40px; overflow: hidden; margin-top: 4px; }
+  .pills.more { cursor: pointer; padding-right: 30px; }
+  .pills.open { max-height: none; padding-right: 0; }
+  .pills:not(.open) .pill.spill { display: none; }
+  .pills.video { --pill: #4c8dff; }
+  .pills.image { --pill: #2fbf71; }
+  .pill { flex: none; max-width: 100%; box-sizing: border-box; padding: 0 7px; border: 1px solid var(--line); border-radius: 999px; background: var(--panel-2);
+    color: var(--muted); font-size: .66rem; line-height: 16px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .pill.diff { border-color: color-mix(in srgb, var(--pill) 60%, var(--panel)); background: color-mix(in srgb, var(--pill) 20%, var(--panel));
+    color: color-mix(in srgb, var(--pill) 35%, var(--text)); font-weight: 600; }
+  .pills.more:not(.open)::after { content: attr(data-more); position: absolute; right: 0; top: 0; padding: 0 2px 0 6px; background: var(--panel);
+    color: var(--muted); font-size: .66rem; line-height: 18px; }
+  /* The workflow in silver, always: what made it, before what sets it apart. */
+  .pill.workflow { border-color: color-mix(in srgb, var(--neutral) 55%, var(--panel)); background: color-mix(in srgb, var(--neutral) 16%, var(--panel));
+    color: var(--neutral); font-weight: 600; }
+  /* The preview: one line, 90% of the box, growing out from the middle; the rest behind a tap. */
+  .viewer-meta-details .pills { width: 96%; max-height: 18px; margin: 2px auto 0; justify-content: center; }
+  .viewer-meta-details .pills.open { max-height: none; }
+  .viewer-meta-details .pills.more:not(.open)::after { content: attr(data-more) " ▾"; }
   .image-set-row { display: flex; align-items: center; gap: 8px; margin-top: 5px; }
   /* Pictures wrap beside the buttons, rather than hiding along a line: a set can be a hundred. */
   .image-grid { flex: 1; min-width: 0; display: flex; flex-wrap: wrap; gap: 4px; }
   .image-grid a { display: block; flex: none; }
   .image-grid img { width: 56px; height: 56px; object-fit: cover; border-radius: 6px; display: block; background: #000; }
   .image-set-actions { flex: none; display: flex; justify-content: flex-end; gap: 6px; margin-top: auto; }
+  /* The grid's button at the left of the row, beside the cover; the others stay at the right. */
+  .image-set-actions [data-grid-set], .image-set-actions [data-grid-collection] { margin-right: auto; }
   /* An album: the cover spans the strip and the buttons, so it sits like a single image beside its buttons. */
   .image-set-row.album { align-items: stretch; }
   /* Its picture fills the box rather than sizing it: a tall wallpaper would otherwise make the row as tall as itself. */
   .album-cover { position: relative; flex: none; display: block; width: 92px; height: 92px; overflow: hidden; border-radius: 8px; }
   .album-cover img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; display: block; background: #000; }
-  .album-count { position: absolute; right: 4px; bottom: 4px; padding: 0 6px; border-radius: 999px; background: rgba(0, 0, 0, .7);
+  .album-count { position: absolute; left: 4px; bottom: 4px; padding: 0 6px; border-radius: 999px; background: rgba(0, 0, 0, .7);
     color: #fff; font-size: .7rem; font-weight: 600; line-height: 1.5; pointer-events: none; }
   .album-side { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 6px; }
   .album-strip { display: flex; gap: 4px; overflow-x: auto; scroll-snap-type: x proximity; scrollbar-width: none; overscroll-behavior-x: contain; }
   .album-strip::-webkit-scrollbar { display: none; }
-  .album-strip a { flex: none; scroll-snap-align: start; }
+  .album-strip a { position: relative; flex: none; scroll-snap-align: start; }
+  /* An upscaled picture says so in its bottom-right corner: in the album and in the preview. */
+  .upscaled-badge { position: absolute; right: 4px; bottom: 4px; display: flex; width: 18px; height: 18px; padding: 3px; box-sizing: border-box;
+    border-radius: 999px; background: rgba(0, 0, 0, .7); color: #fff; pointer-events: none; }
+  .upscaled-badge svg { width: 100%; height: 100%; }
+  .upscaled-badge[hidden] { display: none; }
   .album-strip img { width: 56px; height: 56px; object-fit: cover; border-radius: 6px; display: block; background: #000; }
   /* Beside the cover the buttons share what width there is. */
   .image-set-actions button { width: auto; margin: 0; padding: 6px 10px; font-size: .78rem; background: var(--panel-2); border: 1px solid var(--line); color: var(--text); }
@@ -965,6 +1118,11 @@
     background: linear-gradient(90deg, transparent, rgba(255, 255, 255, .38), transparent); transform: translateX(-100%);
     animation: bar-sheen 3.6s ease-in-out infinite; }
   @keyframes bar-sheen { 0% { transform: translateX(-100%); } 55%, 100% { transform: translateX(250%); } }
+  /* The prompt being written: the same light passing along its bar. */
+  .prompt-progress { overflow: clip; }
+  .prompt-progress::after { content: ""; position: absolute; top: 0; bottom: 0; left: 0; width: 40%; pointer-events: none;
+    background: linear-gradient(90deg, transparent, rgba(255, 255, 255, .38), transparent); transform: translateX(-100%);
+    animation: bar-sheen 3.6s ease-in-out infinite; }
   .step { position: relative; }
   .step.now::before { content: ""; position: absolute; top: -3px; left: 0; right: 0; height: 3px; pointer-events: none;
     background: linear-gradient(90deg, transparent, rgba(255, 255, 255, .5), transparent) no-repeat; background-size: 40% 100%;
@@ -972,17 +1130,15 @@
   @keyframes step-sheen { 0% { background-position: -70% 0; } 55%, 100% { background-position: 170% 0; } }
   @media (prefers-reduced-motion: reduce) {
     #runProgressBar::after, #runStripBar::after, #comfyBar::after, #uploadProgressBar::after, #uploadStripBar::after,
-    #queuePendingBar::after, .step.now::before { animation: none; display: none; } }
+    #queuePendingBar::after, .step.now::before, .prompt-progress::after { animation: none; display: none; } }
   .dashboard .card { scroll-margin-top: 8px; }
   .options-col { min-width: 0; }
   .form-actions { margin-top: 16px; }
   .form-actions .btns { margin-top: 0; }
   .form-actions #go { margin-top: 0; }
-  /* Start later: quiet, centred under the button. */
+  /* Add to top of queue and Add to pending: quiet, either side under the button. */
   .go-under { display: flex; justify-content: space-between; align-items: center; gap: 10px; margin-top: 8px; }
-  .go-under .preview-run { margin: 0; font-size: .8rem; color: var(--muted); }
-  .go-under .preview-run input { width: 16px; height: 16px; margin: 0; }
-  .start-later { width: auto; margin: 0 0 0 auto; padding: 2px 8px; background: none; border: 0; color: var(--muted); font-size: .8rem; font-weight: 600; }
+  .start-later { width: auto; margin: 0; padding: 2px 8px; background: none; border: 0; color: var(--muted); font-size: .8rem; font-weight: 600; }
   /* Under the button, centred: leaving an edit puts the job back where it was. */
   #cancelQueueEdit { display: block; margin: 6px auto 0; }
   #cancelQueueEdit[hidden] { display: none; }
@@ -1208,6 +1364,7 @@
     <button type="button" id="switchImage" data-pipeline="image" role="tab">Image<span class="dot on hidden"></span></button>
   </div>
   <div class="top-icons" id="topIcons">
+    <a href="#" id="privateToggle" role="button" aria-pressed="false" aria-label="Private mode (NSFW)" title="Private mode (NSFW): off"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="7.5" cy="15.5" r="4.5"/><path d="M10.7 12.3 21 2M16 7l3 3M18.5 4.5l2 2"/></svg></a>
     <a href="#" id="settingsBtn" role="button" aria-haspopup="dialog" aria-label="Settings" title="Settings"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg></a>
   </div>
 </div>
@@ -1333,6 +1490,7 @@
   <details class="finished" id="finished" hidden open>
     <summary id="finishedTitle" hidden></summary>
     <div class="hint results" id="finishedList"></div>
+    <div class="finished-foot" id="finishedFoot" hidden><button type="button" class="finished-clear" id="finishedClear" title="Clear Finished: what was made stays">Clear</button></div>
   </details>
   </div>
   <div class="run-quota" id="runQuota"></div>
@@ -1617,7 +1775,7 @@
     </select>
     </div>
     <div class="prompt-label-row"><label for="prompt" id="videoPromptLabel">Prompt</label><span class="prompt-actions" hidden><button type="button" id="clearVideoPrompt" aria-label="Clear video prompt">Clear</button><button type="button" class="prompt-write" id="writeVideoPrompt" aria-label="Write video prompt" title="Write prompt" disabled></button></span></div>
-    <div class="prompt-writing" id="videoPromptWriting"><textarea id="prompt" name="prompt" data-prompt inputmode="none" placeholder="e.g. A storm rolls in over the harbour and the fishing boats race home"></textarea><div class="prompt-progress" id="videoPromptProgress" hidden></div><div class="prompt-eta" id="videoPromptEta" role="status" hidden></div></div>
+    <div class="prompt-writing" id="videoPromptWriting"><textarea id="prompt" name="prompt" data-prompt inputmode="none" placeholder="e.g. A storm rolls in over the harbour and the fishing boats race home"></textarea><div class="prompt-progress-track"><div class="prompt-progress" id="videoPromptProgress" hidden></div></div><div class="prompt-eta" id="videoPromptEta" role="status" hidden></div></div>
     <div class="err" id="videoPromptWriteError" role="alert" hidden></div>
     <button type="button" class="generated-prompts" data-generated-prompts hidden></button>
     <div class="hint" id="videoPromptHint">A sentence or two is enough.</div>
@@ -1649,7 +1807,8 @@
 
   <details class="section" id="videoHow">
     <summary class="section-title">Other</summary>
-    <label class="check"><input type="checkbox" name="review" id="review"><span>Let me read the prompts before rendering</span></label>
+    <label class="check" id="videoReviewBox"><input type="checkbox" name="review" id="review"><span>Let me read the prompts before rendering</span></label>
+    <label class="check not-shorts" id="previewRunLabel"><input type="checkbox" name="try_first" id="previewRun"><span>Preview run</span></label>
     <label for="videoSeed">Seed</label>
     <div class="seed-line">
       <input id="videoSeed" name="seed" inputmode="numeric" autocomplete="off" placeholder="Random" pattern="[0-9]*">
@@ -1744,8 +1903,13 @@
       <div class="range-head res-sub"><button type="button" class="res-info" id="imageUpscaleInfo" aria-expanded="false" aria-controls="imageUpscaleHint" title="What it does"><span>Upscale</span><span class="res-info-mark" aria-hidden="true">i</span></button><output class="resolution-size" id="imageUpscaleSize"></output></div>
       <div class="hint res-hint" id="imageUpscaleHint" hidden></div>
       <select id="imageUpscale" name="opt_image_upscale" aria-label="Upscale" disabled></select>
-      <div class="option-row" id="imageUpscaleDenoiseRow" hidden style="margin-top:8px"><label for="imageUpscaleDenoise">Denoise</label>
-        <input type="number" id="imageUpscaleDenoise" name="opt_image_upscale_denoise" min="0.05" max="1" step="0.05" value="0.3" disabled></div>
+      <div class="option-row" id="imageUpscaleDenoiseRow" hidden style="margin-top:8px"><label>Denoise</label>
+        <div class="count-stepper" title="SeedVR2's latent noise: none restores it as it is; a little more draws more detail in.">
+          <button type="button" id="imageUpscaleDenoiseDown" aria-label="0.01 less denoise">−</button>
+          <span class="mp-field" id="imageUpscaleDenoiseValue" aria-live="polite">0</span>
+          <button type="button" id="imageUpscaleDenoiseUp" aria-label="0.01 more denoise">+</button>
+        </div>
+        <input type="hidden" id="imageUpscaleDenoise" name="opt_image_upscale_denoise" value="0" disabled></div>
       <div class="option-row" id="imageUpscaleFactorRow" hidden style="margin-top:8px"><label for="imageUpscaleFactor">Upscale by</label>
         <select id="imageUpscaleFactor" class="option-choice"><option value="2">2×</option><option value="3">3×</option><option value="4">4×</option></select></div>
       <input type="hidden" id="imageUpscaleFinal" name="opt_image_upscale_size" disabled>
@@ -1783,7 +1947,7 @@
       <div id="imageToPromptSlot"></div>
     </div>
     <div class="prompt-label-row"><label for="imagePrompt" id="imagePromptLabel">Prompt</label><span class="prompt-actions" hidden><button type="button" id="clearImagePrompt" aria-label="Clear image prompt">Clear</button><button type="button" class="prompt-write" id="writeImagePrompt" aria-label="Write image prompt" title="Write prompt" disabled></button></span></div>
-    <div class="prompt-writing" id="imagePromptWriting"><textarea id="imagePrompt" name="prompt" data-prompt inputmode="none"></textarea><div class="prompt-progress" id="imagePromptProgress" hidden></div><div class="prompt-eta" id="imagePromptEta" role="status" hidden></div></div>
+    <div class="prompt-writing" id="imagePromptWriting"><textarea id="imagePrompt" name="prompt" data-prompt inputmode="none"></textarea><div class="prompt-progress-track"><div class="prompt-progress" id="imagePromptProgress" hidden></div></div><div class="prompt-eta" id="imagePromptEta" role="status" hidden></div></div>
     <div class="err" id="imagePromptWriteError" role="alert" hidden></div>
     <button type="button" class="generated-prompts" data-generated-prompts hidden></button>
     <div class="hint" id="imagePromptHint"></div>
@@ -1826,6 +1990,7 @@
 <div class="card videos-card" id="videosCard" data-page="output">
   <div class="choose-banner" id="chooseBanner" hidden><span id="chooseBannerText"></span><button type="button" class="ghost" id="chooseCancel">Cancel</button></div>
   <div class="output-filter-line">
+    <button type="button" class="collections-toggle not-shorts" id="collectionsToggle" aria-expanded="false" aria-controls="collections" title="Collections" hidden><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="8" width="14" height="12" rx="2"/><path d="M7 5h12a2 2 0 0 1 2 2v9"/></svg></button>
     <select id="outputFilter" aria-label="Filter output"><option value="">All workflows</option><option value="__nsfw__">NSFW</option></select>
   </div>
   <div class="vhead">
@@ -1836,6 +2001,7 @@
     <button type="button" class="ghost" id="openFolder" title="Open this tab's folder in File Explorer." {% if not can_open_folders %}hidden{% endif %}>Open folder</button>
     <button type="button" class="only-shorts" id="uploadAll" {% if not can_upload %}disabled title="Set the YouTube keys in .env first (run scripts/authorize_youtube.py once)."{% endif %}>Upload all</button>
   </div>
+  <div class="collections not-shorts" id="collections" hidden></div>
   <div class="carousel not-image" id="videos"></div>
   <div class="only-image" id="imageSets"></div>
   <div class="cnav not-image" id="cnav" hidden>
@@ -1851,8 +2017,8 @@
     <button type="button" id="go">Generate</button>
   </div>
   <div class="go-under">
-    <label class="check preview-run not-shorts" id="previewRunLabel"><input type="checkbox" name="try_first" id="previewRun"><span>Preview run</span></label>
-    <button type="button" class="start-later" id="goLater" title="Into the queue, to start when you start it">Start later</button>
+    <button type="button" class="start-later" id="goTop" title="Into the queue ahead of everything waiting">Add to top of queue</button>
+    <button type="button" class="start-later" id="goLater" title="Into Pending, to start when you start it">Add to pending</button>
   </div>
   <button type="button" class="start-later" id="cancelQueueEdit" title="Put it back where it was, unchanged" hidden>Cancel editing</button>
   <div class="err" id="formError" hidden></div>
@@ -1886,6 +2052,7 @@
   </div>
   <label class="settings-check"><input type="checkbox" id="lowPriority"><span>Run generation at lower priority<small>The pipeline and ComfyUI give way to your other programs, so the PC stays responsive while it renders.</small></span></label>
   <label class="settings-check"><input type="checkbox" id="privateMode"><span>Private mode<small>What you make is tagged NSFW, and Output opens on the NSFW filter. Stays on until you turn it off.</small></span></label>
+  <label class="settings-check"><input type="checkbox" id="geminiTitles"><span>Gemini titles<small>Each new film and image set gets a short descriptive title from Gemini, based on its prompt; its files are named by it too. Uses one Gemini call per run. When Gemini refuses the prompt (it blocks NSFW ones), the local model titles it instead, which first frees ComfyUI's models and takes a little longer. If both fail, it keeps its usual title.</small></span></label>
   <label class="settings-check"><input type="checkbox" id="poweroff"><span>Shut down the PC when the queue is empty<small id="poweroffNote">This session only: it isn't saved. You get a minute to cancel it.</small></span></label>
   <div class="settings-group" id="localLlmTitle">Local LLM model</div>
   <div class="settings-row"><select id="localLlmModel" aria-labelledby="localLlmTitle"><option value="gemma-4-12b">Gemma 4 12B (vision)</option><option value="qwen3-14b">Qwen3 14B (text only)</option></select></div>
@@ -1996,7 +2163,7 @@
   <div class="prompt-editor-head"><div class="panel-dialog-title" id="promptEditorTitle">Prompt</div><span class="hint" id="promptEditorCount" aria-live="polite"></span><span class="prompt-editor-turn" id="promptEditorTurn" hidden><button type="button" id="promptEditorPrev" aria-label="Previous prompt" title="Previous">&#8249;</button><button type="button" id="promptEditorNext" aria-label="Next prompt" title="Next">&#8250;</button></span></div>
   <div class="prompt-editor-box">
     <textarea id="promptEditorText" aria-labelledby="promptEditorTitle" spellcheck="true"></textarea>
-    <div class="prompt-progress" id="promptEditorProgress" hidden></div>
+    <div class="prompt-progress-track"><div class="prompt-progress" id="promptEditorProgress" hidden></div></div>
     <div class="prompt-editor-pages" id="promptEditorPages" hidden></div>
   </div>
   <div class="prompt-editor-foot">
@@ -2017,6 +2184,7 @@
 <dialog id="imageViewer" class="viewer" aria-label="Image">
   <img id="viewerImage" alt="">
   <video id="viewerVideo" controls playsinline preload="none" hidden></video>
+  <span class="upscaled-badge" id="viewerUpscaled" role="img" aria-label="Upscaled" hidden></span>
   <div class="viewer-bar">
     <div class="viewer-head"><span class="viewer-count" id="viewerCount"></span><div class="viewer-title" id="viewerTitle"></div><span class="viewer-res" id="viewerRes"></span></div>
     <div class="viewer-meta"><button type="button" id="viewerMeta" aria-expanded="false" aria-controls="viewerMetaDetails"></button><div class="viewer-meta-details" id="viewerMetaDetails" hidden></div></div>
@@ -2033,8 +2201,28 @@
       </div>
     </div>
     <div class="viewer-actions">
+      <button type="button" class="viewer-grid" id="viewerGrid" aria-label="All of them" title="All of them, small: tap one to open it"></button>
       <button type="button" class="plain" id="viewerClose">Close</button>
+      <button type="button" class="viewer-grid" id="viewerMove" aria-label="Move to a collection" title="Move it to a collection"></button>
     </div>
+  </div>
+</dialog>
+<dialog id="pillsMenu" class="panel-dialog upscale-dialog pills-menu" aria-label="Setup">
+  <div class="upscale-head pills-menu-head"><span>Setup</span></div>
+  <div class="pills open" id="pillsMenuBody"></div>
+</dialog>
+<dialog id="moveSheet" class="panel-dialog upscale-dialog move-menu" aria-label="Move to">
+  <div class="upscale-head"><span>Move to</span></div>
+  <div class="upscale-methods" id="moveList"></div>
+  <div class="move-new" id="moveNewRow" hidden><input id="moveNewName" maxlength="80" placeholder="New collection" aria-label="New collection's name"><button type="button" id="moveNewGo">Create</button></div>
+  <div class="err" id="moveError" hidden></div>
+</dialog>
+<dialog id="thumbGrid" class="panel-dialog thumb-grid-dialog" aria-labelledby="thumbGridTitle">
+  <div class="panel-dialog-title" id="thumbGridTitle"></div>
+  <div class="panel-dialog-body" id="thumbGridBody"></div>
+  <div class="thumb-grid-foot">
+    <button type="button" class="thumb-grid-arrange" id="thumbGridArrange" aria-pressed="false" title="Arrange: tap one, then drag it where it goes" aria-label="Arrange"></button>
+    <button type="button" class="panel-close" id="thumbGridClose">Close</button>
   </div>
 </dialog>
 <dialog id="viewerUpscaleBar" class="panel-dialog upscale-dialog" aria-label="Upscale">
@@ -2042,7 +2230,6 @@
   <div class="upscale-methods" id="upscaleMethods">
     <button type="button" data-method="fast" data-for="image" title="Superscale-SP: seconds, and adds no new detail">Fast</button>
     <button type="button" data-method="ultrasharp" data-for="image" title="4x-UltraSharp: seconds, the picture as it is with crisper edges">UltraSharp</button>
-    <button type="button" data-method="usdu" data-for="image" title="Ultimate SD Upscale: 4x-UltraSharp, then the set's own model redraws it in tiles">Ultimate SD</button>
     <button type="button" data-method="seedvr2" data-for="image" title="SeedVR2: minutes, and draws finer detail">SeedVR2</button>
     <button type="button" data-method="vsr" data-for="film" title="NVIDIA RTX Video Super Resolution">RTX VSR</button>
     <button type="button" data-method="latent" data-for="film" title="H3 latent upscaler: the film is made again on the same seeds, then upscaled and refined">Latent</button>
@@ -2050,6 +2237,11 @@
 </dialog>
 <dialog id="upscaleSettings" class="panel-dialog upscale-dialog upscale-settings" aria-label="Upscale settings">
   <div class="upscale-head"><span id="upscaleTitle">Upscale</span><span class="upscale-note" id="upscaleSettingsNote"></span></div>
+  <div class="upscale-row" id="upscaleMethodRow" hidden>
+    <select id="upscaleMethodChoice" aria-label="Upscale method">
+      <option value="fast">Fast (Superscale-SP)</option><option value="ultrasharp">UltraSharp</option><option value="seedvr2">SeedVR2</option>
+    </select>
+  </div>
   <div class="upscale-row" data-show="vsr">
     <select id="filmUpscaleScale" aria-label="Scale" title="How many times bigger the film is made.">
       <option value="1.5">1.5×</option><option value="2" selected>2×</option><option value="3">3×</option><option value="4">4×</option>
@@ -2070,20 +2262,18 @@
     </div>
   </div>
   <div class="upscale-row hint" data-show="latent" id="filmLatentHint"></div>
-  <div class="upscale-row" data-show="usdu">
-    <select id="viewerUpscaleDenoise" aria-label="Denoise" title="How much the set's model draws again: 0.3 is subtle, 0.45 a heavy rework.">
-      <option value="0.25">Denoise 0.25 · subtle</option><option value="0.3">Denoise 0.3</option><option value="0.35">Denoise 0.35</option>
-      <option value="0.45">Denoise 0.45 · heavy</option>
-    </select>
-  </div>
+
   <div class="upscale-row" data-show="fast ultrasharp">
     <select id="viewerUpscaleStrength" aria-label="Upscaler mix" title="How much of the upscaler's result is used, the rest a plain resize. Lower tones down texture the upscaler invents.">
       <option value="1">Upscaler 100%</option><option value="0.75">Upscaler 75%</option><option value="0.5">Upscaler 50%</option>
     </select>
   </div>
   <div class="upscale-row" data-show="seedvr2">
-    <select id="viewerUpscaleSize" aria-label="Resolution" title="The shorter side SeedVR2 makes it, as in the Krea 2 workflow.">
-      <option value="0">2×</option><option value="720">720p</option><option value="1080">1080p</option><option value="1440">1440p</option><option value="2160">4K</option>
+    <select id="viewerUpscaleSize" aria-label="Resolution" title="How big SeedVR2 makes it: 2×, 3× or 4× its size (up to 2560px on its shorter side), or its shorter side as in the Krea 2 workflow.">
+      <option value="x2">2×</option><option value="x3">3×</option><option value="x4">4×</option><option value="720">720p</option><option value="1080">1080p</option><option value="1440">1440p</option><option value="2160">4K</option>
+    </select>
+    <select id="viewerUpscaleDenoise" aria-label="Denoise" title="SeedVR2's latent noise: none restores it as it is; a little more draws more detail in and smooths what it would overdo.">
+      <option value="0">Denoise 0</option><option value="0.01">Denoise 0.01</option><option value="0.02">Denoise 0.02</option><option value="0.03">Denoise 0.03</option><option value="0.04">Denoise 0.04</option><option value="0.05">Denoise 0.05</option>
     </select>
   </div>
   <div class="upscale-row">
@@ -2091,37 +2281,34 @@
     <button type="button" id="upscaleGo" title="Adds it to the queue">Add to queue</button>
   </div>
 </dialog>
-<dialog id="queueUpscaleSettings" class="panel-dialog upscale-dialog upscale-settings" aria-label="Edit upscale settings">
-  <div class="upscale-head"><span>Edit upscale</span></div>
-  <div class="upscale-row" id="queueUpscaleMethodRow">
-    <select id="queueUpscaleMethod" aria-label="Upscale method">
-      <option value="fast">Superscale-SP</option><option value="ultrasharp">4x-UltraSharp</option><option value="seedvr2">SeedVR2</option>
-      <option value="usdu">Ultimate SD Upscale</option>
-    </select>
-  </div>
-  <div class="upscale-row" id="queueUpscaleStrengthRow">
-    <label>Strength <input id="queueUpscaleStrength" type="number" min="0" max="1" step="0.01"></label>
-  </div>
-  <div class="upscale-row" id="queueUpscaleResolutionRow">
-    <select id="queueUpscaleResolution" aria-label="Resolution">
-      <option value="0">2×</option><option value="720">720p</option><option value="1080">1080p</option><option value="1440">1440p</option><option value="2160">4K</option>
-    </select>
-  </div>
-  <div class="upscale-row" id="queueUpscaleFilmRow">
-    <label>Scale <input id="queueUpscaleScale" type="number" min="1" max="4" step="any"></label>
-    <select id="queueUpscaleQuality" aria-label="Quality">
-      <option value="HIGHBITRATE_HIGH">High bitrate · high</option><option value="HIGHBITRATE_ULTRA">High bitrate · ultra</option>
-      <option value="STREAMING_ULTRA">Streaming · ultra</option><option value="ULTRA">Ultra</option>
-    </select>
-  </div>
-  <div class="upscale-row">
-    <button type="button" id="queueUpscaleCancel">Cancel editing</button>
-    <button type="button" id="queueUpscaleSave">Save to queue</button>
-  </div>
-</dialog>
 
 <script>
 const $ = id => document.getElementById(id);
+// Feedback while a click's request is on its way (delete, move, rename, a queue's buttons...): the button pressed
+// pulses until the answer is back. Only for what a click sends, so the polls and estimates that run by themselves don't.
+let lastPressed = null;
+const QUIET_REQUESTS = /\/api\/(status|estimate)/;
+document.addEventListener('click', e => {
+  const button = e.target.closest && e.target.closest('button, a[role="button"], .icon-btn');
+  // Steppers (and anything marked data-no-busy) take press after press: each sends its own, none waits on the last.
+  if (button && (button.closest('.count-stepper') || button.closest('[data-no-busy]'))) { lastPressed = null; return; }
+  if (button) lastPressed = { el: button, at: performance.now() };
+}, true);
+function markBusy(el, by) {
+  el._busy = Math.max(0, (el._busy || 0) + by);
+  el.classList.toggle('is-busy', el._busy > 0);
+  el.setAttribute('aria-busy', String(el._busy > 0));
+}
+if (typeof window.fetch === 'function') {
+  const plainFetch = window.fetch.bind(window);
+  window.fetch = (url, options = {}) => {
+    const method = String(options.method || 'GET').toUpperCase();
+    const el = lastPressed && performance.now() - lastPressed.at < 1000 && method !== 'GET' && !QUIET_REQUESTS.test(String(url)) ? lastPressed.el : null;
+    if (!el) return plainFetch(url, options);
+    markBusy(el, 1);
+    return plainFetch(url, options).finally(() => markBusy(el, -1));
+  };
+}
 const SETTINGS = {{ settings|tojson }};
 // The workflow a side opens on: its default if one is set (built-in is '@builtin'), else null for the one last used.
 function defaultWorkflow(side) {
@@ -2297,7 +2484,8 @@ document.addEventListener('click', async e => {
 // Wired at start-up, once the forms and their names are all known.
 function wirePresets() {
   for (const side of Object.keys(SIDE_FORMS)) {
-    $(`${side}Preset`).addEventListener('change', e => { if (e.target.value) applyPreset(side, e.target.value); });
+    // Another preset is another start: the prompt goes with the old one.
+    $(`${side}Preset`).addEventListener('change', e => { if (e.target.value) { clearPrompt(side); applyPreset(side, e.target.value); } });
     // Not for the picker itself: picking fires "input" before "change", and checking then put it back to None
     // before the preset it named was set.
     for (const kind of ['change', 'input']) $(SIDE_FORMS[side]).addEventListener(kind, e => { if (e.target !== $(`${side}Preset`)) syncPresets(side); });
@@ -2439,7 +2627,8 @@ $('outputFilter').addEventListener('change', () => {
   renderVideos();
   renderImageSets();
 });
-function visibleFilms() { return filtered(lastVideos[outputFilter === NSFW_FILTER ? 'video' : folder] || []); }
+// The films Output lists: what moved to a collection is only in its collection.
+function visibleFilms() { return filtered(lastVideos[outputFilter === NSFW_FILTER ? 'video' : folder] || []).filter(v => !v.collection); }
 function renderVideos() {
   syncFilter(pipeline === 'image' ? imageSets : (lastVideos[folder] || []));
   const videos = visibleFilms();
@@ -2451,7 +2640,7 @@ function renderVideos() {
     $('uploadAll').textContent = busy ? 'Queue upload all' : 'Upload all';
   }
 
-  const key = folder + '|' + outputFilter + '|' + !!choosingFor + '|' + JSON.stringify(videos.map(v => [v.name, v.mtime, v.topic, v.title, v.model, v.resolution, v.duration, v.size_mb, v.loras, v.h3_mode, v.h3_creativity]));
+  const key = folder + '|' + outputFilter + '|' + !!choosingFor + '|' + JSON.stringify(videos.map(v => [v.name, v.mtime, v.topic, v.title, v.model, v.resolution, v.duration, v.size_mb, v.loras, v.h3_mode, v.h3_creativity, v.pills, v.nsfw]));
   // Keep players that already exist so a poll does not interrupt playback.
   if ($('videos').dataset.key !== key) {
     const was = (slides()[currentSlide()] || {}).dataset;
@@ -2461,6 +2650,7 @@ function renderVideos() {
       : videos.length ? videos.map(v => filmHtml(v, folder)).join('')
       : `<div class="empty">${folder === 'uploaded' ? 'Nothing uploaded yet.' : folder === 'video' ? 'No films yet. Press Generate to make one.' : 'No videos waiting. Press Generate to make one.'}</div>`;
     $('videos').dataset.key = key;
+    requestAnimationFrame(() => markPillOverflow($('videos')));
     const back = was && slides().findIndex(s => s.dataset.name === was.name);
     if (back > 0) goToSlide(back, false);
   }
@@ -2905,6 +3095,7 @@ function formatBytes(n) {
 }
 async function fillSettings() {
   $('lowPriority').checked = !!SETTINGS.low_priority;
+  $('geminiTitles').checked = !!SETTINGS.gemini_titles;
   $('h3Model').value = SETTINGS.h3_model;
   $('localLlmModel').value = SETTINGS.local_llm_model || SETTINGS.h3_model;
   reserveGb = reserveSaved();
@@ -2942,6 +3133,7 @@ $('settingsBtn').addEventListener('click', e => {
 $('settingsClose').addEventListener('click', () => settingsDialog.close());
 settingsDialog.addEventListener('click', e => { if (e.target === settingsDialog) settingsDialog.close(); });
 $('lowPriority').addEventListener('change', () => saveSettings({ low_priority: $('lowPriority').checked }));
+$('geminiTitles').addEventListener('change', () => saveSettings({ gemini_titles: $('geminiTitles').checked }));
 $('h3Model').addEventListener('change', () => saveSettings({ h3_model: $('h3Model').value }));
 $('localLlmModel').addEventListener('change', () => saveSettings({ local_llm_model: $('localLlmModel').value }));
 $('editPreset').addEventListener('change', () => saveSettings({ edit_preset: $('editPreset').value }));
@@ -3166,6 +3358,7 @@ function syncSize() {
   if (!custom) $('size').value = fixed || shape || stepped || note ? sides.join('x') : '';
   videoBase = sides;
   const base = sides ? sides[0] * sides[1] / 1e6 : area / 1e6;
+  videoOffMp = sides ? base : null;
   showVideoStepper(base, 0.1, most / 1e6, sides, null, note, false);
 }
 function showVideoStepper(mp, least, top, sides, end, note, on) {
@@ -3185,7 +3378,18 @@ function showVideoStepper(mp, least, top, sides, end, note, on) {
 // With latent upscale on, the stepper sets the size it ends at, within what the workflow makes well, and the size the
 // clip is made at follows: a quarter of the pixels (twice as big each way). A screen is where it ends unless stepped.
 const LATENT_AREA = 4, LATENT_LEAST = 0.2;
+// Where latent upscale may end. The workflow's own limit (H3's 960x544) is what it *makes* a clip at in a sensible time;
+// the refine is one to three steps, so what holds it back is memory, which follows pixels times frames. A clip at that
+// limit and the model's longest length is known to fit: half as much again is allowed, spread over the longest clip
+// chosen, up to the 4 MP the upscaler takes.
+const LATENT_MOST = 4, LATENT_HEADROOM = 1.5;
+function latentTop(most) {
+  const [, longestChosen] = videoClips(), [, longestModel] = modelClips();
+  const budget = most / 1e6 * longestModel * LATENT_HEADROOM;
+  return Math.floor(Math.min(LATENT_MOST, Math.max(most / 1e6, budget / Math.max(1, longestChosen))) * 10) / 10;
+}
 let videoMadeAt = null;  // With latent upscale on: the megapixels the clip is made at, for Off to drop back to
+let videoOffMp = null, videoLatentWas = 'Off';  // With it off: the resolution's megapixels, for On to start from
 function syncUpscaledSize(preset, custom, fixed, shape, most) {
   let ratio, exact = null;
   if (fixed) exact = preset.split('x').map(Number);
@@ -3195,12 +3399,15 @@ function syncUpscaledSize(preset, custom, fixed, shape, most) {
   else { const [w, h] = videoImageShape(); ratio = w / h; }
   // Typed, it is the size the clip is made at, and the end follows it (four times the pixels) until stepped.
   const typedMp = custom && exact ? exact[0] * exact[1] / 1e6 : null;
-  const top = Math.floor(most / 1e5) / 10, exactMp = exact ? exact[0] * exact[1] / 1e6 : null;
-  const wanted = Number($('videoLatentMp').value) || (typedMp ? typedMp * LATENT_AREA : exactMp) || top;
+  const top = latentTop(most), exactMp = exact ? exact[0] * exact[1] / 1e6 : null;
+  const wanted = Number($('videoLatentMp').value) || (typedMp ? typedMp * LATENT_AREA : exactMp) || Math.min(top, 1);
   const mp = Math.min(top, Math.max(LATENT_LEAST, Math.round(wanted * 10) / 10));
-  const note = wanted > top + 0.05 ? `Held to ${top.toFixed(1)} MP: past what this workflow makes well, it would very likely run out of memory.` : '';
+  const longest = videoClips()[1];
+  const note = wanted > top + 0.05
+    ? `Held to ${top.toFixed(1)} MP: refining ${longest}s clips any bigger would very likely run out of memory on this card. Shorter clips can go bigger.` : '';
   $('videoLatentMp').value = mp.toFixed(1);
-  const madeAt = Math.max(0.1, mp / LATENT_AREA), sides = videoSized(ratio, madeAt * 1e6);
+  // Made at a quarter of where it ends, within what the workflow makes in a sensible time.
+  const madeAt = Math.min(most / 1e6, Math.max(0.1, mp / LATENT_AREA)), sides = videoSized(ratio, madeAt * 1e6);
   const end = exact && !custom && Math.abs(mp - exactMp) < 0.05 ? exact : videoSized(ratio, mp * 1e6);
   // The size it's made at goes as the size, and shows in the box (not while it's being typed in).
   if (!custom || document.activeElement !== $('size')) $('size').value = sides.join('x');
@@ -3208,7 +3415,12 @@ function syncUpscaledSize(preset, custom, fixed, shape, most) {
   videoMadeAt = madeAt;
   showVideoStepper(mp, LATENT_LEAST, top, sides, end, note, true);
 }
-$('sizePreset').addEventListener('change', () => { videoMegapixels = null; $('videoLatentMp').value = ''; });
+$('sizePreset').addEventListener('change', () => {
+  // Custom size starts from the size the clip was being made at; with latent upscale on, where it ends stays.
+  if ($('sizePreset').value === 'custom' && videoBase) { $('size').value = videoBase.join('x'); videoMegapixels = null; return; }
+  videoMegapixels = null;
+  $('videoLatentMp').value = '';
+});
 $('size').addEventListener('input', () => { if (videoLatentOn()) $('videoLatentMp').value = ''; });
 $('size').addEventListener('blur', () => syncSize());
 // Latent upscale, under Resolution: the clip is made at the size above, its latent made this big, then refined.
@@ -3243,6 +3455,8 @@ function syncVideoLatent(options) {
   $('videoLatentNote').hidden = !unavailable;
   if (!preset) {
     $('videoLatentUpscale').innerHTML = '<option>Off</option>';
+    // Its list is gone now: a workflow that has it fills it again.
+    box.dataset.key = '';
     $('videoLatentCustom').hidden = true;
     $('videoLatentSize').textContent = '';
     showResHint('videoLatentInfo', '');
@@ -3288,9 +3502,13 @@ function showVideoLatent() {
 }
 // Latent upscale off: back to the size the clip was being made at.
 $('videoLatentUpscale').addEventListener('change', () => {
-  if ($('videoLatentUpscale').value === 'Off' && videoMadeAt != null) {
+  const now = $('videoLatentUpscale').value;
+  if (now === 'Off' && videoMadeAt != null) {
     videoMegapixels = videoMadeAt;
   }
+  // On: made at the resolution there is now, ending four times the pixels (within what the workflow makes well).
+  if (videoLatentWas === 'Off' && now !== 'Off') $('videoLatentMp').value = videoOffMp != null ? (videoOffMp * LATENT_AREA).toFixed(2) : '';
+  videoLatentWas = now;
   videoMadeAt = null;
   syncSize();
   rememberLatent();
@@ -4098,6 +4316,9 @@ const MP_STEP = 0.1;
 // stepper sets the size it ends at. A pixel count that would very likely run out of memory is held to the nearest below.
 let imageStep = null;  // The megapixels the stepper set for the resolution, or null for it as picked
 let imageMadeAt = null;  // With Upscale on: the megapixels it is made at, for Upscale off to drop back to
+let imageOffMp = null;  // With Upscale off: the megapixels of the resolution, for Upscale on to start from
+let imageUpscaleWas = 'Off';
+let imageShown = null;  // The size it is made at, as last shown: Exact size starts from it
 function imageUpscaleOn() {
   return !$('imageUpscaleBox').hidden && !$('imageUpscale').disabled && !!$('imageUpscale').value && $('imageUpscale').value !== 'Off';
 }
@@ -4184,6 +4405,8 @@ function syncMegapixels() {
   $('imagePixelSize').textContent = r.sides ? r.sides.join('×') : '';
   $('imageUpscaleSize').textContent = r.end ? r.end.join('×') : '';
   if (r.on && r.sides) imageMadeAt = r.base;
+  if (!r.on && r.sides) imageOffMp = r.sides[0] * r.sides[1] / MEGAPIXEL;
+  if (r.sides) imageShown = r.sides;
   $('imageMegapixelsValue').innerHTML = `${r.mp.toFixed(1)}<span class="mp-unit">MP</span>`;
   $('imageMegapixelsValue').title = r.on ? 'The size it ends at; the size it is made at follows. Tap for the resolution as picked' : 'Tap for the resolution as picked';
   $('imageMegapixelsValue').setAttribute('aria-label', r.on ? 'Megapixels it ends at' : 'Megapixels');
@@ -4216,7 +4439,9 @@ $('imageMegapixelsValue').addEventListener('click', () => {
 $('imageSize').addEventListener('input', () => { if (imageUpscaleOn()) $('imageUpscaleMp').value = ''; });
 $('imageSize').addEventListener('blur', () => syncImageSize());
 $('imageAspect').addEventListener('change', () => {
-  if (/^\d+x\d+$|^custom$/.test($('imageAspect').value)) { imageStep = null; $('imageUpscaleMp').value = ''; }
+  // Exact size starts from the size it was being made at, so nothing jumps; with an upscale, where it ends stays.
+  if ($('imageAspect').value === 'custom' && imageShown) { $('imageSize').value = imageShown.join('x'); imageStep = null; return; }
+  if (/^\d+x\d+$/.test($('imageAspect').value)) { imageStep = null; $('imageUpscaleMp').value = ''; }
 });
 function syncImageSize() {
   const takes = imageTakes();
@@ -4356,15 +4581,14 @@ const IMAGE_UPSCALE_OPTIONS = ['image_upscale', 'image_upscale_denoise', 'image_
 const IMAGE_UPSCALE_KEY = 'gen-center.imageUpscale';
 const IMAGE_UPSCALE_HINTS = {
   Off: 'Each image is made at the resolution, as it is.',
-  'Ultimate SD': "Made at the resolution, then 4x-UltraSharp enlarges it and the set's own model redraws it in tiles at this denoise, up to the size the stepper sets. Tiles keep a big image within the card.",
   UltraSharp: '4x-UltraSharp: the picture as it is, enlarged to the size the stepper sets, with crisper edges. Seconds.',
-  SeedVR2: 'SeedVR2 draws finer detail as it enlarges to the size the stepper sets (up to 4K on its shorter side). Minutes.',
+  SeedVR2: 'SeedVR2 draws finer detail as it enlarges to the size the stepper sets (up to 4K on its shorter side). Minutes. Denoise adds noise as it does: 0 restores it as it is, more draws more in.',
 };
 function savedImageUpscale() {
   try { return JSON.parse(localStorage.getItem(IMAGE_UPSCALE_KEY) || '{}') || {}; } catch (e) { return {}; }
 }
 function rememberImageUpscale() {
-  try { localStorage.setItem(IMAGE_UPSCALE_KEY, JSON.stringify({ method: $('imageUpscale').value, denoise: $('imageUpscaleDenoise').value, factor: $('imageUpscaleFactor').value })); } catch (e) {}
+  try { localStorage.setItem(IMAGE_UPSCALE_KEY, JSON.stringify({ method: $('imageUpscale').value, seedvr2Denoise: $('imageUpscaleDenoise').value, factor: $('imageUpscaleFactor').value })); } catch (e) {}
 }
 function syncImageUpscale(options) {
   const choice = options.find(option => option.id === 'image_upscale'), box = $('imageUpscaleBox');
@@ -4378,7 +4602,8 @@ function syncImageUpscale(options) {
       box.dataset.key = key;
       $('imageUpscale').innerHTML = choice.choices.map(value => `<option>${esc(value)}</option>`).join('');
       $('imageUpscale').value = choice.choices.includes(was) ? was : choice.default;
-      if (first && saved.denoise) $('imageUpscaleDenoise').value = saved.denoise;
+      // SeedVR2's own: a denoise kept from Ultimate SD's means something else, so it isn't taken.
+      if (first && saved.seedvr2Denoise) setImageUpscaleDenoise(saved.seedvr2Denoise);
       if (first && saved.factor) $('imageUpscaleFactor').value = saved.factor;
     }
   }
@@ -4387,23 +4612,46 @@ function syncImageUpscale(options) {
 }
 function showImageUpscale() {
   const method = $('imageUpscale').value;
-  // Only what goes with the upscale chosen: Ultimate SD's denoise, SeedVR2's 2×, 3× or 4×.
-  $('imageUpscaleDenoiseRow').hidden = method !== 'Ultimate SD';
+  // Only what goes with the upscale chosen: SeedVR2's 2×, 3× or 4× and its denoise.
+  $('imageUpscaleDenoiseRow').hidden = method !== 'SeedVR2';
   $('imageUpscaleFactorRow').hidden = method !== 'SeedVR2';
   showResHint('imageUpscaleInfo', IMAGE_UPSCALE_HINTS[method] || '');
 }
 // Upscale off: back to the size it was being made at, 500×1000 for an upscale that ended at 1000×2000.
 $('imageUpscale').addEventListener('change', () => {
-  if ($('imageUpscale').value === 'Off' && imageMadeAt != null) {
+  const now = $('imageUpscale').value;
+  if (now === 'Off' && imageMadeAt != null) {
     imageStep = imageMadeAt;
     $('imageMegapixels').dataset.sent = $('imageMegapixels').value;
   }
+  // Upscale on: made at the resolution there is now, ending as many times bigger as this upscale goes, not at where
+  // the last one ended.
+  if (imageUpscaleWas === 'Off' && now !== 'Off') $('imageUpscaleMp').value = imageOffMp != null ? (imageOffMp * imageUpscaleArea()).toFixed(2) : '';
+  imageUpscaleWas = now;
   imageMadeAt = null;
   showImageUpscale();
   rememberImageUpscale();
   syncImageSize();
 });
-$('imageUpscaleDenoise').addEventListener('change', rememberImageUpscale);
+// SeedVR2's denoise in Generate: 0 to 0.05, a hundredth at a time, 0 unless set. What was kept from before is held
+// to that: Ultimate SD's 0.2 or the 0.1 of a wider range would be far more than these go to.
+const IMAGE_DENOISE_MOST = 0.05, IMAGE_DENOISE_STEP = 0.01;
+function setImageUpscaleDenoise(value) {
+  const hundredths = Math.min(Math.round(IMAGE_DENOISE_MOST / IMAGE_DENOISE_STEP), Math.max(0, Math.round((+value || 0) / IMAGE_DENOISE_STEP)));
+  const denoise = +(hundredths * IMAGE_DENOISE_STEP).toFixed(2);
+  $('imageUpscaleDenoise').value = String(denoise);
+  $('imageUpscaleDenoiseValue').textContent = String(denoise);
+  $('imageUpscaleDenoiseDown').disabled = hundredths <= 0;
+  $('imageUpscaleDenoiseUp').disabled = denoise >= IMAGE_DENOISE_MOST;
+}
+for (const [id, by] of [['imageUpscaleDenoiseDown', -1], ['imageUpscaleDenoiseUp', 1]]) {
+  $(id).addEventListener('click', () => {
+    setImageUpscaleDenoise(+$('imageUpscaleDenoise').value + by * IMAGE_DENOISE_STEP);
+    rememberImageUpscale();
+    queuePlan();
+  });
+}
+setImageUpscaleDenoise(0);
 // Another factor keeps the size it's made at, and ends that many times bigger.
 $('imageUpscaleFactor').addEventListener('change', () => {
   if (imageMadeAt != null) $('imageUpscaleMp').value = (imageMadeAt * imageUpscaleArea()).toFixed(2);
@@ -4513,6 +4761,90 @@ function h3Description(item) {
   const creativity = item.h3_creativity;
   return `OpenH3-IR: ${mode}${creativity ? ` · ${creativity.charAt(0).toUpperCase() + creativity.slice(1)}` : ''}`;
 }
+// What it was made with, as pills on one line (core/pills.py); those that tell it apart from what its prompt
+// made besides come first, in its side's colour. A tap shows them all when they don't fit.
+function pillsHtml(pills) {
+  // The workflow first and always in colour; the others in colour when they tell it apart from its siblings.
+  return (pills || []).map(p => `<span class="pill${p.kind === 'workflow' ? ' workflow' : ''}${p.diff ? ' diff' : ''}">${esc(p.text)}</span>`).join('');
+}
+function pillsLine(pills, side) {
+  return pills && pills.length ? `<div class="pills ${side}" role="button" tabindex="0" title="Tap to show all">${pillsHtml(pills)}</div>` : '';
+}
+// Which lines of pills hold more than fits (two lines in Output, one in the preview): they say how many more, and a
+// tap opens them.
+function markPillOverflow(root) {
+  if (!root || !root.querySelectorAll) return;
+  for (const line of root.querySelectorAll('.pills')) fitPills(line);
+}
+// Fills its lines in order, but a pill too long for what is left steps aside (into the "+N") and the shorter ones
+// after it take the room: a long pill second no longer leaves the first alone on its line. Measured once without the
+// room the "+N" takes, then again with it if anything stepped aside.
+function fitPills(line) {
+  if (line.classList.contains('open')) return;
+  const pills = [...line.children], lines = +(line.dataset.lines || 2);
+  const pass = () => {
+    for (const pill of pills) pill.classList.remove('spill');
+    const tops = new Set();
+    let hidden = 0;
+    for (const pill of pills) {
+      const top = pill.offsetTop;
+      if (!tops.has(top) && tops.size >= lines) { pill.classList.add('spill'); hidden++; } else tops.add(top);
+    }
+    return hidden;
+  };
+  line.classList.remove('more');
+  let hidden = pass();
+  if (hidden) { line.classList.add('more'); hidden = pass(); }
+  line.classList.toggle('more', hidden > 0);
+  line.dataset.more = hidden ? `+${hidden}` : '';
+}
+document.addEventListener('click', e => {
+  const line = e.target.closest && e.target.closest('.pills');
+  if (!line) return;
+  if (line.closest('.viewer-meta-details')) {
+    if (line.classList.contains('more')) openPillsMenu(line);
+    return;
+  }
+  if (!line.classList.contains('more') && !line.classList.contains('open')) return;
+  line.classList.toggle('open');
+  if (!line.classList.contains('open')) fitPills(line);
+});
+// The preview's pills, all of them, in a box growing over its buttons as Move's menu does.
+function openPillsMenu(line) {
+  const body = $('pillsMenuBody');
+  body.className = `pills ${line.classList.contains('image') ? 'image' : 'video'} open`;
+  body.innerHTML = line.innerHTML;
+  for (const pill of body.querySelectorAll ? body.querySelectorAll('.spill') : []) pill.classList.remove('spill');
+  const box = $('pillsMenu');
+  box.classList.remove('closing');
+  if (!box.open) box.showModal();
+  placeOverPills(box, line);
+}
+// Grown up out of the pill line: as wide as the preview's bar, its bottom on the line's, over it; never off the top.
+function placeOverPills(box, line) {
+  const bar = document.querySelector('#imageViewer .viewer-bar').getBoundingClientRect(), at = line.getBoundingClientRect();
+  Object.assign(box.style, { margin: '0', inset: 'auto', height: 'auto', minHeight: '0', left: `${bar.left}px`, width: `${bar.width}px` });
+  box.style.top = `${Math.max(8, at.bottom + 4 - box.getBoundingClientRect().height)}px`;
+}
+function closePillsMenu() {
+  const box = $('pillsMenu');
+  if (!box.open || box.classList.contains('closing')) return;
+  box.classList.add('closing');
+  setTimeout(() => { box.close(); box.classList.remove('closing'); }, 150);
+}
+// A tap anywhere on it or around it closes it; Esc too.
+$('pillsMenu').addEventListener('click', closePillsMenu);
+$('pillsMenu').addEventListener('cancel', e => { e.preventDefault(); closePillsMenu(); });
+// How a film's clips connect, in shorthand: the long names are Generate's "How clips connect".
+const CONNECTIONS = { chain: 'Continuous take', image: 'Separate moments', director: 'H3 Motion Director',
+  multishot: 'H3 Multishot', infinite: 'H3 Infinite continuation' };
+function connectionDescription(item) {
+  return item.connection ? `Clips: ${CONNECTIONS[item.connection] || item.connection}` : '';
+}
+function connectionLine(item) {
+  const text = connectionDescription(item);
+  return text ? `<div class="meta">${esc(text)}</div>` : '';
+}
 function upscaledLine(item) {
   return item.upscaled ? `<div class="meta">Upscaled: ${esc(item.upscaled)}</div>` : '';
 }
@@ -4545,6 +4877,10 @@ const ICONS = {
   eraser: ICON_SVG('<path d="M7 20h13"/><path d="M4.6 15.4 14.5 5.5a2 2 0 0 1 2.8 0l2.2 2.2a2 2 0 0 1 0 2.8L11 19H7.4z"/><path d="m9 11 5 5"/>'),
   brief: ICON_SVG('<path d="M6 3h9l4 4v14H6z"/><path d="M14 3v5h5M9 13h7M9 17h5"/>'),
   upscale: ICON_SVG('<path d="M4 10V4h6M20 14v6h-6"/><path d="M4 4l6 6M20 20l-6-6"/>'),
+  move: ICON_SVG('<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><path d="M10 13h6M13.5 10.5 16 13l-2.5 2.5"/>'),
+  plus: ICON_SVG('<path d="M12 5v14M5 12h14"/>'),
+  arrange: ICON_SVG('<path d="M12 3v18M3 12h18"/><path d="m9 6 3-3 3 3M9 18l3 3 3-3M6 9l-3 3 3 3M18 9l3 3-3 3"/>'),
+  grid: ICON_SVG('<rect x="4" y="4" width="6.5" height="6.5" rx="1.2"/><rect x="13.5" y="4" width="6.5" height="6.5" rx="1.2"/><rect x="4" y="13.5" width="6.5" height="6.5" rx="1.2"/><rect x="13.5" y="13.5" width="6.5" height="6.5" rx="1.2"/>'),
 };
 $('writeVideoPrompt').innerHTML = $('writeImagePrompt').innerHTML = ICONS.enhanced;
 for (const [id, icon] of Object.entries({ viewerDownload: 'download', viewerDelete: 'trash', promptDetailYours: 'brief', promptEditorCopy: 'copy', promptEditorClear: 'eraser', promptEditorEnhance: 'enhanced', viewerVariations: 'config', viewerUpscale: 'upscale',
@@ -4576,20 +4912,23 @@ async function tagOutput(kind, id, nsfw, button) {
     button.disabled = false;
   }
 }
+function upscaledBadge(method) {
+  return `<span class="upscaled-badge" role="img" aria-label="${esc(`Upscaled: ${method}`)}">${ICONS.upscale}</span>`;
+}
 function imageSetHtml(set) {
   const id = encodeURIComponent(set.id);
-  const picture = (p, extra = '') => `<a href="/image-runs/${id}/files/${p.position}?v=${p.version}" data-view-set="${esc(set.id)}" data-view-position="${p.position}" title="${esc(p.title)}"${extra}><img loading="lazy" alt="${esc(p.title)}" src="/image-runs/${id}/thumbnails/${p.position}?v=${p.version}">`;
-  const all = set.images.length > 1 ? `Download all ${set.images.length}` : 'Download';
+  const picture = (p, extra = '') => `<a href="/image-runs/${id}/files/${p.position}?v=${p.version}" data-view-set="${esc(set.id)}" data-view-position="${p.position}" title="${esc(p.title)}"${extra}><img loading="lazy" alt="${esc(p.title)}" src="/image-runs/${id}/thumbnails/${p.position}?v=${p.version}">${p.upscaled ? upscaledBadge(p.upscaled) : ''}`;
+  // No download here: an image is downloaded from the preview.
   const actions = `<div class="image-set-actions">`
+    + `<button type="button" class="icon-btn" data-grid-set="${esc(set.id)}" title="All of them, small: tap one to open it" aria-label="All of them">${ICONS.grid}</button>`
     + `<button type="button" class="icon-btn" data-again-set="${esc(set.id)}" title="The same again: its settings in Generate, to change first" aria-label="The same again">${ICONS.config}</button>`
     + `<button type="button" class="icon-btn" data-shots="${esc(set.id)}" title="Prompts" aria-label="Prompts">${ICONS.enhanced}</button>`
-    + `<button type="button" class="icon-btn" data-download-set="${esc(set.id)}" title="${all}" aria-label="${all}">${ICONS.download}</button>`
     + `<button type="button" class="icon-btn del" data-delete-set="${esc(set.id)}" title="Delete" aria-label="Delete">${ICONS.trash}</button></div>`;
   // Every set alike: its picture (an album's cover, with how many), and beside it the strip of the rest above its icons.
   const many = set.images.length > 1;
   const row = `
     <div class="image-set-row album">
-      ${set.images.length ? `${picture(set.images[0], ' class="album-cover"')}${many ? `<span class="album-count">${set.images.length}</span>` : ''}</a>` : ''}
+      ${set.images.length ? `${picture(set.images[0], ' class="album-cover"')}${!set.images[0].upscaled && set.images.some(p => p.upscaled) ? `<span class="upscaled-badge" role="img" aria-label="Some of this set are upscaled">${ICONS.upscale}</span>` : ''}${many ? `<span class="album-count">${set.images.length}</span>` : ''}</a>` : ''}
       <div class="album-side">
         ${many ? `<div class="album-strip">${set.images.slice(1).map(p => picture(p) + '</a>').join('')}</div>` : ''}
         ${actions}
@@ -4598,7 +4937,7 @@ function imageSetHtml(set) {
   return `
   <div class="image-set">
     <div class="image-set-heading"><h3>${esc(set.label)}</h3>${nsfwButton('image', set.id, !!set.nsfw)}</div>
-    <div class="meta">${[set.model && esc(set.model), set.resolutions?.length && esc(set.resolutions.join(', ')), outputSize(set.size_bytes), outputCount(set)].filter(Boolean).join(' · ')}</div>${lorasLine(set.loras)}${h3Line(set)}${upscaledLine(set)}
+    <div class="meta">${[!set.pills && set.model && esc(set.model), set.resolutions?.length && esc(set.resolutions.join(', ')), outputSize(set.size_bytes), outputCount(set)].filter(Boolean).join(' · ')}</div>${set.pills ? pillsLine(set.pills, 'image') : `${lorasLine(set.loras)}${h3Line(set)}${upscaledLine(set)}`}
     ${row}
   </div>`;
 }
@@ -4613,7 +4952,7 @@ function renderImageSets() {
   const nsfw = outputFilter === NSFW_FILTER;
   // NSFW: films too, so both are in one list in the order they were made (choosing an image for a box: images only).
   const films = nsfw && !choosingFor ? visibleFilms() : [];
-  const key = outputFilter + JSON.stringify(sets.map(set => [set.id, set.label, set.total, set.images, set.model, set.loras, set.resolutions, set.size_bytes, set.generating, set.llm, set.h3_mode, set.h3_creativity, set.nsfw, set.mtime]))
+  const key = outputFilter + JSON.stringify(sets.map(set => [set.id, set.label, set.total, set.images, set.model, set.loras, set.resolutions, set.size_bytes, set.generating, set.llm, set.h3_mode, set.h3_creativity, set.nsfw, set.mtime, set.pills]))
     + JSON.stringify(films.map(v => [v.name, v.mtime, v.topic, v.title, v.model, v.resolution, v.duration, v.size_mb, v.loras, v.h3_mode, v.h3_creativity, v.run]));
   // Only when it changed, so a poll doesn't reload the pictures.
   if ($('imageSets').dataset.key === key) return;
@@ -4622,15 +4961,19 @@ function renderImageSets() {
   if (nsfw) items.sort((a, b) => b[0] - a[0]);
   $('imageSets').innerHTML = items.length ? items.map(item => item[1]).join('')
     : `<div class="empty">${nsfw ? 'Nothing is tagged NSFW.' : 'No images yet. Press Generate to make some.'}</div>`;
+  requestAnimationFrame(() => markPillOverflow($('imageSets')));
 }
+// A narrower or wider page fits more or fewer pills on a line.
+window.addEventListener('resize', () => { for (const id of ['videos', 'imageSets', 'viewerMetaDetails']) markPillOverflow($(id)); });
 // --- The same again: a set's settings back in Generate, its images too, to change before pressing it ---
 // With position: more like that one image: its own prompt, word for word, four times on new seeds.
 async function sameAgain(id, position = null, exact = null) {
   let data;
   try { data = await (await fetch(`/image-runs/${encodeURIComponent(id)}`)).json(); } catch (e) { data = { error: 'Could not reach the panel. Try again.' }; }
   if (!data.ok) { alert(data.error || 'Could not open that set.'); return; }
-  const s = { ...data.settings };
   const shot = position && data.shots[position - 1];
+  // One image's own setup where it kept one; else the set's.
+  const s = { ...((shot && shot.settings) || data.settings) };
   if (shot) Object.assign(s, { prompt: shot.prompt, direct: true, count: VARIATIONS });
   // Created again from a set's prompts: that one image, its prompt word for word, on its own seed.
   if (exact) Object.assign(s, { prompt: exact.prompt, direct: true, count: exact.count || 1 });
@@ -4824,6 +5167,8 @@ function setViewerTitle(text) {
   $('viewerTitle').textContent = text;
 }
 let upscaleMethod = 'fast';
+// The ways an image is upscaled now: a queued one from before (Ultimate SD) opens as SeedVR2.
+const UPSCALE_METHODS_OFFERED = ['fast', 'ultrasharp', 'seedvr2'];
 $('viewerUpscale').addEventListener('click', () => {
   const box = $('viewerUpscaleBar');
   if (box.open) return;
@@ -4858,48 +5203,85 @@ function placeOverViewerButtons(box) {
     minHeight: `${bottom - first.getBoundingClientRect().top}px` });
   box.style.top = `${bottom - box.getBoundingClientRect().height}px`;
 }
-function openUpscaleSettings(method) {
-  upscaleMethod = method;
-  const film = method === 'vsr' || method === 'latent', img = $('viewerImage'), w = img.naturalWidth, h = img.naturalHeight;
-  if (method === 'latent') showFilmLatent();
-  $('upscaleTitle').textContent = { fast: 'Fast upscale 2×', ultrasharp: 'UltraSharp upscale 2×', usdu: 'Ultimate SD upscale 2×', seedvr2: 'SeedVR2 upscale', vsr: 'RTX VSR upscale', latent: 'Latent upscale' }[method];
-  for (const row of $('upscaleSettings').querySelectorAll('[data-show]')) row.hidden = !row.dataset.show.split(' ').includes(method);
-  const shorter = Math.min(w, h);
-  for (const o of $('viewerUpscaleSize').options) o.disabled = +o.value > 0 && +o.value <= shorter;
-  $('viewerUpscaleSize').value = '0';
-  if (method === 'usdu') $('viewerUpscaleDenoise').value = '0.3';
-  showUpscaleTarget();
-  $('upscaleSettings').showModal();
-  placeOverViewerButtons($('upscaleSettings'));
+// The size of what is upscaled: the viewer's picture, or a queued upscale's source (its edit's size).
+let upscaleSource = null;
+// Selects a value, adding it first if the list doesn't have it (a queued job's 0.6 strength, say).
+function pickOption(select, value, label) {
+  value = String(value);
+  if (![...select.options].some(o => o.value === value)) select.add(new Option(label || value, value));
+  select.value = value;
 }
+// Shows the rows for this way of upscaling, and says it in the title.
+function showUpscaleMethod(method) {
+  upscaleMethod = method;
+  if (method === 'latent') showFilmLatent();
+  $('upscaleTitle').textContent = (queueUpscaleEdit ? 'Edit: ' : '') + { fast: 'Fast upscale 2×', ultrasharp: 'UltraSharp upscale 2×', seedvr2: 'SeedVR2 upscale', vsr: 'RTX VSR upscale', latent: 'Latent upscale' }[method];
+  for (const row of $('upscaleSettings').querySelectorAll('[data-show]')) row.hidden = !row.dataset.show.split(' ').includes(method);
+  const shorter = upscaleSource ? Math.min(...upscaleSource) : 0;
+  for (const o of $('viewerUpscaleSize').options) o.disabled = !!shorter && +o.value > 0 && +o.value <= shorter;
+  showUpscaleTarget();
+}
+// From the viewer (edit null), or for a queued upscale being edited (edit: its settings, as the queue gives them).
+function openUpscaleSettings(method, edit = null) {
+  const img = $('viewerImage');
+  upscaleSource = edit ? edit.size || null : img.naturalWidth ? [img.naturalWidth, img.naturalHeight] : null;
+  $('upscaleMethodRow').hidden = !edit || edit.kind !== 'image_upscale';
+  $('upscaleGo').textContent = edit ? 'Save' : 'Add to queue';
+  $('upscaleGo').title = edit ? 'Saves it in the queue as it now is' : 'Adds it to the queue';
+  if (edit) {
+    // As it was queued: a size 3x or 4x made is said as that, a strength or denoise not in the list is added to it.
+    const shorter = upscaleSource ? Math.min(...upscaleSource) : 0, resolution = +edit.resolution || 0;
+    const times = [2, 3, 4].find(n => shorter && resolution === Math.min(SEEDVR2_MOST_EDGE, n * shorter));
+    pickOption($('viewerUpscaleSize'), !resolution ? 'x2' : times ? `x${times}` : resolution, `${resolution}p`);
+    pickOption($('viewerUpscaleDenoise'), edit.denoise || '0', `Denoise ${edit.denoise}`);
+    pickOption($('viewerUpscaleStrength'), edit.strength || '1', `Upscaler ${Math.round(100 * (+edit.strength || 1))}%`);
+    pickOption($('filmUpscaleScale'), edit.scale || '2', `${edit.scale}×`);
+    $('filmUpscaleQuality').value = edit.quality || 'HIGHBITRATE_HIGH';
+    $('upscaleMethodChoice').value = method;
+  } else {
+    $('viewerUpscaleSize').value = 'x2';
+    if (method === 'seedvr2') $('viewerUpscaleDenoise').value = '0';
+  }
+  showUpscaleMethod(method);
+  $('upscaleSettings').showModal();
+  // Over the viewer's buttons from the viewer; in the middle of the page for a queued one.
+  if (edit) $('upscaleSettings').removeAttribute('style'); else placeOverViewerButtons($('upscaleSettings'));
+}
+$('upscaleMethodChoice').addEventListener('change', () => showUpscaleMethod($('upscaleMethodChoice').value));
 // The size it is now and the size it ends at, in the box's heading, following its settings.
 const FAST_MOST_EDGE = 8192, SEEDVR2_MOST_EDGE = 2560;
+// SeedVR2's shorter side for the size chosen: 2×, 3×, 4× (x2, x3, x4: within SEEDVR2_MOST_EDGE, as the server holds
+// it), or a resolution such as 1080.
+function seedvr2Shorter(value, shorter) {
+  const times = /^x(\d)$/.exec(value || '');
+  return times ? Math.min(SEEDVR2_MOST_EDGE, +times[1] * shorter) : +value || Math.min(SEEDVR2_MOST_EDGE, 2 * shorter);
+}
 function upscaleTarget() {
-  const method = upscaleMethod, img = $('viewerImage');
+  const method = upscaleMethod;
   if (method === 'vsr' || method === 'latent') {
-    const res = ($('viewerRes').textContent || '').match(/(\d+)\D+(\d+)/);
+    const res = (upscaleSource ? upscaleSource.join('x') : $('viewerRes').textContent || '').match(/(\d+)\D+(\d+)/);
     if (!res) return null;
     const [w, h] = [+res[1], +res[2]];
     if (method === 'vsr') { const scale = +$('filmUpscaleScale').value || 2; return [[w, h], [Math.round(w * scale), Math.round(h * scale)]]; }
     const grid = n => Math.max(32, Math.round(n / 32) * 32), area = filmLatentMp * 1e6;
     return [[w, h], [grid(Math.sqrt(area * w / h)), grid(Math.sqrt(area * h / w))]];
   }
-  const [w, h] = [img.naturalWidth, img.naturalHeight];
-  if (!w || !h) return null;
+  if (!upscaleSource) return null;
+  const [w, h] = upscaleSource;
   let scale = Math.min(2, FAST_MOST_EDGE / Math.max(w, h));
-  if (method === 'seedvr2') scale = (+$('viewerUpscaleSize').value || Math.min(SEEDVR2_MOST_EDGE, 2 * Math.min(w, h))) / Math.min(w, h);
+  if (method === 'seedvr2') scale = seedvr2Shorter($('viewerUpscaleSize').value, Math.min(w, h)) / Math.min(w, h);
   return [[w, h], [Math.round(w * scale), Math.round(h * scale)]];
 }
 function showUpscaleTarget() {
   const target = upscaleTarget();
-  $('upscaleSettingsNote').textContent = target ? `${target[0].join('×')} → ${target[1].join('×')}` : ($('viewerRes').textContent || '');
+  $('upscaleSettingsNote').textContent = target ? `${target[0].join('×')} → ${target[1].join('×')}` : queueUpscaleEdit ? '' : ($('viewerRes').textContent || '');
 }
 for (const id of ['viewerUpscaleSize', 'filmUpscaleScale']) $(id).addEventListener('change', showUpscaleTarget);
 // A tap outside either dialog, on the dimmed viewer, closes it.
 for (const id of ['viewerUpscaleBar', 'upscaleSettings']) $(id).addEventListener('click', e => {
   const r = e.currentTarget.getBoundingClientRect();
   if (e.target === e.currentTarget && (e.clientX < r.left || e.clientX > r.right || e.clientY < r.top || e.clientY > r.bottom)) {
-    if (id === 'viewerUpscaleBar') closeUpscaleMenu(); else e.currentTarget.close();
+    if (id === 'viewerUpscaleBar') closeUpscaleMenu(); else if (queueUpscaleEdit) cancelQueueUpscale(); else e.currentTarget.close();
   }
 });
 function closeUpscaleMenu(then) {
@@ -4928,8 +5310,12 @@ function showFilmLatent() {
 $('filmLatentDown').addEventListener('click', () => { filmLatentMp -= 0.1; showFilmLatent(); });
 $('filmLatentUp').addEventListener('click', () => { filmLatentMp += 0.1; showFilmLatent(); });
 $('upscaleSettings').addEventListener('click', async e => {
-  if (e.target.closest && e.target.closest('#upscaleCancel')) { $('upscaleSettings').close(); return; }
+  if (e.target.closest && e.target.closest('#upscaleCancel')) {
+    if (queueUpscaleEdit) cancelQueueUpscale(); else $('upscaleSettings').close();
+    return;
+  }
   const button = e.target.closest && e.target.closest('#upscaleGo');
+  if (button && queueUpscaleEdit) { saveQueueUpscale(button); return; }
   if (!button || !viewing) return;
   const done = body => {
     if (!body) return;
@@ -4949,11 +5335,436 @@ $('upscaleSettings').addEventListener('click', async e => {
     return;
   }
   const { id, position } = viewing;
-  const query = upscaleMethod === 'seedvr2' ? `?method=seedvr2&resolution=${encodeURIComponent($('viewerUpscaleSize').value)}`
-    : upscaleMethod === 'usdu' ? `?method=usdu&denoise=${encodeURIComponent($('viewerUpscaleDenoise').value)}`
+  const size = $('viewerUpscaleSize').value, times = /^x(\d)$/.exec(size);
+  const query = upscaleMethod === 'seedvr2' ? `?method=seedvr2&${times ? `scale=${times[1]}` : `resolution=${encodeURIComponent(size)}`}&denoise=${encodeURIComponent($('viewerUpscaleDenoise').value)}`
     : `?method=${upscaleMethod}&strength=${encodeURIComponent($('viewerUpscaleStrength').value)}`;
   body = await queueRequest(button, async () => (await fetch(`/image-runs/${encodeURIComponent(id)}/upscale/${position}${query}`, { method: 'POST' })).json());
   done(body);
+});
+// --- Collections: your own batches, of images and films moved there one at a time (panel/collections.py) ---
+let allImageSets = [], collections = [], viewerCollection = null;
+// A set by its id, with all its images: those in a collection too.
+function findSet(id) { return allImageSets.find(s => s.id === id) || imageSets.find(s => s.id === id); }
+// A collection's two albums, in the order things came: its images (each as its set has it) and its films.
+function collectionAlbums(id) {
+  const collection = collections.find(c => c.id === id), images = [], films = [];
+  for (const item of collection ? collection.items : []) {
+    if (item.kind === 'image') {
+      const set = allImageSets.find(s => s.id === item.set), picture = set && set.images.find(p => p.file === item.file);
+      if (picture) images.push({ ...picture, set: set.id });
+    } else {
+      const film = (lastVideos.video || []).find(v => v.name === item.name);
+      if (film) films.push(film);
+    }
+  }
+  return { images, films };
+}
+// The one before or after this in its collection's album, as a function that opens it; null at either end.
+function collectionNeighbour(by) {
+  const albums = collectionAlbums(viewerCollection);
+  if (viewing.film) {
+    const next = albums.films[albums.films.findIndex(v => v.name === viewing.name) + by];
+    return next ? () => openFilm(next.name, 'video') : null;
+  }
+  const next = albums.images[albums.images.findIndex(p => p.set === viewing.id && p.position === viewing.position) + by];
+  return next ? () => openViewer(next.set, next.position) : null;
+}
+// Shown as Output is: one with anything NSFW in it only in Private mode or under the NSFW filter, which shows only those.
+function shownCollections() {
+  if (pipeline === 'shorts' || (outputFilter && outputFilter !== NSFW_FILTER)) return [];
+  return collections.filter(c => c.items.length && (outputFilter === NSFW_FILTER ? c.nsfw : !c.nsfw || privateMode));
+}
+const COLLECTIONS_OPEN_KEY = 'gen-center.collectionsOpen';
+// Folded or open as it was left, on every device: kept with the collection (panel/collections.py).
+function collectionFolded(id) { const c = collections.find(other => other.id === id); return !!(c && c.folded); }
+function rememberCollectionFold(id, folded) {
+  const c = collections.find(other => other.id === id);
+  if (!c || c.folded === folded) return;
+  c.folded = folded;
+  fetch(`/api/collections/${encodeURIComponent(id)}/fold`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ folded }) })
+    .catch(() => {});
+}
+function collectionHtml(c) {
+  const albums = collectionAlbums(c.id), id = esc(c.id);
+  const first = albums.images[0], film = albums.films[0];
+  const cover = first ? `/image-runs/${encodeURIComponent(first.set)}/thumbnails/${first.position}?v=${first.version}`
+    : film ? (film.run ? `/runs/${encodeURIComponent(film.run)}/image` : `/posters/video/${encodeURIComponent(film.name)}`) : '';
+  const count = [albums.images.length && `${albums.images.length} ${albums.images.length === 1 ? 'image' : 'images'}`,
+    albums.films.length && `${albums.films.length} ${albums.films.length === 1 ? 'video' : 'videos'}`].filter(Boolean).join(' · ');
+  const strip = [...albums.images.slice(first ? 1 : 0).map(p => `<a href="#" data-open-collection="${id}" data-col-set="${esc(p.set)}" data-col-position="${p.position}"><img loading="lazy" alt="" src="/image-runs/${encodeURIComponent(p.set)}/thumbnails/${p.position}?v=${p.version}">${p.upscaled ? upscaledBadge(p.upscaled) : ''}</a>`),
+    ...albums.films.slice(first ? 0 : 1).map(v => `<a href="#" data-open-collection="${id}" data-col-film="${esc(v.name)}"><img loading="lazy" alt="" src="${v.run ? `/runs/${encodeURIComponent(v.run)}/image` : `/posters/video/${encodeURIComponent(v.name)}`}"></a>`)].join('');
+  const total = albums.images.length + albums.films.length;
+  return `<details class="image-set collection" data-collection="${id}"${collectionFolded(c.id) ? '' : ' open'}>
+    <summary class="image-set-heading"><h3>${esc(c.name)}</h3><button type="button" class="icon-btn rename-btn" data-rename-collection="${id}" data-no-fold="1" title="Rename" aria-label="Rename">${ICONS.prompts}</button></summary>
+    <div class="meta">${count}</div>
+    <div class="image-set-row album">
+      ${cover ? `<a href="#" class="album-cover" data-open-collection="${id}"${first ? ` data-col-set="${esc(first.set)}" data-col-position="${first.position}"` : ` data-col-film="${esc(film.name)}"`}><img loading="lazy" alt="" src="${esc(cover)}">${total > 1 ? `<span class="album-count">${total}</span>` : ''}</a>` : ''}
+      <div class="album-side">
+        ${strip ? `<div class="album-strip">${strip}</div>` : ''}
+        <div class="image-set-actions"><button type="button" class="icon-btn" data-grid-collection="${id}" title="All of them, small: tap one to open it" aria-label="All of them">${ICONS.grid}</button><button type="button" class="icon-btn del" data-delete-collection="${id}" title="Delete it and all in it (tap twice)" aria-label="Delete">${ICONS.trash}</button></div>
+      </div>
+    </div>
+  </details>`;
+}
+function renderCollections() {
+  const shown = shownCollections(), box = $('collections');
+  // Folded or not isn't in it: changed here, the page already shows it; changed elsewhere, the next time it is drawn.
+  const key = JSON.stringify([outputFilter, pipeline, privateMode, shown.map(c => [c.id, c.name, c.items, collectionAlbums(c.id).images.map(p => p.version)])]);
+  if (box.dataset.key === key) return;
+  box.dataset.key = key;
+  box.innerHTML = shown.map(collectionHtml).join('');
+  // Each folds as the headings do, and is remembered folded or not.
+  if (box.querySelectorAll) for (const fold of box.querySelectorAll('details.collection')) {
+    foldDetails(fold);
+    fold.addEventListener('toggle', () => rememberCollectionFold(fold.dataset.collection, !fold.open));
+  }
+  $('collectionsToggle').hidden = !shown.length;
+  showCollections(shown.length > 0 && collectionsOpen(), false);
+}
+// Open or closed as you left it: closed to begin with.
+function collectionsOpen() {
+  try { return localStorage.getItem(COLLECTIONS_OPEN_KEY) === '1'; } catch (e) { return false; }
+}
+// Opens or closes the box, its height easing as the headings' folds do (foldDetails).
+function showCollections(open, animate = true) {
+  const box = $('collections');
+  $('collectionsToggle').classList.toggle('on', open);
+  $('collectionsToggle').setAttribute('aria-expanded', String(open));
+  if (box._fold) { box._fold.cancel(); box._fold = null; }
+  if (!animate || box.hidden === !open || !box.animate || window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+    box.hidden = !open;
+    return;
+  }
+  box.hidden = false;
+  const full = box.getBoundingClientRect().height;
+  box.style.overflow = 'hidden';
+  const fold = box._fold = box.animate({ height: open ? ['0px', `${full}px`] : [`${full}px`, '0px'], opacity: open ? [0, 1] : [1, 0] },
+    { duration: 250, easing: 'ease' });
+  fold.onfinish = () => {
+    if (box._fold !== fold) return;
+    box._fold = null;
+    box.style.overflow = '';
+    box.hidden = !open;
+  };
+}
+$('collectionsToggle').addEventListener('click', () => {
+  const open = $('collections').hidden;
+  try { localStorage.setItem(COLLECTIONS_OPEN_KEY, open ? '1' : '0'); } catch (e) {}
+  showCollections(open);
+});
+$('collections').addEventListener('click', async e => {
+  const target = e.target.closest ? e.target.closest('[data-open-collection], [data-grid-collection], [data-rename-collection], [data-delete-collection]') : null;
+  if (!target) return;
+  const d = target.dataset;
+  e.preventDefault();
+  if (d.openCollection) {
+    viewerCollection = d.openCollection;
+    if (d.colFilm) openFilm(d.colFilm, 'video'); else openViewer(d.colSet, +d.colPosition);
+  } else if (d.gridCollection) {
+    openThumbGrid({ collection: d.gridCollection });
+  } else if (d.renameCollection) {
+    const collection = collections.find(c => c.id === d.renameCollection);
+    const name = collection && window.prompt('Rename the collection', collection.name);
+    if (!name || !name.trim() || name.trim() === collection.name) return;
+    const body = await collectionRequest(`/api/collections/${encodeURIComponent(collection.id)}/rename`, { name: name.trim() });
+    if (body) poll();
+  } else if (d.deleteCollection) {
+    if (!secondTap(target)) return;
+    target.disabled = true;
+    const body = await collectionRequest(`/api/collections/${encodeURIComponent(d.deleteCollection)}/delete`, {});
+    target.disabled = false;
+    if (body) poll();
+  }
+});
+async function collectionRequest(url, payload) {
+  try {
+    const response = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+    const body = await response.json();
+    if (!response.ok || !body.ok) { alert(body.error || 'That could not be done.'); return null; }
+    return body;
+  } catch (error) {
+    alert('Could not reach the panel. Try again.');
+    return null;
+  }
+}
+// --- Move: the item open in the preview, to a collection (one already there, or a new one) ---
+function viewedItem() {
+  if (!viewing) return null;
+  if (viewing.film) return viewing.folder === 'video' ? { kind: 'film', name: viewing.name } : null;
+  const set = findSet(viewing.id), picture = set && set.images.find(p => p.position === viewing.position);
+  return picture ? { kind: 'image', run: set.id, file: picture.file } : null;
+}
+function openMoveSheet() {
+  const item = viewedItem();
+  if (!item) return;
+  const here = viewerCollection;
+  // In Private mode only those with NSFW in them: what is made then is NSFW, so it goes with its kind. Out of it, only
+  // those without, unless under the NSFW filter, where the NSFW ones can be seen too.
+  const others = collections.filter(c => c.id !== here
+    && (privateMode ? c.nsfw : !c.nsfw || outputFilter === NSFW_FILTER));
+  $('moveList').innerHTML = `<button type="button" class="move-new-pick" data-move-new="1">${ICONS.plus}New</button>`
+    + others.map(c => `<button type="button" data-move-to="${esc(c.id)}"${c.nsfw ? ' class="nsfw" title="Has NSFW in it"' : ''}>${esc(c.name)}</button>`).join('');
+  $('moveNewName').value = '';
+  $('moveNewRow').hidden = true;
+  $('moveError').hidden = true;
+  const box = $('moveSheet');
+  box.classList.remove('closing');
+  box.showModal();
+  placeOverViewerButtons(box);
+}
+// Closes as Upscale's menu does: a short fade down before it goes.
+function closeMoveMenu(then) {
+  const box = $('moveSheet');
+  if (!box.open || box.classList.contains('closing')) return;
+  box.classList.add('closing');
+  setTimeout(() => { box.close(); box.classList.remove('closing'); if (then) then(); }, 150);
+}
+async function moveViewed(target, button = null) {
+  const item = viewedItem();
+  if (!item || $('moveSheet').classList.contains('moving')) return;
+  // The one tapped lights up, the others dim, while it moves; a check on it once it has, then the menu goes.
+  $('moveSheet').classList.add('moving');
+  if (button) button.classList.add('picked');
+  // Where the preview goes once it has moved: the next there, or the one before, or closed if it was the last.
+  const next = viewerCollection ? collectionNeighbour(1) || collectionNeighbour(-1) : viewerNeighbour(1) || viewerNeighbour(-1);
+  $('moveError').hidden = true;
+  let body;
+  try {
+    const response = await fetch('/api/collections/move', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...item, ...target }) });
+    body = await response.json();
+    if (!response.ok || !body.ok) throw new Error(body.error || 'It could not be moved.');
+  } catch (error) {
+    $('moveError').textContent = error.message === 'Failed to fetch' ? 'Could not reach the panel. Try again.' : error.message;
+    $('moveError').hidden = false;
+    $('moveSheet').classList.remove('moving');
+    if (button) button.classList.remove('picked');
+    return;
+  }
+  // Moved: its border flashes once, then the menu goes.
+  if (button) button.classList.add('moved');
+  await new Promise(resolve => setTimeout(resolve, 380));
+  $('moveSheet').classList.remove('moving');
+  closeMoveMenu();
+  await poll();
+  if (next) next(); else closeViewer();
+}
+$('moveList').addEventListener('click', e => {
+  if (e.target.closest && e.target.closest('[data-move-new]')) {
+    // + New: its name, right there in the menu.
+    $('moveNewRow').hidden = false;
+    $('moveNewName').focus();
+    placeOverViewerButtons($('moveSheet'));
+    return;
+  }
+  const pick = e.target.closest && e.target.closest('[data-move-to]');
+  if (pick) moveViewed({ to: pick.dataset.moveTo }, pick);
+});
+$('moveNewGo').addEventListener('click', () => {
+  const name = $('moveNewName').value.trim();
+  if (!name) { $('moveNewName').focus(); return; }
+  moveViewed({ new: name });
+});
+$('moveNewName').addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); $('moveNewGo').click(); } });
+// A tap outside it, on the preview, closes it.
+$('moveSheet').addEventListener('click', e => {
+  const r = e.currentTarget.getBoundingClientRect();
+  if (e.target === e.currentTarget && (e.clientX < r.left || e.clientX > r.right || e.clientY < r.top || e.clientY > r.bottom)) closeMoveMenu();
+});
+$('moveSheet').addEventListener('cancel', e => { e.preventDefault(); closeMoveMenu(); });
+$('viewerMove').innerHTML = ICONS.move;
+$('viewerMove').addEventListener('click', openMoveSheet);
+// The one before or after this outside a collection (its set's images, or the films), as a function that opens it.
+function viewerNeighbour(by) {
+  if (viewing.film) {
+    const films = visibleFilms(), next = films[films.findIndex(v => v.name === viewing.name) + by];
+    return next ? () => openFilm(next.name, viewing.folder) : null;
+  }
+  const set = imageSets.find(s => s.id === viewing.id), images = set ? set.images : [];
+  const next = images[images.findIndex(p => p.position === viewing.position) + by];
+  return next ? () => openViewer(viewing.id, next.position) : null;
+}
+// --- The thumbnail grid: all of a set, or the films, small; a tap opens the preview at that one ---
+let thumbGridItems = [];
+// what: { set: id } for a set's images, or { films: folder } for the films the preview swipes through.
+let thumbGridWhat = null, thumbGridArranging = false, thumbGridSelected = null;
+function openThumbGrid(what, keepArranging = false) {
+  thumbGridWhat = what;
+  if (!keepArranging) thumbGridArranging = false;
+  thumbGridSelected = null;
+  let title = '', sections = null;
+  if (what.collection) {
+    const collection = collections.find(c => c.id === what.collection);
+    if (!collection) return;
+    const albums = collectionAlbums(collection.id);
+    title = collection.name;
+    const images = albums.images.map(p => ({ ref: { kind: 'image', run: p.set, file: p.file }, src: `/image-runs/${encodeURIComponent(p.set)}/thumbnails/${p.position}?v=${p.version}`, label: p.title, upscaled: p.upscaled,
+      current: !!viewing && !viewing.film && viewing.id === p.set && viewing.position === p.position,
+      open: () => { viewerCollection = collection.id; openViewer(p.set, p.position); } }));
+    const films = albums.films.map(v => ({ ref: { kind: 'film', name: v.name }, src: v.run ? `/runs/${encodeURIComponent(v.run)}/image` : `/posters/video/${encodeURIComponent(v.name)}`, label: v.title || v.name,
+      upscaled: v.upscaled, current: !!viewing && viewing.film && viewing.name === v.name,
+      open: () => { viewerCollection = collection.id; openFilm(v.name, 'video'); } }));
+    thumbGridItems = [...images, ...films];
+    sections = [['Images', 0, images.length], ['Video', images.length, thumbGridItems.length]].filter(([, from, to]) => to > from);
+  } else if (what.set) {
+    const set = imageSets.find(s => s.id === what.set);
+    if (!set) return;
+    title = set.label;
+    const id = encodeURIComponent(set.id);
+    thumbGridItems = set.images.map(p => ({ ref: p.file, src: `/image-runs/${id}/thumbnails/${p.position}?v=${p.version}`, label: p.title, upscaled: p.upscaled,
+      current: !!viewing && !viewing.film && viewing.id === set.id && viewing.position === p.position, open: () => openViewer(set.id, p.position) }));
+  } else {
+    const folder = what.films;
+    title = 'Video';
+    thumbGridItems = visibleFilms().map(v => {
+      const url = encodeURIComponent(v.name);
+      return { src: v.run && folder === 'video' ? `/runs/${encodeURIComponent(v.run)}/image` : `/posters/${folder}/${url}`, label: v.title || v.topic || v.name,
+        upscaled: v.upscaled, current: !!viewing && viewing.film && viewing.name === v.name, open: () => openFilm(v.name, folder) };
+    });
+  }
+  $('thumbGridTitle').textContent = `${title} (${thumbGridItems.length})`;
+  const thumb = (item, i) => `<button type="button" data-grid-index="${i}" class="${item.current ? 'current' : ''}" title="${esc(item.label || '')}" aria-label="${esc(item.label || 'Open')}">`
+    + `<img loading="lazy" decoding="async" alt="" src="${esc(item.src)}">${item.upscaled ? upscaledBadge(item.upscaled) : ''}</button>`;
+  // A collection's two albums each under their heading; else one grid.
+  $('thumbGridBody').innerHTML = (sections || [[null, 0, thumbGridItems.length]]).map(([heading, from, to]) =>
+    `${heading ? `<div class="thumb-grid-section">${heading} (${to - from})</div>` : ''}<div class="thumb-grid">${thumbGridItems.slice(from, to).map((item, k) => thumb(item, from + k)).join('')}</div>`).join('');
+  // Films in Video are in the order they were made: only a set's or a collection's own order is kept.
+  $('thumbGridArrange').hidden = !!what.films;
+  showArranging();
+  if (!$('thumbGrid').open) $('thumbGrid').showModal();
+}
+function showArranging() {
+  $('thumbGrid').classList.toggle('arranging', thumbGridArranging);
+  $('thumbGridArrange').classList.toggle('on', thumbGridArranging);
+  $('thumbGridArrange').setAttribute('aria-pressed', String(thumbGridArranging));
+  for (const button of $('thumbGridBody').querySelectorAll('[data-grid-index]')) button.classList.toggle('selected', thumbGridArranging && button.dataset.gridIndex === thumbGridSelected);
+}
+$('thumbGridArrange').innerHTML = ICONS.arrange;
+$('thumbGridArrange').addEventListener('click', () => {
+  thumbGridArranging = !thumbGridArranging;
+  thumbGridSelected = null;
+  showArranging();
+});
+// Thumbnails that change place glide there (FLIP), across as well as down.
+function glideGrid(grid, move) {
+  const cells = [...grid.querySelectorAll('[data-grid-index]')];
+  const before = new Map(cells.map(cell => [cell, cell.getBoundingClientRect()]));
+  for (const cell of cells) for (const animation of cell.getAnimations ? cell.getAnimations() : []) animation.cancel();
+  move();
+  if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+  for (const cell of cells) {
+    const was = before.get(cell), now = cell.getBoundingClientRect(), dx = was.left - now.left, dy = was.top - now.top;
+    if (dx || dy) cell.animate([{ transform: `translate(${dx}px, ${dy}px)` }, { transform: 'none' }], { duration: 200, easing: 'cubic-bezier(.2,.8,.2,1)' });
+  }
+}
+// The order now shown, saved: a set's images by their files, a collection's album by its items.
+async function saveGridOrder(grid) {
+  const order = [...grid.querySelectorAll('[data-grid-index]')].map(cell => thumbGridItems[+cell.dataset.gridIndex].ref);
+  const what = thumbGridWhat;
+  const url = what.set ? `/image-runs/${encodeURIComponent(what.set)}/order` : `/api/collections/${encodeURIComponent(what.collection)}/order`;
+  const body = await collectionRequest(url, what.set ? { files: order } : { items: order });
+  await poll();
+  // Drawn again from what was saved (or, refused, as it was), still arranging.
+  if ($('thumbGrid').open) openThumbGrid(what, true);
+  return body;
+}
+// Dragging one: a copy of it floats under the finger, exactly where it is held; where it will land shows as a gap.
+// It takes another's place only once the finger is well inside that one (its middle), so the two never swap back and
+// forth as they glide. Held near the top or bottom of the grid, the grid scrolls.
+let gridDrag = null, gridDragged = false;
+function gridDragTo(x, y) {
+  const drag = gridDrag;
+  drag.x = x;
+  drag.y = y;
+  drag.ghost.style.transform = `translate(${x - drag.dx}px, ${y - drag.dy}px)`;
+  const under = document.elementFromPoint ? document.elementFromPoint(x, y) : null;
+  const target = under && under.closest ? under.closest('[data-grid-index]') : null;
+  if (!target || target === drag.cell || target.parentElement !== drag.grid) return;
+  const box = target.getBoundingClientRect(), inset = box.width * 0.25;
+  if (x < box.left + inset || x > box.right - inset || y < box.top + inset || y > box.bottom - inset) return;
+  const cells = [...drag.grid.children];
+  glideGrid(drag.grid, () => (cells.indexOf(drag.cell) < cells.indexOf(target) ? target.after(drag.cell) : target.before(drag.cell)));
+}
+function gridAutoScroll(now) {
+  const drag = gridDrag;
+  if (!drag) return;
+  drag.frame = 0;
+  const body = $('thumbGridBody'), box = body.getBoundingClientRect(), edge = Math.min(70, box.height / 4);
+  const strength = drag.y < box.top + edge ? -(box.top + edge - drag.y) / edge : drag.y > box.bottom - edge ? (drag.y - box.bottom + edge) / edge : 0;
+  if (!strength) { drag.last = null; return; }
+  const elapsed = drag.last == null ? 16 : Math.min(50, now - drag.last);
+  drag.last = now;
+  const before = body.scrollTop;
+  body.scrollTop += Math.sign(strength) * Math.min(1, Math.abs(strength)) * 900 * elapsed / 1000;
+  if (body.scrollTop !== before) gridDragTo(drag.x, drag.y);
+  drag.frame = requestAnimationFrame(gridAutoScroll);
+}
+$('thumbGridBody').addEventListener('pointerdown', e => {
+  if (!thumbGridArranging || e.button > 0) return;
+  const cell = e.target.closest && e.target.closest('[data-grid-index]');
+  if (!cell || cell.dataset.gridIndex !== thumbGridSelected) return;
+  e.preventDefault();
+  const box = cell.getBoundingClientRect();
+  const ghost = cell.cloneNode(true);
+  ghost.classList.add('grid-ghost');
+  Object.assign(ghost.style, { position: 'fixed', left: '0px', top: '0px', width: `${box.width}px`, height: `${box.height}px`,
+    transform: `translate(${box.left}px, ${box.top}px)`, pointerEvents: 'none', zIndex: 10 });
+  $('thumbGrid').appendChild(ghost);
+  gridDrag = { cell, grid: cell.parentElement, ghost, pointer: e.pointerId, dx: e.clientX - box.left, dy: e.clientY - box.top,
+    x: e.clientX, y: e.clientY, frame: 0, last: null, before: [...cell.parentElement.children].map(c => c.dataset.gridIndex).join() };
+  cell.classList.add('dragging');
+  try { $('thumbGridBody').setPointerCapture(e.pointerId); } catch (err) {}
+});
+$('thumbGridBody').addEventListener('pointermove', e => {
+  if (!gridDrag || e.pointerId !== gridDrag.pointer) return;
+  e.preventDefault();
+  gridDragTo(e.clientX, e.clientY);
+  if (!gridDrag.frame) gridDrag.frame = requestAnimationFrame(gridAutoScroll);
+});
+const dropGrid = async e => {
+  if (!gridDrag || e.pointerId !== gridDrag.pointer) return;
+  const { cell, grid, ghost, before, frame } = gridDrag;
+  gridDrag = null;
+  if (frame) cancelAnimationFrame(frame);
+  ghost.remove();
+  cell.classList.remove('dragging');
+  gridDragged = true;
+  setTimeout(() => { gridDragged = false; }, 0);
+  if ([...grid.children].map(c => c.dataset.gridIndex).join() !== before) await saveGridOrder(grid);
+};
+$('thumbGridBody').addEventListener('pointerup', dropGrid);
+$('thumbGridBody').addEventListener('pointercancel', dropGrid);
+// A tap, not a scroll: the finger stayed put, and the grid wasn't moving (a tap that stops a fling only stops it).
+let gridTap = null, gridScrolledAt = 0;
+$('thumbGridBody').addEventListener('scroll', () => { gridScrolledAt = performance.now(); }, { passive: true });
+$('thumbGridBody').addEventListener('pointerdown', e => {
+  gridTap = { x: e.clientX, y: e.clientY, at: performance.now(), moving: performance.now() - gridScrolledAt < 120 };
+}, true);
+function gridTapped(e) {
+  const tap = gridTap;
+  gridTap = null;
+  if (!tap || e.clientX == null || !e.pointerType) return true;  // A key press, or no pointer seen: as it is
+  if (tap.moving || gridScrolledAt > tap.at) return false;
+  return Math.hypot(e.clientX - tap.x, e.clientY - tap.y) < 10;
+}
+$('thumbGridBody').addEventListener('click', e => {
+  const pick = e.target.closest && e.target.closest('[data-grid-index]');
+  const item = pick && thumbGridItems[+pick.dataset.gridIndex];
+  if (!item || !gridTapped(e)) return;
+  if (thumbGridArranging) {
+    if (!gridDragged) thumbGridSelected = thumbGridSelected === pick.dataset.gridIndex ? null : pick.dataset.gridIndex;
+    showArranging();
+    return;
+  }
+  $('thumbGrid').close();
+  item.open();
+});
+$('thumbGridClose').addEventListener('click', () => $('thumbGrid').close());
+// A tap on the dimmed page around it closes it too.
+$('thumbGrid').addEventListener('click', e => { if (e.target === $('thumbGrid')) $('thumbGrid').close(); });
+$('viewerGrid').innerHTML = ICONS.grid;
+$('viewerGrid').addEventListener('click', () => {
+  if (!viewing) return;
+  openThumbGrid(viewerCollection ? { collection: viewerCollection } : viewing.film ? { films: viewing.folder } : { set: viewing.id });
 });
 // --- Edit: the Image side with Qwen-Image 2.1's edit workflow, for changing painted parts, expanding, or editing an image ---
 const EDIT_WORKFLOW = 'image_Qwen21_edit_turbo.json';
@@ -5006,7 +5817,8 @@ $('viewerPrompts').addEventListener('click', async () => {
   const shot = viewing.film ? null : data.shots[viewing.position - 1];
   const detailed = shot ? shot.enhanced_prompt || shot.prompt
     : data.shots.map((s, i) => `${i + 1}. ${s.title}\n${s.enhanced_prompt || s.prompt}`).join('\n\n');
-  openPromptDetail(detailed, data.brief);
+  // Made from your exact prompt: that is what it was made from, so it opens on yours, the detailed one a tap away.
+  openPromptDetail(detailed, data.brief, data.direct ? 'yours' : 'detailed');
 });
 $('viewerEdit').addEventListener('click', () => {
   if (!viewing || viewing.film) return;
@@ -5018,7 +5830,7 @@ $('viewerEdit').addEventListener('click', () => {
 function applyOptions(box, options, chosen) {
   if (box === $('imageOptionsBox')) {
     if (chosen.image_upscale) $('imageUpscale').value = chosen.image_upscale;
-    if (chosen.image_upscale_denoise) $('imageUpscaleDenoise').value = chosen.image_upscale_denoise;
+    setImageUpscaleDenoise(chosen.image_upscale_denoise || 0);
     if (chosen.image_upscale_mp) $('imageUpscaleMp').value = chosen.image_upscale_mp;
     showImageUpscale();
     syncImageSize();
@@ -5066,14 +5878,36 @@ function upscaleProblem(method, width, height) {
     return `Too big: ${Math.max(width, height)}px on its longer side, past ${TILED_MOST_SIDE}px.`;
   return '';
 }
-function viewerMetadata(item) {
-  const lines = [...(item.loras || []).map(lora => `LoRA: ${lora}`), h3Description(item), item.upscaled && `Upscaled: ${item.upscaled}`].filter(Boolean);
+// A picture in the viewer: its own upscale, not the set's; its other pills are the set's.
+function pictureMetadata(set, picture) {
+  const pills = set.pills && [...set.pills.filter(p => p.kind !== 'upscale'),
+    ...(picture.upscaled ? [{ text: `Upscaled: ${picture.upscaled}`, kind: 'upscale', diff: false }] : [])];
+  viewerMetadata({ ...set, upscaled: picture.upscaled || null, pills }, 'image');
+}
+function viewerMetadata(item, side = 'video') {
+  // Its pills, all of them, when it has them; else the lines it had before pills.
+  const pills = item.pills && item.pills.length ? item.pills : null;
+  const lines = pills ? [] : [connectionDescription(item), ...(item.loras || []).map(lora => `LoRA: ${lora}`), h3Description(item), item.upscaled && `Upscaled: ${item.upscaled}`].filter(Boolean);
   const button = $('viewerMeta'), details = $('viewerMetaDetails');
-  button.textContent = [item.model, item.llm].filter(Boolean).join(' · ') || (lines.length ? 'Details' : '');
+  const has = !!pills || lines.length > 0;
+  button.textContent = [item.model, item.llm].filter(Boolean).join(' · ') || (has ? 'Details' : '');
   button.hidden = !button.textContent;
-  button.disabled = !lines.length;
+  button.disabled = !has;
+  if (pills) {
+    // The pills themselves, in place of the line that opened them: one line, the rest a tap away.
+    button.hidden = true;
+    details.hidden = false;
+    const html = `<div class="pills ${side}" data-lines="1" role="button" tabindex="0">${pillsHtml(pills)}</div>`;
+    // Each poll asks again: the same pills stay as they are, opened or not.
+    if (details.dataset.pills === html) return;
+    details.dataset.pills = html;
+    details.innerHTML = html;
+    requestAnimationFrame(() => markPillOverflow(details));
+    return;
+  }
+  details.dataset.pills = '';
   details.textContent = lines.join('\n');
-  if (!lines.length) details.hidden = true;
+  if (!has) details.hidden = true;
   button.setAttribute('aria-expanded', String(!details.hidden));
 }
 $('viewerMeta').addEventListener('click', () => {
@@ -5086,6 +5920,7 @@ function showViewerMedia(video) {
   for (const id of ['viewerVariations', 'viewerEdit', 'viewerPrompts', 'viewerUpscale']) $(id).hidden = false;
   $('viewerImage').hidden = video;
   $('viewerVideo').hidden = !video;
+  if (video) $('viewerUpscaled').hidden = true;
   if (!video) { $('viewerVideo').pause(); $('viewerVideo').removeAttribute('src'); }
 }
 let viewerTransition = null;
@@ -5139,7 +5974,7 @@ function transitionViewer(media, direction, open, target = media) {
 }
 // A film in the viewer, playing; a swipe goes to the one beside it in Output.
 function openFilm(name, filmFolder = folder) {
-  const films = visibleFilms(), at = films.findIndex(v => v.name === name);
+  const films = viewerCollection ? collectionAlbums(viewerCollection).films : visibleFilms(), at = films.findIndex(v => v.name === name);
   if (at < 0) return;
   const film = films[at], url = `/videos/${filmFolder}/${encodeURIComponent(name)}`;
   viewing = { film: true, name, run: film.run || null, folder: filmFolder, latent: !!film.latent };
@@ -5172,7 +6007,7 @@ function downloadFile(url) {
   link.remove();
 }
 function openViewer(id, position) {
-  const set = imageSets.find(s => s.id === id), picture = set && set.images.find(p => p.position === position);
+  const set = findSet(id), picture = set && set.images.find(p => p.position === position);
   if (!picture) return;
   viewing = { id, position };
   showViewerMedia(false);
@@ -5191,9 +6026,17 @@ function openViewer(id, position) {
   $('viewerImage').alt = picture.title;
   const at = set.images.indexOf(picture);
   setViewerTitle(picture.title);
-  $('viewerCount').textContent = set.images.length > 1 ? `${at + 1} of ${set.images.length}` : '';
+  // In a collection: where it is in the collection's images, not in the set it was made in.
+  const album = viewerCollection ? collectionAlbums(viewerCollection).images : set.images.filter(p => !p.collection);
+  const place = album.findIndex(p => (p.set || set.id) === id && p.position === position);
+  $('viewerCount').textContent = album.length > 1 && place >= 0 ? `${place + 1} of ${album.length}` : '';
   // This picture's own upscale, not another of the set's.
-  viewerMetadata({ ...set, upscaled: picture.upscaled || null });
+  pictureMetadata(set, picture);
+  $('viewerUpscaled').hidden = !picture.upscaled;
+  if (picture.upscaled) {
+    $('viewerUpscaled').innerHTML = ICONS.upscale;
+    $('viewerUpscaled').setAttribute('aria-label', `Upscaled: ${picture.upscaled}`);
+  }
   $('viewerDownload').href = `${url}&download=1`;
   $('viewerRes').textContent = picture.resolution || '';
   if (!$('imageViewer').open) $('imageViewer').showModal();
@@ -5208,6 +6051,13 @@ $('viewerImage').addEventListener('load', () => {
 // The image before or after this one in its set: a swipe, or the arrow keys.
 function stepViewer(by) {
   if (!viewing) return false;
+  if (viewerCollection) {
+    const next = collectionNeighbour(by);
+    if (!next) return false;
+    disarm($('viewerDelete'));
+    transitionViewer($(viewing.film ? 'viewerVideo' : 'viewerImage'), by > 0 ? 'to-right' : 'to-left', next);
+    return true;
+  }
   if (viewing.film) {
     const films = visibleFilms(), next = films[films.findIndex(v => v.name === viewing.name) + by];
     if (!next) return false;
@@ -5319,6 +6169,18 @@ function nsfwItems() {
 // set after or before it there, whichever it is.
 function stepSet(by) {
   if (!viewing) return false;
+  // In a collection: up and down go between its images and its films, and no further.
+  if (viewerCollection) {
+    const albums = collectionAlbums(viewerCollection), toFilms = !viewing.film;
+    if ((by > 0) !== toFilms) return false;
+    const first = toFilms ? albums.films[0] : albums.images[0];
+    if (!first) return false;
+    disarm($('viewerDelete'));
+    if (viewing.film) $('viewerVideo').pause();
+    transitionViewer($(viewing.film ? 'viewerVideo' : 'viewerImage'), by > 0 ? 'to-down' : 'to-up',
+      () => toFilms ? openFilm(first.name, 'video') : openViewer(first.set, first.position), $(toFilms ? 'viewerVideo' : 'viewerImage'));
+    return true;
+  }
   if (outputFilter === NSFW_FILTER) {
     const items = nsfwItems();
     const at = items.findIndex(item => viewing.film ? item.film && item.film.name === viewing.name : item.set && item.set.id === viewing.id);
@@ -5356,8 +6218,9 @@ function closeViewer() {
 }
 $('imageViewer').addEventListener('close', () => {
   clearViewerTransition();
-  for (const id of ['viewerUpscaleBar', 'upscaleSettings']) if ($(id).open) $(id).close();
+  for (const id of ['viewerUpscaleBar', 'upscaleSettings', 'moveSheet', 'pillsMenu']) if ($(id).open) $(id).close();
   viewing = null;
+  viewerCollection = null;
   $('viewerMetaDetails').hidden = true;
   $('viewerMeta').setAttribute('aria-expanded', 'false');
   $('viewerImage').removeAttribute('src');
@@ -5413,7 +6276,9 @@ $('imageSets').addEventListener('click', async e => {
     return;
   }
   const d = e.target.dataset || {};
-  if (d.againSet) {
+  if (d.gridSet) {
+    openThumbGrid({ set: d.gridSet });
+  } else if (d.againSet) {
     await sameAgain(d.againSet);
   } else if (d.downloadSet) {
     const set = imageSets.find(s => s.id === d.downloadSet);
@@ -5437,12 +6302,11 @@ function filmHtml(v, filmFolder = folder) {
     + (filmFolder === 'output' ? icon(`data-up="${name}" data-topic="${esc(v.topic || '')}"`, 'Upload to YouTube', ICONS.upload) : '')
     + (v.run ? icon(`data-again-film="${esc(v.run)}"`, 'The same again: its settings in Generate, to change first', ICONS.config) : '')
     + (v.run ? icon(`data-shots="${esc(v.run)}"`, 'Shots', ICONS.enhanced) : '')
-    + icon(`data-download-film="${name}"`, 'Download', ICONS.download)
     + icon(`data-del="${name}"`, 'Delete', ICONS.trash, ' del') + '</div>';
   return `
   <div class="image-set film" data-name="${name}">
     <div class="image-set-heading"><h3>${v.title || v.topic ? esc(v.title || v.topic) : filmFolder === 'video' ? name : '<span style="color:var(--muted)">No topic recorded</span>'}</h3>${filmFolder === 'video' ? nsfwButton('video', v.name, !!v.nsfw) : ''}</div>
-    <div class="meta" title="${name}">${[v.model && esc(v.model), v.resolution && esc(v.resolution), v.duration != null && fmt(Math.round(v.duration)), v.size_mb != null && `${v.size_mb} MB`].filter(Boolean).join(' · ')}</div>${lorasLine(v.loras)}${h3Line(v)}${upscaledLine(v)}
+    <div class="meta" title="${name}">${[!v.pills && v.model && esc(v.model), v.resolution && esc(v.resolution), v.duration != null && fmt(Math.round(v.duration)), v.size_mb != null && `${v.size_mb} MB`].filter(Boolean).join(' · ')}</div>${v.pills ? pillsLine(v.pills, 'video') : `${connectionLine(v)}${lorasLine(v.loras)}${h3Line(v)}${upscaledLine(v)}`}
     <div class="image-set-row album">
       <a href="/videos/${filmFolder}/${url}" class="album-cover film-cover" data-play-film="${name}" data-film-folder="${filmFolder}" title="Play"><img loading="lazy" alt="" src="${v.run && filmFolder === 'video' ? `/runs/${encodeURIComponent(v.run)}/image` : `/posters/${filmFolder}/${url}`}" onerror="this.onerror=null;this.src='/posters/${filmFolder}/${url}'"><span class="play">▶</span></a>
       <div class="album-side">${actions}</div>
@@ -5548,7 +6412,8 @@ function shotItemHtml(run, shot, i) {
   const like = icon(`data-create="${number}"`, 'More like this: its prompt and settings in Generate, on new seeds', ICONS.config);
   // The prompt is the box itself: a tap opens it. Only what an enhancer wrote from it needs a button of its own.
   const enhanced = shot.enhanced_prompt ? icon(`data-enhanced="${number}" aria-haspopup="dialog"`, 'Detailed prompt: what the prompt enhancer wrote', ICONS.enhanced) : '';
-  const remove = !film && !run.busy && !run.pending ? icon(`data-delete-image="${number}"`, 'Delete', ICONS.trash, ' del') : '';
+  // An image an upscale waits on stays; the rest of the set can go while upscales wait.
+  const remove = !film && !run.busy && !run.pending && !shot.locked ? icon(`data-delete-image="${number}"`, 'Delete', ICONS.trash, ' del') : '';
   const save = run.busy ? '' : icon('data-save="1"', 'Save the prompts', ICONS.save);
   const seed = take && i ? `<input type="hidden" data-seed value="${shot.seed ?? ''}">` : shotSeedHtml(run, shot, i, film ? (take ? 'take' : 'shot') : 'image');
   return `
@@ -5769,10 +6634,10 @@ async function copyText(text, parent) {
 }
 let promptCopyTimer, promptDetailTexts = { detailed: '', yours: '' };
 // The prompt as it went to the model (the enhancer's, else the one written for it), with your own prompt a tap away.
-function openPromptDetail(detailed, yours) {
+function openPromptDetail(detailed, yours, first = 'detailed') {
   promptDetailTexts = { detailed: detailed || '', yours: yours || '' };
   $('promptDetailYours').hidden = !yours;
-  showPromptDetail('detailed');
+  showPromptDetail(first === 'yours' && yours ? 'yours' : 'detailed');
   clearTimeout(promptCopyTimer);
   $('promptDetailCopy').classList.remove('done');
   $('promptDetailCopy').innerHTML = ICONS.copy;
@@ -5783,7 +6648,12 @@ function showPromptDetail(which) {
   $('promptDetailText').textContent = promptDetailTexts[which];
   $('promptDetailText').scrollTop = 0;
   $('promptDetailYours').setAttribute('aria-pressed', String(which === 'yours'));
+  // The button below says where it goes: to the detailed prompt from yours, to yours from the detailed one.
   $('promptDetailYours').setAttribute('aria-label', which === 'yours' ? 'Show the detailed prompt' : 'Show your prompt');
+  $('promptDetailYours').title = which === 'yours' ? 'Detailed prompt' : 'Your prompt';
+  $('promptDetailYours').innerHTML = which === 'yours' ? ICONS.enhanced : ICONS.brief;
+  $('promptDetailCopy').title = which === 'yours' ? 'Copy your prompt' : 'Copy detailed prompt';
+  $('promptDetailCopy').setAttribute('aria-label', $('promptDetailCopy').title);
 }
 $('promptDetailYours').addEventListener('click', () =>
   showPromptDetail($('promptDetailYours').getAttribute('aria-pressed') === 'true' ? 'detailed' : 'yours'));
@@ -5952,7 +6822,9 @@ function renderNow(data) {
   const comfyBusy = c.active && c.connected;
   // The clip being rendered is said in ComfyUI's box, so it isn't said twice.
   const clip = comfyBusy && /^(Clip|Image) \d/.test(p.detail || '') ? p.detail : '';
-  $('now').classList.toggle('hidden', !show);
+  // ComfyUI's box shows whenever it works, even for a job with no stages of its own, such as an upscale.
+  $('now').classList.toggle('hidden', !show && !comfyBusy);
+  $('stepper').hidden = $('stageDetail').hidden = !show;
   if (show) {
     const [n, total, name] = p.stage;
     const names = STAGES[data.pipeline || pipeline].slice(0, total);
@@ -6432,10 +7304,33 @@ function finishedWhen(r) {
   return date.toDateString() === new Date().toDateString() ? r.at || ''
     : `${date.toLocaleDateString(undefined, { day: 'numeric', month: 'short' })} ${r.at || ''}`;
 }
+// Results swiped away, until the server's list no longer has them: a poll in between must not bring one back.
+const forgottenResults = new Set();
+function resultKey(r) {
+  return r.job_id != null ? `${r.lane}:${r.job_id}` : `made:${r.run_id}:${r.position}`;
+}
+// What a result made, as a small picture: an image (or its set's first), a film's start image or poster.
+function finishedThumb(r) {
+  let src = '';
+  if (r.lane === 'run' && r.side === 'image' && r.run_id) {
+    const set = imageSets.find(s => s.id === r.run_id);
+    const picture = set && (set.images.find(p => p.position === r.position) || set.images[0]);
+    const position = picture ? picture.position : r.position;
+    if (position) src = `/image-runs/${encodeURIComponent(r.run_id)}/thumbnails/${position}${picture ? `?v=${picture.version}` : ''}`;
+  } else if (r.lane === 'run' && r.side === 'video' && (r.run_id || r.film)) {
+    src = r.run_id ? `/runs/${encodeURIComponent(r.run_id)}/image` : `/posters/video/${encodeURIComponent(r.film)}`;
+  } else if (r.lane === 'run' && r.side === 'shorts' && r.film) {
+    src = `/posters/output/${encodeURIComponent(r.film)}`;
+  }
+  return `<span class="result-thumb">${src ? `<img loading="lazy" alt="" src="${esc(src)}" onerror="this.remove()">` : ''}</span>`;
+}
+let finishedSwiping = false;
 function renderFinished(runs, uploads, madeNow = []) {
+  if (finishedSwiping) return;  // Redrawn mid-swipe, the row under the finger would vanish
   // Whole jobs, and what the one going now has made so far, such as each image of a set.
-  const all = [...runs, ...madeNow].map(r => ({ ...r, type: SIDE_NAMES[r.pipeline] || 'Shorts', side: r.pipeline || 'shorts' }))
-    .concat(uploads.map(r => ({ ...r, type: 'Upload', side: 'shorts', tab: r.outcome === 'done' ? 'uploaded' : 'output' })))
+  const all = [...runs, ...madeNow].map(r => ({ ...r, type: SIDE_NAMES[r.pipeline] || 'Shorts', side: r.pipeline || 'shorts', lane: 'run' }))
+    .concat(uploads.map(r => ({ ...r, type: 'Upload', side: 'shorts', lane: 'upload', tab: r.outcome === 'done' ? 'uploaded' : 'output' })))
+    .filter(r => !forgottenResults.has(resultKey(r)))
     .sort((a, b) => (b.t || 0) - (a.t || 0) || (b.at || '').localeCompare(a.at || ''))
     .slice(0, FINISHED_SHOWN);
   $('finishedToggle').disabled = !all.length;
@@ -6447,16 +7342,15 @@ function renderFinished(runs, uploads, madeNow = []) {
   $('finishedLabel').innerHTML = all.length ? `Finished (${all.length})${failed ? ` · <span class="failed">${failed} failed</span>` : ''}` : 'Finished';
   $('finishedCount').textContent = all.length ? String(all.length) : '';
   $('finishedCount').classList.toggle('failed', failed > 0);
+  $('finishedFoot').hidden = !all.length;
   if (!all.length) {
     $('finishedList').innerHTML = '';
     $('finishedList').dataset.html = '';
     return;
   }
-  const list = all.map(r => `<button type="button" class="result ${esc(r.outcome)}" style="--side:${SIDE_COLOURS[r.side] || SIDE_COLOURS.shorts}" data-goto="${esc(r.side)}"${r.tab ? ` data-tab="${r.tab}"` : ''}${r.run_id ? ` data-run-id="${esc(r.run_id)}"` : ''}${r.job_id != null ? ` data-job-id="${esc(String(r.job_id))}"` : ''}${r.position ? ` data-position="${r.position}"` : ''}${r.film ? ` data-film="${esc(r.film)}"` : ''}${r.outcome === 'failed' && r.type !== 'Upload' ? ' data-failed="1"' : ''}>`
-    + `<span class="result-mark">${RESULT_MARKS[r.outcome]}</span><span class="result-type">${r.type}</span>`
-    + `<span class="result-label">${esc(r.label)}${r.note ? ` (${esc(r.note)})` : ''}</span><span class="when">${finishedWhen(r)}</span></button>`).join('')
-    // Quietly at the end: tapped once it asks, tapped again it empties the list.
-    + '<div class="finished-foot"><button type="button" class="finished-clear" data-clear-finished="1" title="Clear Finished: what was made stays">Clear</button></div>';
+  const list = all.map(r => `<button type="button" class="result ${esc(r.outcome)}" style="--side:${SIDE_COLOURS[r.side] || SIDE_COLOURS.shorts}" data-goto="${esc(r.side)}"${r.tab ? ` data-tab="${r.tab}"` : ''}${r.run_id ? ` data-run-id="${esc(r.run_id)}"` : ''}${r.job_id != null ? ` data-job-id="${esc(String(r.job_id))}"` : ''}${r.position ? ` data-position="${r.position}"` : ''}${r.film ? ` data-film="${esc(r.film)}"` : ''}${r.outcome === 'failed' && r.type !== 'Upload' ? ' data-failed="1"' : ''} data-lane="${r.lane}" data-key="${esc(resultKey(r))}">`
+    + finishedThumb(r) + `<span class="result-mark">${RESULT_MARKS[r.outcome]}</span><span class="result-type">${r.type}</span>`
+    + `<span class="result-label">${esc(r.label)}${r.note ? ` (${esc(r.note)})` : ''}</span><span class="when">${finishedWhen(r)}</span></button>`).join('');
   if ($('finishedList').dataset.html !== list) { $('finishedList').innerHTML = list; $('finishedList').dataset.html = list; }
 }
 // --- Finished, Log and Quota: each opens in a box over the page ---
@@ -6471,12 +7365,20 @@ function openPanel(which) {
   $('panelDialogTitle').textContent = title;
   $('panelDialog').classList.toggle('log-open', which === 'log');
   $('panelDialogBody').appendChild(el);
+  // Finished's Clear: outside the scrolling list, just above Close.
+  if (which === 'finished') {
+    const foot = $('finishedFoot');
+    panelShown.foot = { parent: foot.parentNode, next: foot.nextSibling };
+    $('panelDialog').insertBefore(foot, $('panelDialogClose'));
+  }
   if (!$('panelDialog').open) $('panelDialog').showModal();
   if (which === 'log') for (const log of ['log', 'uploadLog']) $(log).scrollTop = $(log).scrollHeight;
 }
 function closePanel() {
   if (!panelShown) return;
-  const { el, parent, next } = panelShown;
+  const { el, parent, next, foot } = panelShown;
+  // The foot first: it is what the list goes back in front of.
+  if (foot) foot.parent.insertBefore($('finishedFoot'), foot.next);
   parent.insertBefore(el, next);
   panelShown = null;
   if ($('panelDialog').open) $('panelDialog').close();
@@ -6530,19 +7432,106 @@ function goToOutput(side, tab) {
   resetOutputFilter();
   if (WIDE.matches) $('videosCard').scrollIntoView({ behavior: 'smooth' }); else showPage('output');
 }
-$('finishedList').addEventListener('click', async e => {
-  const clear = e.target.closest && e.target.closest('[data-clear-finished]');
-  if (clear && clear.dataset.clearFinished) {
-    if (!secondTap(clear)) return;
-    try {
-      const response = await fetch('/queue/finished/clear', { method: 'POST' });
-      if (!response.ok) throw new Error();
-    } catch (error) {
-      alert('Could not clear Finished. Check the connection and try again.');
-    }
-    poll();
-    return;
+// Swiping a result to the right takes it off Finished; a short or mostly vertical drag is a tap or a scroll.
+let finishedSwipe = null, finishedSwiped = false;
+$('finishedList').addEventListener('pointerdown', e => {
+  const row = e.target.closest && e.target.closest('.result');
+  if (!row || (e.pointerType === 'mouse' && e.button !== 0)) return;
+  finishedSwipe = { row, id: e.pointerId, x: e.clientX, y: e.clientY, dx: 0, dragging: false };
+});
+$('finishedList').addEventListener('pointermove', e => {
+  const s = finishedSwipe;
+  if (!s || e.pointerId !== s.id) return;
+  const dx = e.clientX - s.x, dy = e.clientY - s.y;
+  if (!s.dragging) {
+    if (Math.abs(dy) > 10 && Math.abs(dy) > Math.abs(dx)) { finishedSwipe = null; return; }  // A scroll
+    if (dx < 10 || dx < Math.abs(dy)) return;
+    s.dragging = finishedSwiping = true;
+    s.row.classList.remove('swipe-back');
+    try { s.row.setPointerCapture(e.pointerId); } catch (error) {}
   }
+  s.dx = Math.max(0, dx);
+  s.row.style.transform = `translateX(${s.dx}px)`;
+  s.row.style.opacity = String(Math.max(0.2, 1 - s.dx / (s.row.offsetWidth || 300)));
+});
+function endFinishedSwipe(e, cancelled = false) {
+  const s = finishedSwipe;
+  if (!s || e.pointerId !== s.id) return;
+  finishedSwipe = null;
+  if (!s.dragging) return;
+  finishedSwiped = true;  // The click that follows the drag isn't a tap
+  setTimeout(() => { finishedSwiped = false; }, 0);
+  if (!cancelled && s.dx > (s.row.offsetWidth || 300) * 0.35) forgetResult(s.row);
+  else {
+    s.row.classList.add('swipe-back');
+    s.row.style.transform = s.row.style.opacity = '';
+    finishedSwiping = false;
+  }
+}
+$('finishedList').addEventListener('pointerup', e => endFinishedSwipe(e));
+$('finishedList').addEventListener('pointercancel', e => endFinishedSwipe(e, true));
+// Clear: tapped once it asks; tapped again each result swipes out from the top, faster and faster, then the list empties.
+const CLEAR_FIRST_GAP = 140, CLEAR_SPEEDUP = 0.75, CLEAR_LEAST_GAP = 20, CLEAR_SLIDE = 220;
+function clearDelays(count) {
+  const delays = [];
+  for (let i = 0, at = 0, gap = CLEAR_FIRST_GAP; i < count; i++, at += gap, gap = Math.max(CLEAR_LEAST_GAP, gap * CLEAR_SPEEDUP)) delays.push(Math.round(at));
+  return delays;
+}
+$('finishedClear').addEventListener('click', async () => {
+  const button = $('finishedClear');
+  if (button.disabled || !secondTap(button)) return;
+  button.disabled = true;
+  finishedSwiping = true;
+  let cleared = false;
+  const rows = [...$('finishedList').querySelectorAll('.result')];
+  const reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  const delays = reduced ? rows.map(() => 0) : clearDelays(rows.length);
+  rows.forEach((row, i) => setTimeout(() => {
+    row.style.transitionTimingFunction = 'ease-in';
+    row.classList.add('swiped');
+  }, delays[i]));
+  await new Promise(resolve => setTimeout(resolve, reduced ? 0 : (delays[delays.length - 1] || 0) + CLEAR_SLIDE));
+  try {
+    const response = await fetch('/queue/finished/clear', { method: 'POST' });
+    if (!response.ok) throw new Error();
+    $('finishedList').innerHTML = '';
+    cleared = true;
+  } catch (error) {
+    alert('Could not clear Finished. Check the connection and try again.');
+  }
+  $('finishedList').dataset.html = '';  // Drawn again from what the server has: nothing, or all of it back
+  finishedSwiping = false;
+  button.disabled = false;
+  // Emptied, there is nothing left to look at: the box closes (on a desk, back to the queue).
+  if (cleared) {
+    if (panelShown && panelShown.which === 'finished') closePanel();
+    else if (DESK.matches && document.body.dataset.runtab === 'finished') setRunTab('queue');
+  }
+  poll();
+});
+function forgetResult(row) {
+  const d = row.dataset, reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  forgottenResults.add(d.key);
+  // Slides out from where the finger left it, then its space closes up.
+  row.style.height = `${row.offsetHeight}px`;
+  row.classList.add('swiped');
+  setTimeout(() => {
+    row.classList.add('collapsing');
+    setTimeout(() => {
+      row.remove();
+      finishedSwiping = false;
+      $('finishedList').dataset.html = '';  // Drawn again from what is left at the next poll
+      poll();
+    }, reduced ? 0 : 200);
+  }, reduced ? 0 : 220);
+  // What the job going now made has no job yet: it is only hidden here, until that job ends.
+  if (d.jobId == null) return;
+  fetch(`/queue/${encodeURIComponent(d.lane)}/finished/${encodeURIComponent(d.jobId)}/forget`, { method: 'POST' })
+    .then(response => { if (!response.ok) throw new Error(); })
+    .catch(() => { forgottenResults.delete(d.key); alert('Could not remove it from Finished. Check the connection and try again.'); poll(); });
+}
+$('finishedList').addEventListener('click', async e => {
+  if (finishedSwiped) { e.preventDefault(); e.stopPropagation(); return; }
   const result = e.target.closest && e.target.closest('[data-goto]');
   if (!result) return;
   const d = result.dataset;
@@ -6671,7 +7660,7 @@ function renderStopped(runs, parked = [], results = [], canRunNow = false) {
         <span class="acts-side acts-end">${run.pipeline !== 'shorts' ? `<button type="button" class="icon-btn" data-shots="${esc(run.id)}" aria-label="Prompts" title="View prompts">${ICONS.enhanced}</button>` : ''}<button type="button" class="icon-btn" data-config="${esc(run.id)}" data-pipeline="${esc(run.pipeline)}" aria-label="Change settings" title="Back to Generate with its settings, to change them">${ICONS.config}</button><button type="button" class="icon-btn" data-discard="${esc(run.id)}" data-pipeline="${esc(run.pipeline)}" data-clips="${run.clips}" aria-label="Discard this run" title="Discard what it has still to do: anything it made stays (tap twice)">${ICONS.trash}</button></span>
       </div>
     </div>`;
-  // Waiting to be started: put there by Start later or Pause, and not in the queue until you start it.
+  // Waiting to be started: put there by Add to pending or Pause, and not in the queue until you start it.
   const parkedRow = item => `
     <div class="stopped-run" data-motion-key="queue-${esc(String(item.id))}">
       <div class="run-head"><div class="what">${queueTitle(`queue-${item.id}`, workHeading(item, item.pipeline))}</div></div>
@@ -7186,8 +8175,10 @@ const goLabel = running => running || (runsQueued && !queueHeld) ? 'Add to queue
 // Longer than a status takes, shorter than anyone would wait for one.
 const POLL_TIMEOUT = 8000;
 let serverStarted = null;
+// Prompts are kept for the tab and come back after a reload (keptPrompts), so they don't hold one off: only an open
+// prompts or prompt editor dialog, or a narration being written, does.
 function formInProgress() {
-  return $('shotsDialog').open || ['topic', 'prompt', 'narration', 'imagePrompt'].some(id => $(id).value);
+  return $('shotsDialog').open || $('promptEditor').open || !!$('narration').value;
 }
 // One part of the page's update: if it throws, the rest still updates, and the console says what went wrong.
 // Before, one error anywhere left the queue and everything after it as it was until the page was reloaded.
@@ -7217,6 +8208,15 @@ async function poll() {
     }
   }
 }
+// Output is held out of sight (output-pending) until it is drawn from a fresh answer: on loading, on coming back to
+// the page (a phone's tab, the browser's cache), and on going to Output. What was drawn before, for another filter or
+// before Private mode changed, never shows, even for a moment.
+let outputHeldAt = 0;
+function holdOutput() {
+  outputHeldAt = performance.now();
+  document.body.classList.add('output-pending');
+  resumePolling();
+}
 function resumePolling() {
   pollGeneration++;
   if (pollAbort) pollAbort.abort();
@@ -7226,6 +8226,7 @@ function resumePolling() {
   poll();
 }
 async function pollOnce(generation) {
+  const askedAt = performance.now();
   const editAtRequest = queueEdit, upscaleAtRequest = queueUpscaleEdit;
   const abort = new AbortController();
   pollAbort = abort;
@@ -7238,6 +8239,8 @@ async function pollOnce(generation) {
     if (response.redirected) { location.reload(); return; }
     data = await response.json();
     if (generation !== pollGeneration) return;
+    // Not a status (an error page, a proxy's reply): as if it had failed, and the next tick asks again.
+    if (!data || !data.queue || !data.upload) return;
   } catch (e) {
     return; // transient, or stuck and given up on; the next tick retries
   } finally {
@@ -7247,7 +8250,11 @@ async function pollOnce(generation) {
 
   // A new server has new code: pick it up, unless that would lose what is being typed.
   if (serverStarted && serverStarted !== data.server_started) {
-    if (!formInProgress()) { location.reload(); return; }
+    if (!formInProgress()) {
+      for (const side of Object.keys(PROMPT_FIELDS)) keepPrompt(side);
+      location.reload();
+      return;
+    }
   } else {
     serverStarted = data.server_started;
   }
@@ -7272,7 +8279,7 @@ async function pollOnce(generation) {
   runsQueued = ready.length;
   queueHeld = !!queue.held;
   uploadsQueued = upq.items.length;
-  // Pending ones (Start later, Pause) aren't in the active queue: they don't start by themselves, so not next, and not part of when this all ends.
+  // Pending ones (Add to pending, Pause) aren't in the active queue: they don't start by themselves, so not next, and not part of when this all ends.
   const parked = queue.items.filter(item => item.later);
   // Between two jobs for a moment: the next is about to start, so this isn't "Finished".
   const nextUp = !running && ready.length > 0 && !queue.held;
@@ -7315,6 +8322,11 @@ async function pollOnce(generation) {
   if (data.stopped_runs.length !== stoppedCount) { stoppedCount = data.stopped_runs.length; refreshPlan(); }
   $('runActions').hidden = DESK.matches && !running;
   $('skip').hidden = $('stop').hidden = !running;
+  // A Cancel waiting for the run to have something saved: it says so until it happens.
+  if (!$('skip').classList.contains('queue-request')) {
+    $('skip').textContent = data.cancelling ? 'Cancelling…' : 'Cancel';
+    $('skip').disabled = !!data.cancelling;
+  }
   // A batch (Shorts' videos, Image's images) can end once the one being made is done; a film is one video.
 
   safely(() => renderNow(data));
@@ -7341,16 +8353,23 @@ async function pollOnce(generation) {
   safely(() => renderQuota(data.quota));
 
   lastVideos = data.videos;
-  imageSets = data.image_sets || [];
+  // Every set, to open any image (one in a collection too); and as Output shows them, without what moved to a collection.
+  allImageSets = data.image_sets || [];
+  imageSets = allImageSets.map(set => ({ ...set, images: set.images.filter(p => !p.collection) })).filter(set => set.images.length || set.generating);
+  collections = data.collections || [];
   if (viewing && viewing.film) {
     const film = (lastVideos[viewing.folder] || []).find(item => item.name === viewing.name);
     if (film) { $('viewerRes').textContent = film.resolution || ''; viewerMetadata(film); }
   } else if (viewing) {
-    const set = imageSets.find(item => item.id === viewing.id);
-    if (set) viewerMetadata(set);
+    const set = findSet(viewing.id);
+    const picture = set && set.images.find(p => p.position === viewing.position);
+    if (picture) pictureMetadata(set, picture);
   }
   safely(() => renderVideos());
   safely(() => renderImageSets());
+  safely(() => renderCollections());
+  // Drawn from an answer asked for after Output was held: what it shows is what should show, NSFW or not.
+  if (askedAt >= outputHeldAt) document.body.classList.remove('output-pending');
 }
 
 // On a desktop the log is always open beside the run; on a phone it stays folded until asked for.
@@ -7455,7 +8474,7 @@ function endQueueEdit(edit) {
   }
   if (queueUpscaleEdit === edit) {
     queueUpscaleEdit = null;
-    if ($('queueUpscaleSettings').open) $('queueUpscaleSettings').close();
+    if ($('upscaleSettings').open) $('upscaleSettings').close();
   }
 }
 function reconcileQueueEdits(queue, editAtRequest, upscaleAtRequest) {
@@ -7472,16 +8491,8 @@ async function removeQueued(lane, id) {
     }
   } catch (error) { alert('Could not reach the panel. Try again.'); }
 }
-function syncQueueUpscale() {
-  const image = queueUpscaleEdit.kind === 'image_upscale';
-  $('queueUpscaleMethodRow').hidden = !image;
-  $('queueUpscaleStrengthRow').hidden = !image || ['seedvr2', 'usdu'].includes($('queueUpscaleMethod').value);
-  $('queueUpscaleResolutionRow').hidden = !image || $('queueUpscaleMethod').value !== 'seedvr2';
-  $('queueUpscaleFilmRow').hidden = image;
-}
-$('queueUpscaleMethod').addEventListener('change', syncQueueUpscale);
 async function cancelQueueUpscale() {
-  if (!queueUpscaleEdit || $('queueUpscaleSave').disabled) return;
+  if (!queueUpscaleEdit || $('upscaleGo').disabled) return;
   const edit = queueUpscaleEdit;
   try {
     const body = await (await fetch(`/queue/run/edit/${edit.id}/cancel`, {
@@ -7489,31 +8500,27 @@ async function cancelQueueUpscale() {
     })).json();
     if (!body.ok) { alert(body.error || 'Could not cancel editing.'); return; }
     queueUpscaleEdit = null;
-    $('queueUpscaleSettings').close();
+    $('upscaleSettings').close();
     poll();
   } catch (error) { alert('Could not reach the panel. Try again.'); }
 }
-$('queueUpscaleCancel').addEventListener('click', cancelQueueUpscale);
-$('queueUpscaleSettings').addEventListener('cancel', e => { e.preventDefault(); cancelQueueUpscale(); });
-$('queueUpscaleSave').addEventListener('click', async e => {
-  if (!queueUpscaleEdit) return;
-  const image = queueUpscaleEdit.kind === 'image_upscale';
-  const fields = image
-    ? [$('queueUpscaleMethod'), ...($('queueUpscaleMethod').value === 'usdu' ? []
-      : [$('queueUpscaleMethod').value !== 'seedvr2' ? $('queueUpscaleStrength') : $('queueUpscaleResolution')])]
-    : [$('queueUpscaleScale'), $('queueUpscaleQuality')];
-  if (fields.some(field => !field.value || !field.reportValidity())) return;
+// Esc while a queued one is open: as Cancel, so it goes back as it was.
+$('upscaleSettings').addEventListener('cancel', e => { if (queueUpscaleEdit) { e.preventDefault(); cancelQueueUpscale(); } });
+// What the upscale box now says, saved to the queued job: as the viewer would queue it.
+async function saveQueueUpscale(button) {
   const edit = queueUpscaleEdit;
-  const values = { token: edit.token, method: $('queueUpscaleMethod').value, strength: $('queueUpscaleStrength').value,
-    resolution: $('queueUpscaleResolution').value, scale: $('queueUpscaleScale').value, quality: $('queueUpscaleQuality').value,
-    denoise: queueUpscaleEdit.denoise };
-  $('queueUpscaleCancel').disabled = true;
-  const body = await queueRequest(e.currentTarget, async () => (await fetch(`/queue/run/edit/${edit.id}/upscale`, {
+  const size = $('viewerUpscaleSize').value, times = /^x(\d)$/.exec(size);
+  const values = edit.kind === 'image_upscale'
+    ? { token: edit.token, method: upscaleMethod, strength: $('viewerUpscaleStrength').value,
+        ...(times ? { times: times[1] } : { resolution: size }), denoise: upscaleMethod === 'seedvr2' ? $('viewerUpscaleDenoise').value : '' }
+    : { token: edit.token, scale: $('filmUpscaleScale').value, quality: $('filmUpscaleQuality').value };
+  $('upscaleCancel').disabled = true;
+  const body = await queueRequest(button, async () => (await fetch(`/queue/run/edit/${edit.id}/upscale`, {
     method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(values),
   })).json(), 'Saved', 'Saving…');
-  $('queueUpscaleCancel').disabled = false;
-  if (body) { queueUpscaleEdit = null; $('queueUpscaleSettings').close(); poll(); }
-});
+  $('upscaleCancel').disabled = false;
+  if (body) { queueUpscaleEdit = null; $('upscaleSettings').close(); poll(); }
+}
 // A continued run being edited: its prompt made the generated ones, so it stays; they open from under it.
 function syncContinued() {
   const run = queueEdit && queueEdit.continued;
@@ -7531,7 +8538,7 @@ function syncContinued() {
 function queueEditLabel() {
   syncContinued();
   $('cancelQueueEdit').hidden = !queueEdit;
-  $('goLater').hidden = !!queueEdit;
+  $('goLater').hidden = $('goTop').hidden = !!queueEdit;
   if (!submitting) $('go').textContent = $('goStick').textContent = queueEdit ? 'Save to queue' : goLabel(wasRunning);
 }
 async function editQueued(id, button) {
@@ -7546,14 +8553,10 @@ async function editQueued(id, button) {
   const data = await queueRequest(button, async () => (await fetch(`/queue/run/edit/${id}`, { method: 'POST' })).json(), 'Pending', 'Opening…');
   if (!data) return;
   if (data.upscale) {
-    queueUpscaleEdit = { id: data.id, token: data.token, kind: data.upscale.kind, denoise: data.upscale.denoise };
-    $('queueUpscaleMethod').value = data.upscale.method || 'fast';
-    $('queueUpscaleStrength').value = data.upscale.strength || '1';
-    $('queueUpscaleResolution').value = data.upscale.resolution || '0';
-    $('queueUpscaleScale').value = data.upscale.scale || '2';
-    $('queueUpscaleQuality').value = data.upscale.quality || 'HIGHBITRATE_HIGH';
-    syncQueueUpscale();
-    $('queueUpscaleSettings').showModal();
+    // The viewer's own upscale box, filled in as it was queued.
+    queueUpscaleEdit = { id: data.id, token: data.token, ...data.upscale };
+    const image = data.upscale.kind === 'image_upscale';
+    openUpscaleSettings(image ? (UPSCALE_METHODS_OFFERED.includes(data.upscale.method) ? data.upscale.method : 'seedvr2') : 'vsr', queueUpscaleEdit);
     poll();
     return;
   }
@@ -7673,7 +8676,7 @@ function showSending(share) {
   $('queuePendingPct').textContent = pct.trim();
   $('queuePendingBar').style.width = `${Math.round((share || 0) * 100)}%`;
 }
-async function startJob(url, later = false) {
+async function startJob(url, later = false, top = false) {
   if (submitting) return;
   if ((pipeline === 'video' || pipeline === 'image') && $(pipeline + 'PromptWriting').classList.contains('busy')) {
     showFormError('Wait for the prompt writer to finish first.');
@@ -7689,11 +8692,13 @@ async function startJob(url, later = false) {
   }
   showFormError('');
   submitting = true;
-  $('go').disabled = $('goStick').disabled = $('goLater').disabled = true;
+  $('go').disabled = $('goStick').disabled = $('goLater').disabled = $('goTop').disabled = true;
   showSending(0);
   if (later) $('goLater').textContent = 'Adding…';
+  if (top) $('goTop').textContent = 'Adding…';
   const form = new FormData($(SIDE_FORMS[pipeline]));
   if (later) form.append('start_later', '1');
+  if (top) form.append('queue_top', '1');
   if (queueEdit && queueEdit.continued) url = `/queue/run/edit/${queueEdit.id}/continue`;
   if (queueEdit) {
     form.append('queue_edit_id', String(queueEdit.id));
@@ -7703,11 +8708,13 @@ async function startJob(url, later = false) {
   if (body.ok) {
     $('go').textContent = $('goStick').textContent = later ? 'Pending' : body.queued ? 'Queued' : 'Started';
     if (later) $('goLater').textContent = 'Pending';
+    if (top) $('goTop').textContent = body.queued ? 'Queued first' : 'Started';
     await new Promise(resolve => setTimeout(resolve, 800));
   }
   submitting = false;
-  $('go').disabled = $('goStick').disabled = $('goLater').disabled = false;
-  $('goLater').textContent = 'Start later';
+  $('go').disabled = $('goStick').disabled = $('goLater').disabled = $('goTop').disabled = false;
+  $('goLater').textContent = 'Add to pending';
+  $('goTop').textContent = 'Add to top of queue';
   if (body.ok && queueEdit) queueEdit = null;
   queueEditLabel();
   $('queuePending').hidden = true;
@@ -7745,6 +8752,11 @@ $('goStick').addEventListener('click', () => $('go').click());
 $('goLater').addEventListener('click', () => {
   if (pipeline === 'video') saveVideoForm(); else if (pipeline === 'image') saveImageForm(); else saveForm();
   startJob(`/generate/${pipeline}`, true);
+});
+// Into the queue ahead of everything already waiting there.
+$('goTop').addEventListener('click', () => {
+  if (pipeline === 'video') saveVideoForm(); else if (pipeline === 'image') saveImageForm(); else saveForm();
+  startJob(`/generate/${pipeline}`, false, true);
 });
 
 const PROMPT_FIELDS = { shorts: 'topic', video: 'prompt', image: 'imagePrompt' };
@@ -7811,6 +8823,27 @@ async function writePrompt(side) {
 }
 $('writeVideoPrompt').addEventListener('click', () => writePrompt('video'));
 $('writeImagePrompt').addEventListener('click', () => writePrompt('image'));
+// Each side's prompt, kept for this tab as it is typed: it stays until a preset is picked, the side is switched, or
+// Clear, and comes back after a reload (such as the panel's own, for new code).
+const PROMPTS_KEY = 'gen-center.prompts';
+function keptPrompts() {
+  try { return JSON.parse(sessionStorage.getItem(PROMPTS_KEY) || '{}') || {}; } catch (e) { return {}; }
+}
+function keepPrompt(side) {
+  try { sessionStorage.setItem(PROMPTS_KEY, JSON.stringify({ ...keptPrompts(), [side]: $(PROMPT_FIELDS[side]).value })); } catch (e) {}
+}
+document.addEventListener('input', e => {
+  const side = Object.keys(PROMPT_FIELDS).find(key => e.target && e.target.id === PROMPT_FIELDS[key]);
+  if (side) keepPrompt(side);
+});
+for (const [side, id] of Object.entries(PROMPT_FIELDS)) {
+  const kept = keptPrompts()[side];
+  if (kept && !$(id).value) {
+    $(id).value = kept;
+    syncPromptBox($(id));
+    if (side !== 'shorts') syncPromptWriter(side);
+  }
+}
 function clearPrompt(side) {
   const field = $(PROMPT_FIELDS[side]);
   if (!field.value) return;
@@ -7855,6 +8888,8 @@ function setPipeline(side, remember = true, preservePrompt = false) {
   $('jumpResults').textContent = { shorts: 'Shorts', video: 'Videos', image: 'Images' }[side];
   $('formNote').hidden = true;
   $(SIDE_FORMS[side]).appendChild($('formActions'));
+  // One Preview run, in the Other settings of whichever form is showing.
+  if (side !== 'shorts') $(side === 'image' ? 'imageReviewBox' : 'videoReviewBox').after($('previewRunLabel'));
   folder = side === 'shorts' ? 'output' : side;
   $('tabOutput').classList.add('active');
   $('tabUploaded').classList.remove('active');
@@ -7883,7 +8918,8 @@ $('stop').addEventListener('click', async () => {
 $('skip').addEventListener('click', async () => {
   disarm($('stop'));
   if (!secondTap($('skip'))) return;
-  const data = await queueRequest($('skip'), async () => (await fetch('/skip', { method: 'POST' })).json(), 'Pending', 'Stopping…');
+  // No question: it stops now, or as soon as it has something saved to continue from, and the queue goes on.
+  const data = await queueRequest($('skip'), async () => (await fetch('/skip', { method: 'POST' })).json(), 'Cancelled', 'Cancelling…');
   if (data) poll();
 });
 
@@ -7912,14 +8948,20 @@ function renderPrivate(on) {
   const was = privateMode;
   privateMode = on;
   $('privateMode').checked = on;
+  $('privateToggle').classList.toggle('on', on);
+  $('privateToggle').setAttribute('aria-pressed', String(on));
+  $('privateToggle').title = `Private mode (NSFW): ${on ? 'on' : 'off'}`;
   if (on && !was) resetOutputFilter();
 }
-$('privateMode').addEventListener('change', async () => {
+async function setPrivate(on) {
   try {
-    const body = await (await fetch('/api/private', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ on: $('privateMode').checked }) })).json();
+    const body = await (await fetch('/api/private', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ on }) })).json();
     renderPrivate(!!body.on);
-  } catch (e) { settingsNote('Could not reach the panel.', true); }
-});
+  } catch (e) { settingsNote('Could not reach the panel.', true); renderPrivate(privateMode); }
+}
+$('privateMode').addEventListener('change', () => setPrivate($('privateMode').checked));
+// The key in the top bar: Private mode on and off, as its Settings checkbox does.
+$('privateToggle').addEventListener('click', e => { e.preventDefault(); setPrivate(!privateMode); });
 function resetOutputFilter() {
   const wanted = privateMode && pipeline !== 'shorts' ? NSFW_FILTER : '';
   if (outputFilter === wanted) return;
@@ -7929,8 +8971,7 @@ function resetOutputFilter() {
   renderImageSets();
 }
 function showPage(page) {
-  if (!WIDE.matches && !choosingFor && document.body.dataset.page === 'generate' && page !== 'generate') clearPrompt(pipeline);
-  if (page === 'output' && document.body.dataset.page !== 'output') resetOutputFilter();
+  if (page === 'output' && document.body.dataset.page !== 'output') { holdOutput(); resetOutputFilter(); }
   document.body.dataset.page = page;
   try { sessionStorage.setItem(PAGE_KEY, page); } catch (e) {}
   if (!WIDE.matches) window.scrollTo(0, 0);
@@ -7965,7 +9006,6 @@ $('jump').addEventListener('click', e => {
   e.preventDefault();
   const page = link.dataset.page;
   if (choosingFor && page !== 'output') {
-    if (page !== 'generate') clearPrompt(choosingFor.side);
     backToGenerate(choosingFor.side);
     stopChoosing();
     if (page === 'generate') return;
@@ -7998,7 +9038,6 @@ function markJump() {
     : JUMPS.find(a => a.dataset.page === document.body.dataset.page) || JUMPS[0];
   if (WIDE.matches) {
     const generate = !!here && here.hash === '#optionsCard';
-    if (desktopGenerateActive && !generate && !choosingFor) clearPrompt(pipeline);
     desktopGenerateActive = generate;
   } else desktopGenerateActive = false;
   JUMPS.forEach(a => a.classList.toggle('active', a === here));
@@ -8316,6 +9355,7 @@ function foldDetails(details) {
   const summary = details.querySelector(':scope > summary');
   if (!summary) return;
   summary.addEventListener('click', e => {
+    if (e.target.closest && e.target.closest('[data-no-fold]')) return;
     if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
       setTimeout(() => { if (details.open) revealQueueSection(details); });
       return;
@@ -8408,8 +9448,8 @@ loadPresets();
 poll();
 setInterval(poll, 2000);
 // A phone pauses a page it isn't showing, so catch up as soon as it is shown again.
-document.addEventListener('visibilitychange', () => { if (!document.hidden) resumePolling(); });
-window.addEventListener('pageshow', resumePolling);
+document.addEventListener('visibilitychange', () => { if (!document.hidden) holdOutput(); });
+window.addEventListener('pageshow', holdOutput);
 window.addEventListener('focus', resumePolling);
 window.addEventListener('online', resumePolling);
 </script>

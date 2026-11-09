@@ -102,6 +102,19 @@ class RunState:
     def thumbnail_path(self, shot):
         return os.path.join(self.folder, "thumbnails", f"{os.path.splitext(shot['file'])[0]}.jpg")
 
+    # What made an image, kept with it ("setup") when it is made: a set continued another way later, or the image moved
+    # to a collection, it still knows its own. Its prompt, seed and title are its own already.
+    SETUP_FIELDS = ("brief", "direct", "llm", "workflow", "options", "width", "height", "compose", "transparent", "detail",
+                    "region", "form", "source_seeds", "image_count", "title")
+
+    def setup(self):
+        """The set's setup as it is now, as a copy an image can keep."""
+        return json.loads(json.dumps({name: getattr(self, name) for name in self.SETUP_FIELDS}))
+
+    def shot_setup(self, shot):
+        """What made this image: its own kept setup, or for one made before images kept theirs, the set's."""
+        return shot.get("setup") or self.setup()
+
     # --- Saving ---
 
     def update(self, **fields):

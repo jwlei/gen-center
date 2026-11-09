@@ -46,8 +46,12 @@ class UltimateTest(unittest.TestCase):
     def test_ksampler_gives_model_prompts_and_its_settings(self):
         api = ru.usdu(copy.deepcopy(KSAMPLER), "up.png", denoise=0.3)
         node = api["ru_usdu"]
-        self.assertEqual(node["class_type"], "UltimateSDUpscale")
+        self.assertEqual(node["class_type"], "UltimateSDUpscaleCustomSample")
         inputs = node["inputs"]
+        # The tiles start at the noise asked for, evenly down to none: not a "denoise" a shifted schedule makes far more.
+        self.assertEqual(inputs["custom_sigmas"], ["ru_sigmas", 0])
+        self.assertEqual(api["ru_sigmas"]["inputs"]["sigmas"], "0.3000, 0.2000, 0.1000, 0.0000", "as much of its 8 steps as 0.3 is: 3")
+        self.assertEqual((inputs["custom_sampler"], api["ru_sampler"]["inputs"]["sampler_name"]), (["ru_sampler", 0], "euler"))
         self.assertEqual((inputs["model"], inputs["positive"], inputs["negative"], inputs["vae"]), (["1", 0], ["2", 0], ["3", 0], ["6", 0]))
         self.assertEqual((inputs["steps"], inputs["seed"], inputs["sampler_name"], inputs["scheduler"], inputs["denoise"]), (8, 5, "euler", "simple", 0.3))
         self.assertEqual((inputs["mode_type"], inputs["tile_width"], inputs["mask_blur"], inputs["upscale_by"]), ("Chess", 768, 16, 2.0))
@@ -55,9 +59,15 @@ class UltimateTest(unittest.TestCase):
         self.assertEqual(api["ru_show"]["inputs"]["images"], ["ru_usdu", 0])
         self.assertNotIn("5", api, "the sampler itself doesn't run")
 
-    def test_a_sampler_ksampler_lacks_runs_as_euler(self):
-        inputs = ru.usdu(two_passes(), "up.png")["ru_usdu"]["inputs"]
-        self.assertEqual((inputs["sampler_name"], inputs["scheduler"]), ("euler", "simple"))
+    def test_a_res4lyf_sampler_runs_as_itself(self):
+        api = ru.usdu(two_passes(), "up.png")
+        inputs = api["ru_usdu"]["inputs"]
+        self.assertEqual((inputs["sampler_name"], api["ru_sampler"]["inputs"]["sampler_name"]), ("res_2s", "res_2s"), "RES4LYF's own, as KSampler knows it")
+        api = two_passes()
+        api["9"]["inputs"]["sampler_name"] = "exponential/made_up"
+        self.assertEqual(ru.usdu(api, "up.png")["ru_sampler"]["inputs"]["sampler_name"], "euler", "one KSampler lacks: euler")
+        self.assertEqual((ru.refine_steps(0.2, 8), ru.refine_steps(0.05, 8), ru.refine_steps(0.5, 30)), (2, 2, 15))
+        self.assertEqual(api["ru_sigmas"]["inputs"]["sigmas"], "0.2000, 0.1000, 0.0000", "by default as Krea 2's second pass: 0.2 in two steps")
 
     def test_a_guider_goes_to_the_guider_node(self):
         api = copy.deepcopy(KSAMPLER)
@@ -67,7 +77,7 @@ class UltimateTest(unittest.TestCase):
             api[node_id] = {"class_type": "X", "inputs": {}}
         node = ru.usdu(api, "up.png")["ru_usdu"]
         self.assertEqual(node["class_type"], "UltimateSDUpscaleGuider")
-        self.assertEqual((node["inputs"]["guider"], node["inputs"]["sigmas"]), (["13", 0], ["ru_split", 1]))
+        self.assertEqual((node["inputs"]["guider"], node["inputs"]["sigmas"]), (["13", 0], ["ru_sigmas", 0]))
 
     def test_sampler_custom_keeps_its_own_sampler_and_schedule(self):
         api = copy.deepcopy(KSAMPLER)
@@ -77,7 +87,7 @@ class UltimateTest(unittest.TestCase):
             api[node_id] = {"class_type": "X", "inputs": {}}
         node = ru.usdu(api, "up.png")["ru_usdu"]
         self.assertEqual(node["class_type"], "UltimateSDUpscaleCustomSample")
-        self.assertEqual((node["inputs"]["custom_sampler"], node["inputs"]["custom_sigmas"], node["inputs"]["cfg"]), (["14", 0], ["ru_split", 1], 4.0))
+        self.assertEqual((node["inputs"]["custom_sampler"], node["inputs"]["custom_sigmas"], node["inputs"]["cfg"]), (["14", 0], ["ru_sigmas", 0], 4.0))
 
 
 class InGenerationTest(unittest.TestCase):
@@ -94,6 +104,9 @@ class InGenerationTest(unittest.TestCase):
         self.assertEqual(ru.in_generation(copy.deepcopy(KSAMPLER), "usdu", (2000, 2000), scale=2.5)["ru_usdu"]["inputs"]["upscale_by"], 2.5)
         self.assertEqual(ru.in_generation(copy.deepcopy(KSAMPLER), "usdu", (9000, 9000), scale=9)["ru_usdu"]["inputs"]["upscale_by"], ru.MOST_SCALE)
         self.assertEqual(ru.in_generation(copy.deepcopy(KSAMPLER), "seedvr2", (2160, 3840))["ru_seedvr2"]["inputs"]["resolution"], 2160)
+        seedvr2 = ru.in_generation(copy.deepcopy(KSAMPLER), "seedvr2", (2160, 3840), denoise=0.15)["ru_seedvr2"]["inputs"]
+        self.assertEqual(seedvr2["latent_noise_scale"], 0.15, "its denoise, as its latent noise")
+        self.assertNotIn("Ultimate SD", ru.IN_GENERATION, "no longer offered in Generate")
 
     def test_without_free_memory_it_reads_the_decoder(self):
         api = ru.in_generation(copy.deepcopy(KSAMPLER), "ultrasharp", (2048, 2048), free_memory=False)

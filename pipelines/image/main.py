@@ -11,7 +11,7 @@ import time
 
 from dotenv import load_dotenv
 
-from core import batch_stop, h3_refiner, run_form, seeds
+from core import batch_stop, h3_refiner, pills, run_form, seeds, titles
 from core.saved_workflows import shorthand, title_words, unique_name
 from pipelines.image import media, models, paths, regions
 from pipelines.image import planner as image_planner
@@ -227,14 +227,27 @@ def plan_run(args, stages):
             title, versions = image_planner.write_prompts(*plan_args, compose=args.compose, transparent=args.transparent)
     shots = [{"number": number, "file": None, "seed": seeds.nth(args.seed, number - 1), **version}
              for number, version in enumerate(versions, 1)]
+    # Before the name: the set's folder and files take it too.
+    title = titles.titled(title, args.prompt, "a set of images", comfy.url, None if args.direct else llm)
     # At once: the prompts are what was paid for.
-    output_name = unique_name(paths.OUTPUT_DIR, f"{title_words(title, 'images')}_{shorthand(state.workflow, 'image')}")
+    workflow = shorthand(state.workflow, "image")
+    name = f"{title_words(title, 'images')}_{workflow}"
+    tag = set_tag(state, workflow)
+    output_name = unique_name(paths.OUTPUT_DIR, f"{name}_{tag}" if tag else name)
     state.update(title=title, shots=shots, output_name=output_name)
 
     print(f"🖼️ {title}, {state.width}x{state.height}")
     for shot in shots:
         print(f"\n{shot['number']}. {shot['title']}\n   {shot['prompt']}")
     return state
+
+
+def set_tag(state, workflow):
+    """What tells this set apart from the sets its prompt made before, for its folder's name (core/pills.py)."""
+    key = pills.sibling_key("image", state.brief)
+    others = [pills.run_facts(other, "image", shorthand(other.workflow, "image")) for other in list_runs()
+              if other.id != state.id and other.output_name and key and pills.sibling_key("image", other.brief) == key]
+    return pills.fixed_tag(pills.run_facts(state, "image", workflow), others, pills.run_stamp(state.id))
 
 
 def _region_fingerprint(args):
@@ -388,6 +401,8 @@ def render_images(state, comfy, most=None):
             failed += 1
             continue
         shot["file"] = os.path.basename(path)
+        # What made it, kept with it: the set continued another way later, or the image moved, it still knows.
+        shot["setup"] = state.setup()
         state.save()
         time_spent += time.time() - started
         made += 1

@@ -23,6 +23,29 @@ MULTISHOT_STEPS = 20
 DEFAULT_RENDER_SECONDS = 31
 # Unexplained drift from the original estimate below this isn't worth a line in the panel.
 SMALL_DRIFT_SECONDS = 60
+# Latent upscale (core/workflow_options.py): the clip made at its size, then its latent enlarged and refined at the size
+# it ends at. The refine is timed apart, per second of film at full size where it ends, per preset and model; until
+# timed, from how many refine steps the preset takes.
+LATENT_OPTIONS = "latent_upscale"
+LATENT_STEPS = {"Clean": 1, "Hires fix": 2, "Heavy": 3}
+LATENT_SECONDS_PER_STEP = 5
+# FastVideo: the first/last-frame model distilled to 4 steps. Timed as a model of its own; until then, the standard
+# one's time at 4 of its usual 20 steps.
+FASTVIDEO_SHARE = 4 / 20
+
+
+def _latent_in(options):
+    """(preset, refine steps, megapixels it ends at) for latent upscale, or (None, 0, 0)."""
+    options = options or {}
+    preset = options.get(LATENT_OPTIONS)
+    if not preset or preset == "Off":
+        return None, 0, 0
+    try:
+        steps = int(float(options.get("latent_upscale_steps", 3))) if preset == "Custom" else LATENT_STEPS.get(preset, 2)
+        megapixels = float(options.get("latent_upscale_mp", 1))
+    except ValueError:
+        return None, 0, 0
+    return preset, steps, megapixels
 
 
 def _option(argv, name, default):
@@ -107,7 +130,20 @@ class RunEta:
             except Exception:
                 self.local_model = None
         self.local = LocalModelTimer(self.timings, self.local_model, self.creativity)
-        self.render_keys = render_keys(self.workflow or DEFAULT_WORKFLOW, self.options, self.size)
+        # The clip itself is timed without its latent upscale, so making it is shared with films made without one.
+        self.latent, self.latent_steps, latent_mp = _latent_in(self.options)
+        self.latent_share = latent_mp * 1e6 / RENDER_AREA
+        made_options = {key: value for key, value in (self.options or {}).items() if not key.startswith(LATENT_OPTIONS)}
+        self.render_keys = render_keys(self.workflow or DEFAULT_WORKFLOW, made_options, self.size)
+        self.fastvideo = (self.options or {}).get("h3_model") == "FastVideo 4-step"
+        # Before FastVideo has a time of its own: the standard model's, as a share.
+        self.standard_keys = render_keys(self.workflow or DEFAULT_WORKFLOW,
+                                         {key: value for key, value in made_options.items() if key != "h3_model"}, self.size)
+        if self.fastvideo:
+            self.render_keys = [SEPARATOR.join(("fastvideo", key)) for key in self.render_keys]
+        model = self.render_keys[-1].removeprefix("fastvideo" + SEPARATOR)
+        self.latent_keys = ([SEPARATOR.join(("Latent upscale", self.latent, model)), SEPARATOR.join(("Latent upscale", self.latent)),
+                             "Latent upscale | per step"] if self.latent else [])
         # A take replaces the sampler and its steps with its own, so it is timed apart, without the steps option.
         take_options = {key: value for key, value in (self.options or {}).items() if key != "steps"}
         self.take_keys = [SEPARATOR.join(("multishot", key))
@@ -230,8 +266,21 @@ class RunEta:
 
     def _finish_attempt(self, now):
         if self.attempt_started is not None and self.attempt_seconds:
-            # As if at full size, or a 360p film would make the next 720p estimate far too short.
-            self.timings.learn_render(self.render_keys, (now - self.attempt_started) / self.attempt_seconds / self.size_share)
+            spent = now - self.attempt_started
+            if self.latent:
+                # The refine, once making the clip is timed: what's left over, per second at full size where it ends.
+                # Before that, making the clip: what's left once the refine's own guess is taken out.
+                if any(key in self.timings.renders for key in self.render_keys):
+                    made = self._made_seconds(self.attempt_seconds)
+                    refine = max(0.0, spent - made) / self.attempt_seconds / max(self.latent_share, 0.05)
+                    self.timings.learn_step(self.latent_keys[:2], refine)
+                    self.timings.learn_step(self.latent_keys[2:], refine / max(1, self.latent_steps))
+                else:
+                    made = max(1.0, spent - self._latent_seconds(self.attempt_seconds))
+                    self.timings.learn_render(self.render_keys, made / self.attempt_seconds / self.size_share)
+            else:
+                # As if at full size, or a 360p film would make the next 720p estimate far too short.
+                self.timings.learn_render(self.render_keys, spent / self.attempt_seconds / self.size_share)
             self.done_seconds += self.attempt_seconds
             self.attempt_started = None
             self._save()
@@ -268,8 +317,24 @@ class RunEta:
         """Stitching, per clip: H3 Infinite's is done in ComfyUI, from the saved latents, and takes far longer."""
         return "part | infinite" if self.start == "infinite" else "part"
 
+    def _made_seconds(self, film_seconds):
+        """Making the clip, at the size it is made at."""
+        default = DEFAULT_RENDER_SECONDS
+        if self.fastvideo:
+            default = self.timings.render(self.standard_keys, DEFAULT_RENDER_SECONDS) * FASTVIDEO_SHARE
+        return self.timings.render(self.render_keys, default) * self.size_share * film_seconds
+
+    def _latent_seconds(self, film_seconds):
+        """Its latent upscale: the refine at the size it ends at."""
+        if not self.latent:
+            return 0
+        per_step = self.timings.step(self.latent_keys[2:], LATENT_SECONDS_PER_STEP)
+        rate = self.timings.timed_step(self.latent_keys[:2])
+        rate = rate if rate is not None else per_step * self.latent_steps
+        return rate * self.latent_share * film_seconds
+
     def _render_seconds(self, film_seconds):
-        return self.timings.render(self.render_keys, DEFAULT_RENDER_SECONDS) * self.size_share * film_seconds
+        return self._made_seconds(film_seconds) + self._latent_seconds(film_seconds)
 
     def _take_seconds(self, film_seconds):
         rate = self.timings.render(self.take_keys, DEFAULT_TAKE_SECONDS)
@@ -319,7 +384,7 @@ class RunEta:
                 "clips": self.shots,
                 "clip_seconds": round(self.film_seconds / self.shots) if self.film_seconds else clip_seconds(self.video_model, self.clip_range)[2],
                 "clip_render": round(self._render_seconds(self.film_seconds / self.shots)) if self.film_seconds else 0,
-                "timed": self.timings.timed(self.render_keys)}
+                "timed": self.timings.timed(self.render_keys) and (not self.latent or self.timings.timed_step(self.latent_keys[:2]) is not None)}
 
     def estimate(self):
         """Returns seconds per step and left overall, or None before the first step (or for a run without steps)."""

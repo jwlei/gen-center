@@ -38,9 +38,11 @@ def write(path, data):
 
 
 def from_run(state):
-    return {"origin_run": state.id, "title": state.title or state.brief,
+    # The brief: an upscaled copy stays a sibling of what its prompt made (core/pills.py).
+    return {"origin_run": state.id, "title": state.title or state.brief, "brief": state.brief,
             "model": shorthand(state.workflow, BUILT_IN), "llm": state.llm,
             "h3_mode": state.h3_mode, "h3_creativity": state.h3_creativity,
+            "connection": state.connection_mode or state.start, "direct": bool(state.direct),
             "loras": workflow_options.loras_used(state.workflow, state.options, "video")}
 
 

@@ -39,7 +39,8 @@ from flask import (Flask, abort, has_request_context, redirect, render_template,
 from werkzeug.exceptions import NotFound
 from werkzeug.datastructures import MultiDict
 
-from core import batch_stop, eta_keys, run_form, workflow_options
+from core import batch_stop, eta_keys, pills, run_form, workflow_options
+from core.upscale_eta import UpscaleEta, is_upscale
 from core.paths import LOGS_DIR, PROJECT_ROOT, SAVED_WORKFLOWS_DIR, comfyui_client_id
 from core.quota import quota_summary
 from core.saved_workflows import display_label, list_saved, pipeline_of
@@ -65,8 +66,8 @@ VIDEO_TIMINGS = os.path.join(LOGS_DIR, "stage_timings_video.json")
 IMAGE_TIMINGS = os.path.join(LOGS_DIR, "stage_timings_image.json")
 PROMPT_WRITER_TIMINGS = os.path.join(LOGS_DIR, "prompt_writer_timings.json")
 ETAS = {"shorts": lambda argv, env: ShortsEta(argv, env, SHORTS_TIMINGS),
-        "video": lambda argv, env: VideoEta(argv, VIDEO_TIMINGS, env),
-        "image": lambda argv, env: ImageEta(argv, env, IMAGE_TIMINGS)}
+        "video": lambda argv, env: UpscaleEta(argv, VIDEO_TIMINGS) if is_upscale(argv) else VideoEta(argv, VIDEO_TIMINGS, env),
+        "image": lambda argv, env: UpscaleEta(argv, IMAGE_TIMINGS) if is_upscale(argv) else ImageEta(argv, env, IMAGE_TIMINGS)}
 # What panel/shorts.py, panel/video.py and panel/image.py each add: load_run, describe_runs, continue_run,
 # discard_run, delete_video, captions and context.
 PIPELINES = {}
@@ -411,6 +412,15 @@ job = Job(batches=True)
 uploads = Job()
 
 
+# Called as a job ends, with (item, outcome, its run's state, the position it made, the film it made): what other parts
+# of the panel do then (panel/collections.py puts an upscale of an item in a collection in the same one).
+RECORD_HOOKS = []
+# Called with the status as it is built, after NSFW tags: panel/collections.py marks what is in a collection.
+STATUS_HOOKS = []
+# Called once as the panel starts serving (main), not on import: panel/comfy_cleanup.py clears ComfyUI's folders.
+STARTUP_HOOKS = []
+
+
 class JobQueue:
     """
     The jobs waiting for a Job, oldest first, each keeping the options it was
@@ -483,6 +493,16 @@ class JobQueue:
             self.results = []
             self._save_results()
 
+    def forget_result(self, job_id):
+        """Takes one job off Finished (a swipe). What it made stays. Returns whether it was there."""
+        with self.lock:
+            kept = [result for result in self.results if result.get("job_id") != job_id]
+            forgotten = len(kept) != len(self.results)
+            if forgotten:
+                self.results = kept
+                self._save_results()
+            return forgotten
+
     def _save(self):
         # Once closed, the file keeps what was queued at Shut down.
         if not self.path or self.job.closed:
@@ -505,9 +525,12 @@ class JobQueue:
         """Starts the job if nothing is ahead of it, otherwise queues it. Returns True if it is queued."""
         edit_id = request.form.get("queue_edit_id", type=int) if has_request_context() else None
         edit_token = request.form.get("queue_edit_token") if edit_id else None
-        # Generate's "Start later": it waits in the queue until it's started.
-        if has_request_context() and request.path.startswith("/generate/") and request.form.get("start_later"):
+        # Generate's "Add to pending": it waits in the queue until it's started.
+        generating = has_request_context() and request.path.startswith("/generate/")
+        if generating and request.form.get("start_later"):
             item["later"] = True
+        # Generate's "Add to top of queue": ahead of everything already waiting.
+        to_top = generating and not item.get("later") and bool(request.form.get("queue_top"))
         # New creations only: an upscale or continuation of something made before keeps that one's tag.
         if self is run_queue and private_mode() and item.get("pipeline") in ("image", "video") and (not item.get("resume") or item.get("new_run")):
             item["private"] = True
@@ -537,7 +560,7 @@ class JobQueue:
                 self._start(item)
                 return False
             # Ahead of those waiting to be started, which stay at the end.
-            at = len(self.items) if item.get("later") else next((i for i, waiting in enumerate(self.items) if waiting.get("later")), len(self.items))
+            at = len(self.items) if item.get("later") else 0 if to_top else next((i for i, waiting in enumerate(self.items) if waiting.get("later")), len(self.items))
             self.items.insert(at, item)
             if self.job is job and self.job.running and batch_stop.requested():
                 self.held = True
@@ -659,6 +682,11 @@ class JobQueue:
         # go back to Pending instead of being lost with it.
         if outcome == "failed" and not run_id and self is run_queue:
             result["job"] = {key: value for key, value in item.items() if key not in self.TRANSIENT_KEYS}
+        for hook in RECORD_HOOKS:
+            try:
+                hook(item, outcome, state, position, film)
+            except Exception as e:  # One part of the panel failing must not lose the job's result
+                app.logger.error("A job's end could not be followed up: %s", e)
         self.results.append(result)
         del self.results[:-self.KEPT_RESULTS]
         self._save_results()
@@ -968,6 +996,8 @@ def list_videos(folder):
         })
 
     videos.sort(key=lambda v: v["mtime"], reverse=True)
+    # A film's pills, against the others made from its prompt; the prompt itself stays here.
+    pills.with_pills([video for video in videos if "_facts" in video])
     return videos
 
 
@@ -1050,7 +1080,7 @@ def _video_nsfw_key(name, films=None):
     return ("video", run) if run else ("video_file", name)
 
 
-def _apply_nsfw(payload, tags, film_runs):
+def _apply_nsfw(payload, tags, film_runs, private=False):
     image_tags, video_tags, video_files = (set(tags[key]) for key in ("image", "video", "video_file"))
     tagged_films = set()
     for film in payload["videos"]["video"]:
@@ -1063,6 +1093,9 @@ def _apply_nsfw(payload, tags, film_runs):
         image_set["nsfw"] = image_set["id"] in image_tags
 
     def visible_result(result):
+        # Private mode: what is made is NSFW, so Finished shows it rather than hiding all of it.
+        if private:
+            return True
         if result.get("pipeline") == "image":
             return result.get("run_id") not in image_tags
         if result.get("pipeline") == "video":
@@ -1708,7 +1741,10 @@ def saved_runs():
     if time.time() - _runs_cache["at"] > 3:
         _runs_cache["at"] = time.time()
         try:
-            _runs_cache["value"] = [run for pipeline in PIPELINES.values() for run in pipeline.describe_runs()]
+            runs = [run for pipeline in PIPELINES.values() for run in pipeline.describe_runs()]
+            # An image set's pills, against the others made from its prompt.
+            pills.with_pills([run for run in runs if "_facts" in run])
+            _runs_cache["value"] = runs
         except Exception as e:  # This is polled for the whole page: one odd run must not freeze it
             job.log(f"⚠️ Could not list the saved runs: {e}")
     return _runs_cache["value"]
@@ -1994,6 +2030,7 @@ def discard_run(run_id):
 @app.route("/stop", methods=["POST"])
 @password_required
 def stop():
+    _cancelling["started_at"] = None  # Stop is all of it: a Cancel waiting to happen goes with it
     return {"ok": stop_run(), "error": STOP_FAILED if job.running else None}
 
 
@@ -2027,17 +2064,56 @@ def stop_after():
     return {"ok": True, "stop_after": True}
 
 
+# Cancel asked for before the run had anything saved: it stops once it has (its plan or prompts written), for the job
+# that was running then. {"started_at": ...} while waiting, else None.
+_cancelling = {"started_at": None}
+
+
+def run_saved():
+    """Whether the running job's run is saved, so it can be stopped and continued later. Upscales and Shorts can always."""
+    run_id = (job.progress or {}).get("run_id")
+    current = run_queue.current or {}
+    if current.get("pipeline") not in PIPELINES or current.get("pipeline") == "shorts" or is_upscale(current.get("argv")):
+        return True
+    return bool(run_id and PIPELINES[current["pipeline"]].load_run(run_id))
+
+
+def cancel_now():
+    """Stops the running job; the next in the queue starts if the queue is going, and a held queue stays held."""
+    _cancelling["started_at"] = None
+    return stop_run(start_next=not run_queue.held)
+
+
+def _cancel_when_saved(started_at):
+    while job.running and job.started_at == started_at and _cancelling["started_at"] == started_at:
+        if run_saved():
+            job.log("⏭️ Its plan is saved: cancelling it now.")
+            cancel_now()
+            return
+        time.sleep(0.5)
+    if _cancelling["started_at"] == started_at:
+        _cancelling["started_at"] = None  # It ended on its own first
+
+
 @app.route("/skip", methods=["POST"])
 @password_required
 def skip():
-    """Stops the run so the next in the queue can start. It waits under Stopped runs until you continue it."""
-    # A film's plan is saved once written: stopped before that, there would be nothing to continue.
+    """
+    Cancels the running job: it stops, and waits under Stopped runs until you continue it, and the next in the queue
+    starts if the queue is going. One with nothing saved yet to continue from stops as soon as it has.
+    """
     _runs_cache["at"] = 0.0
-    if job.progress.get("run_id") not in {run["id"] for run in saved_runs()}:
-        return {"ok": False, "error": "This run has nothing saved to continue from yet. Try again once its plan is written."}, 409
-    stopped = stop_run(start_next=True)
-    # Once stopped, what's running is the next job.
-    return {"ok": stopped, "error": STOP_FAILED if job.running and not stopped else None}
+    if not job.running:
+        return {"ok": True, "cancelling": False}
+    if run_saved():
+        stopped = cancel_now()
+        return {"ok": stopped, "error": STOP_FAILED if job.running and not stopped else None}
+    started_at = job.started_at
+    if _cancelling["started_at"] != started_at:
+        _cancelling["started_at"] = started_at
+        job.log("⏭️ Cancelling once its plan is saved: then the next in the queue starts.")
+        threading.Thread(target=_cancel_when_saved, args=(started_at,), daemon=True).start()
+    return {"ok": True, "cancelling": True}
 
 
 @app.route("/publish/stop", methods=["POST"])
@@ -2063,6 +2139,14 @@ def clear_finished():
     for queue in QUEUES.values():
         queue.clear_results()
     return {"ok": True}
+
+
+@app.route("/queue/<lane>/finished/<int:job_id>/forget", methods=["POST"])
+@password_required
+def queue_forget_result(lane, job_id):
+    if lane not in QUEUES:
+        abort(404)
+    return {"ok": QUEUES[lane].forget_result(job_id)}
 
 
 @app.route("/queue/<lane>/failed/<int:job_id>/dismiss", methods=["POST"])
@@ -2159,6 +2243,30 @@ def legacy_queue_form(item):
     return form, files, options
 
 
+def upscale_source_size(item):
+    """[width, height] of what a queued upscale makes bigger, for the upscale box's "before → after"; None if unknown."""
+    from panel import image as image_panel
+    from PIL import Image
+    argv = item.get("argv") or []
+    flag = lambda name: argv[argv.index(name) + 1] if name in argv[:-1] else None
+    try:
+        if "pipelines.image.upscale" in argv:
+            state = image_panel.RunState.load(item.get("resume"))
+            position = image_panel.upscale_position(state, argv) if state else None
+            if not position or not position.isdigit() or not 1 <= int(position) <= len(state.shots or []):
+                return None
+            with Image.open(state.image_path(state.shots[int(position) - 1])) as image:
+                return list(image.size)
+        if "pipelines.video.upscale" in argv and flag("--film"):
+            path = os.path.join(FOLDERS["video"], flag("--film"))
+            stat = os.stat(path)
+            resolution = video_file_metadata(path, stat.st_mtime_ns, stat.st_size).get("resolution") or ""
+            return [int(side) for side in resolution.split("x")] if "x" in resolution else None
+    except (OSError, ValueError, TypeError):
+        return None
+    return None
+
+
 def upscale_queue_settings(item):
     argv = item.get("argv") or []
     flag = lambda name, default="": argv[argv.index(name) + 1] if name in argv[:-1] else default
@@ -2196,7 +2304,7 @@ def queue_edit(item_id):
             item["edit_token"] = secrets.token_urlsafe(24)
             run_queue._save()
             return {"ok": True, "id": item_id, "token": item["edit_token"], "pipeline": item.get("pipeline"),
-                    "upscale": upscale}
+                    "upscale": {**upscale, "size": upscale_source_size(item)}}
         restored = (item["form"], item.get("form_files", {}), {}) if item.get("form") else legacy_queue_form(item)
         if not restored:
             return {"ok": False, "error": "Setup is unavailable for this job. It remains in the queue unchanged."}, 409
@@ -2270,7 +2378,9 @@ def queue_edit_continue(item_id):
         if request.form.get("try_first"):
             argv = argv + ["--first-only"]
         replacement = {**old, "argv": argv, "waited": True, "first_only": bool(request.form.get("try_first")),
-                       "resolution": f"{state.width}x{state.height}"}
+                       "resolution": f"{state.width}x{state.height}",
+                       # Its new size and options take another time: estimated again, as the run will be made.
+                       "estimate": pipeline.estimate(argv, old.get("env") or {})}
         for key in ("later", "edit_token", "edit_from_queue"):
             replacement.pop(key, None)
         if request.form.get("start_later"):
@@ -2327,12 +2437,25 @@ def queue_edit_upscale(item_id):
             problem = image_panel.upscale_problem(method, *size)
             if problem:
                 return {"ok": False, "error": problem}, 400
+            # A resolution offered, or what 2x, 3x or 4x made it (its shorter side times over, within SeedVR2's most).
             if (method == "seedvr2" and resolution and
-                    (resolution not in image_panel.UPSCALE_RESOLUTIONS or resolution <= shorter)):
+                    ((resolution not in image_panel.UPSCALE_RESOLUTIONS and resolution > image_panel.SEEDVR2_MOST_EDGE)
+                     or resolution <= shorter)):
                 return {"ok": False, "error": "Choose a supported resolution larger than the original image."}, 400
+            # 2x, 3x or 4x, as the upscale box says it: its shorter side that many times, within SeedVR2's most.
+            times = data.get("times")
+            if method == "seedvr2" and times:
+                if str(times) not in tuple(str(n) for n in image_panel.UPSCALE_SCALES):
+                    return {"ok": False, "error": "SeedVR2 makes it 2, 3 or 4 times its size."}, 400
+                resolution = min(image_panel.SEEDVR2_MOST_EDGE, int(times) * shorter)
             if method != "seedvr2":
                 resolution = 0
             denoise = None
+            if method == "seedvr2":
+                try:
+                    denoise = image_panel.seedvr2_denoise(data.get("denoise")) or None
+                except ValueError as e:
+                    return {"ok": False, "error": str(e)}, 400
             if method in image_panel.REFINE_UPSCALES:
                 try:
                     denoise = float(data.get("denoise") or 0.3)
@@ -2340,13 +2463,12 @@ def queue_edit_upscale(item_id):
                     return {"ok": False, "error": "Denoise is a number from 0.05 to 1."}, 400
                 if not math.isfinite(denoise) or not 0.05 <= denoise <= 1:
                     return {"ok": False, "error": "Denoise is a number from 0.05 to 1."}, 400
-            how = image_panel.upscale_detail(method, strength, resolution, denoise)
+            how = image_panel.upscale_detail(method, strength, resolution, denoise, int(times) if method == "seedvr2" and times else None)
             new_argv = [*image_panel.UPSCALE, "--resume", state.id, "--image", position,
                         *(["--file", flag("--file")] if flag("--file") else []), "--method", method,
                         "--strength", f"{strength:g}", *(["--resolution", str(resolution)] if resolution else []),
                         *(["--denoise", f"{denoise:g}"] if denoise is not None else [])]
-            estimate = (image_panel.UPSCALE_SECONDS if method == "seedvr2" else image_panel.REFINE_UPSCALE_SECONDS if denoise is not None
-                        else image_panel.FAST_UPSCALE_SECONDS)
+            estimate = UpscaleEta(new_argv, IMAGE_TIMINGS).plan()["total"]
         else:
             name = flag("--film")
             if not name:
@@ -2364,7 +2486,7 @@ def queue_edit_upscale(item_id):
                 return {"ok": False, "error": "Choose a valid scale and quality."}, 400
             how = f"RTX VSR, {scale:g}x, {quality}"
             new_argv = [*video_panel.UPSCALE, "--film", name, "--scale", f"{scale:g}", "--quality", quality]
-            estimate = old.get("estimate")
+            estimate = UpscaleEta(new_argv, VIDEO_TIMINGS).plan()["total"]
         replacement = {**old, "argv": new_argv, "detail": how, "estimate": estimate, "waited": True}
         replacement.pop("later", None)
         replacement.pop("edit_token", None)
@@ -2761,6 +2883,7 @@ def status():
             queue["current"]["facts"]["resolution"] = f"{state.width}x{state.height}"
     payload["server_started"] = STARTED_AT
     payload["stop_after"] = payload["running"] and batch_stop.requested()
+    payload["cancelling"] = bool(payload["running"] and _cancelling["started_at"] and _cancelling["started_at"] == job.started_at)
     payload["queue"] = queue
     payload["stopped_runs"] = stopped_runs()
     payload["made_now"] = made_in_this_run()
@@ -2772,14 +2895,19 @@ def status():
                              for run in saved_runs() if run["pipeline"] == "image" and run["images"]]
     with _nsfw_lock:
         tags = _read_nsfw()
-    _apply_nsfw(payload, tags, films_of_runs())
+    payload["private"] = private_mode()
+    _apply_nsfw(payload, tags, films_of_runs(), payload["private"])
+    for hook in STATUS_HOOKS:
+        try:
+            hook(payload)
+        except Exception as e:  # The status is polled for the whole page: one part failing must not freeze it
+            app.logger.error("Status could not be completed: %s", e)
     online = comfyui_online(wait=False)
     payload["comfyui"] = {"online": online, "listening": comfyui_listening(), "can_start": bool(comfyui_launcher()), "ram": ram_stats(),
                           "starting": not online and time.time() - _comfyui_start_requested_at < COMFYUI_STARTUP_WAIT,
                           **(comfy_monitor.snapshot() if comfy_monitor else {})}
     payload["gpu"] = gpu_stats()
     payload["poweroff"] = poweroff_state()
-    payload["private"] = private_mode()
     payload["quota"] = cached_quota()
     return payload
 
@@ -3053,6 +3181,11 @@ def main():
     parser.add_argument("--port", type=int, default=8800, help="Port (default: 8800).")
     parser.add_argument("--debug", action="store_true")
     args = parser.parse_args()
+    for hook in STARTUP_HOOKS:
+        try:
+            hook()
+        except Exception as e:  # Tidying up must never keep the panel from starting
+            app.logger.error("A start-up task failed: %s", e)
 
     if args.host != "127.0.0.1" and not os.getenv("APP_PASSWORD"):
         parser.error(

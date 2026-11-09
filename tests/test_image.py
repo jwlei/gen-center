@@ -733,6 +733,12 @@ class PanelTest(unittest.TestCase):
         self.assertEqual(len(run.shots), 3)
         upscaled = run.shots[1]
         self.assertEqual((upscaled["upscaled_from"], upscaled["title"]), (1, run.shots[0]["title"] + " · upscaled"))
+        # Each keeps what made it; the upscaled one its own copy of the original's.
+        self.assertEqual(run.shots[0]["setup"]["width"], run.width)
+        self.assertEqual(upscaled["setup"], run.shots[0]["setup"])
+        self.assertIsNot(upscaled["setup"], run.shots[0]["setup"])
+        detail = self.client.get(f"/image-runs/{run.id}").get_json()
+        self.assertEqual(detail["shots"][0]["settings"]["size"], f"{run.width}x{run.height}", "more like this from its own setup")
         self.assertTrue(upscaled["file"].endswith("_upscaled.png") and os.path.exists(run.image_path(upscaled)))
         sent = self.comfy.prompts[prompts]["prompt"]
         self.assertEqual({node["class_type"] for node in sent.values()},
@@ -745,6 +751,25 @@ class PanelTest(unittest.TestCase):
         self.wait_idle()
         sent = self.comfy.prompts[prompts]["prompt"]
         self.assertEqual(next(n for n in sent.values() if n["class_type"] == "SeedVR2VideoUpscaler")["inputs"]["resolution"], 1440)
+        # 2, 3 or 4 times its size: its shorter side that many times, within 2560.
+        self.assertEqual(self.client.post(f"/image-runs/{run.id}/upscale/1?method=seedvr2&scale=5").status_code, 400)
+        shorter = min(Image.open(run.image_path(run.shots[0])).size)
+        for scale in (3, 4):
+            prompts = len(self.comfy.prompts)
+            self.assertTrue(self.client.post(f"/image-runs/{run.id}/upscale/1?method=seedvr2&scale={scale}").get_json()["ok"])
+            self.wait_idle()
+            sent = self.comfy.prompts[prompts]["prompt"]
+            self.assertEqual(next(n for n in sent.values() if n["class_type"] == "SeedVR2VideoUpscaler")["inputs"]["resolution"],
+                             min(2560, scale * shorter))
+        # Its denoise is SeedVR2's latent noise; none unless asked.
+        self.assertEqual(next(n for n in sent.values() if n["class_type"] == "SeedVR2VideoUpscaler")["inputs"]["latent_noise_scale"], 0.0)
+        prompts = len(self.comfy.prompts)
+        self.assertTrue(self.client.post(f"/image-runs/{run.id}/upscale/1?method=seedvr2&denoise=0.1").get_json()["ok"])
+        self.wait_idle()
+        sent = self.comfy.prompts[prompts]["prompt"]
+        self.assertEqual(next(n for n in sent.values() if n["class_type"] == "SeedVR2VideoUpscaler")["inputs"]["latent_noise_scale"], 0.1)
+        self.assertTrue(self.only_run().shots[1]["upscaled_with"].endswith("denoise 0.1"), self.only_run().shots[1]["upscaled_with"])
+
     def test_upscaling_fast_takes_superscale_and_blends_at_the_strength_asked(self):
         self.make(count="1", aspect="1:1", megapixels="0.5")
         run = self.only_run()
@@ -772,18 +797,19 @@ class PanelTest(unittest.TestCase):
         sent = self.comfy.prompts[prompts]["prompt"]
         self.assertEqual(next(n for n in sent.values() if n["class_type"] == "UpscaleModelLoader")["inputs"]["model_name"], "4x-UltraSharp.pth")
 
-    def test_ultimate_sd_is_queued_with_its_denoise_and_hires_fix_is_gone(self):
+    def test_seedvr2_takes_a_denoise_and_ultimate_sd_and_hires_fix_are_gone(self):
         self.make(count="1", aspect="1:1", megapixels="0.5")
         run = self.only_run()
         added = []
         with mock.patch.object(webapp.run_queue, "add", lambda item: added.append(item) or 1):
-            self.assertEqual(self.client.post(f"/image-runs/{run.id}/upscale/1?method=hires").status_code, 400)
-            self.assertEqual(self.client.post(f"/image-runs/{run.id}/upscale/1?method=usdu&denoise=2").status_code, 400)
-            self.assertTrue(self.client.post(f"/image-runs/{run.id}/upscale/1?method=usdu&denoise=0.45").get_json()["ok"])
-            self.assertTrue(self.client.post(f"/image-runs/{run.id}/upscale/1?method=usdu").get_json()["ok"])
-        self.assertEqual(added[0]["argv"][added[0]["argv"].index("--denoise") + 1], "0.45")
-        self.assertEqual(added[0]["detail"], "Ultimate SD Upscale, twice the size, denoise 0.45")
-        self.assertEqual(added[1]["argv"][added[1]["argv"].index("--denoise") + 1], "0.3", "Ultimate SD's usual")
+            for gone in ("hires", "usdu"):
+                self.assertEqual(self.client.post(f"/image-runs/{run.id}/upscale/1?method={gone}").status_code, 400, gone)
+            self.assertEqual(self.client.post(f"/image-runs/{run.id}/upscale/1?method=seedvr2&denoise=2").status_code, 400)
+            self.assertTrue(self.client.post(f"/image-runs/{run.id}/upscale/1?method=seedvr2&scale=2&denoise=0.1").get_json()["ok"])
+            self.assertTrue(self.client.post(f"/image-runs/{run.id}/upscale/1?method=seedvr2&denoise=0").get_json()["ok"])
+        self.assertEqual(added[0]["argv"][added[0]["argv"].index("--denoise") + 1], "0.1")
+        self.assertTrue(added[0]["detail"].startswith("SeedVR2, 2× (") and added[0]["detail"].endswith("p), denoise 0.1"), added[0]["detail"])
+        self.assertNotIn("--denoise", added[1]["argv"], "none: as it ran before")
 
     def test_a_screen_stepped_goes_as_its_shape_at_that_many_megapixels(self):
         from panel import image as image_panel
@@ -795,9 +821,9 @@ class PanelTest(unittest.TestCase):
     def test_a_big_image_takes_the_ways_that_fit_and_says_how_it_was_upscaled(self):
         from panel import image as image_panel
         self.assertIsNotNone(image_panel.upscale_problem("seedvr2", 1568, 2784))
-        for method in ("usdu", "ultrasharp", "fast"):
+        for method in ("ultrasharp", "fast"):
             self.assertIsNone(image_panel.upscale_problem(method, 1568, 2784), method)
-        self.assertIsNotNone(image_panel.upscale_problem("usdu", 3000, 5000))
+        self.assertIsNotNone(image_panel.upscale_problem("ultrasharp", 3000, 5000))
         self.make(count="1", aspect="1:1", megapixels="0.5")
         run = self.only_run()
         self.assertTrue(self.client.post(f"/image-runs/{run.id}/upscale/1?method=ultrasharp&strength=0.75").get_json()["ok"])
@@ -827,6 +853,25 @@ class PanelTest(unittest.TestCase):
             self.addCleanup(lambda: webapp.run_queue.items[:] and [webapp.run_queue.items.remove(i) for i in list(webapp.run_queue.items) if i.get("id") == 990])
             self.assertEqual(self.client.post(f"/image-runs/{run.id}/upscale/1?method=ultrasharp").status_code, 409,
                              "not while the set itself is queued to be made")
+
+    def test_an_image_can_be_deleted_while_another_of_its_set_waits_to_be_upscaled(self):
+        from panel import image as image_panel
+        self.make(count="2", aspect="1:1", megapixels="0.5")
+        run = self.only_run()
+        with mock.patch.object(webapp.run_queue, "_advance"):
+            self.assertTrue(self.client.post(f"/image-runs/{run.id}/upscale/1?method=ultrasharp").get_json()["ok"])
+            queued = [item for item in webapp.run_queue.items if image_panel.is_upscale(item)]
+            self.addCleanup(lambda: [webapp.run_queue.items.remove(i) for i in queued if i in webapp.run_queue.items])
+            self.assertEqual(self.client.post(f"/image-runs/{run.id}/delete/1").status_code, 409, "not the one it waits to upscale")
+            detail = self.client.get(f"/image-runs/{run.id}").get_json()
+            self.assertFalse(detail["busy"] or detail["pending"], "an upscale only waiting doesn't hold the set")
+            self.assertEqual([shot["locked"] for shot in detail["shots"]], [True, False], "only the image it waits on")
+            reply = self.client.post(f"/image-runs/{run.id}/delete/2").get_json()
+            self.assertTrue(reply["ok"], reply)
+            self.assertEqual(len(self.only_run().shots), 1)
+            # One queued before images were found by file would land on the wrong one: refused.
+            queued[0]["argv"] = [arg for arg in queued[0]["argv"] if arg != queued[0]["argv"][queued[0]["argv"].index("--file") + 1] and arg != "--file"]
+            self.assertEqual(self.client.post(f"/image-runs/{run.id}/delete/1").status_code, 409)
 
     def test_trying_one_first_makes_one_and_stops(self):
         self.make(count="3", try_first="1")

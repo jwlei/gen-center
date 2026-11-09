@@ -20,7 +20,7 @@ function element(id) {
     classList: { toggle() {}, add() {}, remove() {}, contains: () => false },
     listeners: {}, listenersAll: {}, addEventListener(name, fn) { this.listeners[name] = fn; (this.listenersAll[name] = this.listenersAll[name] || []).push(fn); }, querySelectorAll: selector => (selector === 'input' ? [element('low'), element('high')] : []), querySelector: () => element('part'), setAttribute() {},
     reportValidity() { return true; }, dispatchEvent() {},
-    getBoundingClientRect: () => ({ top: 0, bottom: 100 }), appendChild() {}, insertBefore() {}, offsetHeight: 90, insertAdjacentHTML() {}, showModal() { this.open = true; }, close() { this.open = false; }, scrollTo() {}, scrollIntoView() {},
+    getBoundingClientRect: () => ({ top: 0, bottom: 100 }), appendChild() {}, insertBefore() {}, after() {}, offsetHeight: 90, insertAdjacentHTML() {}, showModal() { this.open = true; }, close() { this.open = false; }, scrollTo() {}, scrollIntoView() {},
     pause() {}, play() { return Promise.resolve(); }, removeAttribute(name) { delete this[name]; },
   };
 }
@@ -387,13 +387,13 @@ context.sets = sets;
 const setHtml = run('imageSetHtml(sets[0])');
 assert(!setHtml.includes('<b>set') && !setHtml.includes('<i>Look'), 'titles are escaped');
 assert(setHtml.includes('/thumbnails/1?v=5') && setHtml.includes('/files/1?v=5') && setHtml.includes('loading="lazy"'), 'small pictures, that open full size');
-assert(setHtml.includes('data-delete-set=') && setHtml.includes('data-shots=') && setHtml.includes('data-download-set='));
+assert(setHtml.includes('data-delete-set=') && setHtml.includes('data-shots=') && !setHtml.includes('data-download-set='), 'no download on the card: the preview has it');
 assert(setHtml.includes(`title="Prompts" aria-label="Prompts">${run('ICONS.enhanced')}</button>`), 'image Output prompts uses the star icon');
 assert(setHtml.includes('krea2_&lt;SFW&gt; · 1024x1024 · 2.0 MB · 2 of 3 images'), 'workflow, resolution, total size and progress');
 assert(run("outputCount({ total: 3, finished: true, images: [1, 2] })") === '2 images', 'finished sets show the current count');
 assert(!setHtml.includes('target="_blank"') && setHtml.includes('data-view-position="3"'), 'a picture opens in the viewer, not a new tab');
 const inRow = setHtml.slice(setHtml.indexOf('class="image-set-row'));
-assert(inRow.includes('<img') && inRow.indexOf('<img') < inRow.indexOf('data-download-set') && inRow.indexOf('data-shots') < inRow.indexOf('data-delete-set'), 'the pictures and their buttons share one line');
+assert(inRow.includes('<img') && inRow.indexOf('<img') < inRow.indexOf('data-delete-set') && inRow.indexOf('data-shots') < inRow.indexOf('data-delete-set'), 'the pictures and their buttons share one line');
 
 // Download on a set takes each image as a file of its own; the viewer's takes just the one it shows.
 const clicked = [];
@@ -514,10 +514,225 @@ assert(/\.image-set-row \{ display: flex/.test(html) && /\.image-grid img \{ wid
 // An album: its cover, as tall as the strip of the rest above its buttons; one image stays on a line with its buttons.
 assert(/<div class="image-set-row album">\s*<a [^>]*class="album-cover"[^>]*><img[^>]*\/thumbnails\/1\?v=5"><span class="album-count">2<\/span><\/a>\s*<div class="album-side">\s*<div class="album-strip"><a [^>]*data-view-position="3"[\s\S]*?<\/div>\s*<div class="image-set-actions">/.test(setHtml),
   'cover beside the strip, the strip above the buttons');
+assert(!setHtml.includes('upscaled-badge'), 'no badge on a picture that was not upscaled');
+const upscaledHtml = run("imageSetHtml({ ...sets[0], images: [{ position: 1, title: 'a', version: 1, upscaled: 'SeedVR2' }, { position: 2, title: 'b', version: 1 }, { position: 3, title: 'c', version: 1, upscaled: '<x>' }] })");
+assert((upscaledHtml.match(/class="upscaled-badge"/g) || []).length === 2 && upscaledHtml.includes('aria-label="Upscaled: SeedVR2"') && !upscaledHtml.includes('<x>'),
+  'an upscaled picture, cover or strip, has its badge, its method escaped');
+assert(/\.album-count \{ position: absolute; left: 4px; bottom: 4px;/.test(html) && /\.upscaled-badge \{ position: absolute; right: 4px; bottom: 4px;/.test(html), 'count bottom left, badge bottom right');
+assert(html.includes('<span class="upscaled-badge" id="viewerUpscaled" role="img" aria-label="Upscaled" hidden></span>') && script.includes("$('viewerUpscaled').hidden = !picture.upscaled;"), 'the preview has the badge too');
+{
+  const later = run("imageSetHtml({ ...sets[0], images: [{ position: 1, title: 'a', version: 1 }, { position: 2, title: 'b', version: 1, upscaled: 'SeedVR2' }] })");
+  const cover = later.slice(later.indexOf('class="album-cover"'), later.indexOf('album-side'));
+  assert(cover.includes('aria-label="Some of this set are upscaled"'), 'the cover says so when any of its set is upscaled');
+  assert(!run("imageSetHtml({ ...sets[0], images: [{ position: 1, title: 'a', version: 1, upscaled: 'SeedVR2' }] })").includes('Some of this set'), 'not twice when the cover is the upscaled one');
+}
+assert(/<option value="x2">2×<\/option><option value="x3">3×<\/option><option value="x4">4×<\/option><option value="720">/.test(html), 'SeedVR2: 2×, 3× or 4×, then the resolutions');
+assert.strictEqual(run("seedvr2Shorter('x3', 800)"), 2400, '3× its shorter side');
+assert.strictEqual(run("seedvr2Shorter('x4', 800)"), 2560, 'within what SeedVR2 takes');
+assert.strictEqual(run("seedvr2Shorter('1080', 800)"), 1080, 'a resolution as it is');
+{
+  // A long pill steps aside into the "+N"; the shorter ones after it take its room.
+  const made = [0, 30, 0, 0].map(top => {
+    const p = { _top: top, classes: new Set(), classList: { add(c) { p.classes.add(c); }, remove(c) { p.classes.delete(c); } } };
+    Object.defineProperty(p, 'offsetTop', { get: () => (p.classes.has('spill') ? 0 : p._top) });
+    return p;
+  });
+  const classes = new Set(), line = { children: made, dataset: { lines: '1' }, classList: { contains: c => classes.has(c), add: c => classes.add(c), remove: c => classes.delete(c), toggle: (c, on) => (on ? classes.add(c) : classes.delete(c)) } };
+  context.testLine = line;
+  run('fitPills(testLine)');
+  assert(made[1].classes.has('spill') && !made[2].classes.has('spill') && line.dataset.more === '+1', 'the long second one steps aside, the rest stay on the line');
+  assert(/\.pills:not\(\.open\) \.pill\.spill \{ display: none; \}/.test(html), 'stepped aside until the line is opened');
+}
+assert(!html.includes('data-method="usdu"') && !html.includes('<option value="usdu">'), 'Ultimate SD is gone from the preview and the queue');
+assert(html.includes(`<select id="viewerUpscaleDenoise"`) && html.includes('<option value="0">Denoise 0</option><option value="0.01">Denoise 0.01</option>')
+  && html.includes('<option value="0.05">Denoise 0.05</option>\n    </select>') && script.includes("&denoise=${encodeURIComponent($('viewerUpscaleDenoise').value)}`")
+  && script.includes("if (method === 'seedvr2') $('viewerUpscaleDenoise').value = '0';"), "SeedVR2's denoise: 0 to 0.05 a hundredth at a time, 0 unless set");
+assert(html.includes('<input type="hidden" id="imageUpscaleDenoise" name="opt_image_upscale_denoise" value="0" disabled>'), "Generate's: a stepper's value, 0 to start with");
+for (const id of ['imageUpscaleDenoise', 'imageUpscaleDenoiseValue', 'imageUpscaleDenoiseDown', 'imageUpscaleDenoiseUp']) context.document.getElementById(id);
+run('setImageUpscaleDenoise(0)');
+assert(els.imageUpscaleDenoiseDown.disabled && els.imageUpscaleDenoiseValue.textContent === '0', 'none, and no lower');
+els.imageUpscaleDenoiseUp.listeners.click();
+els.imageUpscaleDenoiseUp.listeners.click();
+assert.strictEqual(els.imageUpscaleDenoise.value, '0.02', 'a hundredth at a time');
+run('setImageUpscaleDenoise(0.2)');
+assert(els.imageUpscaleDenoise.value === '0.05' && els.imageUpscaleDenoiseUp.disabled, 'held to 0.05, as Ultimate SD\'s kept 0.2 would be');
+run('setImageUpscaleDenoise(0)');
+assert(!html.includes('id="queueUpscaleSettings"') && script.includes("openUpscaleSettings(image ? (UPSCALE_METHODS_OFFERED.includes(data.upscale.method)"),
+  "a queued upscale opens the viewer's own upscale box, filled in");
+// The thumbnail grid: on a set's card and left of Close in the preview; a tap opens the preview at that one.
+assert(setHtml.includes('data-grid-set="image_20261102_120000"') && /<button type="button" class="viewer-grid" id="viewerGrid"[^>]*><\/button>\s*<button type="button" class="plain" id="viewerClose">Close<\/button>\s*<button type="button" class="viewer-grid" id="viewerMove"/.test(html),
+  'a grid button on each set; in the preview the grid left of Close, Move right of it');
+{
+  const opened = [];
+  context.document.getElementById('thumbGridBody');
+  context.opened = opened;
+  run(`imageSets = [{ id: 'image_1', label: 'S', images: [{ position: 1, title: 'a', version: 1 }, { position: 3, title: '<b>', version: 2, upscaled: 'SeedVR2' }] }];
+       viewing = { id: 'image_1', position: 3 }; oldOpenViewer = openViewer;`);
+  run("openViewer = (id, position) => opened.push([id, position]); openThumbGrid({ set: 'image_1' })");
+  const grid = els.thumbGridBody.innerHTML;
+  assert(grid.includes('src="/image-runs/image_1/thumbnails/3?v=2"') && grid.includes('class="current"') && grid.includes('class="upscaled-badge"') && !grid.includes('<b>'),
+    'its pictures, the one open outlined, upscaled ones badged, titles escaped');
+  assert.strictEqual(els.thumbGridTitle.textContent, 'S (2)');
+  els.thumbGridBody.listeners.click({ target: { closest: () => ({ dataset: { gridIndex: '1' } }) } });
+  assert.strictEqual(JSON.stringify(opened), '[["image_1",3]]', 'a tap opens the preview there');
+  run('openViewer = oldOpenViewer; imageSets = []; viewing = null');
+}
+// Collections: shown with Output's sets; one with NSFW in it only in Private mode or under the NSFW filter.
+{
+  for (const id of ['collections', 'moveList', 'moveNewName', 'moveError', 'moveSheet']) context.document.getElementById(id);
+  run(`allImageSets = [{ id: 'image_1', label: 'S', images: [{ position: 1, file: 'a.png', title: 'a', version: 1 }, { position: 2, file: 'b.png', title: 'b', version: 1, collection: 'c_1' }] }];
+       lastVideos = { ...lastVideos, video: [{ name: 'F.mp4', run: 'run_1', collection: 'c_1' }] };
+       collections = [{ id: 'c_1', name: 'Mine <i>', nsfw: false, items: [{ kind: 'image', set: 'image_1', file: 'b.png' }, { kind: 'film', name: 'F.mp4' }] },
+                      { id: 'c_2', name: 'Hot', nsfw: true, items: [{ kind: 'film', name: 'F.mp4' }] }];
+       outputFilter = ''; privateMode = false; pipeline = 'image';`);
+  const albums = run("collectionAlbums('c_1')");
+  assert(albums.images.length === 1 && albums.images[0].set === 'image_1' && albums.images[0].position === 2 && albums.films[0].name === 'F.mp4', 'its two albums, as their sets and Videos have them');
+  assert.strictEqual(JSON.stringify(run('shownCollections().map(c => c.id)')), '["c_1"]', 'NSFW ones out of the normal view');
+  run('privateMode = true');
+  assert.strictEqual(JSON.stringify(run('shownCollections().map(c => c.id)')), '["c_1","c_2"]', 'all of them in Private mode');
+  run('privateMode = false; outputFilter = NSFW_FILTER');
+  assert.strictEqual(JSON.stringify(run('shownCollections().map(c => c.id)')), '["c_2"]', 'only NSFW ones under the NSFW filter');
+  context.document.getElementById('collectionsToggle');
+  context.localStorage.getItem = key => (key === 'gen-center.collectionsOpen' ? '1' : null);
+  run("outputFilter = ''; renderCollections()");
+  context.localStorage.getItem = () => null;
+  const box = els.collections.innerHTML;
+  assert(!els.collectionsToggle.hidden && !html.includes('id="collectionsCount"') && /\.collections-toggle \{[^}]*color: var\(--neutral\); \}/.test(html) && /<button type="button" class="collections-toggle not-shorts" id="collectionsToggle"[\s\S]*?<select id="outputFilter"/.test(html),
+    "an icon on the filter's line, left of it, silver, without a count");
+  assert(/\.collections:not\(\[hidden\]\) \{[^}]*background: var\(--bg\); border: 1px solid var\(--line\)/.test(html), 'open, a dark bordered box of its own');
+  assert(/\.image-set\.collection \.image-set-heading \.rename-btn svg \{ width: 12px; height: 12px; \}/.test(html) && box.includes('Mine &lt;i&gt;') && box.includes('1 image · 1 video')
+    && box.includes('data-rename-collection="c_1"') && box.includes('data-grid-collection="c_1"') && box.includes('data-delete-collection="c_1"'),
+    'under a folding header: its name escaped, rename at its right, what it holds, the grid and delete');
+  assert(!els.collections.hidden);
+  assert(/<details class="image-set collection" data-collection="c_1" open>\s*<summary class="image-set-heading">/.test(box) && box.includes('data-no-fold="1"'),
+    'each folds by its name; the pen renames without folding it');
+  // In the preview: up and down go between its albums, and no further.
+  run("viewerCollection = 'c_1'; viewing = { id: 'image_1', position: 2 }");
+  assert.strictEqual(run('stepSet(-1)'), false, 'nothing above its images');
+  assert(run("typeof collectionNeighbour(1)") === 'object' && run('collectionNeighbour(1)') === null, 'the only image: none beside it');
+  // Move: the image open, by its set and file.
+  assert.strictEqual(JSON.stringify(run('viewedItem()')), '{"kind":"image","run":"image_1","file":"b.png"}');
+  run("viewing = { film: true, name: 'F.mp4', folder: 'video' }");
+  assert.strictEqual(JSON.stringify(run('viewedItem()')), '{"kind":"film","name":"F.mp4"}');
+  run("viewing = null; viewerCollection = null; collections = []; allImageSets = []; renderCollections()");
+  assert(els.collections.hidden && els.collectionsToggle.hidden, 'none: no icon, no box');
+}
+// Private mode's key in the top bar, by Settings: lit while on, and a tap turns it the other way.
+{
+  assert(/<div class="top-icons" id="topIcons">\s*<a href="#" id="privateToggle" role="button" aria-pressed="false"[^>]*><svg[\s\S]*?<\/a>\s*<a href="#" id="settingsBtn"/.test(html), 'the key, before Settings');
+  for (const id of ['privateToggle', 'privateMode']) context.document.getElementById(id);
+  const lit = new Set();
+  els.privateToggle.classList = { toggle: (name, on) => (on ? lit.add(name) : lit.delete(name)), add() {}, remove() {}, contains: name => lit.has(name) };
+  run('renderPrivate(true)');
+  assert(lit.has('on') && els.privateToggle.title === 'Private mode (NSFW): on', 'lit while on');
+  let sent;
+  const keptFetch = context.fetch;
+  context.fetch = (url, options) => { sent = { url, body: JSON.parse(options.body) }; return new Promise(() => {}); };
+  els.privateToggle.listeners.click({ preventDefault() {} });
+  context.fetch = keptFetch;
+  assert(sent.url === '/api/private' && sent.body.on === false, 'a tap asks for it off');
+  // Turned on, it opened Output on the NSFW filter: back to all, for what follows.
+  run("renderPrivate(false); outputFilter = ''");
+}
+// Arranging in the grid: the button left of Close, lit while on; a tap picks one rather than opening it.
+{
+  assert(/<div class="thumb-grid-foot">\s*<button type="button" class="thumb-grid-arrange" id="thumbGridArrange"[^>]*><\/button>\s*<button type="button" class="panel-close" id="thumbGridClose">/.test(html), 'arrange, left of Close');
+  for (const id of ['thumbGrid', 'thumbGridArrange', 'thumbGridBody']) context.document.getElementById(id);
+  const lit = new Set();
+  els.thumbGridArrange.classList = { toggle: (name, on) => (on ? lit.add(name) : lit.delete(name)), add() {}, remove() {}, contains: name => lit.has(name) };
+  run(`allImageSets = imageSets = [{ id: 'image_1', label: 'S', images: [{ position: 1, file: 'a.png', title: 'a', version: 1 }, { position: 2, file: 'b.png', title: 'b', version: 1 }] }];
+       openThumbGrid({ set: 'image_1' })`);
+  assert(!els.thumbGridArrange.hidden && !lit.has('on'), 'offered for a set, off to begin with');
+  els.thumbGridArrange.listeners.click();
+  assert(lit.has('on') && run('thumbGridArranging'), 'lit while arranging');
+  context.opened = [];
+  run('oldOpenViewer = openViewer; openViewer = (id, position) => opened.push(position)');
+  els.thumbGridBody.listeners.click({ target: { closest: () => ({ dataset: { gridIndex: '1' } }) } });
+  assert(run("thumbGridSelected === '1'") && context.opened.length === 0, 'a tap picks it, and opens nothing');
+  assert.strictEqual(JSON.stringify(run('thumbGridItems.map(item => item.ref)')), '["a.png","b.png"]', 'a set is ordered by its files');
+  run("openThumbGrid({ films: 'video' })");
+  assert(els.thumbGridArrange.hidden && !run('thumbGridArranging'), 'not for the films in Video: they are in the order made');
+  run('openViewer = oldOpenViewer; allImageSets = imageSets = []');
+}
+// Move: a menu growing over the preview's buttons, as Upscale's: + New on top, then the collections.
+{
+  assert(/<dialog id="moveSheet" class="panel-dialog upscale-dialog move-menu"/.test(html) && /dialog#viewerUpscaleBar, dialog#moveSheet, dialog#pillsMenu \{[^}]*animation: menu-in/.test(html), 'it grows as the upscale menu does');
+  for (const id of ['moveSheet', 'moveList', 'moveNewRow', 'moveNewName', 'moveError']) context.document.getElementById(id);
+  run(`allImageSets = [{ id: 'image_1', images: [{ position: 1, file: 'a.png' }] }]; collections = [{ id: 'c_1', name: 'Mine', items: [] }];
+       viewing = { id: 'image_1', position: 1 }; viewerCollection = null; oldPlace = placeOverViewerButtons; placeOverViewerButtons = () => {}`);
+  run('openMoveSheet()');
+  const menu = els.moveList.innerHTML;
+  assert(menu.indexOf('data-move-new="1"') < menu.indexOf('data-move-to="c_1"') && menu.includes('>New</button>') && els.moveNewRow.hidden, '+ New first, its name only once asked for');
+  els.moveNewName.focus = () => {};
+  els.moveList.listeners.click({ target: { closest: selector => (selector === '[data-move-new]' ? {} : null) } });
+  assert(!els.moveNewRow.hidden, '+ New: its name, in the menu');
+  run(`collections = [{ id: 'c_1', name: 'Mine', items: [] }, { id: 'c_2', name: 'Hot', nsfw: true, items: [] }]; privateMode = false; outputFilter = ''; openMoveSheet()`);
+  assert(!els.moveList.innerHTML.includes('c_2'), 'one with NSFW in it: not offered with Private mode off');
+  run('privateMode = true; openMoveSheet()');
+  assert(els.moveList.innerHTML.includes('data-move-to="c_2" class="nsfw"') && !els.moveList.innerHTML.includes('data-move-to="c_1"'),
+    'in Private mode, only those with NSFW in them, dark red');
+  run('outputFilter = NSFW_FILTER; openMoveSheet()');
+  assert(!els.moveList.innerHTML.includes('data-move-to="c_1"') && els.moveList.innerHTML.includes('c_2'), 'in Private mode, under the NSFW filter too: only those');
+  run('privateMode = false; openMoveSheet()');
+  assert(els.moveList.innerHTML.includes('c_1') && els.moveList.innerHTML.includes('c_2'), 'out of it, under the NSFW filter: all of them');
+  run("outputFilter = ''");
+  run('privateMode = false');
+  run('placeOverViewerButtons = oldPlace; viewing = null; collections = []; allImageSets = []; $("moveSheet").close()');
+}
+// In the grid, a tap opens only if the finger stayed put and the grid wasn't moving.
+{
+  run('gridTap = { x: 10, y: 10, at: 100, moving: false }; gridScrolledAt = 0');
+  assert.strictEqual(run("gridTapped({ clientX: 13, clientY: 12, pointerType: 'touch' })"), true, 'a tap');
+  run('gridTap = { x: 10, y: 10, at: 100, moving: false }; gridScrolledAt = 150');
+  assert.strictEqual(run("gridTapped({ clientX: 10, clientY: 60, pointerType: 'touch' })"), false, 'a scroll is not a tap');
+  run('gridTap = { x: 10, y: 10, at: 100, moving: true }; gridScrolledAt = 90');
+  assert.strictEqual(run("gridTapped({ clientX: 10, clientY: 10, pointerType: 'touch' })"), false, 'a tap that stops a fling only stops it');
+  assert(/\.thumb-grid button\.current \{ outline: 2px solid var\(--accent\); outline-offset: -2px; \}/.test(html)
+    && /button\.selected \{ outline: 2px dotted var\(--accent\); outline-offset: -2px;/.test(html), 'outlines inside the picture; the one held dotted');
+  assert(/\.grid-ghost \{ margin: 0; padding: 0; border: 0; background: #000;[^}]*outline: 2px dotted color-mix\(in srgb, var\(--accent\) 55%, #000\)/.test(html) && script.includes("ghost.classList.add('grid-ghost')"), 'dragged, a copy follows the finger');
+}
+assert(/\.image-set-actions \[data-grid-set\], \.image-set-actions \[data-grid-collection\] \{ margin-right: auto; \}/.test(html), "the grid's button at the left, beside the cover");
+// Output never shows what it drew before (another filter, Private mode since changed): held until a fresh answer.
+assert(/#videos, #imageSets, #collections, #collectionsToggle, #cnav \{ transition: opacity \.25s ease; \}/.test(html) && /body\.output-pending #collectionsToggle, body\.output-pending #cnav \{ visibility: hidden; opacity: 0; transition: none; \}/.test(html)
+  && /body\.output-pending #videos, body\.output-pending #imageSets, body\.output-pending #collections,/.test(html)
+  && script.includes("if (page === 'output' && document.body.dataset.page !== 'output') { holdOutput(); resetOutputFilter(); }")
+  && script.includes("window.addEventListener('pageshow', holdOutput);") && script.includes("if (askedAt >= outputHeldAt) document.body.classList.remove('output-pending');"),
+  'held out of sight on going to Output and on coming back, until drawn from an answer asked for after');
+// The preview's pills never grow in place: "+N" opens them all in a box over its buttons.
+{
+  for (const id of ['pillsMenu', 'pillsMenuBody']) context.document.getElementById(id);
+  context.oldPlace = run('placeOverPills');
+  run('placeOverPills = () => {}');
+  const line = { innerHTML: '<span class="pill">a</span><span class="pill spill">b</span>', classList: { contains: name => name === 'image' || name === 'more' },
+    closest: selector => (selector === '.viewer-meta-details' ? {} : null) };
+  context.testLine = line;
+  run('openPillsMenu(testLine)');
+  assert(els.pillsMenu.open && els.pillsMenuBody.innerHTML.includes('>b<') && els.pillsMenuBody.className === 'pills image open', 'all of them, in their colour');
+  run('placeOverPills = oldPlace; $("pillsMenu").close()');
+  assert(script.includes('placeOverPills(box, line);') && script.includes("box.style.top = `${Math.max(8, at.bottom + 4 - box.getBoundingClientRect().height)}px`;"), 'grown up out of the pill line');
+  assert(/<dialog id="pillsMenu" class="panel-dialog upscale-dialog pills-menu"/.test(html) && script.includes("if (line.closest('.viewer-meta-details')) {"), 'a box, growing as Move does');
+}
+assert(script.includes("if (pick) moveViewed({ to: pick.dataset.moveTo }, pick);") && /button\.picked \{ background: color-mix\(in srgb, var\(--accent\) 30%/.test(html)
+  && /dialog#moveSheet\.moving \.upscale-methods button:not\(\.picked\) \{ opacity: \.4;/.test(html), 'the collection tapped lights up while it moves, the others dimmed');
+// A clicked button's request on its way: it pulses until the answer is back.
+{
+  const classes = new Set(), attrs = {};
+  context.busyButton = { classList: { toggle: (name, on) => (on ? classes.add(name) : classes.delete(name)) }, setAttribute: (k, v) => { attrs[k] = v; } };
+  run('markBusy(busyButton, 1)');
+  assert(classes.has('is-busy') && attrs['aria-busy'] === 'true', 'busy while its request is out');
+  run('markBusy(busyButton, -1)');
+  assert(!classes.has('is-busy') && attrs['aria-busy'] === 'false', 'and back once answered');
+  assert(script.includes("if (button && (button.closest('.count-stepper') || button.closest('[data-no-busy]'))) { lastPressed = null; return; }"), "a stepper's + and - never wait on the last press");
+  assert(/\.is-busy \{ animation: busy-pulse/.test(html) && script.includes("const QUIET_REQUESTS = "), 'polls and estimates never pulse anything');
+}
+assert(/\.thumb-grid button \{[^}]*overflow: clip;/.test(html) && !/\.thumb-grid button \{[^}]*overflow: hidden/.test(html), 'a swipe on a picture scrolls the grid');
+assert(/button, \[role="button"\], \.icon-btn, summary, \.count-stepper, \.count-stepper \.mp-field, \.pills, \.pill \{\s*-webkit-user-select: none; user-select: none; -webkit-touch-callout: none; \}/.test(html),
+  'pressing a button or stepper quickly never selects its text');
+assert(/\.prompt-progress::after \{[^}]*animation: bar-sheen 3\.6s/.test(html), "the prompt's bar has the light passing along it, as the others");
 const single = run("imageSetHtml({ id: 'image_9', label: 'One', total: 1, size: '1x1', when: 'now', images: [{ position: 1, title: 'x', version: 1 }] })");
 assert(single.includes('class="album-cover"') && !single.includes('album-count') && !single.includes('album-strip'), 'one image: the same picture box, no count, no strip');
-assert(/class="icon-btn" data-download-set="image_9" title="Download" aria-label="Download"><svg/.test(single) && /class="icon-btn del" data-delete-set="image_9"[^>]*aria-label="Delete"><svg/.test(single), 'icons, named');
-assert(/<div class="image-set-actions"><button type="button" class="icon-btn" data-again-set="image_9"[^>]*aria-label="The same again"><svg[\s\S]*?data-shots="image_9"[\s\S]*?data-download-set="image_9"[\s\S]*?data-delete-set="image_9"/.test(single), 'the same again first, then prompts, then download beside delete');
+assert(/class="icon-btn del" data-delete-set="image_9"[^>]*aria-label="Delete"><svg/.test(single), 'icons, named');
+assert(/<div class="image-set-actions"><button type="button" class="icon-btn" data-grid-set="image_9"[^>]*aria-label="All of them"><svg[\s\S]*?<\/button><button type="button" class="icon-btn" data-again-set="image_9"[^>]*aria-label="The same again"><svg[\s\S]*?data-shots="image_9"[\s\S]*?data-delete-set="image_9"/.test(single), 'the grid, the same again, then prompts, then delete');
 assert(single.includes(`aria-label="The same again">${run('ICONS.config')}</button>`) && run('ICONS.config !== ICONS.again'), 'same again uses settings, distinct from retry');
 for (const side of ['shorts', 'video', 'image']) {
   assert(html.includes(`data-preset-delete="${side}" title="Delete this preset" aria-label="Delete this preset" hidden>${run('ICONS.trash')}</button>`), 'preset deletion uses the shared trash icon');
@@ -706,7 +921,7 @@ context.film = film;
 const card = run('filmHtml(film)');
 assert(!card.includes('<video') && card.includes('loading="lazy"'), 'a page of films must not hold the browser\'s connections: a poster, playing only when asked');
 assert(!card.includes('<i>film'), 'film titles are escaped');
-assert(card.includes('data-shots="run_20261101_120000"') && !card.includes('data-up=') && card.includes('data-download-film='), 'a film can be downloaded, not uploaded');
+assert(card.includes('data-shots="run_20261101_120000"') && !card.includes('data-up=') && !card.includes('data-download-film='), 'a film is downloaded from the preview, not uploaded');
 assert(card.includes(`aria-label="Shots">${run('ICONS.enhanced')}</button>`), 'film Output prompts uses the star icon');
 film.run = null;
 const orphan = run('filmHtml(film)');
@@ -765,10 +980,32 @@ assert(/class="result done" style="--side:#4c8dff" data-goto="video"/.test(els.f
 assert(/\.results \.result \{ display: flex; align-items: center;/.test(html) && /border: 1px solid var\(--side/.test(html) && /\.result \.when \{ margin-left: auto;/.test(html)
   && /\.result-label \{[^}]*-webkit-line-clamp: 2/.test(html), 'outlined, text left, the time quietly at the right');
 assert(/id="skip"[^>]*>Cancel<\/button>/.test(html) && /id="stop"[^>]*>Stop<\/button>/.test(html) && /\.run-actions \{ display: flex; justify-content: center;/.test(html), 'Cancel and Stop, small and centred');
-assert(/data-goto="shorts" data-tab="uploaded">[\s\S]*?<span class="result-type">Upload</.test(els.finishedList.innerHTML), 'an upload goes to what was uploaded');
+assert(/data-goto="shorts" data-tab="uploaded"[^>]*>[\s\S]*?<span class="result-type">Upload</.test(els.finishedList.innerHTML), 'an upload goes to what was uploaded');
 // Kept over a restart: a quiet Clear at the end, and one from another day says which.
-assert(/<div class="finished-foot"><button type="button" class="finished-clear" data-clear-finished="1"[^>]*>Clear<\/button><\/div>$/.test(els.finishedList.innerHTML), 'a discreet Clear closes the list');
-assert(/data-clear-finished[\s\S]{0,120}if \(!secondTap\(clear\)\) return;[\s\S]{0,120}fetch\('\/queue\/finished\/clear', \{ method: 'POST' \}\)/.test(html), 'Clear asks first, then empties it');
+assert(!els.finishedList.innerHTML.includes('finished-clear') && els.finishedFoot.hidden === false, 'Clear is outside the list, shown while it has something');
+assert(/<div class="finished-foot" id="finishedFoot" hidden><button type="button" class="finished-clear" id="finishedClear"[^>]*>Clear<\/button><\/div>/.test(html), 'a discreet Clear under the list');
+assert(/if \(cleared\) \{\s*if \(panelShown && panelShown\.which === 'finished'\) closePanel\(\);\s*else if \(DESK\.matches && document\.body\.dataset\.runtab === 'finished'\) setRunTab\('queue'\);/.test(script), 'cleared, Finished closes');
+assert(/\$\('finishedClear'\)\.addEventListener\('click'[\s\S]{0,160}secondTap\(button\)[\s\S]{0,900}fetch\('\/queue\/finished\/clear', \{ method: 'POST' \}\)/.test(html), 'Clear asks first, swipes them out, then empties it');
+{ const d = run('clearDelays(6)'); assert(d[0] === 0 && d.every((v, i) => i < 2 || v - d[i - 1] < d[i - 1] - (d[i - 2] ?? 0)), 'from the top, each sooner after the last than the one before'); }
+assert(/#finishedList \{ overflow-x: clip; \}/.test(html) && !/#finishedList \{ overflow-x: hidden/.test(html), 'the list scrolls with the box, not on its own');
+// A small picture of what it made on the left, and a swipe to the right takes it off the list.
+run(`imageSets = [{ id: 'image_1', images: [{ position: 2, version: 9 }] }];
+  renderFinished([{ label: 'Set', outcome: 'done', at: '17:05', pipeline: 'image', run_id: 'image_1', job_id: 4 },
+    { label: 'Film', outcome: 'done', at: '17:06', pipeline: 'video', run_id: 'run_1', film: 'f.mp4', job_id: 5 }],
+    [{ label: 'Up', outcome: 'done', at: '17:07', job_id: 4 }], [{ label: 'Made', outcome: 'done', at: '17:08', pipeline: 'image', run_id: 'image_1', position: 2 }])`);
+{
+  const list = els.finishedList.innerHTML;
+  assert(list.includes('<span class="result-thumb"><img loading="lazy" alt="" src="/image-runs/image_1/thumbnails/2?v=9" onerror="this.remove()"></span><span class="result-mark">'), 'an image set: its first picture');
+  assert(list.includes('src="/runs/run_1/image"'), "a film: its run's start image");
+  assert(/data-lane="upload" data-key="upload:4">\s*<span class="result-thumb"><\/span>/.test(list), 'an upload: an empty space, so the rows line up');
+  assert(list.includes('data-lane="run" data-key="run:4"') && list.includes('data-key="made:image_1:2"'), 'a key per row, by lane, so an upload and a run with one number differ');
+  run(`forgottenResults.add('run:5'); forgottenResults.add('made:image_1:2'); renderFinished([{ label: 'Film', outcome: 'done', at: '17:06', pipeline: 'video', run_id: 'run_1', job_id: 5 }], [], [{ label: 'Made', outcome: 'done', at: '17:08', pipeline: 'image', run_id: 'image_1', position: 2 }])`);
+  assert(!els.finishedList.innerHTML.includes('data-key='), 'swiped away: not brought back by the next poll');
+  run('forgottenResults.clear(); imageSets = []');
+}
+assert(script.includes("fetch(`/queue/${encodeURIComponent(d.lane)}/finished/${encodeURIComponent(d.jobId)}/forget`, { method: 'POST' })")
+  && /\.results \.result\.swiped \{[^}]*translateX\(110%\)/.test(html) && /\.results \.result\.collapsing \{[^}]*height: 0 !important/.test(html)
+  && /\.results \.result \{[^}]*touch-action: pan-y;/.test(html), 'it slides out, its space closes, and the server forgets it; scrolling still works');
 assert.strictEqual(run(`finishedWhen({ at: '17:05', t: Date.now() / 1000 })`), '17:05', 'today: the time alone');
 assert(run(`finishedWhen({ at: '17:05', t: Date.now() / 1000 - 3 * 86400 })`).endsWith(' 17:05') && run(`finishedWhen({ at: '17:05', t: Date.now() / 1000 - 3 * 86400 })`) !== '17:05', 'another day: its date too');
 // One tap takes you to that side's output.
@@ -811,6 +1048,19 @@ assert(!html.includes('Expand to see the log'));
   run('closePanel()');
   assert.deepStrictEqual(moved, ['quotaCard', 'back:quotaCard'], 'and back where it was');
   assert.strictEqual(els.panelDialog.open, false);
+  // Finished: its Clear goes to the box's own foot, above Close, outside what scrolls; then back under the list.
+  moved.length = 0;
+  const home = { insertBefore: (el, before) => moved.push(`back:${el.id}`) };
+  context.document.getElementById('finishedList').parentNode = home;
+  context.document.getElementById('finishedFoot').parentNode = home;
+  els.panelDialog.insertBefore = (el, before) => moved.push(`dialog:${el.id}:before:${before.id}`);
+  run("openPanel('finished')");
+  assert.deepStrictEqual(moved, ['finishedList', 'dialog:finishedFoot:before:panelDialogClose']);
+  run('closePanel()');
+  assert.deepStrictEqual(moved.slice(2), ['back:finishedFoot', 'back:finishedList'], 'the foot back first, then the list in front of it');
+  assert(/dialog\.panel-dialog > \.finished-foot \{ position: absolute; right: 14px; bottom: 12px;/.test(html)
+    && /dialog\.panel-dialog > \.finished-foot \.finished-clear \{ padding: 6px 10px; font-size: \.82rem;[^}]*border: 1px solid transparent;/.test(html),
+    "in the box's bottom-right corner, sized as Close so they share a line");
 }
 assert(/dialog\.panel-dialog::backdrop \{[^}]*backdrop-filter: blur\(6px\)/.test(html) && /\.panel-close \{ align-self: center;/.test(html), 'over a blurred page, with a close in the middle under it');
 assert(/\.status-queue:has\(> :not\(\[hidden\]\)\) \{[^}]*background: var\(--bg\)/.test(html), 'the runs in a darker box');
@@ -963,7 +1213,7 @@ run("setTab('uploaded')");
 assert(els.videos.innerHTML.includes('uploaded_short.mp4') && !els.videos.innerHTML.includes('a_film.mp4'));
 // Shorts have the same rows as films and image sets; a Short ready to go has an upload icon first.
 run("setTab('output')");
-assert(/<div class="image-set film" data-name="a_short\.mp4">[\s\S]*?class="icon-btn" data-up="a_short\.mp4"[^>]*aria-label="Upload to YouTube"><svg[\s\S]*?data-download-film="a_short\.mp4"/.test(els.videos.innerHTML));
+assert(/<div class="image-set film" data-name="a_short\.mp4">[\s\S]*?class="icon-btn" data-up="a_short\.mp4"[^>]*aria-label="Upload to YouTube"><svg/.test(els.videos.innerHTML));
 run("setTab('uploaded')");
 assert(!els.videos.innerHTML.includes('data-up='), 'nothing to upload once it is up');
 run("setPipeline('shorts', false)");
@@ -1086,7 +1336,8 @@ assert(!html.includes('.current-work::after'), 'the clickable run title has no c
   dialog.close = savedClose;
   dialog.getBoundingClientRect = savedBox;
 }
-assert(/<textarea id="promptEditorText"[^>]*><\/textarea>\s*<div class="prompt-progress" id="promptEditorProgress" hidden><\/div>/.test(html), 'the prompt editor has a progress bar inside the top of its box');
+assert(/<textarea id="promptEditorText"[^>]*><\/textarea>\s*<div class="prompt-progress-track"><div class="prompt-progress" id="promptEditorProgress" hidden><\/div><\/div>/.test(html)
+  && /\.prompt-progress-track \{ position: absolute; inset: 1px; border-radius: 9px; overflow: clip;/.test(html), 'the prompt editor has a progress bar inside the top of its box, following its corners');
 assert(/#promptEditorEnhance\.working svg \{ animation: prompt-writing-icon/.test(html) && /\$\('promptEditorEnhance'\)\.classList\.toggle\('working', busy\)/.test(html), 'the write button animates while the LLM writes');
 assert(/button\.classList\.add\('working'\)/.test(html) && /button\.classList\.remove\('working'\)/.test(html), 'the form write button animates too');
 assert(/rgba\(255, 255, 255, \.38\)/.test(html) && /#runCard \.step\.done \{ border-color: var\(--job, var\(--neutral\)\); \}/.test(html), 'a brighter sweep, finished stages in full colour');
@@ -1128,7 +1379,12 @@ assert.strictEqual(run("workHeading({label: '3 videos', facts: {count: 3}}, 'sho
 assert.strictEqual(run("workHeading({label: 'Topic', facts: {count: 2}}, 'shorts')"), 'Shorts(2): Topic');
 assert.strictEqual(run("workHeading({label: 'Upscale: Film'}, 'video')"), 'Video: Upscale: Film');
 assert(/#stageDetail \{ text-align: left; \}/.test(html), 'the stage status lines up like every other');
-assert(/id="viewerVariations"[^>]*><\/button>\s*<button type="button" class="icon-btn" id="viewerPrompts"[^>]*><\/button>/.test(html) && script.includes('openPromptDetail(detailed, data.brief);'), 'More like this beside Prompts, which opens its detailed prompt');
+assert(/id="viewerVariations"[^>]*><\/button>\s*<button type="button" class="icon-btn" id="viewerPrompts"[^>]*><\/button>/.test(html) && script.includes("openPromptDetail(detailed, data.brief, data.direct ? 'yours' : 'detailed');"), 'More like this beside Prompts, which opens its detailed prompt (yours, made from it word for word)');
+for (const id of ['promptDetail', 'promptDetailTitle', 'promptDetailText', 'promptDetailYours', 'promptDetailCopy']) context.document.getElementById(id);
+run("openPromptDetail('long version', 'my words', 'yours')");
+assert(els.promptDetailTitle.textContent === 'Your prompt' && els.promptDetailText.textContent === 'my words' && els.promptDetailYours.title === 'Detailed prompt'
+  && els.promptDetailYours.innerHTML === run('ICONS.enhanced'), 'an exact prompt opens on yours; the button below goes to the detailed one');
+run("$('promptDetail').close()");
 assert(/#currentWork\.arrive \{ animation: work-arrive/.test(html) && /\.queue-item\.leaving \{[^}]*animation: queue-leave/.test(html));
 assert(/dialog\.viewer \.viewer-actions > \* \{ flex: 1 1 0; min-width: 0; max-width: 120px; height: 32px;/.test(html), 'Download, Delete and Close share the available space');
 assert(/\.image-set-actions button\.armed, \.acts button\.armed[^{]*\{\s*background: var\(--err\) !important;/.test(html), 'Confirm is red in Output too');
@@ -1140,6 +1396,10 @@ assert(run("filmHtml({ name: 'f.mp4', created: 'now', size_mb: 1, loras: ['a'] }
 const filmWithH3 = run("filmHtml({ name: 'f.mp4', created: 'now', loras: ['a'], h3_mode: 'render', h3_creativity: 'balanced' })");
 assert(filmWithH3.includes('LoRA: a</div><div class="meta">OpenH3-IR: Before each clip · Balanced</div>'), 'OpenH3 follows LoRA');
 assert(!run("filmHtml({ name: 'f.mp4', created: 'now', h3_mode: 'off' })").includes('OpenH3-IR:'), 'disabled OpenH3 is omitted');
+assert(run("filmHtml({ name: 'f.mp4', created: 'now', connection: 'chain', loras: ['a'] })").includes('<div class="meta">Clips: Continuous take</div><div class="meta loras"'), 'how clips connect, in shorthand, before LoRA');
+assert(!run("filmHtml({ name: 'f.mp4', created: 'now' })").includes('Clips:'), 'unknown: no line');
+run("viewerMetadata({ model: 'H3', connection: 'infinite', loras: ['x'] })");
+assert.strictEqual(els.viewerMetaDetails.textContent, 'Clips: H3 Infinite continuation\nLoRA: x', 'and in the preview details');
 run("viewerMetadata({ model: 'H3', llm: 'local', loras: ['x'], h3_mode: 'review', h3_creativity: 'bold' })");
 els.viewerMeta.listeners.click();
 assert.strictEqual(els.viewerMetaDetails.textContent, 'LoRA: x\nOpenH3-IR: Before review · Bold');
@@ -1218,9 +1478,35 @@ assert(/xhr\.upload\.onprogress/.test(script) && /<div class="queue-pending" id=
 const filmRow = run("filmHtml({ name: 'f.mp4', created: 'now', size_mb: 1, run: 'run_1', model: 'wan', loras: ['example'], h3_mode: 'review', h3_creativity: 'bold' })");
 assert(filmRow.includes('LoRA: example') && filmRow.includes('OpenH3'), 'film output shows inherited LoRAs and OpenH3 settings');
 assert(run("filmHtml({ name: 'f.mp4', model: 'wan', resolution: '864x480', duration: 12, size_mb: 3 })").includes('wan · 864x480 · 0:12 · 3 MB'));
+// Pills: what it was made with, on one line under the grey line of resolution, duration and size; those that
+// tell it apart from its prompt's other runs first, marked. They replace the metadata lines.
+{
+  const pilled = run(`filmHtml({ name: 'f.mp4', model: 'wan', resolution: '864x480', duration: 12, size_mb: 3, loras: ['x'], connection: 'chain',
+    pills: [{ text: 'Upscaled: <RTX>', kind: 'upscale', diff: true }, { text: 'wan', kind: 'workflow', diff: false }] })`);
+  assert(pilled.includes('<div class="meta" title="f.mp4">864x480 · 0:12 · 3 MB</div>'), 'the grey line keeps resolution, duration and size, without the workflow');
+  assert(pilled.includes('<div class="pills video" role="button" tabindex="0" title="Tap to show all"><span class="pill diff">Upscaled: &lt;RTX&gt;</span><span class="pill workflow">wan</span></div>'), 'pills, escaped, the differing one marked');
+  assert(!pilled.includes('LoRA: x') && !pilled.includes('Clips:'), 'the old lines are gone where there are pills');
+  const set = run(`imageSetHtml({ id: 'image_1', label: 'S', total: 2, resolutions: ['1024x1024'], size_bytes: 2097152, model: 'krea2', images: [{ position: 1, title: 'a', version: 1 }, { position: 2, title: 'b', version: 1 }],
+    pills: [{ text: 'krea2', kind: 'workflow', diff: true }] })`);
+  assert(set.includes('<div class="meta">1024x1024 · 2.0 MB · 2 images</div>') && set.includes('<div class="pills image"'), 'a set too: its grey line, then its pills in green');
+  run(`viewerMetadata({ model: 'wan', llm: 'local', pills: [{ text: 'wan', kind: 'workflow', diff: true }] })`);
+  assert(els.viewerMetaDetails.innerHTML === '<div class="pills video" data-lines="1" role="button" tabindex="0"><span class="pill workflow diff">wan</span></div>'
+    && els.viewerMeta.hidden && !els.viewerMetaDetails.hidden, 'the preview shows its pills in place of the line that opened them: one line, the rest a tap away');
+  els.viewerMetaDetails.innerHTML = 'kept';
+  run(`viewerMetadata({ model: 'wan', llm: 'local', pills: [{ text: 'wan', kind: 'workflow', diff: true }] })`);
+  assert.strictEqual(els.viewerMetaDetails.innerHTML, 'kept', 'the same pills at the next poll are left as they are, opened or not');
+  run(`pictureMetadata({ model: 'k', pills: [{ text: 'k', kind: 'workflow', diff: false }, { text: 'Upscaled: x', kind: 'upscale', diff: false }] }, { upscaled: 'SeedVR2' })`);
+  assert(els.viewerMetaDetails.innerHTML.includes('Upscaled: SeedVR2') && !els.viewerMetaDetails.innerHTML.includes('Upscaled: x'), "a picture's own upscale, not its set's");
+  assert(/\.pills \{ position: relative; display: flex; flex-wrap: wrap; gap: 4px; max-height: 40px; overflow: hidden;/.test(html)
+    && /\.pill\.workflow \{[^}]*var\(--neutral\)/.test(html) && /\.viewer-meta-details \.pills \{ width: 96%; max-height: 18px; margin: 2px auto 0; justify-content: center; \}/.test(html) && /\.pills\.open \{ max-height: none;/.test(html)
+    && /\.pills\.more:not\(\.open\)::after \{ content: attr\(data-more\);/.test(html), 'two lines in Output, one centred line in the preview; the workflow in silver; a count of the rest, open on a tap');
+  assert(/<input type="checkbox" id="geminiTitles"><span>Gemini titles<small>/.test(html) && script.includes("saveSettings({ gemini_titles: $('geminiTitles').checked })")
+    && script.includes("$('geminiTitles').checked = !!SETTINGS.gemini_titles;"), 'Gemini titles: a setting of its own, saved like the others');
+  assert(/\.viewer-meta \{ width: 100%;/.test(html), 'the preview line is 90% of the bar, not of its own content');
+}
 assert(filmRow.includes(run('ICONS.config')), 'film same-again uses the settings slider');
 assert(/<div class="image-set film" data-name="f\.mp4">[\s\S]*?<div class="image-set-row album">\s*<a [^>]*class="album-cover film-cover" data-play-film="f\.mp4"/.test(filmRow));
-assert(/data-again-film="run_1"[\s\S]*?data-shots="run_1"[\s\S]*?<\/button><button type="button" class="icon-btn" data-download-film="f\.mp4"[\s\S]*?<\/button><button type="button" class="icon-btn del" data-del="f\.mp4"/.test(filmRow), 'the same again, shots, then download beside delete');
+assert(/data-again-film="run_1"[\s\S]*?data-shots="run_1"[\s\S]*?<\/button><button type="button" class="icon-btn del" data-del="f\.mp4"/.test(filmRow), 'the same again, shots, then delete');
 assert(!run("filmHtml({ name: 'f.mp4', created: 'now', size_mb: 1 })").includes('data-again-film'), 'not once its run is gone');
 // It plays in the viewer, and a swipe goes to the next film.
 run(`lastVideos = { output: [], uploaded: [], video: [{ name: 'a.mp4', title: 'A' }, { name: 'b.mp4', title: 'B', model: 'wan', llm: 'local', loras: ['example'], h3_mode: 'review', h3_creativity: 'bold' }] }; folder = 'video'`);
@@ -1359,14 +1645,15 @@ assert(/id="paintPrompts" class="panel-dialog"[\s\S]*?id="paintAreaList"/.test(h
 assert(/id="paintCancel">Close<\/button>\s*<button type="button" class="panel-close paint-save" id="paintDone">Save<\/button>\s*<\/div>\s*<\/dialog>/.test(html));
 assert(/const PRESET_SKIP = \['prompt', 'narration', 'seed', 'topic', 'output', 'review'\];/.test(script), 'what each run is about stays out of a preset');
 
-// Try one first; start later; no note when something ends.
-assert((html.match(/<input type="checkbox" name="try_first" id="previewRun">/g) || []).length === 1, 'one Preview run, under the button, for whichever form it is in');
-assert(/<button type="button" class="start-later" id="goLater"[^>]*>Start later<\/button>/.test(html) && !html.includes('type="time"'), 'Start later: a quiet button, no clock');
+// Try one first; add to pending or the top of the queue; no note when something ends.
+assert((html.match(/<input type="checkbox" name="try_first" id="previewRun">/g) || []).length === 1, 'one Preview run, in Other, for whichever form it is in');
+assert(/<button type="button" class="start-later" id="goLater"[^>]*>Add to pending<\/button>/.test(html) && !html.includes('type="time"'), 'Add to pending: a quiet button, no clock');
+assert(/<button type="button" class="start-later" id="goTop"[^>]*>Add to top of queue<\/button>/.test(html) && script.includes("form.append('queue_top', '1')"), 'Add to top of queue: a quiet button that puts it first');
 assert(!html.includes('id="toast"') && !script.includes('announceResults'), 'nothing pops up when something ends: Finished has it');
 assert(script.includes('} else if (d.runNow) {') && script.includes('fetch(`/queue/run/run-now/${d.runNow}`'), 'its play runs it now');
 assert(/<button type="button" class="start-later" id="cancelQueueEdit"[^>]*>Cancel editing<\/button>/.test(html) && /#cancelQueueEdit \{ display: block; margin: 6px auto 0; \}/.test(html), 'Cancel editing sits centred under the button');
 
-assert(/\.output-filter-line \{ display: flex; justify-content: center;/.test(html) && /\.output-filter-line select \{ width: 220px;/.test(html), 'the filter: centred, one size');
+assert(/\.output-filter-line \{ position: relative; display: flex; justify-content: center;/.test(html) && /\.output-filter-line select \{ width: 220px;/.test(html), 'the filter: centred, one size');
 
 assert(/dialog\.viewer::backdrop \{ background: rgba\(0, 0, 0, \.55\);[^}]*backdrop-filter: blur\(6px\)/.test(html), 'the page behind the preview, as behind Quota');
 
@@ -1495,7 +1782,8 @@ for (const [field, writer] of [['prompt', 'writeVideoPrompt'], ['imagePrompt', '
   assert(els[writer].disabled, 'writing keeps the writer disabled');
   els[field].readOnly = false; els[field].value = ''; els[field].listeners.input();
 }
-assert(/<div class="go-under">\s*<label class="check preview-run not-shorts" id="previewRunLabel"><input type="checkbox" name="try_first" id="previewRun"><span>Preview run<\/span><\/label>\s*<button type="button" class="start-later" id="goLater"/.test(html) && (html.match(/name="try_first"/g) || []).length === 1, 'Preview run under the button, left of Start later');
+assert(/<div class="go-under">\s*<button type="button" class="start-later" id="goTop"[^>]*>[^<]*<\/button>\s*<button type="button" class="start-later" id="goLater"/.test(html) && (html.match(/name="try_first"/g) || []).length === 1, 'Add to top of queue under the button, left of Add to pending');
+assert(/<details class="section" id="videoHow">[\s\S]*?id="review"[\s\S]*?<label class="check not-shorts" id="previewRunLabel">/.test(html) && script.includes(".after($('previewRunLabel'))"), 'Preview run in Other, moved to whichever form is showing');
 assert(/<select id="avatarSize" name="avatar_size">/.test(html), 'Shorts has a resolution');
 assert(/<div id="imageToPromptSlot"><\/div>/.test(html) && /imageRole\(\) === 'image_to_prompt' \? \$\('imageToPromptSlot'\)/.test(script), "image to prompt's image right under the choice");
 for (const n of [1, 2, 20]) {
@@ -1618,6 +1906,11 @@ assert.deepStrictEqual(lines(els.stageDetail), { first: 'scene 3, 6s lipsync', c
 run(`renderNow(atStage('Scene 4 of 9', true))`);
 assert.strictEqual(lines(els.stageDetail).count, 'Scene 4 of 9', 'only a clip goes in the box');
 assert.deepStrictEqual(lines(els.comfyMeta), { first: '', count: '', time: '1:05', twoLines: false }, 'no clip: one line, the time on its right');
+assert(!els.stepper.hidden, 'a job with stages shows its stepper');
+// An upscale has no stages of its own: ComfyUI's box and bar still show, without an empty stepper.
+run(`renderNow({ ...atStage('', true), pipeline: 'image', progress: { action: 'Upscaling' } })`);
+assert(els.stepper.hidden && els.stageDetail.hidden && els.comfyBar.style.width === '38%' && els.comfySteps.textContent === 'Step 3 of 8', 'no stage: the box and its bar alone');
+assert(/\$\('now'\)\.classList\.toggle\('hidden', !show && !comfyBusy\)/.test(script), 'the box shows whenever ComfyUI works');
 assert.deepStrictEqual(lines({ innerHTML: run(`statusHtml('Stitching', '', '0:42')`) }), { first: 'Stitching', count: '', time: '0:42', twoLines: false },
   'not two lines: the time at the right of the first');
 assert.strictEqual(run(`statusHtml('Generating prompts')`), '<div class="status-foot"><span class="status-first">Generating prompts</span></div>');
@@ -1895,9 +2188,9 @@ assert(els.comfyFacts.innerHTML.includes('Generating the image · 3/8') && els.c
     assert(run('queueEdit.id === 10'), 'an active edit survives status reconciliation');
     run(`reconcileQueueEdits({ items: [] }, queueEdit, null)`);
     assert(run('queueEdit === null'), 'removal in another tab releases the form');
-    run(`queueUpscaleEdit = { id: 12, token: 'token', kind: 'video_upscale' }; $('queueUpscaleSettings').showModal();
+    run(`queueUpscaleEdit = { id: 12, token: 'token', kind: 'video_upscale' }; $('upscaleSettings').showModal();
          reconcileQueueEdits({ items: [] }, null, queueUpscaleEdit)`);
-    assert(run('queueUpscaleEdit === null') && !els.queueUpscaleSettings.open, 'removal closes an upscale edit');
+    assert(run('queueUpscaleEdit === null') && !els.upscaleSettings.open, 'removal closes an upscale edit');
     let finishFile;
     context.savedEditQueueRequest = run('queueRequest');
     context.savedEditPoll = run('poll');
@@ -2118,7 +2411,7 @@ assert(els.comfyFacts.innerHTML.includes('Generating the image · 3/8') && els.c
   run("showPage('generate')");
   assert.strictEqual(els.imagePrompt.value, 'variant', 'remaining on Generate preserves a prompt');
   run("showPage('output')");
-  assert.strictEqual(els.imagePrompt.value, '', 'leaving Generate clears its prompt');
+  assert.strictEqual(els.imagePrompt.value, 'variant', 'leaving Generate keeps its prompt');
   els.imagePrompt.value = 'another variant';
   run("setPipeline('video', false)");
   assert.strictEqual(els.imagePrompt.value, '', 'switching sides clears the old prompt');
@@ -2128,7 +2421,7 @@ assert(els.comfyFacts.innerHTML.includes('Generating the image · 3/8') && els.c
   run("setPipeline('shorts', false); showPage('generate')");
   els.topic.value = 'short topic';
   run("showPage('status')");
-  assert.strictEqual(els.topic.value, '', 'leaving Shorts clears its topic');
+  assert.strictEqual(els.topic.value, 'short topic', 'leaving Generate on Shorts keeps its topic');
   const savedJumps = run('JUMPS.slice()');
   const jump = hash => ({ hash, classList: classes() });
   context.testJumps = [jump('#runCard'), jump('#optionsCard'), jump('#videosCard')];
@@ -2140,7 +2433,7 @@ assert(els.comfyFacts.innerHTML.includes('Generating the image · 3/8') && els.c
   els.topic.value = 'desktop topic';
   desktopTop = { runCard: -900, optionsCard: -500, videosCard: 0 };
   run('markJump()');
-  assert.strictEqual(els.topic.value, '', 'scrolling away from Generate on desktop clears the prompt');
+  assert.strictEqual(els.topic.value, 'desktop topic', 'scrolling away from Generate on desktop keeps the prompt');
   wide.matches = false;
   context.savedJumps = savedJumps;
   run('JUMPS.splice(0, JUMPS.length, ...savedJumps); desktopGenerateActive = false');
@@ -2290,22 +2583,20 @@ assert(els.comfyFacts.innerHTML.includes('Generating the image · 3/8') && els.c
   assert(failedRow.classList.contains('highlight'), 'a failure without a saved run still highlights its Failed entry');
   run('openViewer = oldViewer; openFilm = oldFilm; closePanel = oldClosePanel; goToOutput = oldGoOutput');
   context.setTimeout = fn => { fn(); return 0; };
-  run(`queueUpscaleEdit = { id: 8, token: 'edit-token', kind: 'image_upscale' }`);
-  for (const id of ['queueUpscaleResolution', 'queueUpscaleStrength', 'queueUpscaleResolutionRow', 'queueUpscaleStrengthRow', 'queueUpscaleFilmRow']) context.document.getElementById(id);
-  els.queueUpscaleMethod.value = 'seedvr2';
-  els.queueUpscaleResolution.value = '1080';
-  els.queueUpscaleStrength.value = '1';
-  run('syncQueueUpscale()');
-  assert(!els.queueUpscaleResolutionRow.hidden && els.queueUpscaleStrengthRow.hidden && els.queueUpscaleFilmRow.hidden);
+  // A queued SeedVR2 upscale, edited in the viewer's own box: 3x and a denoise go as the viewer sends them.
+  run(`queueUpscaleEdit = { id: 8, token: 'edit-token', kind: 'image_upscale', size: [640, 368] }; upscaleMethod = 'seedvr2'`);
+  for (const id of ['viewerUpscaleSize', 'viewerUpscaleDenoise', 'viewerUpscaleStrength', 'upscaleCancel', 'upscaleGo']) context.document.getElementById(id);
+  els.viewerUpscaleSize.value = 'x3';
+  els.viewerUpscaleDenoise.value = '0.1';
+  els.viewerUpscaleStrength.value = '1';
   let savedUpscale;
   context.fetch = async (url, options) => {
     savedUpscale = { url, body: JSON.parse(options.body) };
     return { json: async () => ({ ok: true }) };
   };
-  await els.queueUpscaleSave.listeners.click({ currentTarget: feedback });
+  await run('saveQueueUpscale')(feedback);
   assert.strictEqual(savedUpscale.url, '/queue/run/edit/8/upscale');
-  assert.strictEqual(savedUpscale.body.resolution, '1080');
-  assert.strictEqual(savedUpscale.body.token, 'edit-token');
+  assert.deepStrictEqual([savedUpscale.body.method, savedUpscale.body.times, savedUpscale.body.denoise, savedUpscale.body.token], ['seedvr2', '3', '0.1', 'edit-token']);
   assert.strictEqual(run('queueUpscaleEdit'), null, 'saving closes the queued upscale editor');
   context.setTimeout = () => 0;
   const quiet = { ...idle, lines: [], queue: { items: [], results: [], held: false, current: null }, stopped_runs: [], videos: { output: [], uploaded: [], video: [] },
@@ -2379,15 +2670,21 @@ assert(els.comfyFacts.innerHTML.includes('Generating the image · 3/8') && els.c
   run('wasRunning = false');
   assert(windowListeners.pageshow.length && windowListeners.online.length && documentListeners.visibilitychange.length, 'restored, reconnected and visible tabs refresh');
 
-  // A new server means new code, unless that would lose what is being typed.
+  // A new server means new code, unless that would lose what is being typed: a prompt is kept for the tab as it is
+  // typed, so only one set without being kept (or a narration) holds the reload off.
+  for (const id of ['prompt', 'imagePrompt', 'narration']) context.document.getElementById(id).value = '';
   context.reloads = 0;
-  context.document.getElementById('topic').value = 'Half typed';
+  const tabStore = {};
+  context.sessionStorage = { getItem: key => (key in tabStore ? tabStore[key] : null), setItem: (key, value) => { tabStore[key] = String(value); } };
+  context.document.getElementById('narration').value = 'Half written';
   context.fetch = answer({ ...quiet, server_started: 2 });
   await run('poll()');
-  assert.strictEqual(context.reloads, 0, 'a typed topic is not lost');
-  context.document.getElementById('topic').value = '';
+  assert.strictEqual(context.reloads, 0, 'a narration being written is not lost');
+  context.document.getElementById('narration').value = '';
+  context.document.getElementById('topic').value = 'Half typed';
   await run('poll()');
   assert.strictEqual(context.reloads, 1, 'a deferred reload happens once editing is no longer in progress');
+  assert.strictEqual(run('keptPrompts().shorts'), 'Half typed', 'and a prompt is kept for the tab, to come back after it');
 
   // Reopening an output brings back the settings it was made with, its prompt model included.
   run(`pipeline = 'video'; loadVideoWorkflows = async () => { $('llm').value = 'gemini'; }; syncVideoForm = () => {};
@@ -2578,13 +2875,13 @@ for (const fn of ['sameAgain', 'sameAgainFilm', 'sameAgainShorts', 'editQueued',
 assert(/was = first \? 'Off' : \$\('imageUpscale'\)\.value/.test(script) && /was = first \? 'Off' : \$\('videoLatentUpscale'\)\.value/.test(script), 'upscale defaults to off');
 assert(/\.res-block \{[^}]*background: var\(--bg\)/.test(html), 'the block is dark like the queue');
 
-// Only what goes with the upscale chosen shows: Ultimate SD's denoise, SeedVR2's factor; a hidden row stays hidden.
+// Only what goes with the upscale chosen shows: SeedVR2's factor and denoise; a hidden row stays hidden.
 assert(/\.pipeline-form \.option-row\[hidden\] \{ display: none; \}/.test(html), 'a hidden option row is hidden');
 {
   els.imageUpscaleBox.hidden = false;
   els.imageUpscale.disabled = false;
   els.imageUpscaleBox.limits = { SeedVR2: { base: 4, final: 8.3, shorter: 2160 }, 'Ultimate SD': { base: 2, final: 16 } };
-  for (const [method, denoise, factor] of [['Off', true, true], ['Ultimate SD', false, true], ['SeedVR2', true, false]]) {
+  for (const [method, denoise, factor] of [['Off', true, true], ['UltraSharp', true, true], ['SeedVR2', false, false]]) {
     els.imageUpscale.value = method;
     run('showImageUpscale()');
     assert.strictEqual(els.imageUpscaleDenoiseRow.hidden, denoise, `${method}: denoise`);
@@ -2618,4 +2915,97 @@ assert(/\.pipeline-form \.option-row\[hidden\] \{ display: none; \}/.test(html),
   run('stepMegapixels(MP_STEP)');
   assert.notStrictEqual(els.imageSize.value, once, 'and keeps moving');
   els.imageAspect.value = '1:1';
+}
+
+// Upscale on starts from the resolution there is now, not where an earlier upscale ended; off drops back to it.
+{
+  els.imageUpscaleBox.hidden = false;
+  els.imageUpscaleBox.limits = { UltraSharp: { base: 2, final: 16 } };
+  els.imageUpscale.disabled = false;
+  els.imageAspect.value = 'custom';
+  els.imageSize.value = '784x1392';
+  els.imageUpscale.value = 'Off';
+  els.imageUpscaleMp.value = '9.0';  // left from an earlier upscale
+  run("imageStep = null; imageMadeAt = null; imageUpscaleWas = 'Off'; syncImageSize()");
+  els.imageUpscale.value = 'UltraSharp';
+  els.imageUpscale.listeners.change();
+  assert.strictEqual(els.imageSize.value, '784x1392', `the box keeps the resolution it had: ${els.imageSize.value}`);
+  assert.strictEqual(els.imagePixelSize.textContent, '784×1392');
+  const ends = els.imageUpscaleSize.textContent.split('×').map(Number);
+  assert(Math.abs(ends[0] / 784 - 2) < 0.05, `ends twice as big each way: ${els.imageUpscaleSize.textContent}`);
+  els.imageUpscale.value = 'Off';
+  els.imageUpscale.listeners.change();
+  assert.strictEqual(els.imageSize.value, '784x1392', 'and off drops back to it');
+  run('stepMegapixels(MP_STEP)');
+  assert.notStrictEqual(els.imageSize.value, '784x1392', 'where the stepper moves it again');
+  els.imageUpscaleBox.hidden = true;
+  els.imageAspect.value = '1:1';
+  run("imageStep = null; imageMadeAt = null");
+}
+
+// Switching to Exact size: the box takes the size it was being made at, so nothing jumps.
+{
+  els.imageUpscaleBox.hidden = true;
+  els.imageUpscale.value = 'Off';
+  els.imageAspect.value = '16:9';
+  els.imageSize.value = '111x222';
+  run('imageStep = null; sourceSize = null; syncImageSize()');
+  const shown = els.imagePixelSize.textContent;
+  els.imageAspect.value = 'custom';
+  for (const fn of els.imageAspect.listenersAll.change || []) fn({ target: els.imageAspect });
+  run('syncImageSize()');
+  assert.strictEqual(els.imageSize.value, shown.replace('×', 'x'), `the box starts at the size there was: ${els.imageSize.value}`);
+  assert.strictEqual(els.imagePixelSize.textContent, shown);
+  els.imageAspect.value = '1:1';
+}
+
+// From a workflow without latent upscale back to one with it: its presets are there again, not only Off.
+{
+  const withIt = [{ id: 'latent_upscale', kind: 'choice', choices: ['Off', 'Clean', 'Hires fix', 'Heavy', 'Custom'], default: 'Off' },
+    { id: 'latent_upscale_mp', kind: 'number', min: 0.5, max: 4, default: '1' }];
+  run("workflowH3 = { 'r2v.json': true, 'director.json': true }; workflowMultishot = { 'r2v.json': true }; workflowDirector = { 'director.json': true }");
+  els.start.hidden = false;
+  els.start.value = 'image';
+  els.videoLatentUpscale.innerHTML = '';
+  els.videoLatentBox.dataset.key = '';
+  for (const [workflow, options] of [['r2v.json', withIt], ['director.json', []], ['r2v.json', withIt]]) {
+    els.videoWorkflow.value = workflow;
+    context.latentOptions = options;
+    run('syncVideoLatent(latentOptions)');
+  }
+  assert(/Hires fix/.test(els.videoLatentUpscale.innerHTML), `presets back: ${els.videoLatentUpscale.innerHTML}`);
+  assert(!els.videoLatentUpscale.disabled, 'and it can be picked');
+  run("workflowH3 = {}; workflowMultishot = {}; workflowDirector = {}");
+  els.videoWorkflow.value = '';
+}
+
+// Picking a preset starts again: the prompt goes with the old one. None leaves it.
+{
+  els.imagePrompt.value = 'kept until a preset is picked';
+  els.imagePreset.value = '';
+  els.imagePreset.listeners.change({ target: els.imagePreset });
+  assert.strictEqual(els.imagePrompt.value, 'kept until a preset is picked', 'None keeps it');
+  run("presets.image = [{ name: 'Portrait', values: {} }]; var realApplyPreset = applyPreset; applyPreset = () => {}");
+  els.imagePreset.value = 'Portrait';
+  els.imagePreset.listeners.change({ target: els.imagePreset });
+  assert.strictEqual(els.imagePrompt.value, '', 'a preset picked clears it');
+  run('presets.image = []; applyPreset = realApplyPreset');
+}
+
+// Latent upscale may end past what the workflow makes a clip at: memory, pixels times frames, is what holds it.
+{
+  run("workflowClips = { 'r2v.json': [3, 10, 5] }");
+  els.videoWorkflow.value = 'r2v.json';
+  els.videoClipSeconds.value = '3-5';
+  assert.strictEqual(run('latentTop(960 * 544)'), 1.5, '5 s clips: half again the known fit, spread over 5 s');
+  els.videoClipSeconds.value = '3-10';
+  assert.strictEqual(run('latentTop(960 * 544)'), 0.7, '10 s clips: less');
+  els.videoClipSeconds.value = '3-3';
+  assert.strictEqual(run('latentTop(960 * 544)'), 2.6);
+  run("workflowClips = { 'r2v.json': [1, 30, 5] }");
+  els.videoClipSeconds.value = '1-1';
+  assert.strictEqual(run('latentTop(960 * 544)'), 4, 'never past the 4 MP the upscaler takes');
+  run('workflowClips = {}');
+  els.videoClipSeconds.value = '';
+  els.videoWorkflow.value = '';
 }

@@ -28,7 +28,7 @@ DATA = tempfile.mkdtemp(prefix="comfyui_auto_gen_tests_")
 atexit.register(shutil.rmtree, DATA, ignore_errors=True)
 os.environ["AUTOGEN_DATA"] = DATA
 # load_dotenv never replaces what is already set, so the real .env can't reach the tests.
-for name in ("APP_PASSWORD", "COMFYUI_LAUNCHER", "GEMINI_MODEL", "CLAUDE_MODEL", "LLM_PROVIDER", "COMFYUI_WORKFLOW",
+for name in ("APP_PASSWORD", "COMFYUI_LAUNCHER", "COMFYUI_DIR", "GEMINI_MODEL", "CLAUDE_MODEL", "LLM_PROVIDER", "COMFYUI_WORKFLOW",
              "YOUTUBE_CLIENT_ID", "YOUTUBE_CLIENT_SECRET", "YOUTUBE_REFRESH_TOKEN"):
     os.environ[name] = ""
 # The tests fake Gemini's replies; the real default is the local model (planner.default_llm).

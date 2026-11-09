@@ -129,6 +129,23 @@ def _probe(path):
     return float(probe["format"]["duration"]), {stream["codec_type"] for stream in probe["streams"]}
 
 
+def film_size(clips, width, height):
+    """
+    The size to join clips at: the largest clip's own. A latent upscale renders clips bigger than the run's
+    size, and joining at the run's size threw that away. The run's size if no clip can be read.
+    """
+    best = (width, height)
+    for clip in clips:
+        try:
+            stream = next(s for s in ffmpeg.probe(clip)["streams"] if s["codec_type"] == "video")
+            size = (int(stream["width"]), int(stream["height"]))
+        except (ffmpeg.Error, StopIteration, KeyError, ValueError):
+            continue
+        if size[0] * size[1] > best[0] * best[1]:
+            best = size
+    return best
+
+
 def clip_problem(path, seconds):
     """Returns what is wrong with the file, or None."""
     try:

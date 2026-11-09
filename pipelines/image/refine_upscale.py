@@ -10,13 +10,23 @@ SamplerCustom or SamplerCustomAdvanced with a guider):
 In Generate each ends at the exact size chosen. (A Hires fix second pass was tried and left out: on these turbo
 models a partial denoise came out noisy.)
 """
+import math
+
 SAMPLERS = ("KSampler", "KSamplerAdvanced", "ClownsharKSampler_Beta", "ClownsharKSampler", "SamplerCustom", "SamplerCustomAdvanced")
 DECODERS = ("VAEDecode", "VAEDecodeTiled")
 UPSCALE_MODEL = "4x-UltraSharp.pth"
 # What KSampler (and so Ultimate SD Upscale) knows: a sampler of another kind, such as RES4LYF's, is run as euler.
 KSAMPLER_SAMPLERS = ("euler", "euler_ancestral", "dpmpp_2m", "dpmpp_2m_sde", "dpmpp_sde", "res_multistep", "uni_pc", "ddim", "lcm", "er_sde")
+# RES4LYF's samplers that it adds to KSampler's list, under their own names.
+RES4LYF_SAMPLERS = ("res_2s", "res_3s", "res_2m", "res_3m", "res_5s", "res_6s", "deis_2m", "deis_3m")
 KSAMPLER_SCHEDULERS = ("simple", "normal", "karras", "exponential", "sgm_uniform", "beta", "linear_quadratic", "ddim_uniform")
-DENOISE = {"usdu": 0.3}
+# The noise the tiles start from, as a share of all of it: these are all flow models (Krea 2, Qwen-Image, Fibo,
+# MOSS), whose sigmas run 1 to 0. A plain "denoise 0.3" on their shifted schedules started near 0.56, enough for each
+# tile to draw a picture of its own (faces and bodies in every tile); this starts at the denoise and goes evenly down.
+# Lightly, as Krea 2's own second pass refines (0.2 in ceil(0.2 x 8) = 2 steps of res_2s): eight steps from 0.3 over
+# 4x-UltraSharp's crisp edges baked its grain into specks and a cracked skin; two from 0.2 keep the sharpness clean.
+DENOISE = {"usdu": 0.2}
+LEAST_STEPS = 2
 TILE = 768
 
 
@@ -55,11 +65,33 @@ def _show_only(api, image):
         del api[node_id]
 
 
-def _denoised_sigmas(api, sigmas, denoise):
-    """The tail of a schedule, for a denoise: SplitSigmasDenoise's low sigmas."""
-    api["ru_split"] = {"class_type": "SplitSigmasDenoise", "inputs": {"sigmas": sigmas, "denoise": denoise},
-                       "_meta": {"title": "Refine: denoise"}}
-    return ["ru_split", 1]
+def _refine_sigmas(api, denoise, steps):
+    """
+    From denoise down to 0 in steps, evenly (ManualSigmas): the noise the tiles start from is the denoise asked for,
+    whatever shift the model's own schedule has.
+    """
+    from core.workflow_options import custom_sigmas
+    api["ru_sigmas"] = {"class_type": "ManualSigmas", "inputs": {"sigmas": custom_sigmas(denoise, refine_steps(denoise, steps))},
+                        "_meta": {"title": "Refine: from the denoise down"}}
+    return ["ru_sigmas", 0]
+
+
+def refine_steps(denoise, steps):
+    """As many of the set's steps as the denoise is a share of (ceil(0.2 x 8) = 2), at least LEAST_STEPS."""
+    return max(LEAST_STEPS, math.ceil(denoise * steps - 1e-9))
+
+
+def _sampler_name(sampler, kind):
+    """
+    The set's own sampler, as KSampler knows it: RES4LYF's "exponential/res_2s" is res_2s there, as that pack, which
+    a ClownsharKSampler workflow has, adds its samplers to KSampler's. Else euler.
+    """
+    given = str(sampler.get("sampler_name") or "")
+    if given in KSAMPLER_SAMPLERS:
+        return given
+    if kind.startswith("ClownsharKSampler") and given.rsplit("/", 1)[-1] in RES4LYF_SAMPLERS:
+        return given.rsplit("/", 1)[-1]
+    return "euler"
 
 
 def _load(api, uploaded):
@@ -91,23 +123,26 @@ def _tiled(api, sampler_id, vae, image, scale, denoise, seed=777):
     if kind == "SamplerCustomAdvanced":
         if not isinstance(sampler.get("sigmas"), list):
             raise Unsupported("Its sampler has no schedule to take a denoise from.")
+        steps = int(_number(api, api.get(str(sampler["sigmas"][0]), {}).get("inputs", {}).get("steps"), 8))
         node = {"class_type": "UltimateSDUpscaleGuider", "inputs": {
-            **common, "guider": sampler["guider"], "sampler": sampler["sampler"], "sigmas": _denoised_sigmas(api, sampler["sigmas"], denoise)}}
+            **common, "guider": sampler["guider"], "sampler": sampler["sampler"], "sigmas": _refine_sigmas(api, denoise, steps)}}
     elif "positive" in sampler and "negative" in sampler and "model" in sampler:
-        given = sampler.get("sampler_name")
         steps = int(_number(api, sampler.get("steps"), 8))
         cfg = float(_number(api, sampler.get("cfg"), 1.0))
         inputs = {**common, "model": sampler["model"], "positive": sampler["positive"], "negative": sampler["negative"],
                   "seed": int(_number(api, sampler.get("seed", sampler.get("noise_seed")), seed)), "steps": steps, "cfg": cfg,
-                  "sampler_name": given if given in KSAMPLER_SAMPLERS else "euler",
+                  "sampler_name": _sampler_name(sampler, kind),
                   "scheduler": sampler.get("scheduler") if sampler.get("scheduler") in KSAMPLER_SCHEDULERS else "simple",
                   "denoise": denoise}
-        if kind == "SamplerCustom" and isinstance(sampler.get("sigmas"), list) and isinstance(sampler.get("sampler"), list):
-            # Its own sampler and schedule, as it made the image.
-            inputs.update(custom_sampler=sampler["sampler"], custom_sigmas=_denoised_sigmas(api, sampler["sigmas"], denoise))
-            node = {"class_type": "UltimateSDUpscaleCustomSample", "inputs": inputs}
+        if kind == "SamplerCustom" and isinstance(sampler.get("sampler"), list):
+            custom = sampler["sampler"]  # Its own sampler, as it made the image
         else:
-            node = {"class_type": "UltimateSDUpscale", "inputs": inputs}
+            # The set's own sampler, as its second pass refines with it (res_2s for Krea 2).
+            api["ru_sampler"] = {"class_type": "KSamplerSelect", "inputs": {"sampler_name": inputs["sampler_name"]},
+                                 "_meta": {"title": "Refine: sampler"}}
+            custom = ["ru_sampler", 0]
+        inputs.update(custom_sampler=custom, custom_sigmas=_refine_sigmas(api, denoise, steps))
+        node = {"class_type": "UltimateSDUpscaleCustomSample", "inputs": inputs}
     else:
         raise Unsupported("Its sampler doesn't take a model and prompts that Ultimate SD Upscale can use.")
     node["_meta"] = {"title": "Ultimate SD Upscale"}
@@ -137,7 +172,7 @@ def _sharpened(api, image):
 SEEDVR2 = ("SeedVR2LoadDiTModel", "SeedVR2LoadVAEModel", "SeedVR2VideoUpscaler")
 
 
-def _seedvr2(api, image, shorter):
+def _seedvr2(api, image, shorter, denoise=0.0):
     from pipelines.image.upscale import DIT_MODEL, VAE_MODEL
     api["ru_dit"] = {"class_type": "SeedVR2LoadDiTModel", "_meta": {"title": "SeedVR2: model"}, "inputs": {
         "model": DIT_MODEL, "device": "cuda:0", "blocks_to_swap": 36, "swap_io_components": False,
@@ -149,12 +184,13 @@ def _seedvr2(api, image, shorter):
     api["ru_seedvr2"] = {"class_type": "SeedVR2VideoUpscaler", "_meta": {"title": "SeedVR2"}, "inputs": {
         "image": image, "dit": ["ru_dit", 0], "vae": ["ru_vae", 0], "seed": 777, "resolution": shorter, "max_resolution": 0,
         "batch_size": 1, "uniform_batch_size": False, "color_correction": "lab", "temporal_overlap": 0, "prepend_frames": 0,
-        "input_noise_scale": 0.0, "latent_noise_scale": 0.0, "offload_device": "cpu", "enable_debug": False}}
+        "input_noise_scale": 0.0, "latent_noise_scale": float(denoise or 0), "offload_device": "cpu", "enable_debug": False}}
     return ["ru_seedvr2", 0]
 
 
 # In Generate: each image of the set upscaled as it is made, before the workflow saves it. {what the page says: method}
-IN_GENERATION = {"Ultimate SD": "usdu", "UltraSharp": "ultrasharp", "SeedVR2": "seedvr2"}
+# Ultimate SD is left out: its tiles, redrawn by these flow models, came out noisy rather than sharper.
+IN_GENERATION = {"UltraSharp": "ultrasharp", "SeedVR2": "seedvr2"}
 # What a 12 GB card takes without running out of memory (or stalling long enough for Windows to reset the driver, as a
 # 4x-UltraSharp pass over a 3.6 MP Krea 2 image did with Krea 2 still loaded): the most megapixels the image may be
 # before (4x-UltraSharp works at four times its size), the most it may end at, and for SeedVR2 its shorter side.
@@ -193,7 +229,7 @@ def in_generation(api, method, final, scale=2.0, denoise=None, free_memory=True)
     elif method == "usdu":
         image = _tiled(api, sampler_id, vae, image, scale, DENOISE["usdu"] if denoise is None else denoise)
     elif method == "seedvr2":
-        image = _seedvr2(api, image, min(final))
+        image = _seedvr2(api, image, min(final), denoise or 0)
     else:
         raise Unsupported(f"No upscale called {method}.")
     # Exactly the size chosen: each of these comes out near it, on its own grid.

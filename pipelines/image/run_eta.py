@@ -13,6 +13,19 @@ DEFAULT_PROMPTS_SECONDS = 45
 DEFAULT_SECONDS_PER_PROMPT = 15
 DEFAULT_IMAGE_SECONDS = 120
 SMALL_DRIFT_SECONDS = 60
+# Upscale under Resolution, per megapixel it ends at, until timed: the image is made, then upscaled in the same render.
+# It is timed apart from making the image, per method and model, so a new end size or method starts from its nearest.
+UPSCALE_RATES = {"UltraSharp": 4, "Ultimate SD": 25, "SeedVR2": 45}
+UPSCALE_OPTIONS = "image_upscale"
+
+
+def _upscale_in(options):
+    """(method, megapixels it ends at) for Upscale under Resolution, or (None, 0)."""
+    method = (options or {}).get(UPSCALE_OPTIONS)
+    size = re.fullmatch(r"(\d+)x(\d+)", str((options or {}).get("image_upscale_size") or ""))
+    if not method or method == "Off" or not size:
+        return None, 0
+    return method, int(size.group(1)) * int(size.group(2)) / 1e6
 
 
 def _option(argv, name, default=None):
@@ -85,7 +98,12 @@ class RunEta:
                 self.local_model = None
         self.local = LocalModelTimer(self.timings, self.local_model)
         self.local_mark = 0.0
-        self.render_keys = render_keys(self.workflow, self.options, self.size, fallback="image")
+        # The image itself is timed without its upscale, so making it is shared with sets made without one.
+        self.upscale, self.upscale_mp = _upscale_in(self.options)
+        made_options = {key: value for key, value in self.options.items() if not key.startswith(UPSCALE_OPTIONS)}
+        self.render_keys = render_keys(self.workflow, made_options, self.size, fallback="image")
+        self.upscale_keys = ([SEPARATOR.join(("Upscale in generation", self.upscale, self.render_keys[-1])),
+                              SEPARATOR.join(("Upscale in generation", self.upscale))] if self.upscale else [])
         self.number = self.total = 0
         self.name = None
         self.stage_started = None
@@ -149,7 +167,17 @@ class RunEta:
 
     def _finish_image(self, now):
         if self.image_started is not None:
-            self.timings.learn_render(self.render_keys, (now - self.image_started) / self.size_share)
+            spent = now - self.image_started
+            if self.upscale:
+                # Its upscale, once making the image is timed: what's left over, per megapixel it ends at. Before
+                # that, making the image: what's left once the upscale's own guess is taken out.
+                if any(key in self.timings.renders for key in self.render_keys):
+                    made = self.timings.render(self.render_keys, DEFAULT_IMAGE_SECONDS) * self.size_share
+                    self.timings.learn_step(self.upscale_keys, max(0.0, spent - made) / max(self.upscale_mp, 0.1))
+                else:
+                    self.timings.learn_render(self.render_keys, max(1.0, spent - self._upscale_seconds()) / self.size_share)
+            else:
+                self.timings.learn_render(self.render_keys, spent / self.size_share)
             self.timings.save()
             self.done_images += 1
             self.image_started = None
@@ -169,8 +197,13 @@ class RunEta:
 
     # --- Estimating ---
 
+    def _upscale_seconds(self):
+        if not self.upscale:
+            return 0
+        return self.timings.step(self.upscale_keys, UPSCALE_RATES.get(self.upscale, 25)) * self.upscale_mp
+
     def _image_seconds(self):
-        return self.timings.render(self.render_keys, DEFAULT_IMAGE_SECONDS) * self.size_share
+        return self.timings.render(self.render_keys, DEFAULT_IMAGE_SECONDS) * self.size_share + self._upscale_seconds()
 
     def _stage_seconds(self, name):
         if name == "Prompts":

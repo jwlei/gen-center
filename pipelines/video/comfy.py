@@ -262,6 +262,9 @@ class ComfyClient:
                 for chunk in r.iter_content(chunk_size=8192):
                     f.write(chunk)
         os.replace(part_path, save_path)
+        # Ours now: ComfyUI's copy in its output folder (where some nodes save) goes, so nothing is left there.
+        from core import comfy_files
+        comfy_files.forget_output(params["filename"], params["subfolder"], params["type"])
         return save_path
 
     def _wait_for(self, prompt_id):

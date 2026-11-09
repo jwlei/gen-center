@@ -47,6 +47,9 @@ FACE_SKIP = re.compile(r"prompt|enhance|refine|thinking|max_tok|max_length|width
 # enhancer that expands yours, and image to prompt, which describes a picture. Each is a group, or for the enhancer
 # a Refine Prompt switch as Krea-2's template has. On Video and Shorts the LLM always writes them, so they stay off.
 ENHANCER_GROUP = re.compile(r"enhanc", re.I)
+# A group's switch said as what it does, where its title in the workflow is a single word: the id stays the title's,
+# so what was chosen and saved keeps working.
+GROUP_LABELS = {"noise": "Add noise (film grain)"}
 IMAGE_TO_PROMPT = re.compile(r"image.?to.?prompt|img.?2.?prompt|caption", re.I)
 REFINE_SWITCH = re.compile(r"refine|enhance", re.I)
 ROLES = ("prompt_enhancer", "image_to_prompt")
@@ -213,7 +216,7 @@ def describe(ui, info=None, pipeline="image"):
         if not members:
             continue
         group_id = f"group_{_slug(title)}"
-        options.append({"id": group_id, "kind": "switch", "label": title, "default": OFF if all(node.get("mode") == BYPASSED for node in members) else ON})
+        options.append({"id": group_id, "kind": "switch", "label": GROUP_LABELS.get(title.strip().lower(), title), "default": OFF if all(node.get("mode") == BYPASSED for node in members) else ON})
         for node in members:
             if node["type"] in subgraphs:
                 options += _face_choices(node, subgraphs[node["type"]], group_id, title)
@@ -502,7 +505,7 @@ SPLICED_NODES = ("MinimaxH3LatentUpscaler3D", "LTXVSeparateAVLatent", "LTXVConca
 # image_upscale_size is where it ends, image_upscale_scale about how many times bigger that is.
 NO_IMAGE_UPSCALE = "Off"
 IMAGE_UPSCALE_NEEDS = {"UltraSharp": ("UpscaleModelLoader", "ImageUpscaleWithModel", "ImageScale"),
-                       "Ultimate SD": ("UpscaleModelLoader", "ImageScale"),
+                       "Ultimate SD": ("UpscaleModelLoader", "ImageScale", "ManualSigmas", "KSamplerSelect"),
                        "SeedVR2": ("SeedVR2LoadDiTModel", "SeedVR2LoadVAEModel", "SeedVR2VideoUpscaler", "ImageScale")}
 
 
@@ -524,15 +527,16 @@ def _image_upscale(api, info, chosen):
         # Ultimate SD's node for this sampler (plain, custom-sample or guider) has to be installed too.
         if method == "usdu" and trial["ru_usdu"]["class_type"] not in info:
             continue
-        if "ru_split" in trial and "SplitSigmasDenoise" not in info:
+        if "ru_sigmas" in trial and "ManualSigmas" not in info:
             continue
         offered.append(label)
     if not offered:
         return []
     options = [{"id": "image_upscale", "kind": "choice", "label": "Upscale", "choices": [NO_IMAGE_UPSCALE, *offered], "default": NO_IMAGE_UPSCALE,
                 "limits": {label: ru.LIMITS[label] for label in offered}},
-               {"id": "image_upscale_denoise", "kind": "number", "label": "Denoise", "parent": "image_upscale", "default": "0.3",
-                "min": 0.05, "max": 1, "step": 0.05},
+               # SeedVR2's latent noise (pipelines/image/upscale.py upscale_workflow): 0, as it was, unless set.
+               {"id": "image_upscale_denoise", "kind": "number", "label": "Denoise", "parent": "image_upscale", "default": "0",
+                "min": 0, "max": 0.05, "step": 0.01},
                {"id": "image_upscale_size", "kind": "text", "label": "Upscale to", "parent": "image_upscale", "default": ""},
                {"id": "image_upscale_scale", "kind": "number", "label": "Upscale by", "parent": "image_upscale", "default": "2",
                 "min": 1, "max": ru.MOST_SCALE, "step": 0.01}]
@@ -540,7 +544,7 @@ def _image_upscale(api, info, chosen):
     final = ru.parse_final(chosen.get("image_upscale_size"))
     if label in offered and final:
         ru.in_generation(api, ru.IN_GENERATION[label], final, float(chosen.get("image_upscale_scale", 2)),
-                         float(chosen.get("image_upscale_denoise", ru.DENOISE["usdu"])), free_memory=free)
+                         float(chosen.get("image_upscale_denoise", 0) or 0), free_memory=free)
     return options
 
 

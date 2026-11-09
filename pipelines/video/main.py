@@ -13,7 +13,7 @@ import requests
 from dotenv import load_dotenv
 
 from core import director, h3_refiner, run_form, seeds
-from core import workflow_options
+from core import pills, titles, workflow_options
 from core.audio import AudioEngine
 from core.paths import LOGS_DIR
 from core.saved_workflows import shorthand, title_words, unique_name
@@ -331,7 +331,7 @@ def plan_run(args, stages):
             media.save_input(image, path)
         for index, shot in enumerate(shots):
             shot["seed"] = seeds.nth(args.seed, index)
-        state.update(title=title, shots=shots)
+        state.update(title=titles.titled(title, state.brief, "a short film", comfy.url, None), shots=shots)
         return state
     print(f"🧠 {llm} is writing {planner.shot_count(state.seconds, video_model, args.clip_seconds)} prompts for a {state.seconds}s film at "
           f"{width}x{height}, {shortest}-{longest}s a clip...")
@@ -351,6 +351,7 @@ def plan_run(args, stages):
         media.save_input(image, path)
     for index, shot in enumerate(shots):
         shot["seed"] = seeds.nth(args.seed, index)
+    title = titles.titled(title, state.brief, "a short film", comfy.url, llm)
     state.update(title=title, shots=shots)
 
     print(f"🎞️ {title}")
@@ -523,11 +524,25 @@ def render_clips(state, comfy, most=None):
     return True
 
 
+def film_tag(state, workflow):
+    """
+    What tells this film apart from the films its prompt made before, for its name (core/pills.py): fixed once
+    it is made. Nothing for the first.
+    """
+    key = pills.sibling_key("video", state.brief)
+    others = [pills.run_facts(other, "video", shorthand(other.workflow, BUILT_IN)) for other in list_runs()
+              if other.id != state.id and other.final and key and pills.sibling_key("video", other.brief) == key]
+    return pills.fixed_tag(pills.run_facts(state, "video", workflow), others, pills.run_stamp(state.id))
+
+
 def stitch_film(state):
     print("🧵 Stitching the film...")
     # Made again (a shot redone), it keeps its name; a new film never takes another's.
     if not state.film_name:
-        state.update(film_name=unique_name(paths.OUTPUT_DIR, f"{title_words(state.title, 'film')}_{shorthand(state.workflow, BUILT_IN)}", ".mp4"))
+        workflow = shorthand(state.workflow, BUILT_IN)
+        name = f"{title_words(state.title, 'film')}_{workflow}"
+        tag = film_tag(state, workflow)
+        state.update(film_name=unique_name(paths.OUTPUT_DIR, f"{name}_{tag}" if tag else name, ".mp4"))
     output = os.path.join(paths.OUTPUT_DIR, f"{state.film_name}.mp4")
     if state.start == "multishot":
         shutil.copyfile(os.path.join(state.parts_dir, state.take_file), output)
@@ -537,7 +552,8 @@ def stitch_film(state):
         ComfyClient().stitch_continuation(state.id, len(state.shots), os.path.splitext(output)[0])
     else:
         clips = [state.clip_path(i) for i in range(len(state.shots))]
-        media.stitch(clips, state.parts_dir, output, state.width, state.height, state.start == "chain")
+        width, height = media.film_size(clips, state.width, state.height)
+        media.stitch(clips, state.parts_dir, output, width, height, state.start == "chain")
     if state.has_audio:
         media.with_audio(output, state.audio_path, pad=state.fixed_clip)
     state.update(final=output)

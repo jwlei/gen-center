@@ -1,5 +1,6 @@
 """The panel's Image side: sets of images from text or from an image, with prompts the LLM writes or you do."""
 import json
+import math
 import os
 import secrets
 import sys
@@ -8,7 +9,8 @@ from types import SimpleNamespace
 from flask import abort, request, send_file
 from PIL import Image
 
-from core import h3_refiner, run_form, seeds, workflow_options
+from core import h3_refiner, pills, run_form, seeds, workflow_options
+from core.upscale_eta import UpscaleEta
 from core.saved_workflows import display_label, shorthand
 from panel.server import (read_outcome, IMAGE_TIMINGS, PIPELINES, _runs_cache, active_runs, app, busy_runs, form_options, job, password_required, run_queue, saved_at, queue_form_snapshot,
                           saved_workflows)
@@ -176,7 +178,7 @@ def image_files(state):
             except OSError as error:
                 app.logger.warning("Could not read image metadata for %s: %s", path, error)
                 resolution = None
-            files.append({"position": position, "title": shot["title"], "version": version,
+            files.append({"position": position, "file": shot["file"], "title": shot["title"], "version": version,
                           "resolution": resolution, "size_bytes": stat.st_size, "mtime": stat.st_mtime,
                           "upscaled": upscaled_with(shot) or upscaled_in_generation(state)})
     return files
@@ -198,11 +200,7 @@ def upscaled_with(shot):
 
 def upscaled_in_generation(state):
     """Upscale under Resolution, as the set was made with it, or None."""
-    method = (state.options or {}).get("image_upscale")
-    if not method or method == workflow_options.NO_IMAGE_UPSCALE:
-        return None
-    denoise = (state.options or {}).get("image_upscale_denoise")
-    return f"{method}, denoise {denoise}" if denoise and method != "UltraSharp" else method
+    return pills.image_upscale_description(state.options)
 
 
 def describe_run(state):
@@ -213,10 +211,15 @@ def describe_run(state):
     files = image_files(state)
     size_bytes = sum(image["size_bytes"] for image in files)
     resolutions = list(dict.fromkeys(image["resolution"] for image in files if image["resolution"]))
+    upscaled = upscaled_in_generation(state) or ", ".join(dict.fromkeys(image["upscaled"] for image in files if image["upscaled"])) or None
+    loras = workflow_options.loras_used(state.workflow, state.options, "image")
     return {"id": state.id, "pipeline": "image", "label": state.title or state.brief, "detail": " · ".join(parts),
-            "model": shorthand(state.workflow, "image"), "outcome": read_outcome(state.folder), "loras": workflow_options.loras_used(state.workflow, state.options, "image"),
+            "model": shorthand(state.workflow, "image"), "outcome": read_outcome(state.folder), "loras": loras,
             "llm": state.llm, "size_bytes": size_bytes, "resolutions": resolutions,
-            "upscaled": upscaled_in_generation(state) or ", ".join(dict.fromkeys(image["upscaled"] for image in files if image["upscaled"])) or None,
+            "upscaled": upscaled,
+            # What Output's pills are made from (core/pills.py): saved_runs turns them into pills.
+            "_facts": pills.facts(shorthand(state.workflow, "image"), upscaled, loras=loras, llm=state.llm, direct=state.direct),
+            "_sibling": pills.sibling_key("image", state.brief),
             "when": saved_at(state.path), "mtime": max((image["mtime"] for image in files), default=0), "clips": done, "finished": state.finished, "total": total, "images": files,
             "size": f"{state.width}x{state.height}", "estimate": RunEta(resume_argv(state), env, IMAGE_TIMINGS).plan()["total"]}
 
@@ -530,6 +533,43 @@ def generating(run_id):
     return bool(job.running and (job.progress or {}).get("run_id") == run_id and not (current and is_upscale(current)))
 
 
+def set_in_hand(run_id):
+    """
+    (busy, pending) for a set, as the prompts view shows it: busy while its images are being made or queued to be, or an
+    upscale of it runs; pending while a job to make them waits to be started. Upscales only waiting count for neither.
+    """
+    making = [item for item in run_queue.pending() if item.get("resume") == run_id and not is_upscale(item)]
+    current = run_queue.current
+    running = bool(job.running and (job.progress or {}).get("run_id") == run_id) or bool(
+        job.running and current and is_upscale(current) and current.get("resume") == run_id)
+    busy = running or any(not item.get("later") for item in making)
+    return busy, not busy and any(item.get("later") for item in making)
+
+
+def upscales_in_the_way(run_id, shot, last=False):
+    """
+    Why an image can't be deleted now, as a reply, or None. Upscales of its set waiting in the queue don't stop it: each
+    starts from the set as saved and finds its image by its file. Not the image one waits to upscale, though, nor while
+    one is running (it would save its set over the deletion), nor one queued before images were found by file.
+    """
+    if generating(run_id):
+        return {"ok": False, "error": "That set is being made or is queued to be. Delete images once it's done."}, 409
+    current = run_queue.current
+    if job.running and current and is_upscale(current) and current.get("resume") == run_id:
+        return {"ok": False, "error": "An upscale of this set is running: delete images once it's done."}, 409
+    waiting = [item for item in run_queue.pending() if is_upscale(item) and item.get("resume") == run_id]
+    if waiting and last:
+        return {"ok": False, "error": "Upscales of this image wait in the queue: take them out first."}, 409
+    for item in waiting:
+        argv = item.get("argv") or []
+        source = argv[argv.index("--file") + 1] if "--file" in argv[:-1] else None
+        if source is None:
+            return {"ok": False, "error": "An upscale of this set waits in the queue: delete images once it's done."}, 409
+        if source == shot.get("file"):
+            return {"ok": False, "error": "This image waits to be upscaled: take that out of the queue first."}, 409
+    return None
+
+
 def upscale_position(state, argv):
     """The place in the set of the image a queued upscale is of: by its file, as upscales before it add images."""
     flag = lambda name: argv[argv.index(name) + 1] if name in argv[:-1] else None
@@ -557,24 +597,36 @@ def image_run_detail(run_id):
     if not state or not state.shots:
         return {"ok": False, "error": "That run is no longer saved."}, 404
     with run_queue.lock:
-        busy = run_id in active_runs()
-        pending = not busy and run_id in busy_runs()
+        # Upscales of the set waiting in the queue leave it alone: they start from it as saved. Only making its own
+        # images, or an upscale running now, holds it.
+        busy, pending = set_in_hand(run_id)
+        locked = [bool(upscales_in_the_way(run_id, shot, last=len(state.shots) == 1)) for shot in state.shots]
     return {"ok": True, "id": state.id, "title": state.title, "brief": state.brief, "llm": state.llm, "direct": state.direct,
             "busy": busy, "pending": pending, "finished": state.finished, "is_image": True,
             "size": f"{state.width}x{state.height}", "image_count": state.image_count, "settings": settings_of(state),
             "shots": [{"title": shot["title"], "prompt": shot["prompt"], "rendered": bool(shot.get("file")),
                        "seed": shot.get("seed"), "used_seed": shot.get("used_seed"), "enhanced_prompt": shot.get("enhanced_prompt"),
-                       "version": int(os.path.getmtime(state.image_path(shot))) if shot.get("file") else 0} for shot in state.shots]}
+                       # Its own, as it was made: the set may have been continued another way since.
+                       "settings": settings_of(state, state.shot_setup(shot)) if shot.get("setup") else None,
+                       # It can't be deleted now: an upscale of it waits, say.
+                       "locked": lock,
+                       "version": int(os.path.getmtime(state.image_path(shot))) if shot.get("file") else 0}
+                      for shot, lock in zip(state.shots, locked)]}
 
 
-def settings_of(state):
-    """What a set was made with, as the form sets it: for "the same again", to change before pressing Generate."""
-    workflow = next((w["name"] for w in saved_workflows() if state.workflow and w.get("path") and os.path.abspath(w["path"]) == os.path.abspath(state.workflow)), "")
-    return {"prompt": state.brief, "direct": state.direct, "count": len(state.shots or []) or state.count, "llm": state.llm,
-            "workflow": workflow, "size": f"{state.width}x{state.height}", "options": state.options or {},
+def settings_of(state, setup=None):
+    """
+    What a set was made with, as the form sets it: for "the same again", to change before pressing Generate. setup: one
+    image's own (RunState.shot_setup), for "more like this" from that image, in place of the set's as it is now.
+    """
+    made = setup or state.setup()
+    path = made.get("workflow")
+    workflow = next((w["name"] for w in saved_workflows() if path and w.get("path") and os.path.abspath(w["path"]) == os.path.abspath(path)), "")
+    return {"prompt": made.get("brief"), "direct": made.get("direct"), "count": len(state.shots or []) or state.count, "llm": made.get("llm"),
+            "workflow": workflow, "size": f"{made.get('width')}x{made.get('height')}", "options": made.get("options") or {},
             "inputs": sum(1 for path in state.input_paths if os.path.exists(path)),
             # The form as it was sent: anything above that it doesn't hold comes from the set itself.
-            "form": run_form.flat(state.form)}
+            "form": run_form.flat(made.get("form"))}
 
 
 @app.route("/image-runs/<run_id>/inputs/<int:number>")
@@ -613,9 +665,12 @@ def image_thumbnail(run_id, position):
 def save_image_shots(run_id):
     """Saves changed prompts. An image already made stays as it is until you redo it."""
     with run_queue.lock:
-        state, refused = load_idle_run(run_id, allow_pending=True)
-        if refused:
-            return refused
+        state = RunState.load(run_id)
+        if not state or not state.shots:
+            return {"ok": False, "error": "That run is no longer saved."}, 404
+        # Upscales of it waiting in the queue start from the set as saved, so they don't stop this.
+        if set_in_hand(run_id)[0]:
+            return {"ok": False, "error": "That run is going or queued. Stop it or take it out of the queue first."}, 409
         body = request.get_json(silent=True) or {}
         prompts = body.get("prompts")
         if not isinstance(prompts, list) or len(prompts) != len(state.shots) or not all(isinstance(p, str) and p.strip() for p in prompts):
@@ -646,12 +701,15 @@ def redo_image(run_id, position):
 @password_required
 def delete_image(run_id, position):
     """Takes one image and its prompt out of the set, so a Continue doesn't make it again. The last one takes the set with it."""
-    state, refused = load_idle_run(run_id)
-    if refused:
-        return refused
+    state = RunState.load(run_id)
+    if not state or not state.shots:
+        return {"ok": False, "error": "That run is no longer saved."}, 404
     if not 1 <= position <= len(state.shots):
         return {"ok": False, "error": "That image isn't in this set."}, 400
     shot = state.shots[position - 1]
+    refused = upscales_in_the_way(run_id, shot, last=len(state.shots) == 1)
+    if refused:
+        return refused
     if len(state.shots) == 1:
         state.remove()
         run_queue.forget(run_id=run_id)  # The set is gone, so its line in Finished goes too
@@ -691,20 +749,29 @@ def discard_run(run_id):
 
 
 UPSCALE = [sys.executable, "-m", "pipelines.image.upscale"]
-UPSCALE_SECONDS = 180  # About what SeedVR2 takes for one image on this card
-FAST_UPSCALE_SECONDS = 20  # Superscale-SP: seconds, as Kokon measured it (13 s for 1472² on a 5070 Ti)
+UPSCALE_SCALES = (2, 3, 4)  # SeedVR2: times its size, its shorter side within SEEDVR2_MOST_EDGE
+SEEDVR2_MOST_EDGE = 2560  # As pipelines/image/upscale.py's MOST_EDGE: what twice the size is already held to
 UPSCALE_RESOLUTIONS = (720, 1080, 1440, 2160)  # SeedVR2's shorter side, as the Krea 2 workflow's 720p, 1080p, 1440p and 4K
-UPSCALE_METHODS = ("seedvr2", "fast", "ultrasharp", "usdu")
+# Ultimate SD is left out: its tiles, redrawn by these flow models, came out noisy rather than sharper.
+UPSCALE_METHODS = ("seedvr2", "fast", "ultrasharp")
 REFINE_UPSCALES = {"usdu": "Ultimate SD Upscale"}  # Drawn again with the set's model: denoise, not strength
-REFINE_UPSCALE_SECONDS = 90
 
 
-def upscale_detail(method, strength, resolution, denoise=None):
+def seedvr2_denoise(value):
+    """SeedVR2's denoise (its latent noise) as asked, 0 to 1; ValueError otherwise."""
+    denoise = float(value or 0)
+    if not math.isfinite(denoise) or not 0 <= denoise <= 1:
+        raise ValueError("Denoise is a number from 0 to 1.")
+    return denoise
+
+
+def upscale_detail(method, strength, resolution, denoise=None, scale=None):
     """How a queued upscale is described in the queue."""
     if method in REFINE_UPSCALES:
         return f"{REFINE_UPSCALES[method]}, twice the size" + (f", denoise {denoise:g}" if denoise is not None else "")
     if method == "seedvr2":
-        return f"SeedVR2, {resolution}p" if resolution else "SeedVR2, twice the size"
+        size = f"{scale}× ({resolution}p)" if scale else f"{resolution}p" if resolution else "twice the size"
+        return f"SeedVR2, {size}" + (f", denoise {denoise:g}" if denoise else "")
     name = "4x-UltraSharp" if method == "ultrasharp" else "Superscale-SP"
     return f"{name}, twice the size, strength {round(strength * 100)}%"
 UPSCALE_MOST_SIDE = 1440  # SeedVR2: the shorter side it still takes, as the whole image goes through at once
@@ -758,30 +825,66 @@ def upscale_image(run_id, position):
         return {"ok": False, "error": "Resolution is a number of pixels."}, 400
     if resolution and resolution not in UPSCALE_RESOLUTIONS:
         return {"ok": False, "error": "Unknown resolution."}, 400
+    scale = request.args.get("scale") if method == "seedvr2" else None
+    if scale:
+        if scale not in tuple(str(n) for n in UPSCALE_SCALES):
+            return {"ok": False, "error": "SeedVR2 makes it 2, 3 or 4 times its size."}, 400
+        # Its shorter side that many times over, within what SeedVR2 takes on this card.
+        resolution = min(SEEDVR2_MOST_EDGE, int(scale) * shorter)
     if resolution and resolution <= shorter:
         return {"ok": False, "error": f"It's already {shorter}px on its shorter side: pick a bigger resolution."}, 400
     denoise = None
+    if method == "seedvr2":
+        try:
+            denoise = seedvr2_denoise(request.args.get("denoise")) or None
+        except ValueError as e:
+            return {"ok": False, "error": str(e)}, 400
     if method in REFINE_UPSCALES:
         if not state.workflow:
             return {"ok": False, "error": f"{REFINE_UPSCALES[method]} draws it again with the set's workflow, and this set has none saved."}, 400
         try:
-            denoise = float(request.args.get("denoise") or 0.3)
+            denoise = float(request.args.get("denoise") or 0.2)
         except ValueError:
             return {"ok": False, "error": "Denoise is a number from 0.05 to 1."}, 400
         if not 0.05 <= denoise <= 1:
             return {"ok": False, "error": "Denoise is a number from 0.05 to 1."}, 400
-    how = upscale_detail(method, strength, resolution, denoise)
+    how = upscale_detail(method, strength, resolution, denoise, int(scale) if scale else None)
     item = {"pipeline": "image", "label": queue_label(f"Upscale: {state.shots[position - 1]['title']}"), "detail": how,
             "argv": [*UPSCALE, "--resume", state.id, "--image", str(position), "--file", state.shots[position - 1]["file"],
                      "--method", method, "--strength", f"{min(1, max(0, strength)):g}",
                      *(["--resolution", str(resolution)] if resolution else []), *(["--denoise", f"{denoise:g}"] if denoise is not None else [])],
-            "env": {}, "resume": state.id,
-            "estimate": UPSCALE_SECONDS if method == "seedvr2" else REFINE_UPSCALE_SECONDS if denoise is not None else FAST_UPSCALE_SECONDS}
+            "env": {}, "resume": state.id}
+    # As timed for this way of upscaling, per megapixel it makes (core/upscale_eta.py).
+    item["estimate"] = UpscaleEta(item["argv"], IMAGE_TIMINGS).plan()["total"]
     queued = run_queue.add(item)
     _runs_cache["at"] = 0.0
     if item.get("error"):
         return {"ok": False, "error": item["error"]}, 500
     return {"ok": True, "queued": queued}
+
+
+@app.route("/image-runs/<run_id>/order", methods=["POST"])
+@password_required
+def order_image_set(run_id):
+    """
+    Puts a set's images in the order given by their files (the thumbnail grid's arrange). Not while it is being made
+    or an upscale of it waits: those find their image as the set is, and an older one by its place in it.
+    """
+    files = (request.get_json(silent=True) or {}).get("files")
+    state, refused = load_idle_run(run_id)
+    if refused:
+        return refused
+    if any(is_upscale(item) and item.get("resume") == run_id for item in run_queue.pending()):
+        return {"ok": False, "error": "An upscale of this set waits in the queue: arrange it once that's done."}, 409
+    made = [shot for shot in state.shots if shot.get("file")]
+    if not isinstance(files, list) or sorted(map(str, files)) != sorted(shot["file"] for shot in made) or len(set(files)) != len(files):
+        return {"ok": False, "error": "That set changed: open it again."}, 409
+    by_file = {shot["file"]: shot for shot in made}
+    # Those not made yet (prompts still to render) stay after the ones that are.
+    state.shots = [by_file[name] for name in files] + [shot for shot in state.shots if not shot.get("file")]
+    state.save()
+    _runs_cache["at"] = 0.0
+    return {"ok": True}
 
 
 @app.route("/image-runs/<run_id>/delete", methods=["POST"])
@@ -791,6 +894,16 @@ def delete_image_set(run_id):
     state, refused = load_idle_run(run_id)
     if refused:
         return refused
+    # Images moved from it into a collection aren't the set's any more: they stay, and the set with them, unseen.
+    from panel import collections
+    moved = {key[2] for key in collections.membership() if key[0] == "image" and key[1] == run_id}
+    if moved:
+        for shot in [shot for shot in state.shots if shot.get("file") and shot["file"] not in moved]:
+            os.remove(state.image_path(shot))
+        state.shots = [shot for shot in state.shots if shot.get("file") in moved]
+        state.save()
+        _runs_cache["at"] = 0.0
+        return {"ok": True}
     state.remove()
     run_queue.forget(run_id=run_id)  # Deleted from Output, it is gone from Finished too
     _runs_cache["at"] = 0.0
@@ -814,4 +927,5 @@ def context():
 PIPELINES["image"] = SimpleNamespace(
     load_run=RunState.load, describe_runs=lambda: [describe_run(state) for state in list_runs() if state.shots], continue_run=continue_run,
     discard_run=discard_run, delete_video=lambda folder, path: abort(404), captions=lambda: lambda name: {}, context=context,
-    resume_argv=resume_argv, edit_continuation=edit_continuation)
+    resume_argv=resume_argv, edit_continuation=edit_continuation,
+    estimate=lambda argv, env: RunEta(argv, env, IMAGE_TIMINGS).plan()["total"])

@@ -36,8 +36,12 @@ class UpscaleClient(ComfyClient):
         self.client_id = comfyui_client_id()
 
 
-def upscale_workflow(image, resolution):
-    """SeedVR2 on one image, its shorter side to resolution, into ComfyUI's temp folder (PreviewImage), not its output."""
+def upscale_workflow(image, resolution, denoise=0.0):
+    """
+    SeedVR2 on one image, its shorter side to resolution, into ComfyUI's temp folder (PreviewImage), not its output.
+    denoise: SeedVR2's latent noise (latent_noise_scale), 0-1: it has no denoise of its own (one step restores the
+    picture), and the noise it adds during that step is what makes it draw more, and soften what it would overdo.
+    """
     workflow = {
         "1": {"class_type": "LoadImage", "inputs": {"image": image}},
         "2": {"class_type": "SeedVR2LoadDiTModel", "inputs": {
@@ -50,7 +54,7 @@ def upscale_workflow(image, resolution):
         "4": {"class_type": "SeedVR2VideoUpscaler", "inputs": {
             "image": ["1", 0], "dit": ["2", 0], "vae": ["3", 0], "seed": 777, "resolution": resolution, "max_resolution": 0,
             "batch_size": 1, "uniform_batch_size": False, "color_correction": "lab", "temporal_overlap": 0, "prepend_frames": 0,
-            "input_noise_scale": 0.0, "latent_noise_scale": 0.0, "offload_device": "cpu", "enable_debug": False}},
+            "input_noise_scale": 0.0, "latent_noise_scale": float(denoise or 0), "offload_device": "cpu", "enable_debug": False}},
         "5": {"class_type": "PreviewImage", "inputs": {"images": ["4", 0]}},
     }
     # Titled as ComfyUI's own exports are, so its queue and history say what each node is.
@@ -68,6 +72,8 @@ FAST_MOST_EDGE = 8192
 MODEL_METHODS = {"fast": (FAST_MODEL, "Superscale-SP"), "ultrasharp": ("4x-UltraSharp.pth", "4x-UltraSharp")}
 # The ways that draw it again with the set's own model and prompt (pipelines/image/refine_upscale.py).
 REFINE_METHODS = {"usdu": "Ultimate SD Upscale"}
+# A workflow's options that have an LLM write the prompt (core/workflow_options.py _role): off for a refining upscale.
+LLM_ROLES = ("prompt_enhancer", "image_to_prompt")
 METHODS = ("seedvr2", *MODEL_METHODS, *REFINE_METHODS)
 
 
@@ -113,7 +119,9 @@ def refined(state, shot, uploaded, method, denoise, save_as):
     if not state.workflow:
         raise RuntimeError("This set has no saved workflow to draw it again with.")
     os.environ["COMFYUI_WORKFLOW"] = state.workflow
-    client = ImageClient(state.options or {})
+    # Its own prompt for the tiles: a prompt enhancer or image-to-prompt would write another, on a new seed.
+    options = {**(state.options or {}), **{role: "0" for role in LLM_ROLES if role in (state.options or {})}}
+    client = ImageClient(options)
     images = upload_images(state, client) if not state.region else []
     graph = client.filled(shot["prompt"], images, *client.render_size(state.width, state.height))
     try:
@@ -122,6 +130,31 @@ def refined(state, shot, uploaded, method, denoise, save_as):
         raise RuntimeError(f"{REFINE_METHODS[method]} can't run on this set's workflow: {e}")
     entry = client._run(graph, shot.get("used_seed", shot.get("seed")))
     return client._download(entry, save_as, IMAGE_EXTENSIONS, "an image")
+
+
+def keep_origin(source, path, used):
+    """
+    The upscaled PNG keeps what the original's says made it (ComfyUI's "prompt" and "workflow", and with them its
+    seed), not the upscale's graph, whose seed is the upscaler's own (777) or, re-saved after a blend, none at all.
+    What upscaled it goes beside them. Kept as it was if the original's can't be read.
+    """
+    from PIL import Image
+    from PIL.PngImagePlugin import PngInfo
+    try:
+        with Image.open(source) as original:
+            texts = {key: value for key, value in original.info.items() if isinstance(value, str)}
+        if not texts:
+            return
+        info = PngInfo()
+        for key, value in texts.items():
+            info.add_text(key, value)
+        info.add_text("upscaled_with", used)
+        part = path + ".part"
+        with Image.open(path) as made:
+            made.save(part, format="PNG", pnginfo=info)
+        os.replace(part, path)
+    except OSError as e:
+        print(f"   ⚠️ Could not keep the original's seed and workflow in the upscaled image: {e}")
 
 
 def upscale(state, position, comfy, method="seedvr2", strength=1.0, resolution=0, denoise=None):
@@ -151,16 +184,19 @@ def upscale(state, position, comfy, method="seedvr2", strength=1.0, resolution=0
         os.replace(part, path)
     else:
         resolution = resolution or target_resolution(width, height)
-        print(f"🔍 Upscaling image {position}, {width}x{height}, to {resolution} on its shorter side...")
-        entry = comfy._run(upscale_workflow(uploaded, resolution), 777)
+        print(f"🔍 Upscaling image {position}, {width}x{height}, to {resolution} on its shorter side"
+              f"{f', denoise {denoise:g}' if denoise else ''}...")
+        entry = comfy._run(upscale_workflow(uploaded, resolution, denoise or 0), 777)
         path = comfy._download(entry, os.path.join(state.output_dir, stem), IMAGE_EXTENSIONS, "an image")
     how = {"seedvr2": "upscaled", "fast": "upscaled fast", "ultrasharp": "upscaled with UltraSharp",
            "usdu": "upscaled with Ultimate SD"}[method]
     # What made it bigger, for the gallery's "Upscaled:" line.
-    used = {"seedvr2": f"SeedVR2, {resolution}p" if method == "seedvr2" and resolution else "SeedVR2",
+    used = {"seedvr2": ", ".join(["SeedVR2", *([f"{resolution}p"] if resolution else []), *([f"denoise {denoise:g}"] if denoise else [])]),
             "fast": f"Superscale-SP, strength {strength:g}", "ultrasharp": f"4x-UltraSharp, strength {strength:g}",
             "usdu": f"Ultimate SD, denoise {denoise:g}" if denoise is not None else "Ultimate SD"}[method]
-    made = {**{key: value for key, value in shot.items() if key not in ("redo",)},
+    keep_origin(source, path, used)
+    # Its own copy of what made the original: independent of it from here on.
+    made = {**{key: value for key, value in shot.items() if key not in ("redo",)}, "setup": state.shot_setup(shot),
             "title": f"{shot['title']} · {how}", "file": os.path.basename(path), "upscaled_from": position, "upscaled_with": used}
     state.shots.insert(position, made)
     state.save()
@@ -180,7 +216,7 @@ def main(argv=None):
                              "ultrasharp: 4x-UltraSharp, seconds, the picture as it is with crisper edges.")
     parser.add_argument("--strength", type=float, default=1.0, help="With fast or ultrasharp: how much of the model's result, 0-1, the rest a plain resize.")
     parser.add_argument("--denoise", type=float, default=None,
-                        help="With usdu: how much is drawn again, 0-1 (0.3 unless set).")
+                        help="With seedvr2: its latent noise, 0-1 (0 unless set), so it draws more. With usdu: how much is drawn again.")
     parser.add_argument("--resolution", type=int, default=0, metavar="PX",
                         help="With seedvr2: the shorter side to make it, as the Krea 2 workflow's 720p/1080p/1440p/4K. 0: twice what it is.")
     args = parser.parse_args(argv)
@@ -201,7 +237,7 @@ def main(argv=None):
         return 1
     try:
         upscale(state, args.image, comfy, args.method, min(1.0, max(0.0, args.strength)), max(0, args.resolution),
-                None if args.denoise is None else min(1.0, max(0.05, args.denoise)))
+                None if args.denoise is None else min(1.0, max(0.0, args.denoise)))
     except (RuntimeError, OSError) as e:
         print(f"❌ Could not upscale it: {e}")
         return 1

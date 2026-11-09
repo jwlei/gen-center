@@ -8,7 +8,8 @@ from types import SimpleNamespace
 
 from flask import abort, request, send_file
 
-from core import director, h3_refiner, run_form, seeds, workflow_options
+from core import director, h3_refiner, pills, run_form, seeds, workflow_options
+from core.upscale_eta import UpscaleEta
 from panel.server import (OUTCOME_FILE, read_outcome, form_options, PIPELINES, VIDEO_TIMINGS, _runs_cache, active_runs, app, busy_runs, item_images, job,
                           password_required, safe_video_path, saved_at, run_queue, saved_runs, saved_workflows, queue_form_snapshot)
 from panel.shorts import VOICES
@@ -631,11 +632,9 @@ def upscale_film(name):
     quality = request.args.get("quality") or film_upscale.DEFAULT_QUALITY
     if not 1 <= scale <= 4 or quality not in film_upscale.QUALITIES:
         return {"ok": False, "error": "Unknown scale or quality."}, 400
-    size = film_upscale.probe(path)
-    seconds = size[2] if size else 30
+    argv = [*UPSCALE, "--film", name, "--scale", f"{scale:g}", "--quality", quality]
     item = {"pipeline": "video", "label": queue_label(f"Upscale: {name}"), "detail": f"RTX VSR, {scale:g}x, {quality}",
-            "argv": [*UPSCALE, "--film", name, "--scale", f"{scale:g}", "--quality", quality], "env": {},
-            "estimate": round(30 + seconds * 4)}
+            "argv": argv, "env": {}, "estimate": UpscaleEta(argv, VIDEO_TIMINGS).plan()["total"]}
     queued = run_queue.add(item)
     _runs_cache["at"] = 0.0
     if item.get("error"):
@@ -650,12 +649,7 @@ NOT_COPIED = ("clips", "parts", "state.json")
 
 def latent_used(state):
     """The latent upscale a film was made with, for the gallery's "Upscaled:" line, or None."""
-    options = (state.options if state else None) or {}
-    preset = options.get("latent_upscale")
-    if not preset or preset == "Off":
-        return None
-    detail = f", denoise {options.get('latent_upscale_denoise', '0.5')}" if preset == "Custom" else ""
-    return f"Latent, {preset}{detail}, {options.get('latent_upscale_mp', '1')} MP"
+    return pills.latent_description(state.options if state else None)
 
 
 def offers_latent_upscale(workflow):
@@ -754,6 +748,9 @@ def delete_video(folder, path):
     state = RunState.load(run_id)
     if state:
         state.remove()
+    # H3 Infinite kept the run's clips in ComfyUI's output folder, to continue and redo it from: they go with it.
+    from core import comfy_files
+    comfy_files.forget_h3_run(run_id)
     _runs_cache["at"] = 0.0
     return {"ok": True}
 
@@ -778,6 +775,14 @@ def preserve_upscales(run_id=None, source_name=None):
                     output_metadata.write(path, metadata)
 
 
+def with_facts(caption, brief):
+    """A film's caption, with what Output's pills are made from (core/pills.py): list_videos turns them into pills."""
+    caption["_facts"] = pills.facts(caption["model"], caption["upscaled"], caption["connection"], caption["h3_mode"],
+                                    caption["h3_creativity"], caption["loras"], caption["llm"], caption.pop("_direct", False))
+    caption["_sibling"] = pills.sibling_key("video", brief)
+    return caption
+
+
 def captions():
     titles = {run["id"]: run["label"] for run in saved_runs() if run["pipeline"] == "video"}
     films = films_of_runs()
@@ -793,24 +798,28 @@ def captions():
                     if metadata is not None:
                         output_metadata.write(path, metadata)
                 if metadata is not None:
-                    return {**{key: metadata.get(key) for key in ("title", "model", "llm", "h3_mode", "h3_creativity")},
-                            "loras": metadata.get("loras", []), "upscaled": "RTX VSR",
-                            "run": metadata.get("origin_run") if metadata.get("origin_run") in titles else None}
+                    return with_facts({**{key: metadata.get(key) for key in ("title", "model", "llm", "h3_mode", "h3_creativity", "connection")},
+                                       "loras": metadata.get("loras", []), "upscaled": "RTX VSR", "_direct": bool(metadata.get("direct")),
+                                       "run": metadata.get("origin_run") if metadata.get("origin_run") in titles else None},
+                                      metadata.get("brief"))
             except (OSError, ValueError) as error:
                 app.logger.warning("Could not preserve video metadata for %s: %s", name, error)
         run = run_of_film(name, films)
         made_by = films.get(name) or runs.get(run)
-        return {"run": run if run in titles else None, "title": titles.get(run),
+        return with_facts({"run": run if run in titles else None, "title": titles.get(run),
+                           "_direct": bool(made_by and made_by.direct),
                 "model": shorthand(made_by.workflow, BUILT_IN) if made_by else None,
                 "llm": made_by.llm if made_by else None,
                 "h3_mode": made_by.h3_mode if made_by else None,
                 "h3_creativity": made_by.h3_creativity if made_by else None,
+                # How its clips connect: chain, image, director, multishot or infinite.
+                "connection": (made_by.connection_mode or made_by.start) if made_by else None,
                 "loras": workflow_options.loras_used(made_by.workflow, made_by.options, "video") if made_by else [],
                 "upscaled": "RTX VSR" if UPSCALED.search(name) else latent_used(made_by),
                 # The viewer's Latent upscale: greyed out where it can't be used (see latent_upscale_film).
                 "latent": bool(made_by and made_by.final and not UPSCALED.search(name)
                                and (made_by.connection_mode or made_by.start) not in ("director", "multishot", "infinite")
-                               and offers(made_by.workflow))}
+                               and offers(made_by.workflow))}, made_by.brief if made_by else None)
     offered = {}
 
     def offers(workflow):
@@ -838,4 +847,5 @@ def context():
 PIPELINES["video"] = SimpleNamespace(
     load_run=RunState.load, describe_runs=lambda: [describe_run(state) for state in list_runs() if state.shots], continue_run=continue_run,
     discard_run=discard_run, delete_video=delete_video, captions=captions, context=context,
-    resume_argv=resume_argv, edit_continuation=edit_continuation)
+    resume_argv=resume_argv, edit_continuation=edit_continuation,
+    estimate=lambda argv, env: RunEta(argv, VIDEO_TIMINGS, env).plan()["total"])

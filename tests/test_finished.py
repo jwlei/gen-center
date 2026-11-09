@@ -69,6 +69,24 @@ class FinishedTest(unittest.TestCase):
         runs.assert_called_once_with(run_id="run_1", film="Film.mp4")
         uploads.assert_called_once_with(run_id="run_1", film="Film.mp4")
 
+    def test_a_swipe_forgets_one_result_and_it_stays_gone(self):
+        with tempfile.TemporaryDirectory() as folder:
+            queue = self.queue(folder)
+            for number in (1, 2, 3):
+                queue._record({"label": f"job {number}", "pipeline": "shorts", "id": number}, "done")
+            self.assertTrue(queue.forget_result(2))
+            self.assertFalse(queue.forget_result(2), "already gone")
+            self.assertEqual([r["label"] for r in self.queue(folder).results], ["job 1", "job 3"], "and after a restart")
+
+    def test_forget_route_takes_the_lane(self):
+        client = server.app.test_client()
+        with client.session_transaction() as session:
+            session["authed"] = True
+        with mock.patch.object(server.upload_queue, "forget_result", return_value=True) as uploads:
+            self.assertEqual(client.post("/queue/upload/finished/5/forget").get_json(), {"ok": True})
+        uploads.assert_called_once_with(5)
+        self.assertEqual(client.post("/queue/nope/finished/5/forget").status_code, 404)
+
     def test_clear_route_empties_runs_and_uploads(self):
         client = server.app.test_client()
         with client.session_transaction() as session:
