@@ -10,7 +10,7 @@ from PIL import Image
 
 from core import h3_refiner, run_form, seeds, workflow_options
 from core.saved_workflows import display_label, shorthand
-from panel.server import (read_outcome, IMAGE_TIMINGS, PIPELINES, _runs_cache, active_runs, app, busy_runs, form_options, password_required, run_queue, saved_at, queue_form_snapshot,
+from panel.server import (read_outcome, IMAGE_TIMINGS, PIPELINES, _runs_cache, active_runs, app, busy_runs, form_options, job, password_required, run_queue, saved_at, queue_form_snapshot,
                           saved_workflows)
 from panel.video import clean_inputs, queue_label, shot_seeds
 from pipelines.image import media, models, regions
@@ -518,6 +518,27 @@ def queue_saved_run(state, redo=None):
     return {"ok": True, "queued": queued}
 
 
+def is_upscale(item):
+    return "pipelines.image.upscale" in (item.get("argv") or [])
+
+
+def generating(run_id):
+    """Whether a job that makes the set's own images has it in hand, going or queued: upscales of it don't count."""
+    if any(item.get("resume") == run_id and not is_upscale(item) for item in run_queue.pending()):
+        return True
+    current = run_queue.current
+    return bool(job.running and (job.progress or {}).get("run_id") == run_id and not (current and is_upscale(current)))
+
+
+def upscale_position(state, argv):
+    """The place in the set of the image a queued upscale is of: by its file, as upscales before it add images."""
+    flag = lambda name: argv[argv.index(name) + 1] if name in argv[:-1] else None
+    name = flag("--file")
+    if name:
+        return next((str(i) for i, shot in enumerate(state.shots or [], 1) if shot.get("file") == name), None)
+    return flag("--image")
+
+
 def load_idle_run(run_id, allow_pending=False):
     """The saved run, or the reply saying why it can't be touched now."""
     state = RunState.load(run_id)
@@ -704,10 +725,15 @@ def upscale_problem(method, width, height):
 @app.route("/image-runs/<run_id>/upscale/<int:position>", methods=["POST"])
 @password_required
 def upscale_image(run_id, position):
-    """Queues one image of a set to be made bigger with SeedVR2, as a new image in the set beside it."""
-    state, refused = load_idle_run(run_id)
-    if refused:
-        return refused
+    """
+    Queues one image of a set to be made bigger, as a new image in the set beside it. Several can wait at once, of
+    one set or more: each finds its image by its file, as the ones before it add images to the set.
+    """
+    state = RunState.load(run_id)
+    if not state or not state.shots:
+        return {"ok": False, "error": "That run is no longer saved."}, 404
+    if generating(run_id):
+        return {"ok": False, "error": "That set is being made or is queued to be. Upscale it once it's done."}, 409
     if not 1 <= position <= len(state.shots) or not state.shots[position - 1].get("file"):
         return {"ok": False, "error": "That image isn't made yet."}, 400
     try:
@@ -746,7 +772,8 @@ def upscale_image(run_id, position):
             return {"ok": False, "error": "Denoise is a number from 0.05 to 1."}, 400
     how = upscale_detail(method, strength, resolution, denoise)
     item = {"pipeline": "image", "label": queue_label(f"Upscale: {state.shots[position - 1]['title']}"), "detail": how,
-            "argv": [*UPSCALE, "--resume", state.id, "--image", str(position), "--method", method, "--strength", f"{min(1, max(0, strength)):g}",
+            "argv": [*UPSCALE, "--resume", state.id, "--image", str(position), "--file", state.shots[position - 1]["file"],
+                     "--method", method, "--strength", f"{min(1, max(0, strength)):g}",
                      *(["--resolution", str(resolution)] if resolution else []), *(["--denoise", f"{denoise:g}"] if denoise is not None else [])],
             "env": {}, "resume": state.id,
             "estimate": UPSCALE_SECONDS if method == "seedvr2" else REFINE_UPSCALE_SECONDS if denoise is not None else FAST_UPSCALE_SECONDS}

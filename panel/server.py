@@ -2301,7 +2301,7 @@ def queue_edit_upscale(item_id):
         flag = lambda name: argv[argv.index(name) + 1] if name in argv[:-1] else None
         if settings["kind"] == "image_upscale":
             state = image_panel.RunState.load(old.get("resume"))
-            position = flag("--image")
+            position = image_panel.upscale_position(state, argv) if state else None
             if not state or not position or not position.isdigit() or not 1 <= int(position) <= len(state.shots or []):
                 return {"ok": False, "error": "The original image is no longer available."}, 409
             shot = state.shots[int(position) - 1]
@@ -2338,7 +2338,8 @@ def queue_edit_upscale(item_id):
                 if not math.isfinite(denoise) or not 0.05 <= denoise <= 1:
                     return {"ok": False, "error": "Denoise is a number from 0.05 to 1."}, 400
             how = image_panel.upscale_detail(method, strength, resolution, denoise)
-            new_argv = [*image_panel.UPSCALE, "--resume", state.id, "--image", position, "--method", method,
+            new_argv = [*image_panel.UPSCALE, "--resume", state.id, "--image", position,
+                        *(["--file", flag("--file")] if flag("--file") else []), "--method", method,
                         "--strength", f"{strength:g}", *(["--resolution", str(resolution)] if resolution else []),
                         *(["--denoise", f"{denoise:g}"] if denoise is not None else [])]
             estimate = (image_panel.UPSCALE_SECONDS if method == "seedvr2" else image_panel.REFINE_UPSCALE_SECONDS if denoise is not None

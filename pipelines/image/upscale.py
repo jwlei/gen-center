@@ -174,6 +174,7 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.strip().splitlines()[0])
     parser.add_argument("--resume", metavar="RUN", required=True, help="The set the image is in.")
     parser.add_argument("--image", type=int, required=True, metavar="N", help="Its place in the set, from 1.")
+    parser.add_argument("--file", metavar="NAME", help="The image's file: found by it, as upscales queued before add images.")
     parser.add_argument("--method", choices=METHODS, default="seedvr2",
                         help="seedvr2: redraws the detail, minutes (the default). fast: Superscale-SP, seconds, adds no new content. "
                              "ultrasharp: 4x-UltraSharp, seconds, the picture as it is with crisper edges.")
@@ -184,6 +185,12 @@ def main(argv=None):
                         help="With seedvr2: the shorter side to make it, as the Krea 2 workflow's 720p/1080p/1440p/4K. 0: twice what it is.")
     args = parser.parse_args(argv)
     state = RunState.load(args.resume)
+    if state and args.file:
+        found = next((i for i, shot in enumerate(state.shots or [], 1) if shot.get("file") == args.file), None)
+        if not found:
+            print(f"❌ {args.file} is no longer in the set.")
+            return 1
+        args.image = found
     if not state or not 1 <= args.image <= len(state.shots or []) or not state.shots[args.image - 1].get("file"):
         print(f"❌ No image {args.image} in a set called '{args.resume}'.")
         return 1

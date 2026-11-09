@@ -806,6 +806,28 @@ class PanelTest(unittest.TestCase):
         self.assertEqual([image["upscaled"] for image in listed["images"]], [None, "4x-UltraSharp, strength 0.75"])
         self.assertEqual(listed["upscaled"], "4x-UltraSharp, strength 0.75")
 
+    def test_several_upscales_of_a_set_queue_at_once_each_by_its_file(self):
+        from panel import image as image_panel
+        self.make(count="2", aspect="1:1", megapixels="0.5")
+        run = self.only_run()
+        files = [shot["file"] for shot in run.shots]
+        with mock.patch.object(webapp.run_queue, "_advance"):
+            for position in (1, 2, 2):
+                reply = self.client.post(f"/image-runs/{run.id}/upscale/{position}?method=ultrasharp")
+                self.assertTrue(reply.get_json()["ok"], reply.get_json())
+            queued = [item for item in webapp.run_queue.items if image_panel.is_upscale(item)]
+            self.addCleanup(lambda: [webapp.run_queue.items.remove(item) for item in queued if item in webapp.run_queue.items])
+            self.assertEqual(len(queued), 3, "a second and third upscale of the set wait too")
+            self.assertEqual([item["argv"][item["argv"].index("--file") + 1] for item in queued], [files[0], files[1], files[1]])
+            # Once the first is made, image 2 is third in the set: it is found by its file.
+            state = image_panel.RunState.load(run.id)
+            state.shots.insert(1, {**state.shots[0], "file": "made.png", "upscaled_from": 1})
+            self.assertEqual(image_panel.upscale_position(state, queued[1]["argv"]), "3")
+            webapp.run_queue.items.append({"id": 990, "pipeline": "image", "resume": run.id, "argv": ["x"], "later": True})
+            self.addCleanup(lambda: webapp.run_queue.items[:] and [webapp.run_queue.items.remove(i) for i in list(webapp.run_queue.items) if i.get("id") == 990])
+            self.assertEqual(self.client.post(f"/image-runs/{run.id}/upscale/1?method=ultrasharp").status_code, 409,
+                             "not while the set itself is queued to be made")
+
     def test_trying_one_first_makes_one_and_stops(self):
         self.make(count="3", try_first="1")
         run = self.only_run()

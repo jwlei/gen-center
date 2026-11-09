@@ -2499,3 +2499,34 @@ for (const fn of ['sameAgain', 'sameAgainFilm', 'sameAgainShorts', 'editQueued',
   assert(/reopening\(/.test(body) && body.indexOf('reopening(') < body.indexOf('Workflows()'), `${fn}: the default preset stays off it`);
   assert(/reopened\(/.test(body), `${fn}: the preset picker is checked against the form`);
 }
+
+// With an upscale on, the stepper sets where it ends and the size it's made at follows: a quarter of the pixels, within
+// what the upscale starts from on a 12 GB card.
+{
+  els.imageUpscaleBox.hidden = false;
+  els.imageUpscaleBox.limits = { UltraSharp: { base: 2, final: 16 } };
+  els.imageUpscale.disabled = false;
+  els.imageUpscale.value = 'UltraSharp';
+  els.imageAspect.value = '16:9';
+  run('sourceSize = null');
+  els.imageUpscaleMp.value = '4';
+  run('syncMegapixels()');
+  const [made, ends] = els.imagePixelSize.textContent.split(' → ').map(t => t.split('×').map(Number));
+  assert(Math.abs(made[0] * made[1] - 1048576) < 0.08e6, `made at a quarter: ${els.imagePixelSize.textContent}`);
+  assert(Math.abs(ends[0] * ends[1] - 4 * 1048576) < 0.2e6, `ends where the stepper says: ${els.imagePixelSize.textContent}`);
+  assert.strictEqual(els.imageMegapixels.value, '1.00', 'the size it is made at is what goes');
+  els.imageUpscaleMp.value = '14';
+  run('syncMegapixels()');
+  assert.strictEqual(els.imageMegapixels.value, '2.00', 'held to the 2 MP the upscale starts from');
+  els.imageUpscaleMp.value = '40';
+  run('syncMegapixels()');
+  assert.strictEqual(els.imageUpscaleMp.value, '16.0', 'and held to where it may end');
+  assert(!els.imageResNote.hidden && /run out of memory/.test(els.imageResNote.textContent), 'saying why');
+  els.imageAspect.value = '3840x2160';
+  els.imageUpscaleMp.value = '';
+  run('syncMegapixels()');
+  assert(/→ 3840×2160$/.test(els.imagePixelSize.textContent), `a screen picked is where it ends: ${els.imagePixelSize.textContent}`);
+  els.imageUpscaleBox.hidden = true;
+  els.imageUpscale.value = 'Off';
+  els.imageAspect.value = '1:1';
+}
