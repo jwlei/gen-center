@@ -2511,9 +2511,10 @@ for (const fn of ['sameAgain', 'sameAgainFilm', 'sameAgainShorts', 'editQueued',
   run('sourceSize = null');
   els.imageUpscaleMp.value = '4';
   run('syncMegapixels()');
-  const [made, ends] = els.imagePixelSize.textContent.split(' → ').map(t => t.split('×').map(Number));
+  // Resolution shows the size it is made at, Upscale the size it ends at.
+  const made = els.imagePixelSize.textContent.split('×').map(Number), ends = els.imageUpscaleSize.textContent.split('×').map(Number);
   assert(Math.abs(made[0] * made[1] - 1048576) < 0.08e6, `made at a quarter: ${els.imagePixelSize.textContent}`);
-  assert(Math.abs(ends[0] * ends[1] - 4 * 1048576) < 0.2e6, `ends where the stepper says: ${els.imagePixelSize.textContent}`);
+  assert(Math.abs(ends[0] * ends[1] - 4 * 1048576) < 0.2e6, `ends where the stepper says: ${els.imageUpscaleSize.textContent}`);
   assert.strictEqual(els.imageMegapixels.value, '1.00', 'the size it is made at is what goes');
   els.imageUpscaleMp.value = '14';
   run('syncMegapixels()');
@@ -2525,10 +2526,16 @@ for (const fn of ['sameAgain', 'sameAgainFilm', 'sameAgainShorts', 'editQueued',
   els.imageAspect.value = '3840x2160';
   els.imageUpscaleMp.value = '';
   run('syncMegapixels()');
-  assert(/→ 3840×2160$/.test(els.imagePixelSize.textContent), `a screen picked is where it ends: ${els.imagePixelSize.textContent}`);
-  els.imageUpscaleBox.hidden = true;
+  assert.strictEqual(els.imageUpscaleSize.textContent, '3840×2160', 'a screen picked is where it ends');
+  const madeAt = els.imagePixelSize.textContent;
+  // Upscale off: back to the size it was being made at, in its shape.
   els.imageUpscale.value = 'Off';
+  els.imageUpscale.listeners.change();
+  assert.strictEqual(els.imagePixelSize.textContent, madeAt, `dropped back to what it was made at: ${els.imagePixelSize.textContent}`);
+  assert.strictEqual(els.imageUpscaleSize.textContent, '', 'and nothing to end at');
+  els.imageUpscaleBox.hidden = true;
   els.imageAspect.value = '1:1';
+  run('imageStep = null');
 }
 
 // Without an upscale, the stepper steps the resolution: a number, never NaN.

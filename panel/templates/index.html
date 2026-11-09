@@ -3174,7 +3174,8 @@ function sendTypedSize(typed) {
   $('videoSizeBase').disabled = typed;
 }
 function showVideoStepper(mp, least, top, sides, end, note, on) {
-  $('videoPixelSize').textContent = sides ? sides.join('×') + (end ? ` → ${end.join('×')}` : '') : '';
+  // Resolution: the size it is made at. Latent upscale: the size it ends at.
+  $('videoPixelSize').textContent = sides ? sides.join('×') : '';
   $('videoLatentSize').textContent = end ? end.join('×') : '';
   drawAspect($('videoAspectBox'), ...(sides || [0, 0]));
   $('videoMegapixelsValue').innerHTML = `${mp.toFixed(1)}<span class="mp-unit">MP</span>`;
@@ -3189,6 +3190,7 @@ function showVideoStepper(mp, least, top, sides, end, note, on) {
 // With latent upscale on, the stepper sets the size it ends at, within what the workflow makes well, and the size the
 // clip is made at follows: a quarter of the pixels (twice as big each way). A screen is where it ends unless stepped.
 const LATENT_AREA = 4, LATENT_LEAST = 0.2;
+let videoMadeAt = null;  // With latent upscale on: the megapixels the clip is made at, for Off to drop back to
 function syncUpscaledSize(preset, custom, fixed, shape, most) {
   let ratio, exact = null;
   if (fixed) exact = preset.split('x').map(Number);
@@ -3201,7 +3203,7 @@ function syncUpscaledSize(preset, custom, fixed, shape, most) {
   const mp = Math.min(top, Math.max(LATENT_LEAST, Math.round(wanted * 10) / 10));
   const note = wanted > top + 0.05 ? `Held to ${top.toFixed(1)} MP: past what this workflow makes well, it would very likely run out of memory.` : '';
   $('videoLatentMp').value = mp.toFixed(1);
-  const sides = videoSized(ratio, Math.max(0.1, mp / LATENT_AREA) * 1e6);
+  const madeAt = Math.max(0.1, mp / LATENT_AREA), sides = videoSized(ratio, madeAt * 1e6);
   const end = exact && Math.abs(mp - exactMp) < 0.05 ? exact : videoSized(ratio, mp * 1e6);
   // The size it's made at goes as the size; a typed one stays as typed, for where it ends, and the size it's made at
   // goes in its place.
@@ -3209,6 +3211,7 @@ function syncUpscaledSize(preset, custom, fixed, shape, most) {
   $('videoSizeBase').value = sides.join('x');
   sendTypedSize(!custom);
   videoBase = sides;
+  videoMadeAt = madeAt;
   showVideoStepper(mp, LATENT_LEAST, top, sides, end, note, true);
 }
 $('sizePreset').addEventListener('change', () => { videoMegapixels = null; $('videoLatentMp').value = ''; });
@@ -3287,7 +3290,17 @@ function showVideoLatent() {
   $('videoLatentCustom').hidden = $('videoLatentUpscale').value !== 'Custom' || $('videoLatentUpscale').disabled;
   showResHint('videoLatentInfo', LATENT_HINTS[$('videoLatentUpscale').value] || '');
 }
-$('videoLatentUpscale').addEventListener('change', () => { syncSize(); rememberLatent(); });
+// Latent upscale off: back to the size the clip was being made at.
+$('videoLatentUpscale').addEventListener('change', () => {
+  if ($('videoLatentUpscale').value === 'Off' && videoMadeAt != null) {
+    videoMegapixels = videoMadeAt;
+    // A typed size becomes that size, in its shape.
+    if ($('sizePreset').value === 'custom' && $('videoSizeBase').value) $('size').value = $('videoSizeBase').value;
+  }
+  videoMadeAt = null;
+  syncSize();
+  rememberLatent();
+});
 $('videoLatentCustom').addEventListener('change', rememberLatent);
 $('videoLatentCustomToggle').addEventListener('click', () => {
   const open = $('videoLatentCustom').classList.toggle('open');
@@ -4090,6 +4103,7 @@ const MP_STEP = 0.1;
 // ratio at the image's own pixel count or 1 MP); the stepper scales it, whatever was picked. With Upscale on, the
 // stepper sets the size it ends at. A pixel count that would very likely run out of memory is held to the nearest below.
 let imageStep = null;  // The megapixels the stepper set for the resolution, or null for it as picked
+let imageMadeAt = null;  // With Upscale on: the megapixels it is made at, for Upscale off to drop back to
 function imageUpscaleOn() {
   return !$('imageUpscaleBox').hidden && !$('imageUpscale').disabled && !!$('imageUpscale').value && $('imageUpscale').value !== 'Off';
 }
@@ -4142,7 +4156,7 @@ function upscaledResolution(exact, cap, limit) {
   const base = Math.min(cap, Math.max(MP_STEP, mp / UPSCALE_AREA));
   const sides = shapedSize(ratio, base);
   const end = exact && Math.abs(mp - exactMp) < 0.05 ? exact : shapedSize(ratio, mp);
-  return { sides, send: base.toFixed(2), note, on: true, mp, least: UPSCALE_LEAST, top, end };
+  return { sides, send: base.toFixed(2), note, on: true, mp, least: UPSCALE_LEAST, top, end, base };
 }
 function syncMegapixels() {
   const r = imageResolution();
@@ -4154,8 +4168,10 @@ function syncMegapixels() {
     $('imageUpscaleScale').value = (r.end[0] / r.sides[0]).toFixed(3);
   }
   for (const id of ['imageUpscaleFinal', 'imageUpscaleScale', 'imageUpscaleMp']) $(id).disabled = !r.on;
-  $('imagePixelSize').textContent = r.sides ? r.sides.join('×') + (r.end ? ` → ${r.end.join('×')}` : '') : '';
-  $('imageUpscaleSize').textContent = r.end ? `${(r.end[0] / r.sides[0]).toFixed(2).replace(/\.?0+$/, '')}×` : '';
+  // Resolution: the size it is made at. Upscale: the size it ends at.
+  $('imagePixelSize').textContent = r.sides ? r.sides.join('×') : '';
+  $('imageUpscaleSize').textContent = r.end ? r.end.join('×') : '';
+  if (r.on && r.sides) imageMadeAt = r.base;
   $('imageMegapixelsValue').innerHTML = `${r.mp.toFixed(1)}<span class="mp-unit">MP</span>`;
   $('imageMegapixelsValue').title = r.on ? 'The size it ends at; the size it is made at follows. Tap for the resolution as picked' : 'Tap for the resolution as picked';
   $('imageMegapixelsValue').setAttribute('aria-label', r.on ? 'Megapixels it ends at' : 'Megapixels');
@@ -4358,7 +4374,17 @@ function showImageUpscale() {
   $('imageUpscaleDenoiseRow').hidden = method !== 'Ultimate SD';
   showResHint('imageUpscaleInfo', IMAGE_UPSCALE_HINTS[method] || '');
 }
-$('imageUpscale').addEventListener('change', () => { showImageUpscale(); rememberImageUpscale(); syncImageSize(); });
+// Upscale off: back to the size it was being made at, 500×1000 for an upscale that ended at 1000×2000.
+$('imageUpscale').addEventListener('change', () => {
+  if ($('imageUpscale').value === 'Off' && imageMadeAt != null) {
+    imageStep = imageMadeAt;
+    $('imageMegapixels').dataset.sent = $('imageMegapixels').value;
+  }
+  imageMadeAt = null;
+  showImageUpscale();
+  rememberImageUpscale();
+  syncImageSize();
+});
 $('imageUpscaleDenoise').addEventListener('change', rememberImageUpscale);
 // The workflow writing its own prompts: its prompt enhancer, or image to prompt.
 const ROLE_LABELS = { image_to_prompt: 'Image to prompt', prompt_enhancer: 'Prompt Enhancer' };
