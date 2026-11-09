@@ -2530,3 +2530,17 @@ for (const fn of ['sameAgain', 'sameAgainFilm', 'sameAgainShorts', 'editQueued',
   els.imageUpscale.value = 'Off';
   els.imageAspect.value = '1:1';
 }
+
+// Without an upscale, the stepper steps the resolution: a number, never NaN.
+{
+  els.imageUpscaleBox.hidden = true;
+  els.imageAspect.value = '16:9';
+  els.imageMegapixels.value = 'image';
+  run('imageStep = null; sourceSize = null; syncMegapixels()');
+  run('stepMegapixels(MP_STEP)');
+  assert.strictEqual(run('imageStep'), 1.1, 'one step up from 1 MP');
+  assert(!/NaN/.test(els.imageMegapixelsValue.innerHTML) && !/NaN/.test(els.imagePixelSize.textContent), `no NaN: ${els.imageMegapixelsValue.innerHTML}`);
+  run('stepMegapixels(-MP_STEP); stepMegapixels(-MP_STEP)');
+  assert.strictEqual(run('imageStep'), 0.9);
+  run('imageStep = null');
+}

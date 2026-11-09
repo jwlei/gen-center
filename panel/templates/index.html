@@ -4170,7 +4170,7 @@ function stepMegapixels(by) {
     $('imageUpscaleMp').value = (Math.round((Number($('imageUpscaleMp').value) + by) * 10) / 10).toFixed(1);
   } else {
     const r = imageResolution(), from = r.sides ? r.sides[0] * r.sides[1] / MEGAPIXEL : (imageStep ?? 1);
-    imageStep = Math.min(tenthBelow(r.cap), Math.max(MP_STEP, Math.round((from + by) * 10) / 10));
+    imageStep = Math.min(r.top, Math.max(MP_STEP, Math.round((from + by) * 10) / 10));
   }
   syncImageSize();
   $('imageMegapixels').dispatchEvent(new Event('change', { bubbles: true }));
