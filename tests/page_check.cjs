@@ -2551,3 +2551,25 @@ for (const fn of ['sameAgain', 'sameAgainFilm', 'sameAgainShorts', 'editQueued',
   assert.strictEqual(run('imageStep'), 0.9);
   run('imageStep = null');
 }
+
+// Typed with Upscale on: the box is the size it is made at, and where it ends follows it (four times the pixels).
+{
+  els.imageUpscaleBox.hidden = false;
+  els.imageUpscaleBox.limits = { 'Ultimate SD': { base: 2, final: 16 } };
+  els.imageUpscale.disabled = false;
+  els.imageUpscale.value = 'Ultimate SD';
+  els.imageAspect.value = 'custom';
+  els.imageSize.value = '784x1392';
+  els.imageUpscaleMp.value = '';
+  run('syncMegapixels()');
+  assert.strictEqual(els.imagePixelSize.textContent, '784×1392', 'made at the size typed');
+  const [ew, eh] = els.imageUpscaleSize.textContent.split('×').map(Number);
+  assert(Math.abs(ew / 784 - 2) < 0.05 && Math.abs(eh / 1392 - 2) < 0.05, `ends twice as big each way: ${els.imageUpscaleSize.textContent}`);
+  run('stepMegapixels(MP_STEP)');
+  assert.notStrictEqual(els.imageSize.value, '784x1392', 'stepping the end moves the size it is made at, in the box');
+  assert.strictEqual(els.imageSize.value, els.imagePixelSize.textContent.replace('×', 'x'));
+  els.imageUpscaleBox.hidden = true;
+  els.imageUpscale.value = 'Off';
+  els.imageAspect.value = '1:1';
+  run('imageStep = null; imageMadeAt = null');
+}
