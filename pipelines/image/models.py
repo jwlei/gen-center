@@ -6,6 +6,9 @@ write for it in one reply. core/saved_workflows.py says which model a workflow r
         the coordinates it was trained on run out from the top left corner, so the prompt leaks into
         that corner and it stops following it. Its prompts are long JSON captions, written in fibo2_prompt.py.
     Krea-2 Turbo: makes 1K to 2K images, up to 2048x2048, in 8 steps.
+    MiniMax H3 Image: one checkpoint that makes and edits images, in 6 steps without CFG. Works from about 4 to
+        20 megapixels, best at about 16 (the most the form offers), and poorly below 4. Its prompt enhancer, a small
+        LLM in the workflow, rewrites the prompt into a long caption first.
     Qwen-Image 2.1 Turbo: native 2K, but on this 12 GB card less. Kokon measured what fits: about 12,600 of the
         model's tokens (16 x 16 pixels each) on 12 GB, about 3.2 megapixels, which an edit shares between the image
         it makes and the one it's shown at the same size. So 3.2 to make one, half that to edit one.
@@ -18,10 +21,13 @@ from pipelines.image.media import PIXELS_PER_MEGAPIXEL
 
 FIBO2, KREA2, MOSS_IMAGE, QWEN_IMAGE_EDIT = "fibo2", "krea2", "moss_image", "qwen_image_edit"
 QWEN_IMAGE_21, QWEN_IMAGE_21_EDIT = "qwen_image_21", "qwen_image_21_edit"
+MINIMAX_H3_IMAGE, MINIMAX_H3_IMAGE_EDIT = "minimax_h3_image", "minimax_h3_image_edit"
 LABELS = {FIBO2: "Fibo 2.0", KREA2: "Krea-2", MOSS_IMAGE: "MOSS Image", QWEN_IMAGE_EDIT: "Qwen-Image-Edit", QWEN_IMAGE_21: "Qwen-Image 2.1",
-          QWEN_IMAGE_21_EDIT: "Qwen-Image 2.1 (edit)"}
+          QWEN_IMAGE_21_EDIT: "Qwen-Image 2.1 (edit)", MINIMAX_H3_IMAGE: "MiniMax H3 Image", MINIMAX_H3_IMAGE_EDIT: "MiniMax H3 Image (edit)"}
 # The most megapixels each makes well. A model left out takes what the form offers.
 MOST_MEGAPIXELS = {FIBO2: 1.1, KREA2: 4.2, QWEN_IMAGE_21: 3.2, QWEN_IMAGE_21_EDIT: 1.6}
+# Where the form starts for each, when below it: MiniMax H3 Image does poorly under 4 MP (its template's note).
+LEAST_MEGAPIXELS = {MINIMAX_H3_IMAGE: 4, MINIMAX_H3_IMAGE_EDIT: 4}
 # One reply can only hold so many of Fibo 2.0's captions, each a few hundred words of JSON.
 MOST_WRITTEN = {FIBO2: 30}
 # How many images it takes at most, where that's fewer than its workflow has room for. Qwen-Image 2.1 shows the model
@@ -30,8 +36,9 @@ MOST_IMAGES = {QWEN_IMAGE_21_EDIT: 4}
 # The model's tokens a job has room for on this card, image made and images shown together, in megapixels (Kokon's
 # token_budget for 12 GB). References are shrunk to share what's left: see reference_sizes().
 TOKEN_BUDGET = {QWEN_IMAGE_21: 3.2, QWEN_IMAGE_21_EDIT: 3.2}
-# What it calls the images it's given, in a prompt. Qwen-Image 2.1's encoder labels them <image1>, <image2>...
-IMAGE_NAMES = {QWEN_IMAGE_21_EDIT: "<image{}>", QWEN_IMAGE_EDIT: "Picture {}"}
+# What it calls the images it's given, in a prompt. Qwen-Image 2.1's encoder labels them <image1>, <image2>...; MiniMax
+# H3 Image's prompt enhancer <Picture 1>, <Picture 2>...
+IMAGE_NAMES = {QWEN_IMAGE_21_EDIT: "<image{}>", QWEN_IMAGE_EDIT: "Picture {}", MINIMAX_H3_IMAGE_EDIT: "<Picture {}>"}
 # Models that can make a new picture from images used as references, rather than edit image 1, by the workflow option
 # that gives it a size of its own: on Qwen-Image 2.1's template, Custom size.
 COMPOSE_SWITCH = {QWEN_IMAGE_21_EDIT: "face_custom_size"}
@@ -114,7 +121,8 @@ def reference_sizes(model, made, shown, detail="standard", editing=True):
 
 def for_the_page():
     """What the form needs to know to grey out what a model can't do, and what it can do besides."""
-    return {model: {"label": LABELS[model], "most_megapixels": MOST_MEGAPIXELS.get(model), "most_written": MOST_WRITTEN.get(model),
+    return {model: {"label": LABELS[model], "most_megapixels": MOST_MEGAPIXELS.get(model),
+                    "least_megapixels": LEAST_MEGAPIXELS.get(model), "most_written": MOST_WRITTEN.get(model),
                     "most_images": MOST_IMAGES.get(model), "image_name": IMAGE_NAMES.get(model, "image {}"),
                     "compose": model in COMPOSE_SWITCH, "most_megapixels_compose": MOST_MEGAPIXELS_COMPOSE.get(model),
                     "regions": model in REGION_EDITS, "transparent": model in TRANSPARENT}

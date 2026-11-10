@@ -53,6 +53,10 @@ GROUP_LABELS = {"noise": "Add noise (film grain)"}
 IMAGE_TO_PROMPT = re.compile(r"image.?to.?prompt|img.?2.?prompt|caption", re.I)
 REFINE_SWITCH = re.compile(r"refine|enhance", re.I)
 ROLES = ("prompt_enhancer", "image_to_prompt")
+# "PE", ComfyUI's MiniMax H3 Image templates' name for their prompt enhancer: enable_pe on a face, a Boolean "PE?".
+PE_SWITCH = re.compile(r"(?:^|[\s_])pe(?:$|[\s_?])", re.I)
+# Said as the H3 one in the form, beside a workflow's other prompt writers.
+H3_ENHANCER_LABEL = "Prompt enhancer H3"
 # Words a switch's name has that say nothing about what it switches.
 SWITCH_WORDS = {"enable", "enabled", "use", "mode", "on"}
 MOST_STEPS = 150
@@ -118,7 +122,16 @@ def _face_choices(instance, subgraph, prefix, label):
 
 
 def _words(label):
-    return " ".join(label.replace("_", " ").split()).capitalize().replace("Lora", "LoRA").replace("lora", "LoRA")
+    return _spelled_out(" ".join(label.replace("_", " ").split()).capitalize().replace("Lora", "LoRA").replace("lora", "LoRA"))
+
+
+def _spelled_out(label):
+    """
+    "PE" in ComfyUI's templates (MiniMax H3 Image's "enable_pe", "PE?") is the prompt enhancer: an LLM that rewrites the
+    prompt. Said in full, without the question mark, starting with a capital.
+    """
+    label = re.sub(r"\bpe\b", "prompt enhancer", label, flags=re.I).rstrip("?").strip()
+    return label[:1].upper() + label[1:]
 
 
 def _inner_input(subgraph, slot):
@@ -143,14 +156,19 @@ def _face_settings(instance, subgraph, info):
     faced = [(slot, entry, entry.get("label") or entry["name"]) for slot, entry in enumerate(subgraph.get("inputs", []))
              if entry["name"] in widgets and entry["name"] not in driven and not FACE_SKIP.search(entry.get("label") or entry["name"])]
     switches = [{"id": f"face_{_slug(label)}", "kind": "switch", "label": _words(label), "default": ON if widgets[entry["name"]] else OFF,
-                 "node": instance["id"], "input": entry["name"], **({"advanced": True} if TURBO_WORDS.search(label) else {})}
+                 "node": instance["id"], "input": entry["name"], **({"advanced": True, "speed": True} if TURBO_WORDS.search(label) else {})}
                 for _, entry, label in faced if entry["type"] == "BOOLEAN" and isinstance(widgets[entry["name"]], bool)]
-    found = list(switches)
+    # Its prompt enhancer's switch (MiniMax H3 Image's enable_pe) is chosen as what writes the prompts, not here; what
+    # goes with it (its model) stays as the workflow has it.
+    labels = {entry["name"]: entry.get("label") or entry["name"] for entry in subgraph.get("inputs", [])}
+    enhancer = next((switch for switch in switches if PE_SWITCH.search(labels[switch["input"]])), None)
+    found = [_role("prompt_enhancer", "Prompt enhancer") | {"node": switch["node"], "input": switch["input"]} if switch is enhancer else switch
+             for switch in switches]
     for slot, entry, label in faced:
         words = set(_slug(label).split("_"))
         parent = next((switch for switch in switches if words & (set(switch["id"][5:].split("_")) - SWITCH_WORDS)), None)
         value = widgets[entry["name"]]
-        if not parent or entry["type"] == "BOOLEAN":
+        if not parent or parent is enhancer or entry["type"] == "BOOLEAN":
             continue
         common = {"id": f"face_{_slug(label)}", "label": _words(label), "default": str(value), "parent": parent["id"],
                   "node": instance["id"], "input": entry["name"]}
@@ -162,7 +180,26 @@ def _face_settings(instance, subgraph, info):
             choices = sw._options(spec) if spec else None
             if choices and len(choices) > 1:
                 found.append({**common, "kind": "choice", "choices": [str(choice) for choice in choices]})
-    return found
+    return _face_lora(found, switches, labels)
+
+
+def _face_lora(found, switches, labels):
+    """
+    A face's own LoRA (Krea-2's template: enable_lora, lora_name, lora_strength) as the LoRA setting every workflow has
+    (style_lora): the same ids, under Advanced, its file listed by name.
+    """
+    switch = next((switch for switch in switches if FACE_LORA.fullmatch(labels[switch["input"]])), None)
+    if not switch:
+        return found
+    children = [option for option in found if option.get("parent") == switch["id"]]
+    name = next((option for option in children if option["kind"] == "choice"), None)
+    strength = next((option for option in children if option["kind"] == "number"), None)
+    if not name or not strength:
+        return found
+    trio = lora_options(switch["default"], name["default"], strength["default"], name["choices"])
+    for option, place in zip(trio, (switch, name, strength)):
+        option.update(node=place["node"], input=place["input"])
+    return [option for option in found if option not in (switch, name, strength)] + trio
 
 
 def _primitive_label(title):
@@ -171,8 +208,7 @@ def _primitive_label(title):
     words = (match.group(1) if match else title).split()
     while len(words) > 1 and words[0].lower() in SWITCH_WORDS:
         words = words[1:]
-    label = " ".join(words)
-    label = label[0].upper() + label[1:]
+    label = _spelled_out(" ".join(words))
     return f"{label} (turbo)" if TURBO_WORDS.search(label) and "turbo" not in label.lower() else label
 
 
@@ -186,9 +222,15 @@ def _primitive_switches(ui):
         if (node["type"] != PRIMITIVE_SWITCH or node.get("mode") or not title or node["id"] not in used
                 or not values or not isinstance(values[0], bool) or REFINE_SWITCH.search(title) or FACE_SKIP.search(title)):
             continue
+        if PE_SWITCH.search(title):
+            # Its prompt enhancer's (MiniMax H3 Image's "PE?"): chosen as what writes the prompts.
+            found.append(_role("prompt_enhancer", "Prompt enhancer") | {"node": node["id"], "primitive": True})
+            continue
         label = _primitive_label(title)
+        # A speed LoRA's (lightning, turbo, n-step): shown with the LoRA setting, as the other kind of LoRA.
         found.append({"id": f"switch_{_slug(label.replace('(turbo)', ''))}", "kind": "switch", "label": label,
-                      "default": ON if values[0] else OFF, "node": node["id"], "primitive": True, "advanced": True})
+                      "default": ON if values[0] else OFF, "node": node["id"], "primitive": True, "advanced": True,
+                      **({"speed": True} if TURBO_WORDS.search(label) else {})})
     return found
 
 
@@ -223,7 +265,16 @@ def describe(ui, info=None, pipeline="image"):
     for node in ui["nodes"]:
         if node["type"] == LORA_LOADER and not node.get("mode"):
             loras = [value for value in node.get("widgets_values") or [] if isinstance(value, dict) and value.get("lora")]
-            for number, lora in enumerate(loras, 1):
+            # Its first is the LoRA setting (style_lora), with the one it has as the one to start from; any more are
+            # each a switch of their own, as before.
+            if loras and not any(option["id"] == LORA for option in options):
+                first = loras[0]
+                trio = lora_options(ON if first.get("on") else OFF, _installed_lora(info or {}, first["lora"]), str(first.get("strength", 1) or 1),
+                                    _lora_files(info or {}))
+                for option in trio:
+                    option.update(node=node["id"], entry="lora_1")
+                options += trio
+            for number, lora in enumerate(loras[1:], 2):
                 name = os.path.splitext(os.path.basename(str(lora["lora"]).replace("\\", "/")))[0]
                 options.append({"id": f"lora_{_slug(name)}", "kind": "strength", "label": f"LoRA: {name}", "node": node["id"], "entry": f"lora_{number}",
                                 "default": str(lora.get("strength", 1)) if lora.get("on") else OFF, "min": -2, "max": 2, "step": 0.05,
@@ -237,6 +288,10 @@ def describe(ui, info=None, pipeline="image"):
     if pipeline == "image" and "prompt_enhancer" not in [option["id"] for option in options] and any(
             node["type"] == "PrimitiveBoolean" and REFINE_SWITCH.search(node.get("title") or "") for node in every):
         options.append(_role("prompt_enhancer", "Prompt enhancer"))
+    if any(node["type"].startswith(H3_IMAGE) for node in every):
+        for option in options:
+            if option["id"] == "prompt_enhancer":
+                option.update(label=H3_ENHANCER_LABEL, named=True)
     return options
 
 
@@ -254,7 +309,10 @@ def _before(ui, options, chosen):
     ui = copy.deepcopy(ui)
     for group in _switched_groups(ui):
         title = group.get("title") or ""
-        option = next((option for option in options if option["kind"] == "switch" and option["label"] == title), None)
+        # By its id, not its label: a group said as what it does ("Noise" as "Add noise (film grain)") was never found,
+        # so choosing it did nothing. A prompt writer's group is found by its title, its label.
+        option = next((option for option in options if option["kind"] == "switch" and (option["id"] == f"group_{_slug(title)}"
+                                                                                       or option.get("role") and option["label"] == title)), None)
         if option and option.get("role"):
             wanted = chosen.get(option["id"], OFF)
         else:
@@ -268,16 +326,18 @@ def _before(ui, options, chosen):
     subgraphs = _subgraphs(ui)
     for option in options:
         # A named Boolean on the canvas: set before the workflow is made, as the Image side settles switches then.
-        if option.get("primitive") and option["id"] in chosen and option["node"] in nodes:
-            nodes[option["node"]]["widgets_values"][0] = chosen[option["id"]] == ON
+        # A prompt writer is off unless chosen, as a group of one is.
+        picked = chosen.get(option["id"], OFF) if option.get("role") else chosen.get(option["id"])
+        if option.get("primitive") and picked is not None and option["node"] in nodes:
+            nodes[option["node"]]["widgets_values"][0] = picked == ON
             continue
         # A value on a subgraph's face: a choice, a switch or a number there.
-        if "input" in option and option["id"] in chosen and option["node"] in nodes:
+        if "input" in option and picked is not None and option["node"] in nodes:
             node = nodes[option["node"]]
             names = (sw.face_names(node, subgraphs[node["type"]]) if node["type"] in subgraphs
                      else [entry["widget"]["name"] for entry in node.get("inputs", []) if "widget" in entry])
             values = node.get("widgets_values")
-            value = chosen[option["id"]]
+            value = picked
             value = value == ON if option["kind"] == "switch" else float(value) if option["kind"] == "number" else value
             if isinstance(values, list) and option["input"] in names and names.index(option["input"]) < len(values):
                 values[names.index(option["input"])] = value
@@ -328,11 +388,154 @@ MOST_TEXT = 4000
 FOLLOWERS = ("steps", "cfg", "sampler", "scheduler")
 NEGATIVE_TEXT = ("CLIPTextEncode",)
 LTX_FPS = "LTXVConditioning"
-SLOT = "lora_slot"
-NO_LORA = "None"
 DISTILLED = "The workflow sets its own steps with fixed sigmas, as a distilled one does."
 H3_MEMORY, H3_SPARSE = "H3MemoryOptimization", "H3SparseAttention"
+H3_IMAGE = "MiniMaxH3Image"
 H3_SAMPLING = ("BasicGuider", "CFGGuider", "KSampler", "KSamplerAdvanced", "SamplerCustom", "MiniMaxH3MotionDirector")
+
+
+# --- The LoRA setting every workflow has (under Advanced) ---
+# One LoRA, its file and strength, wherever the workflow takes it: the first row of its Power Lora Loader, its face's
+# enable_lora (Krea-2's template), or else a Load LoRA put in before what samples. So a LoRA dropped in ComfyUI's
+# models/loras is offered at once, on any workflow. The one the workflow has is the one to start from: most LoRAs are
+# made for one model. Speed LoRAs (turbo, lightning, n-step) have switches of their own, and aren't listed.
+LORA, LORA_NAME, LORA_STRENGTH = "lora", "lora_name", "lora_strength"
+LORA_LOADERS = ("LoraLoaderModelOnly", "LoraLoader")
+SPEED_LORA = re.compile(r"turbo|lightning|lightx2v|\d+.?steps?|distill", re.I)
+FACE_LORA = re.compile(r"(?:enable|use)?[\s_]*loras?", re.I)
+# A copy saved twice ("_1", " (1)"): said as the one it is.
+DOWNLOAD_COPY = re.compile(r"(?:_1|\s*\(1\))$")
+# What earlier runs chose, before the LoRA setting: Add a LoRA (LTX's empty loader), and a face's own.
+OLD_LORA_IDS = {"lora_slot": LORA_NAME, "lora_slot_strength": LORA_STRENGTH, "face_enable_lora": LORA, "face_lora_name": LORA_NAME,
+                "face_lora_strength": LORA_STRENGTH}
+
+
+def lora_label(name):
+    """A LoRA file as it's said: its folder and name, without .safetensors or a download's "_1"."""
+    stem = os.path.splitext(str(name).replace("\\", "/"))[0]
+    return DOWNLOAD_COPY.sub("", stem)
+
+
+def _lora_files(info):
+    """The LoRAs ComfyUI has, as its Load LoRA lists them."""
+    return list(dict.fromkeys(_combo(info, "LoraLoader", "lora_name") + _combo(info, "LoraLoaderModelOnly", "lora_name")))
+
+
+def _installed_lora(info, name):
+    """The installed file a workflow's LoRA is: saved under a folder of its author's, it may be installed without one."""
+    files = _lora_files(info)
+    if name in files:
+        return name
+    wanted = os.path.basename(str(name).replace("\\", "/"))
+    return next((file for file in files if os.path.basename(file.replace("\\", "/")) == wanted), name)
+
+
+def lora_options(on, name, strength, files):
+    """The switch, and under it the LoRA (named as lora_label says) and its strength. Speed LoRAs aren't listed."""
+    choices = sorted({file for file in files if not SPEED_LORA.search(file)} | ({name} if name else set()), key=lambda file: lora_label(file).lower())
+    default = name if name in choices else (choices[0] if choices else "")
+    return [{"id": LORA, "kind": "switch", "label": "Use LoRA", "default": on, "advanced": True, "below": True},
+            {"id": LORA_NAME, "kind": "choice", "label": "LoRA", "parent": LORA, "choices": choices, "default": default,
+             "labels": {file: lora_label(file) for file in choices}, "advanced": True},
+            {"id": LORA_STRENGTH, "kind": "number", "label": "Strength", "parent": LORA, "default": f"{float(strength):g}", "min": -2, "max": 2,
+             "step": 0.05, "advanced": True}]
+
+
+def upgraded(chosen, options):
+    """
+    What an earlier run chose for its LoRA, as the LoRA setting has it now: Add a LoRA, a face's enable_lora, or the
+    first Power Lora Loader row's own switch ("lora_<its name>": its strength, or 0 for off).
+    """
+    chosen = dict(chosen or {})
+    known = {option["id"] for option in options}
+    for old, new in OLD_LORA_IDS.items():
+        if old in chosen and new not in chosen and old not in known:
+            value = chosen.pop(old)
+            if old == "lora_slot":
+                if value != "None":
+                    chosen.update({LORA: ON, LORA_NAME: value})
+            else:
+                chosen[new] = value
+    name = next((option for option in options if option["id"] == LORA_NAME), None)
+    if name:
+        old = f"lora_{_slug(os.path.splitext(os.path.basename(str(name['default']).replace(chr(92), '/')))[0])}"
+        if old in chosen and old not in {option["id"] for option in options}:
+            value = chosen.pop(old)
+            chosen[LORA] = OFF if value == OFF else ON
+            if value != OFF:
+                chosen[LORA_STRENGTH] = value
+    return chosen
+
+
+def _model_feeds(api):
+    """Where what samples takes its model from: [(node id, input)], or [] when that isn't one place."""
+    takers = [(node_id, "model") for node_id, node in api.items() if isinstance(node["inputs"].get("model"), list)
+              and ("positive" in node["inputs"] or node["class_type"] in H3_SAMPLING or node["class_type"].endswith("Guider"))]
+    sources = {tuple(api[node_id]["inputs"]["model"]) for node_id, _ in takers}
+    return takers if len(sources) == 1 else []
+
+
+def _style_lora(api, info, chosen, options):
+    """
+    The LoRA setting, applied: to its Power Lora Loader row, or (with none and no face of its own) to an empty Power
+    Lora Loader, or a Load LoRA put in before what samples. Returns the options it adds.
+    """
+    files = _lora_files(info)
+    found = [option for option in options if option["id"] in (LORA, LORA_NAME, LORA_STRENGTH)]
+    if found:
+        switch = found[0]
+        if "entry" in switch and str(switch["node"]) in api:
+            on = chosen.get(LORA, switch["default"]) == ON
+            name = chosen.get(LORA_NAME, found[1]["default"])
+            strength = float(chosen.get(LORA_STRENGTH, found[2]["default"]))
+            api[str(switch["node"])]["inputs"][switch["entry"]] = {"on": on, "lora": _installed_lora(info, name), "strength": strength, "strengthTwo": None}
+        return []
+    # A face with a LoRA switch of its own that isn't the setting (no file list on it): that one stays the way to it.
+    if not files or not any(name in info for name in LORA_LOADERS) or any(
+            option.get("input") and option["kind"] == "switch" and "lora" in option["id"] for option in options):
+        return []
+    added = lora_options(OFF, None, 1, files)
+    if chosen.get(LORA) != ON:
+        return added
+    name, strength = chosen.get(LORA_NAME, added[1]["default"]), float(chosen.get(LORA_STRENGTH, 1))
+    loaders = [node_id for node_id, node in api.items() if node["class_type"] == LORA_LOADER]
+    if len(loaders) == 1:
+        api[loaders[0]]["inputs"]["lora_1"] = {"on": True, "lora": name, "strength": strength, "strengthTwo": None}
+        return added
+    feeds = _model_feeds(api)
+    if not feeds or "LoraLoaderModelOnly" not in info:
+        raise sw.Unusable("There's no one place in this workflow to put a LoRA: give it a Power Lora Loader in ComfyUI.")
+    api["style_lora"] = {"class_type": "LoraLoaderModelOnly", "_meta": {"title": "LoRA"},
+                         "inputs": {"lora_name": name, "strength_model": strength, "model": list(api[feeds[0][0]]["inputs"]["model"])}}
+    for node_id, input_name in feeds:
+        api[node_id]["inputs"][input_name] = ["style_lora", 0]
+    return added
+
+
+def _constant(api, value, depth=0):
+    """A number as set, or read from the constant it comes from (Float Constant, a primitive). None if it isn't one."""
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return value
+    if isinstance(value, list) and depth < 4 and value[0] in api:
+        inputs = api[value[0]]["inputs"]
+        return _constant(api, inputs.get("value", inputs.get("number")), depth + 1) if len(inputs) == 1 else None
+    return None
+
+
+def _drop_idle_loras(api):
+    """
+    A Load LoRA at strength 0 (a turbo LoRA switched off by its strength, as MiniMax H3's template has it) changes
+    nothing: it's taken out, its model passed straight on, so what runs and its pills hold only LoRAs in use.
+    """
+    for node_id, node in list(api.items()):
+        if node["class_type"] not in LORA_LOADERS or not isinstance(node["inputs"].get("model"), list):
+            continue
+        strengths = [_constant(api, node["inputs"].get(name)) for name in ("strength_model", "strength_clip") if name in node["inputs"]]
+        if strengths and all(strength == 0 for strength in strengths):
+            sw._replace_uses(api, node_id, 0, node["inputs"]["model"])
+            if node["class_type"] == "LoraLoader" and isinstance(node["inputs"].get("clip"), list):
+                sw._replace_uses(api, node_id, 1, node["inputs"]["clip"])
+            del api[node_id]
 
 
 def _negatives(api):
@@ -358,17 +561,24 @@ def _tune(api, info, chosen):
         if locked and option.get("parent") == "steps":
             option["problem"] = DISTILLED
         options.append(option)
-        if option["id"] in chosen and not option.get("problem"):
+        # Only what differs from the workflow: its own value stays as it has it (1, not 1.0).
+        if option["id"] in chosen and str(chosen[option["id"]]) != option["default"] and not option.get("problem"):
             for node_id, name in targets:
                 api[node_id]["inputs"][name] = value(chosen[option["id"]])
 
+    main = _main_targets(api)
     for name, label in (("sampler_name", "Sampler"), ("scheduler", "Scheduler")):
         targets = _distinct([_text_source(api, node_id, name) for node_id, node in api.items() if name in node["inputs"]])
+        # More than one (a 2nd pass, a sampler fed its own): the main sampler's, the one that makes the picture.
+        if not (len(targets) == 1 or locked):
+            targets = [main[name]] if main.get(name) else []
         choices = _combo(info, api[targets[0][0]]["class_type"], name) if targets else []
-        if choices and (len(targets) == 1 or locked):
+        if choices:
             offer({"id": name.split("_")[0], "kind": "choice", "label": label, "parent": "steps", "choices": choices}, targets[:1])
     cfg = _distinct([_number_source(api, node_id, "cfg", kinds=FLOATS) for node_id, node in api.items() if "cfg" in node["inputs"]])
-    if cfg and (len(cfg) == 1 or locked):
+    if not (len(cfg) == 1 or locked):
+        cfg = [main["cfg"]] if main.get("cfg") else []
+    if cfg:
         offer({"id": "cfg", "kind": "number", "label": "CFG", "parent": "steps", "min": 0, "max": MOST_CFG, "step": 0.1}, cfg[:1], float)
     negative = _negatives(api)
     # With the CFG fixed at 1 by distilled sigmas, a negative prompt is never used, unless NAG reads it.
@@ -385,15 +595,6 @@ def _tune(api, info, chosen):
     nag = _distinct([_number_source(api, node_id, "nag_scale", kinds=FLOATS) for node_id, node in api.items() if node["class_type"] == "LTX2_NAG"])
     if nag:
         offer({"id": "nag_scale", "kind": "number", "label": "NAG scale", "min": 0, "max": MOST_CFG, "step": 0.5}, nag, float)
-    loaders = [node_id for node_id, node in api.items() if node["class_type"] == LORA_LOADER]
-    if len(loaders) == 1 and not any(re.fullmatch(r"lora_\d+", name) for name in api[loaders[0]]["inputs"]):
-        loras = _combo(info, "LoraLoader", "lora_name") or _combo(info, "LoraLoaderModelOnly", "lora_name")
-        if loras:
-            options.append({"id": SLOT, "kind": "choice", "label": "Add a LoRA", "choices": [NO_LORA, *loras], "default": NO_LORA, "advanced": True})
-            options.append({"id": f"{SLOT}_strength", "kind": "number", "label": "LoRA strength", "parent": SLOT, "default": "1", "min": -2, "max": 2,
-                            "step": 0.05, "advanced": True})
-            if chosen.get(SLOT, NO_LORA) != NO_LORA:
-                api[loaders[0]]["inputs"]["lora_1"] = {"on": True, "lora": chosen[SLOT], "strength": float(chosen.get(f"{SLOT}_strength", 1)), "strengthTwo": None}
     options += _h3(api, info, chosen)
     options += _h3_fastvideo(api, info, chosen)
     options += _h3_latent_upscale(api, info, chosen)
@@ -598,7 +799,9 @@ def _h3(api, info, chosen):
     MiniMax H3's two optimizers (the H3-Optimizations custom node), which a workflow doesn't have: each is put between the
     model and what samples with it, when chosen. Sparse attention also takes how much of the video it attends to.
     """
-    if not any(node["class_type"].startswith("MiniMaxH3") for node in api.values()) or not all(name in info for name in (H3_MEMORY, H3_SPARSE)):
+    # Made for H3's video model (they order its video grid): not H3 Image's, whose conditioning node is its own.
+    if (not any(node["class_type"].startswith("MiniMaxH3") and not node["class_type"].startswith(H3_IMAGE) for node in api.values())
+            or not all(name in info for name in (H3_MEMORY, H3_SPARSE))):
         return []
     sparse = _node_defaults(info, H3_SPARSE)
     budget = float(sparse.get("video_budget", 0.15))
@@ -679,14 +882,15 @@ def lora_problem(option, info, model=None):
 
 def convert(ui, info, chosen=None, pipeline="image"):
     """The workflow made for this side (image, video or shorts) with these options. Returns (api, fields, model, options). Raises Unusable."""
-    chosen = chosen or {}
     options = describe(ui, info, pipeline)
+    chosen = upgraded(chosen, options)
     api = sw.to_api(_before(ui, options, chosen), info, images=pipeline == "image", enhance=chosen.get("prompt_enhancer") == ON)
     # References that grow, such as Fibo 2.0's 16 or MiniMax H3's: a saved workflow wires one or two. Shorts gives one.
     if pipeline != "shorts":
         sw._grow_references(api, info)
     _after(api, options, chosen, info)
-    steps = _steps(api)
+    options += _style_lora(api, info, chosen, options)
+    steps = _steps(api) or _main_targets(api).get("steps")
     if steps:
         node_id, name = steps
         options.append({"id": "steps", "kind": "number", "label": "Steps", "default": str(api[node_id]["inputs"][name]), "min": 1, "max": MOST_STEPS, "step": 1,
@@ -702,6 +906,7 @@ def convert(ui, info, chosen=None, pipeline="image"):
             for option in options:
                 if "seedvr2" in option["id"].lower() and option["id"] != "image_upscale":
                     option["moved"] = "Upscale"
+    _drop_idle_loras(api)
     if pipeline == "image":
         return api, sw.find_image_fields(api, info), sw.image_model(api), options
     return api, sw.find_fields(api, info, needs_audio=pipeline == "shorts"), None, options
@@ -729,6 +934,11 @@ def offered(ui, info, pipeline="image"):
         if problem:
             option["problem"] = problem
     switches = {option["id"]: option for option in options if option["kind"] == "switch"}
+    # What goes with a switch that can't be switched can't be set either, for the same reason.
+    for option in options:
+        parent = switches.get(option.get("parent"))
+        if parent and parent.get("problem") and not option.get("problem"):
+            option["problem"] = parent["problem"]
     for target in options:
         if target["id"] not in FOLLOWERS or target.get("problem"):
             continue
@@ -778,6 +988,7 @@ def chosen_in_env():
 
 def check(options, chosen):
     """Why these choices can't be made, or None."""
+    chosen = upgraded(chosen, options)
     known = {option["id"]: option for option in options}
     for key, value in chosen.items():
         option = known.get(key)
@@ -824,12 +1035,13 @@ def _feeding_outputs(api):
 
 
 def _lora_label(name, strength):
-    short = os.path.splitext(os.path.basename(str(name).replace("\\", "/")))[0]
+    """A LoRA as its pill says it: its name (lora_label, without its folder) and strength, 1 too."""
+    short = lora_label(os.path.basename(str(name).replace("\\", "/")))
     try:
         strength = float(strength)
     except (TypeError, ValueError):
         return short
-    return short if strength == 1 else f"{short} ({strength:g})"
+    return f"{short} ({strength:g})"
 
 
 def loras_in(api):
@@ -849,15 +1061,15 @@ def loras_in(api):
     return list(dict.fromkeys(used))
 
 
-def loras_used(workflow_path, chosen=None, pipeline=None):
-    """The LoRAs a run used: its workflow with the options it was made with. [] if that can't be told."""
+def _made_with(workflow_path, chosen=None, pipeline=None):
+    """The workflow a run was made with, its options and all, in API format: {} if that can't be told. Kept for reuse."""
     if not workflow_path:
-        return []
+        return {}
     stem = os.path.splitext(workflow_path)[0]
     try:
         stamp = max(os.path.getmtime(path) for path in (workflow_path, stem + ".ui.json") if os.path.exists(path))
     except ValueError:
-        return []
+        return {}
     key = (workflow_path, stamp, json.dumps(chosen or {}, sort_keys=True), pipeline)
     if key not in _loras:
         try:
@@ -869,5 +1081,92 @@ def loras_used(workflow_path, chosen=None, pipeline=None):
                     api = json.load(f)
             except (OSError, ValueError):
                 api = {}
-        _loras[key] = loras_in(api) if isinstance(api, dict) else []
+        _loras[key] = api if isinstance(api, dict) else {}
     return _loras[key]
+
+
+def loras_used(workflow_path, chosen=None, pipeline=None):
+    """The LoRAs a run used: its workflow with the options it was made with. [] if that can't be told."""
+    return loras_in(_made_with(workflow_path, chosen, pipeline))
+
+
+def _main_targets(api):
+    """
+    Where the main sampler (_main_sampler) takes its sampler, scheduler, steps and CFG: its own, or what it's fed (a
+    KSamplerSelect, a scheduler's sigmas, a guider). {name: [node id, input]} for each that can be set.
+    """
+    main = _main_sampler(api)
+    if not main:
+        return {}
+    inputs = api[main]["inputs"]
+    fed = lambda name: inputs[name][0] if isinstance(inputs.get(name), list) else None
+    sampler, sigmas, guider = fed("sampler") or main, fed("sigmas") or main, fed("guider")
+    found = {"sampler_name": _text_source(api, sampler, "sampler_name"), "scheduler": _text_source(api, sigmas, "scheduler"),
+             "steps": _number_source(api, sigmas, "steps"),
+             "cfg": _number_source(api, guider, "cfg", kinds=FLOATS) if guider else _number_source(api, main, "cfg", kinds=FLOATS)}
+    return {name: target for name, target in found.items() if target}
+
+
+def _samplers(api):
+    """The nodes in use that sample (they take a latent, sigmas or steps), with a sampler of their own or fed one."""
+    used = _feeding_outputs(api)
+    return [node_id for node_id, node in api.items() if node_id in used
+            and (isinstance(node["inputs"].get("sampler_name"), str) or isinstance(node["inputs"].get("sampler"), list))
+            and any(name in node["inputs"] for name in ("latent_image", "sigmas", "steps"))]
+
+
+def _main_sampler(api):
+    """
+    The sampler that makes the picture: the one that denoises the most (a 2nd pass, as Krea-2's at 0.2, only
+    refines). Its node id, or None.
+    """
+    samplers = _samplers(api)
+    if not samplers:
+        return None
+    denoise = lambda node_id: _constant(api, api[node_id]["inputs"].get("denoise", 1.0))
+    return max(samplers, key=lambda node_id: denoise(node_id) if denoise(node_id) is not None else 1.0)
+
+
+def sampling_in(api):
+    """
+    The sampler and steps a workflow in API format samples with, as "euler, 6 steps". None if neither can be told.
+    A sampler fed its sampler (KSamplerSelect) or its sigmas (a scheduler's steps) runs with those, not with the
+    settings it has of its own, as MiniMax H3's Motion Director has.
+    """
+    main = _main_sampler(api) if api else None
+    if not main:
+        return None
+    inputs = api[main]["inputs"]
+    fed = inputs.get("sampler")
+    sampler = api.get(fed[0], {}).get("inputs", {}).get("sampler_name") if isinstance(fed, list) else inputs.get("sampler_name")
+    if isinstance(inputs.get("sigmas"), list):
+        found = _steps(api)
+        steps = _constant(api, api[found[0]]["inputs"][found[1]]) if found else None
+    else:
+        steps = _constant(api, inputs.get("steps"))
+    parts = [sampler.split("/")[-1] if isinstance(sampler, str) else None, f"{int(steps)} steps" if steps else None]
+    return ", ".join(part for part in parts if part) or None
+
+
+def cfg_in(api):
+    """The CFG the picture is made with, as "1" or "4.5": the main sampler's, or its guider's (a Basic Guider has none: 1). None if it can't be told."""
+    main = _main_sampler(api) if api else None
+    if not main:
+        return None
+    inputs = api[main]["inputs"]
+    guider = api.get(inputs["guider"][0]) if isinstance(inputs.get("guider"), list) else None
+    if guider:
+        value = 1 if guider["class_type"] == "BasicGuider" else _constant(api, guider["inputs"].get("cfg"))
+    else:
+        value = _constant(api, inputs.get("cfg"))
+    return f"{float(value):g}" if value is not None else None
+
+
+def cfg_used(workflow_path, chosen=None, pipeline=None):
+    """The CFG a run was made with (cfg_in), or None."""
+    return cfg_in(_made_with(workflow_path, chosen, pipeline))
+
+
+def sampling_used(workflow_path, chosen=None, pipeline=None):
+    """The sampler and steps a run was made with (sampling_in), or None."""
+    return sampling_in(_made_with(workflow_path, chosen, pipeline))

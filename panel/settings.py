@@ -14,7 +14,7 @@ H3_MODELS = ("gemma-4-12b", "qwen3-14b")
 # Free RAM ComfyUI keeps, in GB: 3 unless set (0, from before, meant ComfyUI's own, which had no floor).
 DEFAULT_RESERVE_GB = 3
 DEFAULTS = {"low_priority": False, "reserve_ram_gb": DEFAULT_RESERVE_GB, "h3_model": H3_MODELS[0], "local_llm_model": H3_MODELS[0],
-            "default_workflow": {side: "" for side in SIDES}, "gemini_titles": False}
+            "default_workflow": {side: "" for side in SIDES}, "gemini_titles": False, "pin_progress": False}
 _lock = threading.Lock()
 
 
@@ -51,10 +51,14 @@ def load():
             "default_workflow": {side: str(workflows.get(side) or "") for side in SIDES},
             # The image preset the viewer's Edit (pen) opens Generate with; empty: the Qwen-Image 2.1 edit workflow.
             "edit_preset": str(saved.get("edit_preset") or "")[:200],
+            # The video preset the viewer's Edit menu opens Video with, its image in image 1 (an image-to-video one).
+            "edit_video_preset": str(saved.get("edit_video_preset") or "")[:200],
             # Private mode: what is made is tagged NSFW, and Output opens on the NSFW filter. Kept over restarts.
             "private_mode": bool(saved.get("private_mode")),
             # Gemini titles: a new film or set is titled by Gemini from its prompt (core/titles.py).
-            "gemini_titles": bool(saved.get("gemini_titles"))}
+            "gemini_titles": bool(saved.get("gemini_titles")),
+            # Pin the progress bar: scrolled away from the top, the header's progress bar stays, along the top of the screen.
+            "pin_progress": bool(saved.get("pin_progress"))}
 
 
 def update(changes):
@@ -77,8 +81,12 @@ def update(changes):
             current["private_mode"] = bool(changes["private_mode"])
         if "gemini_titles" in changes:
             current["gemini_titles"] = bool(changes["gemini_titles"])
+        if "pin_progress" in changes:
+            current["pin_progress"] = bool(changes["pin_progress"])
         if "edit_preset" in changes:
             current["edit_preset"] = str(changes["edit_preset"] or "")[:200]
+        if "edit_video_preset" in changes:
+            current["edit_video_preset"] = str(changes["edit_video_preset"] or "")[:200]
         if isinstance(changes.get("default_workflow"), dict):
             for side in SIDES:
                 if side in changes["default_workflow"]:

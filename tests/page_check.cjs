@@ -173,7 +173,7 @@ boxes[1].parts.input.files = [];
 run('syncImageInput()');
 assert(els.start.disabled && !els.startUnavailable.hidden, 'text-only workflows also use separate moments');
 assert.deepStrictEqual(labels(), [], 'text alone has no image to ask for');
-assert.strictEqual(boxes[1].parts.input.value, '', 'and no image waiting in a hidden box');
+assert(boxes[1].parts.input.disabled, 'an image a text-only workflow cannot take is kept, but not sent');
 assert(els.imagesHint.hidden);
 
 // Up to 20 boxes, one + at a time, and however many a workflow could take.
@@ -205,7 +205,7 @@ els.videoWorkflow.value = 'minimax';
 run('syncImageInput()');
 assert.strictEqual(labels().length, 9);
 assert(els.addImage.hidden && els.imagesHint.textContent.includes('takes 9 at most'));
-assert(boxes[9].parts.input.disabled && !boxes[9].parts.input.files.length, 'what no longer fits is not sent');
+assert(boxes[9].parts.input.disabled && boxes[9].parts.input.files.length, 'what no longer fits is not sent, but kept for a workflow that takes it');
 run('imagesShown = 1; for (const box of imageBoxes()) clearImage(box); syncImageInput()');
 assert.strictEqual(labels().length, 1);
 assert.strictEqual(boxes[0].parts.button.classList.on, true, 'an empty first box has nothing to remove');
@@ -336,7 +336,29 @@ assert(/<span id="runProgressRight"><\/span><\/div>\s*<div class="hint eta-detai
   && /\.eta-detail \{ margin: 2px 0 0; text-align: right;/.test(html), 'the original estimate sits under the time left, over the bar, at the right');
 
 // Shorts in YouTube red; the phone addresses are in the settings box, with copy buttons; no voice hint.
-assert(/body\.on-shorts \{ --accent: #ff0033; \}/.test(html));
+assert(/body\.on-shorts \{ --side: var\(--c-shorts\); \}/.test(html));
+// The colours are written once, and everything else reads them.
+assert(/:root \{ --c-shorts: #ff0033; --c-video: #4c8dff; --c-image: #2fbf71; --shared: #a07cff; \}/.test(html), 'each colour once');
+{
+  assert.strictEqual((html.match(/#ff0033|#4c8dff|#2fbf71|#a07cff/g) || []).length, 4, 'nowhere else in the page');
+  assert(!/#ff0033|#4c8dff|#2fbf71|#a07cff/.test(script) && script.includes("const SIDE_COLOURS = { shorts: 'var(--c-shorts)', video: 'var(--c-video)', image: 'var(--c-image)' };"), 'nor in its script');
+}
+assert(/#restartComfy\.pulse \{ border-color: var\(--warn\); color: var\(--warn\);/.test(html) && !/e6b800|230, 184, 0/.test(html), "Restart ComfyUI's pulse: the same yellow as Restart panel's");
+assert(script.includes("document.body.dataset.viewing = filmFolder === 'video' ? 'video' : 'shorts';") && script.includes("document.body.dataset.viewing = 'image';")
+  && /#imageViewer, #viewerUpscaleBar, #upscaleSettings, #editMenu \{ --accent: var\(--item, var\(--shared\)\); \}/.test(html), 'the preview in the colour of what it shows');
+// One theme: violet everywhere but Generate, which is its side's colour; what sits above every page follows where you are.
+assert(/body \{ --accent: var\(--shared\); --page-accent: var\(--shared\); \}/.test(html)
+  && /body\.in-generate \{ --page-accent: var\(--side\); \}/.test(html) && /#optionsCard, #goBar, \.jump a\[data-page="generate"\] \{ --accent: var\(--side\); \}/.test(html),
+  'violet, but Generate in its side colour');
+assert(/a#privateToggle\.on \{ opacity: 1; color: var\(--page-accent\); \}/.test(html)
+  && /\.page-loader::before \{[^}]*var\(--page-accent\)/.test(html) && /\.disk \.bar > div \{ background: var\(--shared\); \}/.test(html),
+  'the key and the loading bar by where you are; the disk bar violet');
+assert(/\.switch\.output-kinds button\.active \{[^}]*color: var\(--kind\); \}/.test(html) && /\.output-kinds \{ position: relative; --kind: var\(--shared\); \}/.test(html), "Output's Both in violet, not the side's colour");
+assert(/\.pills\.video \{ --pill: var\(--c-video\); \}/.test(html) && /\.pills\.image \{ --pill: var\(--c-image\); \}/.test(html), 'pills keep their kind\'s colour');
+assert(/id="privateToggle"[^>]*><svg[^>]*><circle cx="12" cy="12" r="8"\/><circle cx="12" cy="12" r="2" fill="currentColor"\/><\/svg>/.test(html), 'the key: the same plain ring as the other view');
+assert(/body\.on-shorts #videosCard, body\.on-shorts \.jump a#jumpResults \{ --accent: var\(--c-shorts\); \}/.test(html)
+  && /body\.on-shorts\[data-page="output"\] \{ --page-accent: var\(--c-shorts\); \}/.test(html), "Output on Shorts in Shorts' red");
+assert(script.includes("document.body.classList.toggle('in-generate', WIDE.matches ? desktopGenerateActive : document.body.dataset.page === 'generate');"), 'in Generate: by page, or scrolled to it');
 assert(!html.includes('id="misc"') && /class="settings-row url-row"[^>]*>\s*<span class="url-name">Local<\/span><code>[^<]+<\/code><button type="button" class="copy-url"/.test(html));
 assert(!/<summary>More<\/summary>/.test(html), 'no More dropdown');
 assert(!/id="statusHead"[^>]*aria-controls/.test(status0()));
@@ -386,12 +408,12 @@ const sets = [{ id: 'image_20261102_120000', label: 'A <b>set', total: 3, size: 
 context.sets = sets;
 const setHtml = run('imageSetHtml(sets[0])');
 assert(!setHtml.includes('<b>set') && !setHtml.includes('<i>Look'), 'titles are escaped');
-assert(setHtml.includes('/thumbnails/1?v=5') && setHtml.includes('/files/1?v=5') && setHtml.includes('loading="lazy"'), 'small pictures, that open full size');
+assert(setHtml.includes('/thumbnails/1?v=5') && setHtml.includes('loading="lazy"') && setHtml.includes('data-grid-set="image_20261102_120000"'), 'a small cover, that opens them all');
 assert(setHtml.includes('data-delete-set=') && setHtml.includes('data-shots=') && !setHtml.includes('data-download-set='), 'no download on the card: the preview has it');
 assert(setHtml.includes(`title="Prompts" aria-label="Prompts">${run('ICONS.enhanced')}</button>`), 'image Output prompts uses the star icon');
 assert(setHtml.includes('krea2_&lt;SFW&gt; · 1024x1024 · 2.0 MB · 2 of 3 images'), 'workflow, resolution, total size and progress');
 assert(run("outputCount({ total: 3, finished: true, images: [1, 2] })") === '2 images', 'finished sets show the current count');
-assert(!setHtml.includes('target="_blank"') && setHtml.includes('data-view-position="3"'), 'a picture opens in the viewer, not a new tab');
+assert(!setHtml.includes('target="_blank"') && !setHtml.includes('data-view-position="3"'), 'nothing opens in a new tab; the rest are in the grid');
 const inRow = setHtml.slice(setHtml.indexOf('class="image-set-row'));
 assert(inRow.includes('<img') && inRow.indexOf('<img') < inRow.indexOf('data-delete-set') && inRow.indexOf('data-shots') < inRow.indexOf('data-delete-set'), 'the pictures and their buttons share one line');
 
@@ -474,7 +496,7 @@ assert(/#viewerImage \{[^}]*touch-action: none;/.test(html), 'a swipe and a pinc
   events.get(image).error();
   assert(ghosts[2].removed, 'a failed load does not leave an overlay');
   sets.push({ id: 'image_next', images: [{ position: 1, title: 'Next set', version: 1 }] });
-  run("outputFilter = ''; stepSet(1)");
+  run("nsfwView = false; stepSet(1)");
   events.get(image).load();
   assert.deepStrictEqual(ghosts[3].classes, ['to-down'], 'next set fades downward');
   run('stepSet(-1)');
@@ -511,13 +533,19 @@ assert(!/viewer-from-(right|left|above|below)/.test(html), 'preview navigation n
 run('closeViewer()');
 assert.strictEqual(els.imageViewer.open, false);
 assert(/\.image-set-row \{ display: flex/.test(html) && /\.image-grid img \{ width: 56px/.test(html), 'and small enough to');
-// An album: its cover, as tall as the strip of the rest above its buttons; one image stays on a line with its buttons.
-assert(/<div class="image-set-row album">\s*<a [^>]*class="album-cover"[^>]*><img[^>]*\/thumbnails\/1\?v=5"><span class="album-count">2<\/span><\/a>\s*<div class="album-side">\s*<div class="album-strip"><a [^>]*data-view-position="3"[\s\S]*?<\/div>\s*<div class="image-set-actions">/.test(setHtml),
-  'cover beside the strip, the strip above the buttons');
+// An album: its cover opens them all in the grid; beside it, its pills (up to three lines) above its buttons, no strip.
+assert(/<div class="image-set-row album">\s*<a href="#" class="album-cover" data-grid-set="[^"]+"[^>]*><img[^>]*\/thumbnails\/1\?v=5"><span class="album-count">2<\/span><\/a>\s*<div class="album-side">\s*(<div class="pills image" data-lines="3"[\s\S]*?<\/div>)?\s*<div class="image-set-actions">/.test(setHtml)
+  && !setHtml.includes('album-strip') && !setHtml.includes('aria-label="All of them"'), 'the cover opens the grid; no strip, no grid button');
+{
+  const withPills = run("imageSetHtml({ ...sets[0], pills: [{ text: 'krea', kind: 'workflow' }, { text: '1024x1024' }] })");
+  assert(/<div class="album-side">\s*<div class="pills image" data-lines="3"[^>]*><span class="pill workflow">krea<\/span>[\s\S]*?<\/div>\s*<div class="image-set-actions">/.test(withPills)
+    && !/<\/div><div class="pills/.test(withPills.split('image-set-row')[0]), 'its pills beside the cover, above the buttons, not under the title');
+  assert(/\.album-side \.pills \{ margin-top: 0; max-height: 62px; \}/.test(html), 'three lines of them');
+}
 assert(!setHtml.includes('upscaled-badge'), 'no badge on a picture that was not upscaled');
 const upscaledHtml = run("imageSetHtml({ ...sets[0], images: [{ position: 1, title: 'a', version: 1, upscaled: 'SeedVR2' }, { position: 2, title: 'b', version: 1 }, { position: 3, title: 'c', version: 1, upscaled: '<x>' }] })");
-assert((upscaledHtml.match(/class="upscaled-badge"/g) || []).length === 2 && upscaledHtml.includes('aria-label="Upscaled: SeedVR2"') && !upscaledHtml.includes('<x>'),
-  'an upscaled picture, cover or strip, has its badge, its method escaped');
+assert((upscaledHtml.match(/class="upscaled-badge"/g) || []).length === 1 && upscaledHtml.includes('aria-label="Upscaled: SeedVR2"') && !upscaledHtml.includes('<x>'),
+  'an upscaled cover has its badge');
 assert(/\.album-count \{ position: absolute; left: 4px; bottom: 4px;/.test(html) && /\.upscaled-badge \{ position: absolute; right: 4px; bottom: 4px;/.test(html), 'count bottom left, badge bottom right');
 assert(html.includes('<span class="upscaled-badge" id="viewerUpscaled" role="img" aria-label="Upscaled" hidden></span>') && script.includes("$('viewerUpscaled').hidden = !picture.upscaled;"), 'the preview has the badge too');
 {
@@ -560,7 +588,7 @@ run('setImageUpscaleDenoise(0)');
 assert(!html.includes('id="queueUpscaleSettings"') && script.includes("openUpscaleSettings(image ? (UPSCALE_METHODS_OFFERED.includes(data.upscale.method)"),
   "a queued upscale opens the viewer's own upscale box, filled in");
 // The thumbnail grid: on a set's card and left of Close in the preview; a tap opens the preview at that one.
-assert(setHtml.includes('data-grid-set="image_20261102_120000"') && /<button type="button" class="viewer-grid" id="viewerGrid"[^>]*><\/button>\s*<button type="button" class="plain" id="viewerClose">Close<\/button>\s*<button type="button" class="viewer-grid" id="viewerMove"/.test(html),
+assert(setHtml.includes('data-grid-set="image_20261102_120000"') && /<button type="button" class="viewer-grid" id="viewerGrid"[^>]*><\/button>\s*<button type="button" class="plain viewer-use" id="viewerUse"[^>]*>Use<\/button>\s*<button type="button" class="plain" id="viewerClose">Close<\/button>\s*<button type="button" class="viewer-grid" id="viewerMove"/.test(html),
   'a grid button on each set; in the preview the grid left of Close, Move right of it');
 {
   const opened = [];
@@ -577,31 +605,35 @@ assert(setHtml.includes('data-grid-set="image_20261102_120000"') && /<button typ
   assert.strictEqual(JSON.stringify(opened), '[["image_1",3]]', 'a tap opens the preview there');
   run('openViewer = oldOpenViewer; imageSets = []; viewing = null');
 }
-// Collections: shown with Output's sets; one with NSFW in it only in Private mode or under the NSFW filter.
+// Collections: shown with Output's sets; one with NSFW in it only under the NSFW filter.
 {
   for (const id of ['collections', 'moveList', 'moveNewName', 'moveError', 'moveSheet']) context.document.getElementById(id);
   run(`allImageSets = [{ id: 'image_1', label: 'S', images: [{ position: 1, file: 'a.png', title: 'a', version: 1 }, { position: 2, file: 'b.png', title: 'b', version: 1, collection: 'c_1' }] }];
        lastVideos = { ...lastVideos, video: [{ name: 'F.mp4', run: 'run_1', collection: 'c_1' }] };
        collections = [{ id: 'c_1', name: 'Mine <i>', nsfw: false, items: [{ kind: 'image', set: 'image_1', file: 'b.png' }, { kind: 'film', name: 'F.mp4' }] },
                       { id: 'c_2', name: 'Hot', nsfw: true, items: [{ kind: 'film', name: 'F.mp4' }] }];
-       outputFilter = ''; privateMode = false; pipeline = 'image';`);
+       nsfwView = false; privateMode = false; pipeline = 'image'; outputKind = 'both';`);
   const albums = run("collectionAlbums('c_1')");
   assert(albums.images.length === 1 && albums.images[0].set === 'image_1' && albums.images[0].position === 2 && albums.films[0].name === 'F.mp4', 'its two albums, as their sets and Videos have them');
-  assert.strictEqual(JSON.stringify(run('shownCollections().map(c => c.id)')), '["c_1"]', 'NSFW ones out of the normal view');
+  assert.strictEqual(JSON.stringify(run('shownCollections().map(c => c.id)')), '["c_1"]', 'always shown, whatever the kind; NSFW ones out of the normal view');
   run('privateMode = true');
-  assert.strictEqual(JSON.stringify(run('shownCollections().map(c => c.id)')), '["c_1","c_2"]', 'all of them in Private mode');
-  run('privateMode = false; outputFilter = NSFW_FILTER');
+  assert.strictEqual(JSON.stringify(run('shownCollections().map(c => c.id)')), '["c_1"]', 'Private mode alone does not show NSFW ones');
+  run('privateMode = false; nsfwView = true');
   assert.strictEqual(JSON.stringify(run('shownCollections().map(c => c.id)')), '["c_2"]', 'only NSFW ones under the NSFW filter');
-  context.document.getElementById('collectionsToggle');
-  context.localStorage.getItem = key => (key === 'gen-center.collectionsOpen' ? '1' : null);
-  run("outputFilter = ''; renderCollections()");
-  context.localStorage.getItem = () => null;
+  run("nsfwView = false; renderCollections()");
   const box = els.collections.innerHTML;
-  assert(!els.collectionsToggle.hidden && !html.includes('id="collectionsCount"') && /\.collections-toggle \{[^}]*color: var\(--neutral\); \}/.test(html) && /<button type="button" class="collections-toggle not-shorts" id="collectionsToggle"[\s\S]*?<select id="outputFilter"/.test(html),
-    "an icon on the filter's line, left of it, silver, without a count");
+  assert(!html.includes('id="outputFilter"') && !html.includes('data-kind="collections"')
+    && /<div class="switch output-kinds" id="outputKinds"[^>]*>\s*<span class="kinds-thumb" id="kindsThumb" aria-hidden="true"><\/span><button[^>]*data-kind="image">Images<\/button><button[^>]*data-kind="both">Both<\/button><button[^>]*data-kind="video">Videos<\/button>\s*<\/div>/.test(html),
+    'Images, Both and Videos, Both in the middle, in place of the workflow filter; no Collections there');
+  assert(/\.kinds-thumb \{[^}]*transition: transform \.32s/.test(html) && script.includes('thumb.style.transform = `translateX(${active.offsetLeft}px)`'), 'the lit pill slides to the one tapped');
+  assert(/\.view-toggle \{[^}]*color: var\(--muted\); opacity: \.5;/.test(html) && /\.view-toggle\.on \{ opacity: 1; color: var\(--shared\); \}/.test(html), 'violet when on, a quiet grey when off');
+  assert(/<\/div>\s*<button type="button" class="view-toggle" id="viewToggle" aria-pressed="false" aria-label="View">/.test(html) && !/id="viewToggle"[^>]*(title|NSFW)/.test(html),
+    'the other view: a plain button at its right, saying nothing of what it shows');
   assert(/\.collections:not\(\[hidden\]\) \{[^}]*background: var\(--bg\); border: 1px solid var\(--line\)/.test(html), 'open, a dark bordered box of its own');
   assert(/\.image-set\.collection \.image-set-heading \.rename-btn svg \{ width: 12px; height: 12px; \}/.test(html) && box.includes('Mine &lt;i&gt;') && box.includes('1 image · 1 video')
-    && box.includes('data-rename-collection="c_1"') && box.includes('data-grid-collection="c_1"') && box.includes('data-delete-collection="c_1"'),
+    && /class="album-cover" data-grid-collection="c_1"/.test(box) && !/<button[^>]*data-grid-collection/.test(box) && script.includes('return rest.slice(0, 3).join(\'\');')
+    && script.includes('if (fold.open) reshuffleCollection(fold);')
+    && box.includes('data-rename-collection="c_1"') && box.includes('data-delete-collection="c_1"'),
     'under a folding header: its name escaped, rename at its right, what it holds, the grid and delete');
   assert(!els.collections.hidden);
   assert(/<details class="image-set collection" data-collection="c_1" open>\s*<summary class="image-set-heading">/.test(box) && box.includes('data-no-fold="1"'),
@@ -614,8 +646,19 @@ assert(setHtml.includes('data-grid-set="image_20261102_120000"') && /<button typ
   assert.strictEqual(JSON.stringify(run('viewedItem()')), '{"kind":"image","run":"image_1","file":"b.png"}');
   run("viewing = { film: true, name: 'F.mp4', folder: 'video' }");
   assert.strictEqual(JSON.stringify(run('viewedItem()')), '{"kind":"film","name":"F.mp4"}');
+  assert(!els.collectionsToggle.hidden && /<div class="output-filter-line not-shorts">\s*<button type="button" class="collections-toggle" id="collectionsToggle"/.test(html)
+    && /\.collections-toggle \{ position: absolute; left: 0;/.test(html), 'its icon at the left of the line, shown to begin with');
+  const keptStorage = { get: context.localStorage.getItem, set: context.localStorage.setItem };
+  context.localStorage.setItem = (key, value) => { context.savedShown = [key, value]; };
+  els.collectionsToggle.listeners.click();
+  assert(els.collections.hidden && JSON.stringify(context.savedShown) === '["gen-center.collectionsShown","0"]', 'a tap hides them, and is remembered');
+  context.localStorage.getItem = key => (key === 'gen-center.collectionsShown' ? '0' : null);
+  run("collections = [...collections]; document.getElementById('collections').dataset.key = ''; renderCollections()");
+  assert(els.collections.hidden && !els.collectionsToggle.hidden, 'kept hidden on the next draw, the icon still there');
+  context.localStorage.getItem = keptStorage.get;
+  context.localStorage.setItem = keptStorage.set;
   run("viewing = null; viewerCollection = null; collections = []; allImageSets = []; renderCollections()");
-  assert(els.collections.hidden && els.collectionsToggle.hidden, 'none: no icon, no box');
+  assert(els.collections.hidden && els.collectionsToggle.hidden, 'none: no box, no icon');
 }
 // Private mode's key in the top bar, by Settings: lit while on, and a tap turns it the other way.
 {
@@ -632,7 +675,11 @@ assert(setHtml.includes('data-grid-set="image_20261102_120000"') && /<button typ
   context.fetch = keptFetch;
   assert(sent.url === '/api/private' && sent.body.on === false, 'a tap asks for it off');
   // Turned on, it opened Output on the NSFW filter: back to all, for what follows.
-  run("renderPrivate(false); outputFilter = ''");
+  run("renderPrivate(false)");
+  assert.strictEqual(run('nsfwView'), false, 'Private mode off: the NSFW view goes off with it');
+  run(`renderFinished([{ label: 'Hot', outcome: 'done', at: '17:06', pipeline: 'image', run_id: 'image_9', job_id: 9, nsfw: true }], [], [])`);
+  assert(!els.finishedList.innerHTML.includes('Hot'), 'and Finished shows nothing NSFW');
+  run('renderFinished([], [], [])');
 }
 // Arranging in the grid: the button left of Close, lit while on; a tap picks one rather than opening it.
 {
@@ -656,7 +703,7 @@ assert(setHtml.includes('data-grid-set="image_20261102_120000"') && /<button typ
 }
 // Move: a menu growing over the preview's buttons, as Upscale's: + New on top, then the collections.
 {
-  assert(/<dialog id="moveSheet" class="panel-dialog upscale-dialog move-menu"/.test(html) && /dialog#viewerUpscaleBar, dialog#moveSheet, dialog#pillsMenu \{[^}]*animation: menu-in/.test(html), 'it grows as the upscale menu does');
+  assert(/<dialog id="moveSheet" class="panel-dialog upscale-dialog move-menu"/.test(html) && /dialog#viewerUpscaleBar, dialog#moveSheet, dialog#pillsMenu, dialog#editMenu \{[^}]*animation: menu-in/.test(html), 'it grows as the upscale menu does');
   for (const id of ['moveSheet', 'moveList', 'moveNewRow', 'moveNewName', 'moveError']) context.document.getElementById(id);
   run(`allImageSets = [{ id: 'image_1', images: [{ position: 1, file: 'a.png' }] }]; collections = [{ id: 'c_1', name: 'Mine', items: [] }];
        viewing = { id: 'image_1', position: 1 }; viewerCollection = null; oldPlace = placeOverViewerButtons; placeOverViewerButtons = () => {}`);
@@ -666,16 +713,44 @@ assert(setHtml.includes('data-grid-set="image_20261102_120000"') && /<button typ
   els.moveNewName.focus = () => {};
   els.moveList.listeners.click({ target: { closest: selector => (selector === '[data-move-new]' ? {} : null) } });
   assert(!els.moveNewRow.hidden, '+ New: its name, in the menu');
-  run(`collections = [{ id: 'c_1', name: 'Mine', items: [] }, { id: 'c_2', name: 'Hot', nsfw: true, items: [] }]; privateMode = false; outputFilter = ''; openMoveSheet()`);
+  run(`collections = [{ id: 'c_1', name: 'Mine', items: [] }, { id: 'c_2', name: 'Hot', nsfw: true, items: [] }]; privateMode = false; nsfwView = false; openMoveSheet()`);
   assert(!els.moveList.innerHTML.includes('c_2'), 'one with NSFW in it: not offered with Private mode off');
   run('privateMode = true; openMoveSheet()');
-  assert(els.moveList.innerHTML.includes('data-move-to="c_2" class="nsfw"') && !els.moveList.innerHTML.includes('data-move-to="c_1"'),
-    'in Private mode, only those with NSFW in them, dark red');
-  run('outputFilter = NSFW_FILTER; openMoveSheet()');
-  assert(!els.moveList.innerHTML.includes('data-move-to="c_1"') && els.moveList.innerHTML.includes('c_2'), 'in Private mode, under the NSFW filter too: only those');
+  assert(!els.moveList.innerHTML.includes('data-move-to="c_2"') && !els.moveList.innerHTML.includes('data-move-to="c_1"'),
+    'in Private mode without the NSFW filter: no NSFW one is shown, and the others are not its kind');
+  run('nsfwView = true; openMoveSheet()');
+  assert(!els.moveList.innerHTML.includes('data-move-to="c_1"') && els.moveList.innerHTML.includes('data-move-to="c_2" class="nsfw"'), 'in Private mode, under the NSFW filter: only those, dark red');
   run('privateMode = false; openMoveSheet()');
   assert(els.moveList.innerHTML.includes('c_1') && els.moveList.innerHTML.includes('c_2'), 'out of it, under the NSFW filter: all of them');
-  run("outputFilter = ''");
+  run("nsfwView = false");
+  // A batch: one main row with how many and a chevron; its items under it, set in, a tap away. Going, from what it
+  // has made; done, from its set's pictures.
+  run(`imageSets = [{ id: 'image_5', images: [{ position: 1, version: 1, title: 'A' }, { position: 2, version: 1, title: 'B' }, { position: 3, version: 1, title: 'C' }] }];
+    renderFinished([], [], [{ label: 'One', outcome: 'done', at: '17:01', t: 1, pipeline: 'image', run_id: 'image_5', position: 1 },
+      { label: 'Two', outcome: 'done', at: '17:02', t: 2, pipeline: 'image', run_id: 'image_5', position: 2 }])`);
+  {
+    const going = els.finishedList.innerHTML;
+    assert(/<div class="result-batch" data-batch="image:image_5"><button[^>]*class="result done batch-main"[\s\S]*?<span class="batch-count">2<\/span><span class="batch-chevron"/.test(going)
+      && (going.match(/batch-kid"/g) || []).length === 2 && going.split('data-key="made:image_5:2"').length - 1 === 2, 'going: the newest heads it; both are its items');
+  }
+  run(`renderFinished([{ label: 'Set of 3', outcome: 'done', at: '17:03', t: 3, pipeline: 'image', run_id: 'image_5', job_id: 7 }], [], [])`);
+  {
+    const done = els.finishedList.innerHTML;
+    assert(/class="result done batch-main"[^>]*data-job-id="7"[\s\S]*?Set of 3[\s\S]*?<span class="batch-count">3<\/span>/.test(done)
+      && ['A', 'B', 'C'].every(t => done.includes(`<span class="result-label">${t}</span>`)) && /class="result done batch-kid"[^>]*data-position="3"/.test(done), 'done: one row, its pictures under it');
+    assert(!done.includes('result-batch open'), 'folded to begin with');
+    const main = { classList: { contains: () => false }, parentElement: null };
+    const batch = { dataset: { batch: 'image:image_5' }, classList: { on: false, contains() { return this.on; }, toggle(c, v) { this.on = v; } } };
+    main.parentElement = batch;
+    els.finishedList.listeners.click({ target: { closest: sel => (sel === '.batch-main' ? main : null) } });
+    assert(batch.classList.on && run("openBatches.has('image:image_5')"), 'a tap on the main row opens it, and it stays open');
+    run('renderFinished(...lastFinished)');
+    assert(els.finishedList.innerHTML.includes('result-batch open'), 'still open at the next poll');
+    run("openBatches.clear(); imageSets = []; renderFinished([], [], [])");
+  }
+  assert(/\.batch-kids \{ display: grid; grid-template-rows: 0fr;/.test(html) && /\.batch-kids-in \{[^}]*margin-left: 16px;[^}]*border-left: 2px solid var\(--line\); \}/.test(html), 'growing to their height, set in a little');
+  assert(/\.batch-kids-in \{[^}]*overflow: clip;/.test(html) && /\.result-thumb \{[^}]*overflow: clip;/.test(html),
+    'opened, a set scrolls with the list: clipped, not a scroll box of its own');
   run('privateMode = false');
   run('placeOverViewerButtons = oldPlace; viewing = null; collections = []; allImageSets = []; $("moveSheet").close()');
 }
@@ -693,9 +768,9 @@ assert(setHtml.includes('data-grid-set="image_20261102_120000"') && /<button typ
 }
 assert(/\.image-set-actions \[data-grid-set\], \.image-set-actions \[data-grid-collection\] \{ margin-right: auto; \}/.test(html), "the grid's button at the left, beside the cover");
 // Output never shows what it drew before (another filter, Private mode since changed): held until a fresh answer.
-assert(/#videos, #imageSets, #collections, #collectionsToggle, #cnav \{ transition: opacity \.25s ease; \}/.test(html) && /body\.output-pending #collectionsToggle, body\.output-pending #cnav \{ visibility: hidden; opacity: 0; transition: none; \}/.test(html)
+assert(/#videos, #imageSets, #collections, #cnav \{ transition: opacity \.25s ease; \}/.test(html) && /body\.output-pending #cnav \{ visibility: hidden; opacity: 0; transition: none; \}/.test(html)
   && /body\.output-pending #videos, body\.output-pending #imageSets, body\.output-pending #collections,/.test(html)
-  && script.includes("if (page === 'output' && document.body.dataset.page !== 'output') { holdOutput(); resetOutputFilter(); }")
+  && /if \(page === 'output' && document\.body\.dataset\.page !== 'output'\) \{\s*holdOutput\(\);\s*resetOutputView\(\);/.test(script)
   && script.includes("window.addEventListener('pageshow', holdOutput);") && script.includes("if (askedAt >= outputHeldAt) document.body.classList.remove('output-pending');"),
   'held out of sight on going to Output and on coming back, until drawn from an answer asked for after');
 // The preview's pills never grow in place: "+N" opens them all in a box over its buttons.
@@ -729,10 +804,30 @@ assert(/\.thumb-grid button \{[^}]*overflow: clip;/.test(html) && !/\.thumb-grid
 assert(/button, \[role="button"\], \.icon-btn, summary, \.count-stepper, \.count-stepper \.mp-field, \.pills, \.pill \{\s*-webkit-user-select: none; user-select: none; -webkit-touch-callout: none; \}/.test(html),
   'pressing a button or stepper quickly never selects its text');
 assert(/\.prompt-progress::after \{[^}]*animation: bar-sheen 3\.6s/.test(html), "the prompt's bar has the light passing along it, as the others");
+assert(script.includes("const other = at < 0 ? null : album[at + 1] || album[at - 1];") && script.includes("if (picture) openViewer(set.id, picture.position); else closeViewer();"),
+  'deleting in a collection: on to the next in its album, found by its file');
+assert(script.includes("if (was !== side) carryImages(was, side);") && script.includes("if (boxes().some(box => box.querySelector('input').files.length)) return;"),
+  "switching side, the images chosen go into the other's empty boxes");
+// Edit in the preview: a menu growing as the others do, to edit the image or make a video from it, each bordered
+// in its page's colour; the video one's preset is a setting beside the image one's.
+assert(/<button type="button" data-edit-to="image" style="--side:var\(--c-image\)"[^>]*>Edit image<\/button>\s*<button type="button" data-edit-to="video" style="--side:var\(--c-video\)"[^>]*>Make a video<\/button>/.test(html)
+  && /dialog#editMenu \.upscale-methods button \{ text-align: center; border: 1px solid var\(--side\); \}/.test(html)
+  && html.includes('<select id="editVideoPreset"') && script.includes("saveSettings({ edit_video_preset: $('editVideoPreset').value })")
+  && script.includes("if (to === 'video') videoFromImage(id, position); else editInGenerate(id, position);"), 'Edit: image or video, by its page colour');
+assert(/async function videoFromImage[\s\S]*?backToGenerate\('video'\);\s*\}/.test(script), "a video from an image lands on Video's Generate, not Image's");
+// Picking from Output: a tap opens the preview, where Use (sharing Close's row) chooses it.
+assert(/<button type="button" class="plain viewer-use" id="viewerUse" hidden[^>]*>Use<\/button>\s*<button type="button" class="plain" id="viewerClose">Close<\/button>/.test(html) && !script.includes("$('viewerMove').hidden = !!choosingFor;")
+  && !script.includes('if (choosingFor) { chooseThis(view.dataset.viewSet') && script.includes("chooseThis(id, position);")
+  && /\.viewer-actions\.choosing > button\.plain \{ flex: 1 1 0;/.test(html), 'Use beside Close while choosing; a tap on a thumbnail only opens it');
+// Any box picks from Output: a reference box picks a film, with Use in its preview.
+assert(/Select reference \$\{number\} from Output/.test(html) && script.includes("chooseFromOutput(pick.closest('.image-box'), 'video', 'media')")
+  && script.includes("const choosing = !!choosingFor && (choosingFor.kind === 'media' ? video : !video);") && script.includes('chooseFilm(name, from);'),
+  'reference boxes pick films too, Use choosing them');
 const single = run("imageSetHtml({ id: 'image_9', label: 'One', total: 1, size: '1x1', when: 'now', images: [{ position: 1, title: 'x', version: 1 }] })");
-assert(single.includes('class="album-cover"') && !single.includes('album-count') && !single.includes('album-strip'), 'one image: the same picture box, no count, no strip');
+assert(/<a href="\/image-runs\/image_9\/files\/1\?v=1" data-view-set="image_9" data-view-position="1"[^>]* class="album-cover">/.test(single) && !single.includes('album-count') && !single.includes('data-grid-set'),
+  'one image: the same picture box, opening it, no count');
 assert(/class="icon-btn del" data-delete-set="image_9"[^>]*aria-label="Delete"><svg/.test(single), 'icons, named');
-assert(/<div class="image-set-actions"><button type="button" class="icon-btn" data-grid-set="image_9"[^>]*aria-label="All of them"><svg[\s\S]*?<\/button><button type="button" class="icon-btn" data-again-set="image_9"[^>]*aria-label="The same again"><svg[\s\S]*?data-shots="image_9"[\s\S]*?data-delete-set="image_9"/.test(single), 'the grid, the same again, then prompts, then delete');
+assert(/<div class="image-set-actions"><button type="button" class="icon-btn" data-again-set="image_9"[^>]*aria-label="The same again"><svg[\s\S]*?data-shots="image_9"[\s\S]*?data-delete-set="image_9"/.test(single), 'the same again, then prompts, then delete');
 assert(single.includes(`aria-label="The same again">${run('ICONS.config')}</button>`) && run('ICONS.config !== ICONS.again'), 'same again uses settings, distinct from retry');
 for (const side of ['shorts', 'video', 'image']) {
   assert(html.includes(`data-preset-delete="${side}" title="Delete this preset" aria-label="Delete this preset" hidden>${run('ICONS.trash')}</button>`), 'preset deletion uses the shared trash icon');
@@ -750,7 +845,7 @@ assert(html.includes(`id="paintClear" title="Clear all paint" aria-label="Clear 
   assert(fields.opt_up.checked === true && fields.opt_steps.value === '20' && fields.opt_lora_on.checked === true && fields.opt_lora_strength.value === '0.8');
 }
 assert(/\.image-set-actions \{[^}]*justify-content: flex-end;[^}]*margin-top: auto;/.test(html) && /\.album-cover \{[^}]*width: 92px; height: 92px;/.test(html), 'the icons sit in the same place on every set');
-assert(/\.image-set-row\.album \{ align-items: stretch; \}/.test(html) && /\.album-strip \{ display: flex;[^}]*overflow-x: auto/.test(html), 'the strip scrolls sideways');
+assert(/\.image-set-row\.album \{ align-items: stretch; \}/.test(html) && /\.album-strip \{ display: flex;/.test(html), "a collection's thumbnails in a row");
 assert(/\.album-cover img \{ position: absolute; inset: 0;/.test(html) && !/\.album-cover \{[^}]*min-height/.test(html), 'the cover is as tall as the strip and buttons, not its picture');
 assert(/input\[type=file\]::file-selector-button/.test(html), 'choosing a file has a real button');
 run('imageSets = sets; renderImageSets()');
@@ -846,11 +941,43 @@ const optionsHtml = run('options.map(option => imageOptionHtml(option, options))
 assert(!optionsHtml.includes('<b>pass') && !optionsHtml.includes('<i>LayerColor'), 'labels and problems are escaped');
 assert(/name="opt_group_2nd_pass" value="0"><input type="checkbox" name="opt_group_2nd_pass" value="1" checked/.test(optionsHtml), 'unticked still says so');
 const upscaler = optionsHtml.slice(optionsHtml.indexOf('Upscaler'), optionsHtml.indexOf('Color correction'));
-assert(upscaler.includes('name="opt_group_up.choice"') && upscaler.includes('<option selected>4K</option>') && upscaler.includes('name="opt_face_lora_strength"'),
+assert(upscaler.includes('name="opt_group_up.choice"') && upscaler.includes('<option value="4K" selected>4K</option>') && upscaler.includes('name="opt_face_lora_strength"'),
   'what goes with a switch is beside it');
+// The LoRA setting: its switch, and under it while it's on, the file by name (no .safetensors) and its strength at the right.
+const loraSettingHtml = run(`(() => { const all = [{ id: 'lora', kind: 'switch', label: 'Use LoRA', default: '0', advanced: true, below: true },
+  { id: 'lora_name', kind: 'choice', label: 'LoRA', parent: 'lora', default: 'KNPV3_1.safetensors', choices: ['KNPV3_1.safetensors', 'b.safetensors'],
+    labels: { 'KNPV3_1.safetensors': 'KNPV3', 'b.safetensors': 'b' } },
+  { id: 'lora_strength', kind: 'number', label: 'Strength', parent: 'lora', default: '1', min: -2, max: 2, step: 0.05 }];
+  return all.map(option => imageOptionHtml(option, all)).join(''); })()`);
+assert(/<input type="checkbox" name="opt_lora" value="1">\s*<span>Use LoRA<\/span><\/label><div class="option-reveal" data-below="opt_lora"><div class="option-reveal-in"><div class="options-box option-row option-below"><select name="opt_lora_name"[^>]*><option value="KNPV3_1.safetensors" selected>KNPV3<\/option><option value="b.safetensors">b<\/option><\/select><input type="number" class="option-strength" name="opt_lora_strength"[^>]*value="1"/.test(loraSettingHtml),
+  'off, its file and strength wait folded under it, in a dark box; each file said by name');
+assert(/\.option-reveal \{ display: grid; grid-template-rows: 0fr; opacity: 0; transition: grid-template-rows \.3s/.test(html) && /\.option-reveal\.open \{ grid-template-rows: 1fr; opacity: 1; \}/.test(html)
+  && script.includes("if (toggle) under.classList.toggle('open', toggle.checked);"), 'ticked, the box grows open smoothly');
+// Steps, Sampler, Scheduler and CFG first, in a dark box, each named by a button with a hint; then Use LoRA in its own box.
+run(`syncOptions('testOptions', 'testOptionsBox', [{ id: 'group_x', kind: 'switch', label: 'X', default: '0' },
+    { id: 'lora', kind: 'switch', label: 'Use LoRA', default: '0', advanced: true, below: true },
+    { id: 'cfg', kind: 'number', label: 'CFG', parent: 'steps', default: '1', min: 0, max: 30, step: 0.1, advanced: true },
+    { id: 'steps', kind: 'number', label: 'Steps', default: '8', min: 1, max: 150, step: 1, advanced: true },
+    { id: 'sampler', kind: 'choice', label: 'Sampler', parent: 'steps', default: 'euler', choices: ['euler', 'er_sde'], advanced: true },
+    { id: 'switch_lightning_lora', kind: 'switch', label: 'Lightning LoRA (turbo)', default: '0', advanced: true, speed: true, primitive: true }], 'w')`);
+const laidOut = els.testOptionsBox.innerHTML;
+assert(/^<div class="options-box options-sampling"><div class="option-row sampling-line"><button type="button" class="res-info option-info"[^>]*><span>Steps<\/span>[\s\S]*?<span>Sampler<\/span>[\s\S]*?<span>CFG<\/span>[\s\S]*?<\/div><div class="options-lora"><div class="options-subtitle">Style LoRA<span class="options-subtitle-what"> · changes the look<\/span><\/div>/.test(laidOut)
+  && !laidOut.includes('Advanced') && laidOut.indexOf('opt_group_x') > laidOut.indexOf('options-speed'), 'the four first, in their order, then Use LoRA, then the rest; no Advanced');
+assert(/<div class="options-lora options-speed"><div class="options-subtitle">Speed LoRA<span class="options-subtitle-what"> · fewer steps, faster<\/span><\/div><label class="check">[^]*?name="opt_switch_lightning_lora"/.test(laidOut)
+  && laidOut.indexOf('options-speed') > laidOut.indexOf('opt_lora_name'), 'the speed LoRAs next, under Use LoRA, with a word on what sets them apart');
+assert(laidOut.includes('<div class="res-hint option-hint" hidden>How many times') && script.includes("const info = e.target.closest && e.target.closest('.option-info');"), 'each name drops its hint');
+assert(script.includes("$(box).addEventListener('change', e => { followSwitch($(box), e.target); syncBelow($(box)); rememberOptions($(box)); });")
+  && /\.pipeline-form \.option-below select \{ flex: 1 1 auto;/.test(html), 'switched on, it shows; the file takes the width, the strength at its right');
 assert(/name="opt_group_cc" value="1" disabled/.test(optionsHtml) && optionsHtml.includes("Can't be changed"), "one that can't run is locked, saying why");
 assert(/name="opt_lora_k_on" value="1">/.test(optionsHtml) && /name="opt_lora_k_strength"[^>]*value="1"/.test(optionsHtml), 'an unused LoRA offers its usual strength');
 assert(/<label for="opt_steps">Steps<\/label>/.test(optionsHtml) && /name="opt_steps"[^>]*value="8"/.test(optionsHtml));
+// Sampler and CFG with Steps: each on a line of its own, its name then its setting.
+const stepsHtml = run(`(() => { const all = [{ id: 'steps', kind: 'number', label: 'Steps', default: '8', min: 1, max: 150, step: 1 },
+  { id: 'sampler', kind: 'choice', label: 'Sampler', default: 'euler', choices: ['euler', 'dpmpp_2m'], parent: 'steps' },
+  { id: 'cfg', kind: 'number', label: 'CFG', default: '1', min: 0, max: 30, step: 0.1, parent: 'steps' }];
+  return imageOptionHtml(all[0], all); })()`);
+assert(/<span class="option-line"><span class="option-sub">Sampler<\/span><select name="opt_sampler"[\s\S]*?<\/select><\/span><span class="option-line"><span class="option-sub">CFG<\/span><input[^>]*name="opt_cfg"[^>]*><\/span>/.test(stepsHtml)
+  && /\.option-row \.option-line \{ flex: 1 0 100%;/.test(html), 'each setting with Steps on a line of its own');
 assert(!run("remembered({ name: 'opt_steps', type: 'number' })"), 'each workflow starts as it was saved');
 for (const size of ['1920x1080', '2560x1440', '3840x2160', '1272x2772']) assert(html.includes(`<option value="${size}">`), size);
 els.imageAspect.value = '1920x1080';
@@ -867,16 +994,17 @@ run('imageStep = null');
 els.imageMegapixels.value = 'image';
 assert(!html.includes('id="imageSizeHint"') && !/21:9/.test(html), 'no size hint, and no 21:9');
 assert(/<select id="sizePreset">[\s\S]*?<optgroup label="Aspect ratio">[\s\S]*?<optgroup label="Landscape 16:9">/.test(html), 'video: aspect ratios, then its presets');
-run("setPipeline('image', false)");
-assert.strictEqual(run('folder'), 'image');
-assert.strictEqual(els.jumpResults.textContent, 'Images');
+run("outputKind = 'image'; setPipeline('image', false)");
+assert.strictEqual(run('folder'), 'video', "off Shorts, films are the made ones whichever side Generate is on");
+assert.strictEqual(els.jumpResults.textContent, 'Output', 'the footer says Output, whatever it shows');
 run("setPipeline('shorts', false)");
-assert.strictEqual(els.jumpResults.textContent, 'Shorts', 'on Shorts the footer says Shorts');
+assert.strictEqual(els.jumpResults.textContent, 'Output', 'on Shorts too');
 assert(/\.check \.hint \{ display: block;/.test(html), 'a checkbox hint sits under its label');
 run("setPipeline('video', false)");
-assert.strictEqual(els.jumpResults.textContent, 'Videos');
+assert.strictEqual(run('outputKind'), 'image', "Generate's side does not change what Output shows");
+run("setOutputKind('both')");
 run("setPipeline('shorts', false)");
-assert(/body\.on-image \{ --accent/.test(html));
+assert(/body\.on-image \{ --side: var\(--c-image\); \}/.test(html));
 
 // A stopped run reads top to bottom in its own box: title, details, then the buttons.
 run(`renderStopped([{ id: 'image_1', pipeline: 'image', label: 'Wardrobe', detail: '1 of 2 images · 1376x768', when: '02 Nov 23:46', clips: 1, estimate: 190 }])`);
@@ -911,7 +1039,16 @@ run("showPage('status')");
 assert.strictEqual(context.document.body.dataset.page, 'status');
 run("showPage('generate')");
 assert.strictEqual(context.document.body.dataset.page, 'generate');
-assert(/\.stick \.strip\[hidden\] \{ display: block; max-height: 0; opacity: 0;/.test(html), 'a bar eases out rather than vanishing');
+// The progress bars: in the header, left of its icons; a tap grows one down over the page.
+assert(/<div class="top">\s*<div class="top-main" id="topMain">\s*<div class="head-strips" id="headStrips">\s*<div class="strip" id="runStrip"[\s\S]*?id="uploadStrip"/.test(html)
+  && !/<div class="stick" id="stick">[\s\S]*?id="runStrip"[\s\S]*?<\/nav>/.test(html) && html.indexOf('id="runStrip"') < html.indexOf('id="stick"'), 'in the header, not the footer');
+assert(/\.head-strips \{ position: absolute; top: 0; left: 0; right: 0; z-index: 30;/.test(html)
+  && /\.head-strips\.opened \{ background: var\(--bg\); box-shadow:/.test(html) && !/\.head-strips \.strip\.open \{ background/.test(html),
+  'floating, so it never moves the page; opened, no box of its own, the page behind it');
+assert(/\.head-strips\.empty \{ opacity: 0; transform: translateY\(-6px\); visibility: hidden;/.test(html) && /\.head-strips \{[^}]*transition:[^}]*opacity \.25s ease, transform \.25s ease, visibility \.25s; \}/.test(html),
+  'it eases in and out as the page changes, rather than popping');
+assert(script.includes("document.addEventListener('click', e => { if (!(e.target.closest && e.target.closest('#headStrips'))) foldStrips(); });")
+  && script.includes("window.addEventListener('scroll', foldStrips, { passive: true });"), 'opened, a tap elsewhere or a scroll folds it');
 assert(/@keyframes page-in/.test(html) && /prefers-reduced-motion/.test(html), 'pages slide in, unless motion is turned down');
 
 // Films.
@@ -976,7 +1113,7 @@ assert.strictEqual(els.finishedToggle.title, 'Finished (3) · 1 failed');
 const order = ['>C<', '>B (exit 1)<', '>A &lt;b&gt;run<'].map(text => els.finishedList.innerHTML.indexOf(text));
 assert(order.every(i => i >= 0) && order[0] < order[1] && order[1] < order[2], 'newest first, escaped');
 assert(/data-goto="video"/.test(els.finishedList.innerHTML) && /<span class="result-mark">✔<\/span><span class="result-type">Video<\/span><span class="result-label">A &lt;b&gt;run[^<]*<\/span><span class="when">17:05<\/span>/.test(els.finishedList.innerHTML), 'its type before its title, the time last');
-assert(/class="result done" style="--side:#4c8dff" data-goto="video"/.test(els.finishedList.innerHTML) && /class="result failed"/.test(els.finishedList.innerHTML), 'each outlined in the colour of the page that made it');
+assert(/class="result done" style="--side:var\(--c-video\)" data-goto="video"/.test(els.finishedList.innerHTML) && /class="result failed"/.test(els.finishedList.innerHTML), 'each outlined in the colour of the page that made it');
 assert(/\.results \.result \{ display: flex; align-items: center;/.test(html) && /border: 1px solid var\(--side/.test(html) && /\.result \.when \{ margin-left: auto;/.test(html)
   && /\.result-label \{[^}]*-webkit-line-clamp: 2/.test(html), 'outlined, text left, the time quietly at the right');
 assert(/id="skip"[^>]*>Cancel<\/button>/.test(html) && /id="stop"[^>]*>Stop<\/button>/.test(html) && /\.run-actions \{ display: flex; justify-content: center;/.test(html), 'Cancel and Stop, small and centred');
@@ -992,16 +1129,21 @@ assert(/#finishedList \{ overflow-x: clip; \}/.test(html) && !/#finishedList \{ 
 run(`imageSets = [{ id: 'image_1', images: [{ position: 2, version: 9 }] }];
   renderFinished([{ label: 'Set', outcome: 'done', at: '17:05', pipeline: 'image', run_id: 'image_1', job_id: 4 },
     { label: 'Film', outcome: 'done', at: '17:06', pipeline: 'video', run_id: 'run_1', film: 'f.mp4', job_id: 5 }],
-    [{ label: 'Up', outcome: 'done', at: '17:07', job_id: 4 }], [{ label: 'Made', outcome: 'done', at: '17:08', pipeline: 'image', run_id: 'image_1', position: 2 }])`);
+    [{ label: 'Up', outcome: 'done', at: '17:07', job_id: 4 }], [{ label: 'Made', outcome: 'done', at: '17:08', pipeline: 'image', run_id: 'image_2', position: 2 }])`);
 {
   const list = els.finishedList.innerHTML;
   assert(list.includes('<span class="result-thumb"><img loading="lazy" alt="" src="/image-runs/image_1/thumbnails/2?v=9" onerror="this.remove()"></span><span class="result-mark">'), 'an image set: its first picture');
   assert(list.includes('src="/runs/run_1/image"'), "a film: its run's start image");
   assert(/data-lane="upload" data-key="upload:4">\s*<span class="result-thumb"><\/span>/.test(list), 'an upload: an empty space, so the rows line up');
-  assert(list.includes('data-lane="run" data-key="run:4"') && list.includes('data-key="made:image_1:2"'), 'a key per row, by lane, so an upload and a run with one number differ');
-  run(`forgottenResults.add('run:5'); forgottenResults.add('made:image_1:2'); renderFinished([{ label: 'Film', outcome: 'done', at: '17:06', pipeline: 'video', run_id: 'run_1', job_id: 5 }], [], [{ label: 'Made', outcome: 'done', at: '17:08', pipeline: 'image', run_id: 'image_1', position: 2 }])`);
+  assert(list.includes('data-lane="run" data-key="run:4"') && list.includes('data-key="made:image_2:2"'), 'a key per row, by lane, so an upload and a run with one number differ');
+  run(`forgottenResults.add('run:5'); forgottenResults.add('made:image_2:2'); renderFinished([{ label: 'Film', outcome: 'done', at: '17:06', pipeline: 'video', run_id: 'run_1', job_id: 5 }], [], [{ label: 'Made', outcome: 'done', at: '17:08', pipeline: 'image', run_id: 'image_2', position: 2 }])`);
   assert(!els.finishedList.innerHTML.includes('data-key='), 'swiped away: not brought back by the next poll');
   run('forgottenResults.clear(); imageSets = []');
+  run(`nsfwView = false; renderFinished([{ label: 'Hot', outcome: 'done', at: '17:06', pipeline: 'image', run_id: 'image_9', job_id: 9, nsfw: true }], [], [{ label: 'HotNow', outcome: 'done', at: '17:08', pipeline: 'image', run_id: 'image_10', position: 1, nsfw: true }])`);
+  assert(!els.finishedList.innerHTML.includes('Hot'), 'Finished: NSFW not shown without the NSFW filter');
+  run('nsfwView = true; renderFinished(...lastFinished)');
+  assert(els.finishedList.innerHTML.includes('Hot') && els.finishedList.innerHTML.includes('HotNow'), 'Finished: NSFW shown under the NSFW filter');
+  run("nsfwView = false");
 }
 assert(script.includes("fetch(`/queue/${encodeURIComponent(d.lane)}/finished/${encodeURIComponent(d.jobId)}/forget`, { method: 'POST' })")
   && /\.results \.result\.swiped \{[^}]*translateX\(110%\)/.test(html) && /\.results \.result\.collapsing \{[^}]*height: 0 !important/.test(html)
@@ -1022,11 +1164,15 @@ for (const id of ['logToggle', 'finishedToggle', 'quotaToggle']) {
 {
   const moved = [];
   for (const id of ['settingsHead', 'runActions', 'statusToggles']) context.document.getElementById(id).appendChild = el => moved.push(`${id}:${el.id}`);
-  els.topIcons.insertBefore = (el, before) => moved.push(`topIcons:${el.id}:before:${before.id}`);
+  els.topIcons.insertBefore = (el, before) => moved.push(`topIcons:${el.id}:before:${before ? before.id : 'end'}`);
+  context.document.getElementById('privateToggle').nextSibling = { id: 'settingsBtn' };
   wide.matches = false;
   run('placePanelControls()');
-  assert.deepStrictEqual(moved.splice(0), ['topIcons:logToggle:before:settingsBtn', 'settingsHead:quotaToggle', 'runActions:finishedToggle']);
-  assert(!els.runActions.hidden && els.skip.hidden && els.stop.hidden, 'Finished stays available when idle');
+  assert.deepStrictEqual(moved.splice(0), ['topIcons:finishedToggle:before:settingsBtn', 'topIcons:logToggle:before:settingsBtn', 'settingsHead:quotaToggle'],
+    'in the header: Finished right of the key, then the log, then the gear');
+  assert(!els.runActions.hidden && els.skip.hidden && els.stop.hidden, 'idle: no run controls');
+  assert(/\.top-icons \.panel-icon \{ width: auto; height: auto; padding: 0; gap: 3px; color: var\(--muted\); opacity: \.7;/.test(html)
+    && /\.top-icons #finishedToggle\.empty \{ display: none; \}/.test(html), "the header's icons all one quiet grey; Finished only with something in it");
   run('lastStatus = { running: true }; placePanelControls()');
   assert(!els.skip.hidden && !els.stop.hidden, 'run controls appear during generation');
   moved.length = 0;
@@ -1064,12 +1210,29 @@ assert(!html.includes('Expand to see the log'));
 }
 assert(/dialog\.panel-dialog::backdrop \{[^}]*backdrop-filter: blur\(6px\)/.test(html) && /\.panel-close \{ align-self: center;/.test(html), 'over a blurred page, with a close in the middle under it');
 assert(/\.status-queue:has\(> :not\(\[hidden\]\)\) \{[^}]*background: var\(--bg\)/.test(html), 'the runs in a darker box');
+// Status's parts grow in and close out (a copy closes, the part hidden at once); a new stage eases in; idle, the nudge
+// comes in slowly after a second.
+assert(script.includes("const SMOOTH_PARTS = ['currentWork', 'currentWorkSize', 'runProgress',") && script.includes("watcher.observe(el, { attributes: true, attributeFilter: ['hidden', 'class'] });")
+  && script.includes("for (const id of ['stageDetail', 'comfyNow']) replay($(id), 'stage-in');"), 'smooth in and out, and from stage to stage');
+{
+  context.document.getElementById('smoothHost');
+  const host = els.smoothHost, inserted = [];
+  host.insertBefore = (el, before) => inserted.push(el);
+  const copy = { attrs: { id: 'x' }, removeAttribute(n) { delete this.attrs[n]; }, setAttribute(n, v) { this.attrs[n] = v; }, querySelectorAll: () => [], style: {},
+    offsetHeight: 40, animate(frames) { this.frames = frames; return {}; } };
+  context.smoothCopy = copy;
+  context.smoothEl = { parentNode: host };
+  run('smoothOut(smoothEl, smoothCopy)');
+  assert(inserted[0] === copy && !('id' in copy.attrs) && copy.attrs['aria-hidden'] === 'true' && copy.frames[0].height === '40px' && copy.frames[1].height === '0px',
+    'hidden: a copy without ids closes from its height to nothing');
+}
+assert(/\.nudge \{[^}]*animation: nudge-in 1\.4s ease 1s both,/.test(html) && /@keyframes nudge-in \{ from \{ opacity: 0; transform: translateY\(6px\); \}/.test(html), 'the nudge: in slowly, after a second');
+assert(/\.status-queue > \.queue:not\(\[hidden\]\) ~ \.queue:not\(\[hidden\]\) \{ margin-top: 10px; padding-top: 4px; border-top: 1px solid var\(--line\); \}/.test(html), 'a thin line between the queue, Pending and Failed');
 assert(/\.status-queue:has\(> :not\(\[hidden\]\)\) \{ margin: 14px -10px 0; padding: 2px 12px 12px;/.test(html), 'wider, out into the card, with its own room inside');
 run('renderFinished([], [])');
 assert(els.finishedToggle.disabled === true && els.finishedLabel.innerHTML === 'Finished' && els.finishedCount.textContent === '', 'still there, greyed out, when nothing has finished');
 assert.strictEqual(finishedClasses.empty, true, 'phone icon is hidden when there are no results');
-assert(/\.run-actions \{ position: relative;[^}]*align-items: center/.test(html) && /\.run-actions #finishedToggle \{ position: absolute; right: 0;/.test(html), 'phone run actions remain centred independently of Finished');
-assert(/\.run-actions #finishedToggle\.empty \{ display: none; \}/.test(html), 'empty Finished is hidden only on the phone');
+assert(/\.run-actions \{ position: relative;[^}]*align-items: center/.test(html) && /\.run-actions:not\(:has\(#skip:not\(\[hidden\]\)\)\) \{ display: none; \}/.test(html), 'phone run actions: centred, and gone when idle');
 assert(!script.includes("'Finished ✔'") && !script.includes('Upload finished') && !script.includes('Failed (exit'));
 
 // The header: a short status on Run, and a bar under it per job.
@@ -1084,7 +1247,7 @@ run('renderStrips(idle)');
 assert(els.runStrip.hidden && els.uploadStrip.hidden, 'nothing going, no bars');
 const barOf = id => { const bar = context.document.getElementById(id); bar.parentElement = element('bar'); return bar; };
 for (const id of ['runStripBar', 'uploadStripBar', 'runProgressBar', 'uploadProgressBar']) barOf(id);
-context.document.getElementById('runCard').getBoundingClientRect = () => ({ top: 5000, bottom: 5100 });
+for (const id of ['runProgress', 'uploadProgress']) context.document.getElementById(id).getBoundingClientRect = () => ({ top: 5000, bottom: 5100 });
 run('renderStrips(rendering)');
 assert.strictEqual(els.runStrip.hidden, false, 'away from Status, the footer has the bar');
 assert.strictEqual(els.runProgress.hidden, false, 'and Status has it in full');
@@ -1093,6 +1256,13 @@ assert.strictEqual(els.runProgressText.textContent, '40%', 'how far along on the
 assert(/^~10 min left, done around /.test(els.runProgressRight.textContent), 'when it ends on the right');
 assert.strictEqual(els.runStripText.textContent, 'Clips');
 assert.strictEqual(els.runStripRight.textContent, '40% · ~10 min left');
+assert.strictEqual(els.runStripPct.textContent, '40%', 'folded, only how far along');
+assert(/\.head-strips \.strip \.strip-right \{ max-width: 0; opacity: 0; \}/.test(html) && /\.head-strips \.strip\.open \.strip-pct, \.strip-pct:empty \{ max-width: 0; opacity: 0; \}/.test(html)
+  && /\.head-strips \.strip-more \{ display: grid; grid-template-rows: 0fr;/.test(html) && /\.head-strips \.strip\.open \.strip-more \{ grid-template-rows: 1fr;/.test(html)
+  && /<div class="strip-more"><div class="strip-more-in">/.test(html)
+  && /\.head-strips \.strip \.bar \{ height: 6px;/.test(html), 'the percentage folded, the whole line opened, each easing into the other; the details grow to their own height; a thicker bar');
+assert(script.includes("box.classList.add('pinning');") && /\.head-strips\.pinning, \.head-strips\.pinning \* \{ transition: none !important; \}/.test(html)
+  && script.includes('move.onfinish = move.oncancel = done;'), 'changing place, one animation moves it: its own transitions wait');
 assert.strictEqual(els.runStripBar.style.width, '40%');
 // A status, as statusHtml writes it: its first line, the count under it on the left, and the time on the right.
 const lines = el => ({ first: (/class="status-first">([^<]*)</.exec(el.innerHTML) || [])[1] || '',
@@ -1112,15 +1282,23 @@ assert.strictEqual(els.uploadProgressRight.textContent, '33%', 'the status line 
 assert.strictEqual(els.uploadProgress.hidden, false);
 
 // Folded, a footer bar is one line: the bar, how far along and when it ends. The rest opens when tapped.
-assert(/id="runStrip" role="button"[^>]*>\s*<div class="strip-line"><div class="bar"><div id="runStripBar"><\/div><\/div><span id="runStripRight"><\/span><\/div>\s*<div class="strip-more">[\s\S]*?id="runStripText"[\s\S]*?id="runStripHint"[\s\S]*?id="runStripTotal"/.test(html));
+assert(/id="runStrip" role="button"[^>]*>\s*<div class="strip-line"><div class="bar"><div id="runStripBar"><\/div><\/div><span class="strip-pct" id="runStripPct"><\/span><span class="strip-right" id="runStripRight"><\/span><\/div>\s*<div class="strip-more">[\s\S]*?id="runStripText"[\s\S]*?id="runStripHint"[\s\S]*?id="runStripTotal"/.test(html));
 assert(/^Done around \d/.test(els.runStripTotal.textContent), 'opened, it says when the run ends');
 const classes = () => { const on = new Set(); return { add: c => on.add(c), remove: c => on.delete(c), contains: c => on.has(c), toggle(c, yes) { if (yes) on.add(c); else on.delete(c); } }; };
 els.runStrip.classList = classes();
 const timers = [];
 context.setTimeout = (fn, ms) => { timers.push([fn, ms]); return timers.length; };
 context.document.body.dataset.page = 'generate';
+for (const id of ['headStrips', 'topMain']) context.document.getElementById(id);
+els.topMain.getBoundingClientRect = () => ({ left: 16, right: 330 });
+const keptDocEl = context.document.documentElement;
+context.document.documentElement = { ...keptDocEl, clientWidth: 400 };
 run("tapStrip('run')");
+context.document.documentElement = keptDocEl;
 assert(els.runStrip.classList.contains('open'), 'a tap opens it');
+assert(els.headStrips.style.left === '-16px' && els.headStrips.style.right === '-70px', "opened, the screen's full width, edge to edge over the icons");
+assert(/body:not\(\.strips-out\) \.head-strips:not\(\.opened\) \{ left: 12\.5%; right: 12\.5%; \}/.test(html)
+  && /\.head-strips\.opened \{ border-radius: 0; padding-left: 16px; padding-right: 16px; \}/.test(html), 'folded, a quarter shorter, in the middle; opened, square');
 assert.strictEqual(timers[timers.length - 1][1], 5000);
 timers[timers.length - 1][0]();
 assert(!els.runStrip.classList.contains('open'), 'it folds again by itself after five seconds');
@@ -1192,20 +1370,20 @@ assert.strictEqual(context.fakeLog.scrollTop, 800, 'nothing new, nothing moves')
 run('writeFake(lines(51, 120))');
 assert.strictEqual(context.fakeLog.rows.length, 70);
 assert.strictEqual(context.fakeLog.scrollTop, 300, 'line 81 is still at the top of the view');
-context.document.getElementById('runCard').getBoundingClientRect = () => ({ top: 0, bottom: 100 });
+for (const id of ['runProgress', 'uploadProgress']) context.document.getElementById(id).getBoundingClientRect = () => ({ top: 0, bottom: 100 });
 run('syncStrips()');
-assert(els.runStrip.hidden && els.uploadStrip.hidden, 'on Status the footer bars would only repeat it');
+assert(els.runStrip.hidden && els.uploadStrip.hidden, "with Status's own bars in sight, these would only repeat them");
 assert.deepStrictEqual([...html.matchAll(/<a href="#(\w+)"/g)].map(m => m[1]), ['runCard', 'optionsCard', 'videosCard'], 'Quota is in Status now');
 assert(!html.includes('name="avatar_source"') && !html.includes('name="lang"'), 'Shorts always uses ComfyUI, and the voice says the language');
 
 // Nothing a video does can hold up the status: no video loads until you press play.
 assert(!/preload="(metadata|auto)"/.test(script) && !/preload="(metadata|auto)"/.test(html), 'videos must not hold the browser\'s connections');
 
-// Each side only previews its own videos.
+// Shorts previews only its own videos; the made films are with the images, never Shorts'.
 const made = name => ({ name, created: '01/11 12:00', size_mb: 1, mtime: 1 });
-run(`lastVideos = ${JSON.stringify({ output: [made('a_short.mp4')], uploaded: [made('uploaded_short.mp4')], video: [made('a_film.mp4')] })}`);
+run(`lastVideos = ${JSON.stringify({ output: [made('a_short.mp4')], uploaded: [made('uploaded_short.mp4')], video: [made('a_film.mp4')] })}; outputKind = 'video'`);
 run("setPipeline('video', false)");
-assert(els.videos.innerHTML.includes('a_film.mp4') && !els.videos.innerHTML.includes('short.mp4'), 'Video shows films only');
+assert(els.imageSets.innerHTML.includes('a_film.mp4') && !els.imageSets.innerHTML.includes('short.mp4') && !els.videos.innerHTML.includes('mp4'), 'Videos shows films only');
 run("setPipeline('shorts', false)");
 assert(els.videos.innerHTML.includes('a_short.mp4') && !els.videos.innerHTML.includes('a_film.mp4'), 'Shorts shows Shorts only');
 assert(!els.videos.innerHTML.includes('uploaded_short.mp4'), 'and what is ready, until you open Uploaded');
@@ -1340,7 +1518,7 @@ assert(/<textarea id="promptEditorText"[^>]*><\/textarea>\s*<div class="prompt-p
   && /\.prompt-progress-track \{ position: absolute; inset: 1px; border-radius: 9px; overflow: clip;/.test(html), 'the prompt editor has a progress bar inside the top of its box, following its corners');
 assert(/#promptEditorEnhance\.working svg \{ animation: prompt-writing-icon/.test(html) && /\$\('promptEditorEnhance'\)\.classList\.toggle\('working', busy\)/.test(html), 'the write button animates while the LLM writes');
 assert(/button\.classList\.add\('working'\)/.test(html) && /button\.classList\.remove\('working'\)/.test(html), 'the form write button animates too');
-assert(/rgba\(255, 255, 255, \.38\)/.test(html) && /#runCard \.step\.done \{ border-color: var\(--job, var\(--neutral\)\); \}/.test(html), 'a brighter sweep, finished stages in full colour');
+assert(/rgba\(255, 255, 255, \.38\)/.test(html) && /#runCard \.step\.done \{ border-color: var\(--job, var\(--shared\)\); \}/.test(html), 'a brighter sweep, finished stages in full colour');
 assert(/#comfyBar::after[^{]*\{[^}]*animation: bar-sheen 3\.6s/.test(html) && /\.step\.now::before \{[^}]*animation: step-sheen 3\.6s/.test(html), 'live bars and the stage under way have a slow, quiet sheen');
 assert(!/\.disk \.bar > div::after/.test(html), 'the disk meter does not flash');
 assert(/new ResizeObserver\(\(\) => \{[\s\S]{0,200}height < lastHeight && window\.scrollY > 0[\s\S]{0,300}window\.scrollTo\(0, y\)/.test(html), 'a page made shorter by a fold is repainted, not left black at the top');
@@ -1374,6 +1552,15 @@ assert(/workItem = running \? queue\.current : nextUp \? ready\[0\] : null;/.tes
 assert.strictEqual(run("workHeading({label: '1 video: A film'}, 'video')"), 'Video: A film');
 assert.strictEqual(run("workHeading({label: '1 video'}, 'video')"), 'Video:');
 assert.strictEqual(run("workHeading({label: '5 images: Cats', facts: {count: 5}}, 'image')"), 'Image(5): Cats');
+// Out of Private mode an NSFW job's title is a plain one, in the heading, the queues and what it makes now; in it, its own.
+run('privateMode = false');
+assert.strictEqual(run("workHeading({label: '5 images: Cats', facts: {count: 5}, nsfw: true}, 'image')"), 'Image(5): Untitled');
+assert.strictEqual(run("workHeading({label: '5 images: Cats', facts: {count: 5}}, 'image')"), 'Image(5): Cats', 'not NSFW: its own title');
+assert.strictEqual(run("nowDetail({progress: {detail: 'Image 2 of 5: A cat'}, queue: {current: {nsfw: true}}})"), 'Image 2 of 5');
+run('privateMode = true');
+assert.strictEqual(run("workHeading({label: '5 images: Cats', facts: {count: 5}, nsfw: true}, 'image')"), 'Image(5): Cats', 'Private mode on: its own title');
+run('privateMode = false');
+assert.strictEqual(run("sizeText('880x1920')"), '880 × 1920');
 assert.strictEqual(run("workHeading({label: '1 image: Cat'}, 'image')"), 'Image: Cat');
 assert.strictEqual(run("workHeading({label: '3 videos', facts: {count: 3}}, 'shorts')"), 'Shorts(3):');
 assert.strictEqual(run("workHeading({label: 'Topic', facts: {count: 2}}, 'shorts')"), 'Shorts(2): Topic');
@@ -1429,6 +1616,33 @@ assert(els.sideMenu.innerHTML.includes('data-side="video"') && els.sideMenu.inne
   'the other two sides, not the one you are on');
 assert(/\.side-menu \{[^}]*animation: menu-in/.test(html) && /@keyframes menu-in \{ from \{ opacity: 0; transform: translateY\(8px\) scale\(\.94\)/.test(html), 'grows and fades in, upwards');
 assert(/if \(page === document\.body\.dataset\.page && SIDE_PAGES\.includes\(page\)\)/.test(script) && /const SIDE_PAGES = \['status', 'generate', 'output'\]/.test(script), 'Status, Generate and Output; not Quota');
+// Status, tapped again while on it, as the others: a menu of Finished, the log and Quota, each opening its box.
+context.statusLink = { ...genLink, dataset: { page: 'status' } };
+run('openSideMenu(statusLink)');
+assert(['finished', 'log', 'quota'].every(p => els.sideMenu.innerHTML.includes(`data-panel="${p}"`)), 'Finished, Log, Quota');
+assert(!script.includes('statusTappedAt') && script.includes("if (choice.dataset.panel) { openPanel(choice.dataset.panel); return; }"), 'no quick double tap; a choice opens its box');
+// Output's: a shortcut to what it shows, in a word each; Shorts is Generate's side too.
+context.outLink = { ...genLink, dataset: { page: 'output' } };
+run("setPipeline('image', false); outputKind = 'both'; openSideMenu(outLink)");
+{
+  const menu = els.sideMenu.innerHTML;
+  assert(['image', 'video', 'shorts'].every(k => menu.includes(`data-output-kind="${k}"`)) && !menu.includes('data-output-kind="both"') && !menu.includes('data-side='),
+    'the other three, and no sides');
+  assert(/>Images<\/button>/.test(menu) && /<\/span>Videos<\/button>/.test(menu) && /<\/span>Shorts<\/button>/.test(menu), 'one word each');
+  assert(menu.indexOf('"shorts"') < menu.indexOf('"video"') && menu.indexOf('"video"') < menu.indexOf('"image"'), 'Shorts on top, then Videos, then Images');
+}
+run("outputKind = 'image'; openSideMenu(outLink)");
+{
+  const menu = els.sideMenu.innerHTML;
+  assert(menu.indexOf('"video"') < menu.indexOf('"both"') && /data-output-kind="both"><span class="side-dot" style="background:var\(--shared\)"><\/span>Both<\/button>$/.test(menu),
+    'Both at the bottom, violet');
+  assert(/\.side-menu button\[data-output-kind="both"\] \{ border-color: var\(--shared\); \}/.test(html), 'with a violet border');
+}
+els.sideMenu.listeners.click({ target: { closest: () => ({ dataset: { outputKind: 'shorts' } }) } });
+assert.strictEqual(run('pipeline'), 'shorts', 'Shorts in Output: Generate on Shorts too');
+els.sideMenu.listeners.click({ target: { closest: () => ({ dataset: { outputKind: 'video' } }) } });
+assert(run('pipeline') === 'image' && run('outputKind') === 'video', 'out of Shorts: back to the side it was on, showing Videos');
+run("setPipeline('shorts', false)");
 assert(/\.switch button \{[^}]*padding: 4px 12px; font-size: \.78rem;/.test(html), 'the side switch at the top is small now');
 
 // Each workflow's options come back as you last set them, and another workflow's don't spill over.
@@ -1484,11 +1698,12 @@ assert(run("filmHtml({ name: 'f.mp4', model: 'wan', resolution: '864x480', durat
   const pilled = run(`filmHtml({ name: 'f.mp4', model: 'wan', resolution: '864x480', duration: 12, size_mb: 3, loras: ['x'], connection: 'chain',
     pills: [{ text: 'Upscaled: <RTX>', kind: 'upscale', diff: true }, { text: 'wan', kind: 'workflow', diff: false }] })`);
   assert(pilled.includes('<div class="meta" title="f.mp4">864x480 · 0:12 · 3 MB</div>'), 'the grey line keeps resolution, duration and size, without the workflow');
-  assert(pilled.includes('<div class="pills video" role="button" tabindex="0" title="Tap to show all"><span class="pill diff">Upscaled: &lt;RTX&gt;</span><span class="pill workflow">wan</span></div>'), 'pills, escaped, the differing one marked');
+  assert(pilled.includes('<div class="album-side"><div class="pills video" data-lines="3" role="button" tabindex="0" title="Tap to show all"><span class="pill diff">Upscaled: &lt;RTX&gt;</span><span class="pill workflow">wan</span></div><div class="image-set-actions">'),
+    'pills, escaped, the differing one marked: beside the cover, above the buttons');
   assert(!pilled.includes('LoRA: x') && !pilled.includes('Clips:'), 'the old lines are gone where there are pills');
   const set = run(`imageSetHtml({ id: 'image_1', label: 'S', total: 2, resolutions: ['1024x1024'], size_bytes: 2097152, model: 'krea2', images: [{ position: 1, title: 'a', version: 1 }, { position: 2, title: 'b', version: 1 }],
     pills: [{ text: 'krea2', kind: 'workflow', diff: true }] })`);
-  assert(set.includes('<div class="meta">1024x1024 · 2.0 MB · 2 images</div>') && set.includes('<div class="pills image"'), 'a set too: its grey line, then its pills in green');
+  assert(set.includes('<div class="meta">1024x1024 · 2.0 MB · 2 images</div>') && /<div class="album-side">\s*<div class="pills image" data-lines="3"/.test(set), 'a set too: its grey line, its pills in green beside the cover');
   run(`viewerMetadata({ model: 'wan', llm: 'local', pills: [{ text: 'wan', kind: 'workflow', diff: true }] })`);
   assert(els.viewerMetaDetails.innerHTML === '<div class="pills video" data-lines="1" role="button" tabindex="0"><span class="pill workflow diff">wan</span></div>'
     && els.viewerMeta.hidden && !els.viewerMetaDetails.hidden, 'the preview shows its pills in place of the line that opened them: one line, the rest a tap away');
@@ -1498,8 +1713,55 @@ assert(run("filmHtml({ name: 'f.mp4', model: 'wan', resolution: '864x480', durat
   run(`pictureMetadata({ model: 'k', pills: [{ text: 'k', kind: 'workflow', diff: false }, { text: 'Upscaled: x', kind: 'upscale', diff: false }] }, { upscaled: 'SeedVR2' })`);
   assert(els.viewerMetaDetails.innerHTML.includes('Upscaled: SeedVR2') && !els.viewerMetaDetails.innerHTML.includes('Upscaled: x'), "a picture's own upscale, not its set's");
   assert(/\.pills \{ position: relative; display: flex; flex-wrap: wrap; gap: 4px; max-height: 40px; overflow: hidden;/.test(html)
-    && /\.pill\.workflow \{[^}]*var\(--neutral\)/.test(html) && /\.viewer-meta-details \.pills \{ width: 96%; max-height: 18px; margin: 2px auto 0; justify-content: center; \}/.test(html) && /\.pills\.open \{ max-height: none;/.test(html)
-    && /\.pills\.more:not\(\.open\)::after \{ content: attr\(data-more\);/.test(html), 'two lines in Output, one centred line in the preview; the workflow in silver; a count of the rest, open on a tap');
+    && /\.pill\.workflow \{[^}]*var\(--pill, var\(--neutral\)\)/.test(html) && /\.viewer-meta-details \.pills \{ width: 96%; max-height: 18px; margin: 2px auto 0; justify-content: center; \}/.test(html) && /\.pills\.open \{ max-height: none;/.test(html)
+    && /\.pills\.more:not\(\.open\)::after \{ content: attr\(data-more\);/.test(html), 'three lines in Output, one centred line in the preview; the workflow in its kind\'s colour; a count of the rest, open on a tap');
+  assert(/<input type="checkbox" id="pinProgress"><span>Pin the progress bar<small>/.test(html) && script.includes("saveSettings({ pin_progress: $('pinProgress').checked })")
+    && script.includes("$('pinProgress').checked = !!SETTINGS.pin_progress;"), 'Pin the progress bar: a setting, saved like the others');
+  // Pinned and scrolled away: the bars leave the header for the top of the screen, easing there; not pinned, they stay.
+  {
+    const moved = [];
+    for (const id of ['headStrips', 'topMain']) context.document.getElementById(id);
+    context.window.scrollY = 200;
+    run("SETTINGS.pin_progress = false; pinnedOut = false; syncPin()");
+    assert(!run('pinnedOut'), 'not pinned: stays in the header');
+    els.headStrips.getBoundingClientRect = () => (moved.push(1), { top: moved.length === 1 ? 30 : 0, left: 16, width: 200 });
+    els.topMain.getBoundingClientRect = () => ({ top: 20, left: 16, width: 300 });
+    els.headStrips.animate = frames => { context.pinFrames = frames; return {}; };
+    run("SETTINGS.pin_progress = true; syncPin()");
+    assert(run('pinnedOut') && run("JSON.stringify(pinFrames[0])") === '{"top":"30px","left":"16px","width":"200px"}', 'out, eased from where it was');
+    context.window.scrollY = 0;
+    run('syncPin()');
+    assert(!run('pinnedOut'), 'back at the top: back in the header');
+    run("SETTINGS.pin_progress = false; pinnedOut = false");
+    assert(/body\.strips-out \.head-strips \{ position: fixed; top: 0; left: 0; right: 0;/.test(html) && /\.head-strips\.empty \{ opacity: 0;/.test(html), 'along the top, full width; nothing going, nothing there');
+    assert(/<div class="options-col" id="optionsCard" data-page="generate">\s*<!--[^>]*-->\s*<div class="switch generate-switch" role="tablist" aria-label="Pipeline">/.test(html)
+      && !/<div class="top">[\s\S]*?id="switchShorts"[\s\S]*?<div class="top-icons"/.test(html) && /@media \(min-width: 1000px\) \{ \.generate-switch \{ display: flex;/.test(html),
+      'the side switch: not in the header; at the top of Generate on a desktop');
+  }
+  assert(script.includes("let page = 'status';\n  try { page = sessionStorage.getItem(PAGE_KEY) || page; } catch (e) {}"), 'a first visit opens on Status');
+  assert(/<div class="status-loader" aria-hidden="true">(<i[^>]*><\/i>){5}<\/div>\s*<div class="status-main">/.test(html)
+    && /<div class="nudge" id="nudge" role="button" tabindex="0"[^>]*hidden><\/div>\s*<div class="progress" id="runProgress"/.test(html)
+    && /\.nudge \{[^}]*font-size: 1rem;[^}]*-webkit-background-clip: text;[^}]*animation: nudge-in 1\.4s ease 1s both, nudge-shine 6s ease-in-out 2\.4s infinite; \}/.test(html)
+    && /body\.page-loading \.status-loader \{ display: flex; \}/.test(html), "Status's lines drawn faintly until the first answer; the nudge where the run's progress bar would be, a light passing over it");
+  {
+    context.document.getElementById('nudge');
+    run("syncNudge(true)");
+    const first = els.nudge.textContent;
+    assert(!els.nudge.hidden && run('NUDGES.length') >= 80 && run('NUDGES').includes(first), 'idle: one of the nudges');
+    run("syncNudge(true)");
+    assert.strictEqual(els.nudge.textContent, first, 'the same while it stays idle');
+    // Tapped: Image's Generate, its starred preset, the nudge as the prompt.
+    run(`var keptNudge = { setPipeline, applyPreset, backToGenerate, presets };
+      var nudgeCalls = []; setPipeline = side => nudgeCalls.push(['side', side]); applyPreset = (side, name) => nudgeCalls.push(['preset', side, name]);
+      backToGenerate = side => nudgeCalls.push(['generate', side]); presets = { ...presets, image: [{ name: 'Plain' }, { name: 'Fav', default: true }] }`);
+    run('makeFromNudge()');  // Nothing in it waits, so it is done when it returns
+    assert.strictEqual(els.imagePrompt.value, first, 'the nudge is the prompt');
+    assert.deepStrictEqual(JSON.parse(run('JSON.stringify(nudgeCalls)')).filter(c => c[0] !== 'side' || c[1] === 'image').slice(-2), [['preset', 'image', 'Fav'], ['generate', 'image']], 'with the starred preset, in Generate');
+    run('({ setPipeline, applyPreset, backToGenerate, presets } = keptNudge)');
+    els.imagePrompt.value = '';
+    run("syncNudge(false)");
+    assert(els.nudge.hidden && run('nudgeShown') === null, 'something going: none, and a new one next time');
+  }
   assert(/<input type="checkbox" id="geminiTitles"><span>Gemini titles<small>/.test(html) && script.includes("saveSettings({ gemini_titles: $('geminiTitles').checked })")
     && script.includes("$('geminiTitles').checked = !!SETTINGS.gemini_titles;"), 'Gemini titles: a setting of its own, saved like the others');
   assert(/\.viewer-meta \{ width: 100%;/.test(html), 'the preview line is 90% of the bar, not of its own content');
@@ -1522,12 +1784,30 @@ assert.strictEqual(run('stepViewer(1)'), false, 'nothing after the last');
 assert.strictEqual(run('stepSet(1)'), false, 'no next video at the end');
 assert(/#viewerVideo \{[^}]*touch-action: none;/.test(html), 'video keeps swipe gestures from the browser');
 run('zoom.scale = 2');
-els.imageViewer.listeners.touchstart({ touches: [{ clientX: 20, clientY: 20 }] });
+els.imageViewer.listeners.touchstart({ target: els.viewerVideo, touches: [{ clientX: 20, clientY: 20 }] });
 els.imageViewer.listeners.touchend({ changedTouches: [{ clientX: 20, clientY: 100 }] });
 assert.strictEqual(els.viewerVideo.src, '/videos/video/a.mp4', 'swipe down opens the previous video even after zooming an image');
-els.imageViewer.listeners.touchstart({ touches: [{ clientX: 20, clientY: 100 }] });
+els.imageViewer.listeners.touchstart({ target: els.viewerVideo, touches: [{ clientX: 20, clientY: 100 }] });
 els.imageViewer.listeners.touchend({ changedTouches: [{ clientX: 20, clientY: 20 }] });
 assert.strictEqual(els.viewerVideo.src, '/videos/video/b.mp4', 'swipe up opens the next video');
+// Only a swipe on the media turns it; down on the buttons under it closes the preview.
+els.imageViewer.listeners.touchstart({ target: { closest: () => null }, touches: [{ clientX: 20, clientY: 100 }] });
+els.imageViewer.listeners.touchend({ changedTouches: [{ clientX: 20, clientY: 20 }] });
+assert.strictEqual(els.viewerVideo.src, '/videos/video/b.mp4', 'a swipe beside the media turns nothing');
+{
+  let closed = 0;
+  const keptClose = run('closeViewer');
+  context.closeSpy = () => { closed++; };
+  run('closeViewer = closeSpy');
+  els.imageViewer.listeners.touchstart({ target: { closest: sel => (sel === '.viewer-bar' ? {} : null) }, touches: [{ clientX: 20, clientY: 20 }] });
+  els.imageViewer.listeners.touchend({ changedTouches: [{ clientX: 22, clientY: 140 }] });
+  assert.strictEqual(closed, 1, 'down on the buttons: the preview closes');
+  els.imageViewer.listeners.touchstart({ target: { closest: sel => (sel === '.viewer-bar' ? {} : null) }, touches: [{ clientX: 20, clientY: 140 }] });
+  els.imageViewer.listeners.touchend({ changedTouches: [{ clientX: 22, clientY: 20 }] });
+  assert(closed === 1 && els.viewerVideo.src === '/videos/video/b.mp4', 'up on the buttons: nothing');
+  context.keptClose = keptClose;
+  run('closeViewer = keptClose');
+}
 run('resetZoom()');
 run('closeViewer()');
 run(`folder = 'output'`);
@@ -1580,33 +1860,35 @@ els.imageViewer.listeners.touchstart({ touches: [{ clientX: 20, clientY: 20 }] }
 assert.strictEqual(run('swipeFrom'), null, 'zoomed in, a finger moves the image rather than turning the page');
 run('resetZoom(); viewing = null');
 
-// Output, one workflow at a time: the filter offers what there is, and the list and the viewer follow it.
-run(`lastVideos = { output: [], uploaded: [], video: [{ name: 'a.mp4', model: 'wan', mtime: 1 }, { name: 'b.mp4', model: 'ltx', mtime: 2 }, { name: 'c.mp4', model: 'wan', mtime: 3 }] }; folder = 'video'; pipeline = 'video'`);
-run('syncFilter(lastVideos.video)');
-assert(els.outputFilter.innerHTML.includes('<option value="ltx">ltx</option>') && els.outputFilter.innerHTML.includes('<option value="wan">wan</option>') && els.outputFilter.hidden === false);
-run(`outputFilter = 'wan'`);
-assert.deepStrictEqual(JSON.parse(run('JSON.stringify(visibleFilms().map(v => v.name))')), ['a.mp4', 'c.mp4']);
+// Output: images and films in one list (Both), or either alone; NSFW only in the other view, and nothing of it elsewhere.
+run(`lastVideos = { output: [], uploaded: [], video: [{ name: 'a.mp4', model: 'wan', mtime: 1 }, { name: 'b.mp4', model: 'ltx', mtime: 2 }, { name: 'c.mp4', model: 'wan', mtime: 3 }] }; folder = 'video'; pipeline = 'video'; outputKind = 'both'`);
+assert.deepStrictEqual(JSON.parse(run('JSON.stringify(visibleFilms().map(v => v.name))')), ['a.mp4', 'b.mp4', 'c.mp4']);
 run(`lastVideos.video.push({ name: 'private.mp4', model: 'wan', mtime: 4, nsfw: true });
   imageSets = [{ id: 'image_private', label: 'Private', model: 'test', size: '1x1', when: '', total: 1, nsfw: true,
-    images: [{ position: 1, title: 'Private', version: 1 }] }];
-  outputFilter = ''; syncFilter(lastVideos.video)`);
-assert(els.outputFilter.innerHTML.indexOf('>All workflows</option>') < els.outputFilter.innerHTML.indexOf('>NSFW</option>'));
-assert(els.outputFilter.innerHTML.indexOf('>NSFW</option>') < els.outputFilter.innerHTML.indexOf('>ltx</option>'));
+    images: [{ position: 1, title: 'Private', version: 1 }] }, { id: 'image_plain', label: 'Plain', model: 'test', size: '1x1', when: '', total: 1, mtime: 2.5,
+    images: [{ position: 1, title: 'Plain', version: 1 }] }];
+  nsfwView = false; renderVideos(); renderImageSets()`);
 assert.deepStrictEqual(JSON.parse(run('JSON.stringify(visibleFilms().map(v => v.name))')), ['a.mp4', 'b.mp4', 'c.mp4']);
-assert.strictEqual(run('filtered(imageSets).length'), 0, 'tagged image batches are hidden normally');
-let nsfwView = false;
-const bodyToggle = context.document.body.classList.toggle;
-context.document.body.classList.toggle = (name, value) => { if (name === 'nsfw-view') nsfwView = value; };
-run(`outputFilter = NSFW_FILTER; syncFilter(lastVideos.video); renderVideos(); renderImageSets()`);
+assert.strictEqual(run('filtered(imageSets).length'), 1, 'tagged image batches are hidden normally');
+{
+  const both = els.imageSets.innerHTML, at = s => both.indexOf(s);
+  assert(at('data-play-film="c.mp4"') >= 0 && at('data-play-film="c.mp4"') < at('image_plain') && at('image_plain') < at('data-play-film="b.mp4"'), 'Both: films and sets in one list, newest first');
+  assert(!both.includes('private.mp4') && !both.includes('image_private'), 'nothing NSFW in Both');
+  assert.strictEqual(els.videos.innerHTML, '', 'one list, not a films list above it');
+}
+run("setOutputKind('image')");
+assert(els.imageSets.innerHTML.includes('image_plain') && !els.imageSets.innerHTML.includes('data-play-film'), 'Images: images only');
+run("setOutputKind('video')");
+assert(!els.imageSets.innerHTML.includes('image_plain') && els.imageSets.innerHTML.includes('data-play-film="a.mp4"'), 'Videos: films only');
+run("setOutputKind('both'); setNsfwView(true)");
 assert.deepStrictEqual(JSON.parse(run('JSON.stringify(visibleFilms().map(v => v.name))')), ['private.mp4']);
 assert(els.imageSets.innerHTML.includes('data-nsfw-image="image_private"') && els.imageSets.innerHTML.includes('Remove NSFW tag'));
 assert(els.imageSets.innerHTML.includes('data-nsfw-video="private.mp4"') && els.imageSets.innerHTML.includes('data-film-folder="video"'), 'films are listed with the image sets');
-assert.strictEqual(els.videos.innerHTML, '', 'the NSFW view has one list, not a films list above an images list');
-assert(nsfwView && html.includes('body.nsfw-view .videos-card #imageSets { display: block !important; }'), 'the combined Image and Video view is active');
+assert(!els.imageSets.innerHTML.includes('image_plain'), 'the other view: only what is tagged');
 // Newest first, whatever kind: a set made between two films is listed between them.
-run(`lastVideos.video.push({ name: 'older.mp4', model: 'wan', mtime: 1, nsfw: true }); imageSets[0].mtime = 2; renderImageSets()`);
+run(`imageSets = [imageSets[0]]; lastVideos.video.push({ name: 'older.mp4', model: 'wan', mtime: 1, nsfw: true }); imageSets[0].mtime = 2; renderImageSets()`);
 const nsfwOrder = ['data-nsfw-video="private.mp4"', 'data-nsfw-image="image_private"', 'data-nsfw-video="older.mp4"'].map(s => els.imageSets.innerHTML.indexOf(s));
-assert(nsfwOrder.every(i => i >= 0) && nsfwOrder[0] < nsfwOrder[1] && nsfwOrder[1] < nsfwOrder[2], 'the NSFW view is in the order things were made, not grouped by kind');
+assert(nsfwOrder.every(i => i >= 0) && nsfwOrder[0] < nsfwOrder[1] && nsfwOrder[1] < nsfwOrder[2], 'in the order things were made, not grouped by kind');
 assert(/\$\('imageSets'\)\.addEventListener\('click', async e => \{\n  if \(e\.target\.closest && e\.target\.closest\('\.film'\)\) return onFilmClick\(e\);/.test(html), "a film's buttons work among the image sets");
 run(`lastVideos.video = lastVideos.video.filter(v => v.name !== 'older.mp4')`);
 // In the order they were made, by their run, even when a film's file is newer (stitched again later).
@@ -1614,17 +1896,18 @@ run(`lastVideos.video.push({ name: 'restitched.mp4', model: 'wan', mtime: 9e9, r
   imageSets = [{ ...imageSets[0], id: 'image_20261108_010000' }, { ...imageSets[0], id: 'image_20261108_030000' }]; renderImageSets()`);
 const madeOrder = ['data-nsfw-image="image_20261108_030000"', 'data-nsfw-video="restitched.mp4"', 'data-nsfw-image="image_20261108_010000"'].map(s => els.imageSets.innerHTML.indexOf(s));
 assert(madeOrder.every(i => i >= 0) && madeOrder[0] < madeOrder[1] && madeOrder[1] < madeOrder[2], 'image, video, image made in that order stay in that order');
-// Swiped up and down in the NSFW view, the viewer goes through films and sets in that same order.
-assert.deepStrictEqual(JSON.parse(run(`JSON.stringify(nsfwItems().map(item => item.film ? item.film.name : item.set.id))`)).filter(id => ['image_20261108_030000', 'restitched.mp4', 'image_20261108_010000'].includes(id)),
+// Swiped up and down, the viewer goes through films and sets in that same order.
+assert.deepStrictEqual(JSON.parse(run(`JSON.stringify(outputItems().map(item => item.film ? item.film.name : item.set.id))`)).filter(id => ['image_20261108_030000', 'restitched.mp4', 'image_20261108_010000'].includes(id)),
   ['image_20261108_030000', 'restitched.mp4', 'image_20261108_010000'], 'the viewer steps through them in the order shown');
-assert(/if \(outputFilter === NSFW_FILTER\) \{\s*const items = nsfwItems\(\);/.test(script) && script.includes("next.film ? openFilm(next.film.name, 'video') : openViewer(next.set.id, next.set.images[0].position)"),
-  'from a set to a film and back');
+assert(script.includes("next.film ? openFilm(next.film.name, 'video') : openViewer(next.set.id, next.set.images[0].position)"), 'from a set to a film and back');
+// Shorts: its own, and never the other view.
+run("setPipeline('shorts', false)");
+assert(!run('nsfwView') && els.imageSets.innerHTML === '', 'Shorts: none of the made ones, and not the other view');
 run(`lastVideos.video = lastVideos.video.filter(v => v.name !== 'restitched.mp4'); imageSets = [imageSets[0]]`);
-context.document.body.classList.toggle = bodyToggle;
 run(`renderFinished([], [], []);`);
 assert.strictEqual(els.finishedList.innerHTML, '', 'an open Finished list is cleared when nothing remains');
 run('imageSets = []');
-run(`outputFilter = ''; folder = 'output'; pipeline = 'shorts'`);
+run(`nsfwView = false; folder = 'output'; pipeline = 'shorts'`);
 // The footer's bar says how many more are waiting.
 assert(/right: left \+ \(runsQueued \? ` · \+\$\{runsQueued\} queued` : ''\)/.test(script));
 // The viewer: more like this one, and upscale it, for an image only.
@@ -1653,7 +1936,14 @@ assert(!html.includes('id="toast"') && !script.includes('announceResults'), 'not
 assert(script.includes('} else if (d.runNow) {') && script.includes('fetch(`/queue/run/run-now/${d.runNow}`'), 'its play runs it now');
 assert(/<button type="button" class="start-later" id="cancelQueueEdit"[^>]*>Cancel editing<\/button>/.test(html) && /#cancelQueueEdit \{ display: block; margin: 6px auto 0; \}/.test(html), 'Cancel editing sits centred under the button');
 
-assert(/\.output-filter-line \{ position: relative; display: flex; justify-content: center;/.test(html) && /\.output-filter-line select \{ width: 220px;/.test(html), 'the filter: centred, one size');
+// A batch's details start with the day it was made; its workflow pill is in its kind's colour; the footer says Output.
+assert.strictEqual(run("madeOn(madeAt('image_20261108_043935'))").split(' ').slice(0, 2).join(' '), '8 Nov');
+assert(run("imageSetHtml({ id: 'image_20261108_043935', label: 'L', model: 'krea', images: [] })").includes('<div class="meta">8 Nov'), 'the date first');
+assert(/\.pill\.workflow \{ border-color: color-mix\(in srgb, var\(--pill, var\(--neutral\)\)/.test(html) && /\.pills\.video \{ --pill: var\(--c-video\); \}/.test(html), 'the workflow pill by kind');
+assert(/id="jumpResults">Output<\/a>/.test(html), 'Output in the footer; Status and Output in violet');
+assert(/\.image-set-heading \.nsfw-button \{[^}]*height: 24px; padding: 0; margin: 0 0 -8px;/.test(html), 'the details just under the title');
+assert(/classList\.toggle\('restarting', comfyOff && !!c\.starting\)/.test(script) && /button\.classList\.add\('restarting'\);/.test(script), 'Starting ComfyUI in yellow, as Restart panel');
+assert(/\.output-filter-line \{ position: relative; display: flex; justify-content: center;/.test(html) && /\.view-toggle \{ position: absolute; right: 0;/.test(html), 'the kinds centred, the other view at the right');
 
 assert(/dialog\.viewer::backdrop \{ background: rgba\(0, 0, 0, \.55\);[^}]*backdrop-filter: blur\(6px\)/.test(html), 'the page behind the preview, as behind Quota');
 
@@ -1673,7 +1963,7 @@ assert(html.indexOf('id="statusText"') < html.indexOf('id="currentWork"') && htm
 
 // Up and down in the viewer: the next or the previous set, from its first picture; none past the ends.
 run(`imageSets = [{ id: 'image_a', images: [{ position: 1, title: 'A1', version: 1 }, { position: 2, title: 'A2', version: 1 }] },
-  { id: 'image_b', images: [{ position: 3, title: 'B3', version: 1 }] }]; outputFilter = ''`);
+  { id: 'image_b', images: [{ position: 3, title: 'B3', version: 1 }] }]; nsfwView = false`);
 run("openViewer('image_a', 2)");
 assert.strictEqual(run('stepSet(1)'), true);
 assert.deepStrictEqual(JSON.parse(run('JSON.stringify(viewing)')), { id: 'image_b', position: 3 }, 'the next set, from its first picture');
@@ -1748,7 +2038,9 @@ assert((html.match(/>Prompt source</g) || []).length === 2 && (html.match(/>Mode
 assert(!html.includes('Write prompt uses the text only') && !script.includes('call it '), 'writer and reference naming hints removed');
 assert(/<details class="h3-help"><summary>OpenH3-IR<\/summary><div class="hint">Before review/.test(html), 'OpenH3 explanation opens from its heading');
 assert(/\.count-stepper \{[^}]*align-items: stretch/.test(html) && /\.count-stepper button \{[^}]*width: 48px;/.test(html), 'stepper buttons are wider and stretch to the input height');
-assert(script.includes("const ROLE_LABELS = { image_to_prompt: 'Image to prompt', prompt_enhancer: 'Prompt Enhancer' };"));
+assert(script.includes("const ROLE_LABELS = { image_to_prompt: 'Image to prompt', prompt_enhancer: 'Prompt enhancer' };"));
+assert.strictEqual(run("roleLabel({id: 'prompt_enhancer', label: 'Enhance group'})"), 'Prompt enhancer', 'the usual name');
+assert.strictEqual(run("roleLabel({id: 'prompt_enhancer', label: 'Prompt enhancer H3', named: true})"), 'Prompt enhancer H3', "one with its own name keeps it");
 assert(!script.includes("select.value = 'prompt_enhancer'"), 'a workflow with a prompt enhancer offers it, and never picks it by itself');
 assert(!html.includes('id="imageResolution"') && /id="imageGeneration"[\s\S]*?id="imageAspect"[\s\S]*?<\/details>/.test(html), 'Resolution in Generation');
 assert(/id="imageHow">[\s\S]*?id="imageReview"[\s\S]*?id="imageSeed"/.test(html) && /id="videoHow">[\s\S]*?id="review"[\s\S]*?id="videoSeed"/.test(html), 'review and seed under Other');
@@ -1805,7 +2097,7 @@ assert(/JUMPS\.filter\(a => top\(a\) <= line\)\.sort\(/.test(script), 'by positi
 // Status comes first, Generate is called just that, and it sits with the options.
 assert(html.indexOf('id="runCard"') < html.indexOf('id="optionsCard"'));
 assert(/id="go">Generate</.test(html) && script.includes("'Add to queue'"), 'Generate, or Add to queue while something runs');
-assert(/<a href="#videosCard" data-page="output" id="jumpResults">Videos<\/a>/.test(html) && !html.includes('jumpCount'), 'the footer has no count on Videos');
+assert(/<a href="#videosCard" data-page="output" id="jumpResults">Output<\/a>/.test(html) && !html.includes('jumpCount'), 'the footer has no count on Output');
 // Each heading holds its section, and the first is called Generation.
 assert(!html.includes('What to make'));
 assert(/<details class="section" id="formTopic">\s*<summary class="section-title">Generation</.test(html));
@@ -1847,10 +2139,10 @@ run("setPipeline('video', false)");
 assert(buttons.switchVideo.active === true && buttons.switchShorts.active === false && buttons.switchVideo.selected === true);
 run("setPipeline('shorts', false)");
 assert(buttons.switchShorts.active === true && buttons.switchVideo.active === false && buttons.switchShorts.selected === true);
-assert(/\.switch button\.active \{[^}]*color: var\(--accent\)/.test(html) && /body\.on-video \{ --accent:/.test(html));
+assert(/\.switch button\.active \{[^}]*color: var\(--accent\)/.test(html) && /body\.on-video \{ --side:/.test(html));
 
-// The switch is the top of the page, with the title gone and the gear beside it; shut down is in the settings box.
-assert(html.indexOf('id="switchShorts"') < html.indexOf('id="stick"') && !/<h1>/.test(html.slice(0, html.indexOf('<script>'))));
+// The side switch is Generate's, at its top; the header has no title, only the progress bars and the gear; shut down is in the settings box.
+assert(html.indexOf('id="switchShorts"') > html.indexOf('id="optionsCard"') && !/<h1>/.test(html.slice(0, html.indexOf('<script>'))));
 assert(/id="settingsBtn"[^>]*aria-label="Settings"/.test(html) && !/Sign out/.test(html));
 assert(/<dialog id="settingsDialog"[\s\S]*id="lowPriority"[\s\S]*id="localLlmModel"[\s\S]*id="h3Model"[\s\S]*id="defaultShorts"[\s\S]*id="diskBox"[\s\S]*<div class="settings-actions">[\s\S]*id="restartPanel"[\s\S]*id="restartComfy"[\s\S]*href="\/logout" id="logout"[\s\S]*id="shutdown"[\s\S]*id="settingsClose"/.test(html),
   'settings, then at the foot Restart, Log out left of Shut down; the local LLM above OpenH3-IR');
@@ -1916,13 +2208,14 @@ assert.deepStrictEqual(lines({ innerHTML: run(`statusHtml('Stitching', '', '0:42
 assert.strictEqual(run(`statusHtml('Generating prompts')`), '<div class="status-foot"><span class="status-first">Generating prompts</span></div>');
 assert(/\.status-foot > \.status-first:only-child \{ flex: 1; text-align: center; \}/.test(html), 'a status that is only text is centred');
 
-// The footer bars show away from Status, which has its own.
+// The header's bars show while Status's own are out of sight: on another page, or on Status scrolled past them.
 run('stripActive.run = true; stripActive.upload = false; syncStrips()');
-assert.strictEqual(els.runStrip.hidden, true, 'on Status');
-context.document.getElementById('runCard').getBoundingClientRect = () => ({ top: 5000, bottom: 5100 });
+assert.strictEqual(els.runStrip.hidden, true, "Status's bar in sight");
+for (const id of ['runProgress', 'uploadProgress']) context.document.getElementById(id).getBoundingClientRect = () => ({ top: 5000, bottom: 5100 });
 run('syncStrips()');
-assert.strictEqual(els.runStrip.hidden, false, 'scrolled away from Status');
-context.document.getElementById('runCard').getBoundingClientRect = () => ({ top: 0, bottom: 100 });
+assert.strictEqual(els.runStrip.hidden, false, "scrolled past Status's bar");
+assert(script.includes('$(`${job}Strip`).hidden = !stripActive[job] || inView(`${job}Progress`);'), 'by its own bar on Status, not the whole card');
+for (const id of ['runProgress', 'uploadProgress']) context.document.getElementById(id).getBoundingClientRect = () => ({ top: 0, bottom: 100 });
 run('stripActive.run = false; syncStrips()');
 
 // The switch: each side only shows what applies to it, and a job on the other still shows.
@@ -1983,11 +2276,11 @@ assert(script.includes("function transitionViewer(media, direction, open, target
 assert(/#runActions::after \{ bottom: -10px; border: 1px solid var\(--line\); border-top: 0;/.test(html)
   && /#runActions::before \{[^}]*border-left: 1px dotted var\(--line\); border-right: 1px dotted var\(--line\);[^}]*mask-image: linear-gradient\(to top, #000 15%, transparent\);/.test(html),
   'the running part ends in the queue box\'s line: solid along the bottom and corners, dotted and fading up both sides alike');
-assert(/#runCard \{ --accent: var\(--neutral\); \}/.test(html) && /#runCard \.bar > div, \.stick #runStrip \.bar > div \{ background: var\(--job, var\(--neutral\)\); \}/.test(html)
-  && /#runCard \.step\.now \{ border-color: var\(--job, var\(--neutral\)\); \}/.test(html), 'Status is neutral, its bars the colour of the job');
+assert(/#runCard \{ --accent: var\(--shared\); \}/.test(html) && /#runCard \.bar > div \{ background: var\(--job, var\(--shared\)\); \}/.test(html) && /#runStrip \.bar > div \{ background: var\(--shared\); \}/.test(html)
+  && /#runCard \.step\.now \{ border-color: var\(--job, var\(--shared\)\); \}/.test(html), 'Status is violet, its bars the colour of the job; the header bar violet whichever job');
 assert(script.includes("document.documentElement.style.setProperty('--job', running && SIDE_COLOURS[data.pipeline] || '');"), 'the job colour follows what is generating, and goes when idle');
-assert(/#runCard \.ln-more \{ color: var\(--job, var\(--side-accent\)\); \}/.test(html) && /\.jump a\.run\.active \{ border-color: var\(--job, var\(--accent\)\); \}/.test(html),
-  'the log\'s highlights and Status in the bottom bar keep the type colour');
+assert(/#runCard \.ln-more \{ color: var\(--job, var\(--side-accent\)\); \}/.test(html) && /\.jump a\.run\.active \{ border-color: var\(--shared\); \}/.test(html),
+  'the log\'s highlights keep the type colour; Status in the bottom bar always violet');
 assert(/\.ln\.stage \.x \{ color: var\(--neutral\); \}/.test(html) && /\.settings-group \{[^}]*color: var\(--neutral\);/.test(html), 'the log\'s and settings\' headers are silver, as Status\'s');
 assert(!html.includes('id="logWorkflow"') && /\.log-tools #logComfy \{ margin-left: auto; \}/.test(html), 'no Workflow in the log; ComfyUI and Errors on the right');
 // Titles in the queues: two lines and "…", opened by a tap when cut, kept open when the list is drawn again.
@@ -2301,11 +2594,11 @@ assert(els.comfyFacts.innerHTML.includes('Generating the image · 3/8') && els.c
     run('shotsDirty = false');
     els.shotsDialog.open = false;
   }
-  run("imageSets = []; lastVideos = {output: [], uploaded: [], video: []}; pipeline = 'image'; outputFilter = NSFW_FILTER; document.body.dataset.page = 'status'; showPage('output')");
-  assert.strictEqual(run('outputFilter'), '', 'entering Output resets even the NSFW filter');
-  run("outputFilter = NSFW_FILTER; showPage('output')");
-  assert.strictEqual(run('outputFilter'), '__nsfw__', 'remaining on Output preserves the chosen filter');
-  run("outputFilter = ''; showPage('status')");
+  run("imageSets = []; lastVideos = {output: [], uploaded: [], video: []}; pipeline = 'image'; nsfwView = true; document.body.dataset.page = 'status'; showPage('output')");
+  assert.strictEqual(run('nsfwView'), false, 'entering Output resets even the NSFW view');
+  run("nsfwView = true; showPage('output')");
+  assert.strictEqual(run('nsfwView'), true, 'remaining on Output preserves the chosen view');
+  run("nsfwView = false; showPage('status')");
   {
     const savedFetch = context.fetch, savedPoll = run('poll');
     let calls = [];
@@ -2346,7 +2639,7 @@ assert(els.comfyFacts.innerHTML.includes('Generating the image · 3/8') && els.c
     const prepare = () => {
       context.deleteSet = { id: 'image_delete', label: 'Batch', total: 3, size: '1x1', when: '', images: [
         image(1, 'First'), image(2, 'Second'), image(3, 'Third')] };
-      run("imageSets = [deleteSet]; outputFilter = ''; pipeline = 'image'");
+      run("imageSets = [deleteSet]; nsfwView = false; pipeline = 'image'");
     };
     const remove = async (position, remaining) => {
       context.fetch = async url => {
@@ -2444,15 +2737,15 @@ assert(els.comfyFacts.innerHTML.includes('Generating the image · 3/8') && els.c
   context.fetch = async url => String(url).includes('/files/')
     ? { ok: true, blob: async () => ({ type: 'image/png' }) }
     : { ok: true, json: async () => ({ ok: true, shots: [{ used_seed: 123 }] }) };
-  run("imageSets = []; outputFilter = ''; setPipeline('video', false); showPage('generate'); imagesShown = 2; syncImageInput()");
+  run("imageSets = []; nsfwView = false; setPipeline('video', false); showPage('generate'); imagesShown = 2; syncImageInput()");
   els.prompt.value = 'keep this video prompt';
   boxes[1].parts.select.value = 'place';
-  run('chooseFromOutput(imageBoxes()[1], "video")');
-  assert.strictEqual(run('pipeline'), 'image');
+  run("outputKind = 'both'; chooseFromOutput(imageBoxes()[1], \"video\")");
+  assert(run('pipeline') === 'video' && run('outputKind') === 'image', 'Generate stays on its side; Output shows images only');
   assert.strictEqual(context.document.body.dataset.page, 'output');
   assert.strictEqual(els.prompt.value, 'keep this video prompt');
   await run("chooseThis('a set', 1)");
-  assert.strictEqual(run('pipeline'), 'video');
+  assert(run('pipeline') === 'video' && run('outputKind') === 'both', 'back, Output as it was');
   assert.strictEqual(context.document.body.dataset.page, 'generate');
   assert.strictEqual(boxes[1].parts.input.files[0].name, 'image_1.png');
   assert.strictEqual(boxes[1].parts.select.value, 'place');
@@ -2460,7 +2753,7 @@ assert(els.comfyFacts.innerHTML.includes('Generating the image · 3/8') && els.c
   assert.strictEqual(els.prompt.value, 'keep this video prompt');
   const pickButton = { dataset: { pick: '1' }, closest: () => boxes[0] };
   els.imageBoxes.listeners.click({ target: { closest: () => pickButton } });
-  assert.strictEqual(run('pipeline'), 'image', 'the image box gallery control opens the picker');
+  assert(run('choosingFor') && run('outputKind') === 'image', 'the image box gallery control opens the picker');
   els.chooseCancel.listeners.click();
   assert.strictEqual(run('pipeline'), 'video');
   assert.strictEqual(els.prompt.value, 'keep this video prompt', 'cancelling preserves the originating form');
@@ -2565,7 +2858,7 @@ assert(els.comfyFacts.innerHTML.includes('Generating the image · 3/8') && els.c
     goToOutput = (side, tab) => navigated.push(['output', side, tab]);
     imageSets = [{id:'image_1', images:[{position: 1}, {position: 2}]}];
     lastVideos = { video:[{name:'film.mp4', run:'run_1'}], output:[], uploaded:[] }`);
-  const clickResult = dataset => els.finishedList.listeners.click({ target: { closest: () => ({ dataset }) } });
+  const clickResult = dataset => els.finishedList.listeners.click({ target: { closest: sel => (sel === '[data-goto]' ? { dataset } : null) } });
   clickResult({ goto: 'image', runId: 'image_1', position: '2' });
   clickResult({ goto: 'video', runId: 'run_1' });
   assert.deepStrictEqual(JSON.parse(run('JSON.stringify(navigated)')), [['image', 'image_1', 2], ['output', 'video', null], ['film', 'film.mp4']]);
@@ -2829,7 +3122,15 @@ for (const fn of ['sameAgain', 'sameAgainFilm', 'sameAgainShorts', 'editQueued',
   els.imageUpscale.value = 'Off';
   els.imageUpscale.listeners.change();
   assert.strictEqual(els.imagePixelSize.textContent, madeAt, `dropped back to what it was made at: ${els.imagePixelSize.textContent}`);
-  assert.strictEqual(els.imageUpscaleSize.textContent, '', 'and nothing to end at');
+  const twice = madeAt.split('×').map(side => side * 2).join('×');
+  assert.strictEqual(els.imageUpscaleSize.innerHTML, `<span class="would-tag">2×</span>${twice}`, 'and what 2× would come to, marked 2×, in its place');
+  assert(/2× upscale would make/.test(els.imageUpscaleSize.title), 'said to be only a would-be');
+  // Video's latent upscale shows the same: its end when on, a marked 2× when off.
+  run("showVideoStepper(0.4, 0.1, 2, [832, 480], null, '', false)");
+  assert.strictEqual(els.videoLatentSize.innerHTML, '<span class="would-tag">2×</span>1664×960', 'video, off: what 2× would come to');
+  run("showVideoStepper(1.6, 0.1, 2, [832, 480], [1664, 960], '', true)");
+  assert.strictEqual(els.videoLatentSize.textContent, '1664×960', 'video, on: where it ends');
+  assert.strictEqual(els.videoLatentSize.title, '', 'and no longer a would-be');
   els.imageUpscaleBox.hidden = true;
   els.imageAspect.value = '1:1';
   run('imageStep = null');

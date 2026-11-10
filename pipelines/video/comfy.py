@@ -52,6 +52,7 @@ class ComfyClient:
         self.options = self._offered()
         # The workflow's own options, as the panel chose them for this run.
         chosen = workflow_options.chosen_in_env() if options is None else options
+        self.chosen = dict(chosen or {})
         if chosen:
             self.workflow, self.fields = workflow_options.remake(self.workflow_path, chosen)
 

@@ -393,6 +393,11 @@ class FreeComfyTest(unittest.TestCase):
         self.assertFalse(webapp.frees_comfyui(krea, dict(krea)), "the same models would only load again")
         self.assertFalse(webapp.frees_comfyui(stock, krea), "it loaded nothing in ComfyUI")
         self.assertTrue(webapp.frees_comfyui({"pipeline": "video", "env": {}}, None), "a film continued runs its saved workflow")
+        # Without a workflow file, by what runs: an RTX upscale's models are not the avatars' that come after it.
+        rtx = {"pipeline": "video", "env": {}, "argv": ["python", "-m", "pipelines.video.upscale", "--film", "a.mp4"]}
+        avatars = {"pipeline": "shorts", "env": {"AVATAR_SOURCE": "comfyui"}, "argv": ["python", "-m", "pipelines.shorts.main"]}
+        self.assertTrue(webapp.frees_comfyui(rtx, avatars), "different models, though neither names a workflow")
+        self.assertFalse(webapp.frees_comfyui(rtx, dict(rtx)), "a second RTX upscale uses the same")
 
     def test_a_job_ending_frees_it_before_the_next_starts(self):
         queue = webapp.JobQueue(mock.Mock(batches=True, stopped=False, returncode=0), prepare=lambda item: None)

@@ -218,7 +218,9 @@ def describe_run(state):
             "llm": state.llm, "size_bytes": size_bytes, "resolutions": resolutions,
             "upscaled": upscaled,
             # What Output's pills are made from (core/pills.py): saved_runs turns them into pills.
-            "_facts": pills.facts(shorthand(state.workflow, "image"), upscaled, loras=loras, llm=state.llm, direct=state.direct),
+            "_facts": pills.facts(shorthand(state.workflow, "image"), upscaled, loras=loras, llm=state.llm, direct=state.direct,
+                                  sampling=workflow_options.sampling_used(state.workflow, state.options, "image"),
+                                  cfg=workflow_options.cfg_used(state.workflow, state.options, "image")),
             "_sibling": pills.sibling_key("image", state.brief),
             "when": saved_at(state.path), "mtime": max((image["mtime"] for image in files), default=0), "clips": done, "finished": state.finished, "total": total, "images": files,
             "size": f"{state.width}x{state.height}", "estimate": RunEta(resume_argv(state), env, IMAGE_TIMINGS).plan()["total"]}

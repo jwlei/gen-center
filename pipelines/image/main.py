@@ -233,7 +233,9 @@ def plan_run(args, stages):
     workflow = shorthand(state.workflow, "image")
     name = f"{title_words(title, 'images')}_{workflow}"
     tag = set_tag(state, workflow)
-    output_name = unique_name(paths.OUTPUT_DIR, f"{name}_{tag}" if tag else name)
+    # Its folder is made with its first image: a set that has none yet still has its name, and keeps it.
+    taken = {other.output_name for other in list_runs() if other.id != state.id and other.output_name}
+    output_name = unique_name(paths.OUTPUT_DIR, f"{name}_{tag}" if tag else name, "", taken)
     state.update(title=title, shots=shots, output_name=output_name)
 
     print(f"🖼️ {title}, {state.width}x{state.height}")

@@ -1040,16 +1040,16 @@ class PanelTest(unittest.TestCase):
         listed = {w["name"]: w for w in self.client.get("/api/workflows?pipeline=image").get_json()["workflows"]}
         ids = [option["id"] for option in listed["Krea2_switchable.json"]["takes"]["options"]]
         self.assertIn("group_sharpen", ids)
-        self.assertIn("lora_knpv3_1", ids)
+        self.assertIn("lora", ids)
 
     def test_a_run_uses_the_options_chosen_and_keeps_them(self):
-        reply = self.switchable(opt_group_sharpen=["0", "1"], opt_lora_knpv3_1_on=["0", "1"], opt_lora_knpv3_1_strength="0.7",
+        reply = self.switchable(opt_group_sharpen=["0", "1"], opt_lora=["0", "1"], opt_lora_strength="0.7",
                                 opt_prompt_boost_on=["0"], opt_steps="12")
         self.assertTrue(reply.get_json()["ok"], reply.get_json())
         self.wait_idle()
         run = self.only_run()
         self.assertTrue(run.finished, [l["text"] for l in webapp.job.lines][-15:])
-        self.assertEqual(run.options, {"group_sharpen": "1", "lora_knpv3_1": "0.7", "prompt_boost": "0", "steps": "12"},
+        self.assertEqual(run.options, {"group_sharpen": "1", "lora": "1", "lora_strength": "0.7", "prompt_boost": "0", "steps": "12"},
                          "what differs from the workflow as saved")
         sent = self.comfy.prompts[0]["prompt"]
         self.assertIn("Image Lucy Sharpen", [node["class_type"] for node in sent.values()])

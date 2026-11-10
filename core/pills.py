@@ -1,5 +1,6 @@
 """
 Pills: what a film or an image set was made with, in short (workflow, upscale, how clips connect, OpenH3-IR, LoRA,
+sampler and steps, CFG,
 who wrote the prompts: an LLM or your exact prompt, and which LLM), and which of those tell it apart from its siblings: what else was made from the same prompt.
 
 Live, Output marks the pills that differ from its siblings as they are now. Fixed, a new film's or set's file name
@@ -13,7 +14,7 @@ from core import workflow_options
 CONNECTIONS = {"chain": "Continuous take", "image": "Separate moments", "director": "H3 Motion Director",
                "multishot": "H3 Multishot", "infinite": "H3 Infinite continuation"}
 # The order pills are shown in, after the differing ones.
-KINDS = ("workflow", "prompt", "upscale", "clips", "openh3", "lora", "llm")
+KINDS = ("workflow", "prompt", "upscale", "clips", "openh3", "lora", "sampling", "cfg", "llm")
 
 
 def latent_description(options):
@@ -41,9 +42,12 @@ def run_facts(state, pipeline, workflow_name):
     if pipeline == "video":
         return facts(workflow_name, latent_description(state.options), state.connection_mode or state.start,
                      state.h3_mode, state.h3_creativity, workflow_options.loras_used(state.workflow, state.options, "video"),
-                     state.llm, state.direct)
+                     state.llm, state.direct, workflow_options.sampling_used(state.workflow, state.options, "video"),
+                     workflow_options.cfg_used(state.workflow, state.options, "video"))
     return facts(workflow_name, image_upscale_description(state.options),
-                 loras=workflow_options.loras_used(state.workflow, state.options, "image"), llm=state.llm, direct=state.direct)
+                 loras=workflow_options.loras_used(state.workflow, state.options, "image"), llm=state.llm, direct=state.direct,
+                 sampling=workflow_options.sampling_used(state.workflow, state.options, "image"),
+                 cfg=workflow_options.cfg_used(state.workflow, state.options, "image"))
 
 
 def run_stamp(run_id):
@@ -52,7 +56,7 @@ def run_stamp(run_id):
     return f"{match.group(1)}{match.group(2)}" if match else ""
 
 
-def facts(workflow=None, upscaled=None, clips=None, h3_mode=None, h3_creativity=None, loras=(), llm=None, direct=False):
+def facts(workflow=None, upscaled=None, clips=None, h3_mode=None, h3_creativity=None, loras=(), llm=None, direct=False, sampling=None, cfg=None):
     """What it was made with, as (kind, text), in the order they are shown."""
     found = []
     if workflow:
@@ -65,6 +69,11 @@ def facts(workflow=None, upscaled=None, clips=None, h3_mode=None, h3_creativity=
         # How bold, not when: before review or each clip doesn't tell films apart as it reads.
         found.append(("openh3", f"OpenH3-IR: {h3_creativity[:1].upper()}{h3_creativity[1:]}" if h3_creativity else "OpenH3-IR"))
     found += [("lora", f"LoRA: {lora}") for lora in loras or ()]
+    # The sampler and its steps, as it ran: "euler, 6 steps".
+    if sampling:
+        found.append(("sampling", sampling))
+    if cfg:
+        found.append(("cfg", f"CFG: {cfg}"))
     # Who wrote the prompts: your own, word for word, or an LLM from your idea; which LLM is its own pill, later.
     found.append(("prompt", "Exact prompt" if direct else "LLM"))
     if llm and not direct:

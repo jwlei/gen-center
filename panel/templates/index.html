@@ -1,5 +1,8 @@
 {% extends "base.html" %}
 {% block body %}
+{# Loading from the first paint, until the first answer is drawn (pollOnce): before the script at the end has run. #}
+<script>document.body.classList.add('page-loading', 'output-pending');</script>
+<div class="page-loader" aria-hidden="true"></div>
 {# A dropdown's list is drawn by the system and shows only text: a shape mark stands in for the drawn box. #}
 {% macro shape_mark(w, h) %}{{ '□' if w == h else ('▭' if w > h else '▯') }}{% endmacro %}
 {% macro trash_icon() %}<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7h16"/><path d="M10 11v6M14 11v6"/><path d="M6 7l1 13h10l1-13"/><path d="M9 7V4h6v3"/></svg>{% endmacro %}
@@ -40,6 +43,8 @@
   /* A line between what's going now and what's waiting, there only when something is. */
   /* Wider than the rest, out into the card's own margin, with room inside as before. */
   .status-queue:has(> :not([hidden])) { margin: 14px -10px 0; padding: 2px 12px 12px; background: var(--bg); border: 1px solid var(--line); border-radius: 12px; }
+  /* The queue, Pending and Failed, each under a thin line from the one above (only between those showing). */
+  .status-queue > .queue:not([hidden]) ~ .queue:not([hidden]) { margin-top: 10px; padding-top: 4px; border-top: 1px solid var(--line); }
   /* What is on its way to the queue: there from the tap until the panel has taken it. */
   .queue-pending { margin-top: 12px; padding: 8px 11px; border: 1px dashed var(--line); border-radius: 10px; font-size: .84rem; animation: work-arrive .3s ease; }
   .queue-pending[hidden] { display: none; }
@@ -246,6 +251,14 @@
   .preset-line .preset-delete[hidden] { display: none; }
   .section-title { font-size: .72rem; letter-spacing: .08em; text-transform: uppercase; color: var(--accent); margin: 14px 0 0; font-weight: 700; }
   .options-advanced { margin-top: 12px; padding-top: 8px; border-top: 1px solid var(--line); }
+  /* Steps, Sampler, Scheduler and CFG, and Use LoRA: each set apart in a dark box, as Resolution is. */
+  .options-box { margin: 4px 0 12px; padding: 8px 12px 10px; border: 1px solid var(--line); border-radius: 12px; background: var(--bg); }
+  .options-box > .check:first-child, .options-box > .option-row:first-child { margin-top: 0; }
+  .pipeline-form .sampling-line { flex-wrap: nowrap; }
+  .sampling-line .option-info { flex: none; min-width: 7.5em; justify-content: flex-start; }
+  .sampling-line select { flex: 1 1 auto; min-width: 0; }
+  .sampling-line .option-strength { flex: none; width: 6em; }
+  .option-hint { font-size: .8rem; color: var(--muted); }
   .options-subtitle { font-size: .68rem; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); font-weight: 700; margin-bottom: 2px; }
   .check { display: flex; gap: 10px; align-items: flex-start; margin-top: 14px; cursor: pointer; text-transform: none; letter-spacing: 0; font-size: .95rem; color: var(--text); }
   .check input { width: 20px; height: 20px; margin: 2px 0 0; flex: none; accent-color: var(--accent); }
@@ -340,14 +353,16 @@
   .upscale-dialog .upscale-row button { flex: 1 1 0; min-width: 0; }
   .upscale-dialog select[hidden], .upscale-row[hidden], .upscale-methods button[hidden] { display: none; }
   /* The method list grows up out of the Upscale button, as the footer's side menu does. */
-  dialog#viewerUpscaleBar, dialog#moveSheet, dialog#pillsMenu { padding: 5px; gap: 4px; transform-origin: bottom center; animation: menu-in .2s ease; box-shadow: 0 8px 24px rgba(0, 0, 0, .45); }
-  dialog#viewerUpscaleBar::backdrop, dialog#moveSheet::backdrop, dialog#pillsMenu::backdrop { background: transparent; }
-  dialog#viewerUpscaleBar.closing, dialog#moveSheet.closing, dialog#pillsMenu.closing { animation: menu-out .15s ease forwards; pointer-events: none; }
+  dialog#viewerUpscaleBar, dialog#moveSheet, dialog#pillsMenu, dialog#editMenu { padding: 5px; gap: 4px; transform-origin: bottom center; animation: menu-in .2s ease; box-shadow: 0 8px 24px rgba(0, 0, 0, .45); }
+  dialog#viewerUpscaleBar::backdrop, dialog#moveSheet::backdrop, dialog#pillsMenu::backdrop, dialog#editMenu::backdrop { background: transparent; }
+  dialog#viewerUpscaleBar.closing, dialog#moveSheet.closing, dialog#pillsMenu.closing, dialog#editMenu.closing { animation: menu-out .15s ease forwards; pointer-events: none; }
   /* Its options' text in the middle, + New's icon with it. */
   dialog#moveSheet .upscale-methods button { text-align: center; }
   dialog#moveSheet .upscale-methods button.move-new-pick { display: inline-flex; align-items: center; justify-content: center; gap: 6px; color: var(--accent); }
   dialog#moveSheet .upscale-methods button.move-new-pick svg { width: 14px; height: 14px; }
   dialog#moveSheet .err { margin: 2px 4px; }
+  /* Edit's choices, centred, each bordered in its page's colour: green for Image, blue for Video. */
+  dialog#editMenu .upscale-methods button { text-align: center; border: 1px solid var(--side); }
   /* All of its pills, wrapped and centred: the preview's line stays one line, so its buttons never move. */
   /* Its heading, quiet: the pills are what it shows. */
   dialog#pillsMenu .pills-menu-head { justify-content: center; font-size: .68rem; font-weight: 500; color: var(--muted); opacity: .8; letter-spacing: .02em; }
@@ -365,7 +380,7 @@
   .upscale-dialog .upscale-methods button { width: 100%; padding: 9px 14px; font-size: .85rem; text-align: left; border-radius: 9px; background: var(--panel-2); }
   .upscale-dialog .upscale-methods button:disabled { opacity: .4; cursor: not-allowed; }
   @media (prefers-reduced-motion: reduce) { dialog#viewerUpscaleBar, dialog#viewerUpscaleBar.closing, dialog#moveSheet, dialog#moveSheet.closing,
-    dialog#pillsMenu, dialog#pillsMenu.closing { animation: none; } }
+    dialog#pillsMenu, dialog#pillsMenu.closing, dialog#editMenu, dialog#editMenu.closing { animation: none; } }
   dialog.upscale-settings { inset: 0; margin: auto; width: min(320px, 90vw); height: fit-content; }
   .viewer-head { position: relative; z-index: 0; width: 100%; }
   dialog.viewer #viewerImage { position: relative; z-index: 1; }
@@ -388,7 +403,7 @@
     border: 1px solid var(--side, var(--line)); border-radius: 10px; color: inherit; font: inherit; text-align: left; cursor: pointer;
     touch-action: pan-y; }
   /* What it made, small, on the left; a job with nothing to show (an upload, a failure before its run) keeps the space. */
-  .result-thumb { flex: none; width: 34px; height: 34px; border-radius: 6px; overflow: hidden; background: var(--panel-2); }
+  .result-thumb { flex: none; width: 34px; height: 34px; border-radius: 6px; overflow: clip; background: var(--panel-2); }
   .result-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
   /* A swipe to the right takes a result off the list: it follows the finger, slides out, then the gap closes. */
   /* clip, not hidden: hidden makes the list a scroll box of its own, and inside a dialog (overscroll contained) a
@@ -416,6 +431,19 @@
     font-size: .74rem; font-weight: 500; opacity: .7; }
   .finished-clear:hover, .finished-clear:focus-visible { opacity: 1; color: var(--text); }
   .finished-clear.armed { opacity: 1; color: var(--err); }
+  /* A batch: its main row says how many, with a chevron that turns as its items open under it, set in a little and
+     smaller, growing to their own height (rows 0fr to 1fr). */
+  .batch-count { flex: none; padding: 0 6px; border-radius: 999px; background: var(--panel-2); color: var(--muted); font-size: .7rem; font-variant-numeric: tabular-nums; }
+  .batch-chevron { flex: none; color: var(--muted); font-size: 1rem; line-height: 1; transition: transform .25s ease; }
+  .result-batch.open .batch-chevron { transform: rotate(90deg); }
+  .batch-kids { display: grid; grid-template-rows: 0fr; opacity: 0; transition: grid-template-rows .3s cubic-bezier(.2, .8, .2, 1), opacity .25s ease; }
+  .result-batch.open .batch-kids { grid-template-rows: 1fr; opacity: 1; }
+  /* clip, not hidden (as the thumbnail grid): hidden made the opened set a scroll box of its own, and in the dialog
+     (overscroll contained) a swipe up or down that started on it scrolled nothing. */
+  .batch-kids-in { min-height: 0; overflow: clip; margin-left: 16px; padding-left: 8px; border-left: 2px solid var(--line); }
+  .results .result.batch-kid { padding: 4px 8px; font-size: .8rem; border-style: dashed; }
+  .result.batch-kid .result-thumb { width: 26px; height: 26px; }
+  @media (prefers-reduced-motion: reduce) { .batch-kids, .batch-chevron { transition: none; } }
   .result-type { flex: none; padding: 0 6px; border: 1px solid var(--line); border-radius: 6px; font-size: .7rem; color: var(--text); }
   .result-label { flex: 1 1 0; min-width: 0; overflow-wrap: anywhere; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; overflow: hidden; text-align: left; }
   .finished .failed { color: var(--err); }
@@ -427,7 +455,8 @@
   .settings-actions button { flex: 1 1 0; display: flex; flex-direction: column; align-items: center; gap: 4px; margin: 0; padding: 7px 4px; font-size: .68rem;
     background: var(--panel-2); border: 1px solid var(--line); color: var(--text); }
   .settings-actions button:disabled { opacity: .5; }
-  .settings-actions button.armed { border-color: var(--accent); color: var(--accent); }
+  /* Armed, it keeps its own shape here: icon over a label that wraps, not button.armed's one unwrapped line. */
+  .settings-actions button.armed { border-color: var(--accent); color: var(--accent); flex: 1 1 0; display: flex; padding: 7px 4px; white-space: normal; overflow: visible; }
   .settings-actions button.restarting, .settings-actions button.restarting:disabled { opacity: 1; color: var(--warn); border-color: var(--warn); background: color-mix(in srgb, var(--warn) 12%, transparent); }
   .settings-body { display: flex; flex-direction: column; gap: 10px; }
   /* Free RAM: the stepper centred, as Generate's; Set to its left, there only while a change waits to be set. */
@@ -436,8 +465,9 @@
   #reserveSet { position: absolute; left: 0; top: 50%; transform: translateY(-50%); width: auto; margin: 0; padding: 6px 12px; font-size: .78rem;
     background: transparent; border: 1px solid var(--accent); color: var(--accent); }
   #reserveSet[hidden] { display: none; }
-  #restartComfy.pulse { border-color: #e6b800; color: #e6b800; background: rgba(230, 184, 0, .14); animation: pulse 1.2s ease-in-out infinite; }
-  @keyframes pulse { 50% { box-shadow: 0 0 0 4px rgba(230, 184, 0, .35); } }
+  /* Asking for a restart: the same yellow as Restart panel's while it restarts (--warn). */
+  #restartComfy.pulse { border-color: var(--warn); color: var(--warn); background: color-mix(in srgb, var(--warn) 14%, transparent); animation: pulse 1.2s ease-in-out infinite; }
+  @keyframes pulse { 50% { box-shadow: 0 0 0 4px color-mix(in srgb, var(--warn) 35%, transparent); } }
   .settings-actions #shutdown { background: rgba(229, 83, 75, .14); border-color: var(--err); color: var(--err); }
   .settings-actions #shutdown.armed { background: var(--err); color: #fff; }
   .settings-note { margin: 0; }
@@ -452,6 +482,7 @@
   .url-row code { flex: 1 1 0; min-width: 0; overflow-wrap: anywhere; color: var(--text); background: var(--panel-2); padding: 4px 8px; border-radius: 6px; font-size: .8rem; user-select: all; }
   .url-row button { width: auto; flex: none; margin: 0; padding: 4px 10px; font-size: .78rem; background: var(--panel-2); border: 1px solid var(--line); color: var(--text); }
   .disk .bar { height: 6px; }
+  .disk .bar > div { background: var(--shared); }
   .disk-line { display: flex; justify-content: space-between; gap: 10px; margin-top: 6px; font-size: .84rem; }
   .disk-line span:last-child { color: var(--muted); }
   .vhead { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
@@ -472,13 +503,29 @@
   .carousel::-webkit-scrollbar { display: none; }
   .carousel.as-list { display: block; overflow: visible; }
   /* Centred, one size whatever is picked: a long workflow name is cut short rather than stretching it. */
-  .output-filter-line { position: relative; display: flex; justify-content: center; margin-bottom: 10px; }
-  /* Collections' icon: in the left corner, on the workflow filter's line; lit while they are open. */
+  .output-filter-line { position: relative; display: flex; justify-content: center; margin-bottom: 10px; padding: 0 30px; }
+  /* Images, Both, Videos: the lit one is a pill that slides to where you tap, taking that one's colour on the way. */
+  .output-kinds { position: relative; --kind: var(--shared); }
+  .output-kinds[data-kind="image"] { --kind: var(--c-image); }
+  .output-kinds[data-kind="video"] { --kind: var(--c-video); }
+  .output-kinds button { position: relative; z-index: 1; padding: 4px 12px; transition: color .3s ease; }
+  /* .switch.output-kinds: stronger than .switch's own lit button, which would paint it the side's colour. */
+  .switch.output-kinds button.active { background: transparent; border-color: transparent; color: var(--kind); }
+  .kinds-thumb { position: absolute; top: 2px; bottom: 2px; left: 0; width: 0; border-radius: 999px; background: var(--panel-2);
+    border: 1px solid color-mix(in srgb, var(--kind) 45%, transparent); pointer-events: none;
+    transition: transform .32s cubic-bezier(.2, .8, .2, 1), width .32s cubic-bezier(.2, .8, .2, 1), border-color .32s ease; }
+  .kinds-thumb.still { transition: none; }
+  @media (prefers-reduced-motion: reduce) { .kinds-thumb, .output-kinds button { transition: none; } }
+  /* Collections' icon: at the left of the line, lit while they are shown; a tap hides or shows them. */
   .collections-toggle { position: absolute; left: 0; top: 50%; transform: translateY(-50%); width: auto; margin: 0; padding: 4px 6px;
     display: inline-flex; align-items: center; border: 0; background: none; color: var(--neutral); }
   .collections-toggle[hidden] { display: none; }
-  .collections-toggle.on { color: var(--accent); }
-  .output-filter-line select { width: 220px; max-width: 100%; padding: 5px 10px; font-size: .82rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .collections-toggle.on { color: var(--shared); }
+  /* The other view's switch: at the right of the line, plain, saying nothing of what it shows. */
+  .view-toggle { position: absolute; right: 0; top: 50%; transform: translateY(-50%); width: auto; margin: 0; padding: 4px 6px;
+    display: inline-flex; align-items: center; border: 0; background: none; color: var(--muted); opacity: .5; transition: color .25s ease, opacity .25s ease; }
+  /* On: Output's violet, as the collections icon; off: a quiet grey. */
+  .view-toggle.on { opacity: 1; color: var(--shared); }
   /* A film's poster says it plays. */
   .film-cover .play { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: #fff;
     font-size: 1.4rem; text-shadow: 0 1px 6px rgba(0, 0, 0, .8); pointer-events: none; }
@@ -499,13 +546,14 @@
   .empty { color: var(--muted); font-size: .88rem; text-align: center; padding: 22px 0; flex: 1; }
   .top { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; }
   .top a { color: var(--muted); font-size: .8rem; text-decoration: none; }
-  .top { align-items: center; margin-bottom: 14px; }
-  .top .switch { flex: none; }
+  /* The header: slim, one line of icons and the progress bar, close to the top and to what follows. */
+  .top { align-items: center; margin-bottom: 8px; }
+  .wrap { padding-top: 10px; }
   .top-icons { display: flex; gap: 12px; align-items: center; }
   .top-icons a { display: flex; opacity: .7; }
   .top-icons a:hover { opacity: 1; color: var(--text); }
   /* Private mode's key: lit in the accent while it is on. */
-  .top-icons a#privateToggle.on { opacity: 1; color: var(--accent); }
+  .top-icons a#privateToggle.on { opacity: 1; color: var(--page-accent); }
   .top .sub { margin-bottom: 6px; }
   details summary { cursor: pointer; font-size: .95rem; font-weight: 600; }
   .hidden { display: none !important; }
@@ -554,10 +602,28 @@
     background: transparent; color: var(--muted); border: 1px solid transparent; border-radius: 999px; font-weight: 500;
   }
   .switch button.active { background: var(--panel-2); color: var(--accent); border-color: color-mix(in srgb, var(--accent) 45%, transparent); font-weight: 600; }
-  /* Each mode has its own colour across the page, so you can tell which you're in at a glance. */
-  body.on-shorts { --accent: #ff0033; }
-  body.on-video { --accent: #4c8dff; }
-  body.on-image { --accent: #2fbf71; }
+  /* One theme: Output, Status and the rest are violet; Generate is its side's colour (Shorts red, Video blue, Image
+     green). --side is the side's colour; --page-accent, for what sits above every page (the side switch, the key,
+     the loading bar), is the side's while you are in Generate and violet elsewhere. */
+  /* The colours, once: each side's, and the violet the rest shares. Everything else reads these. */
+  :root { --c-shorts: #ff0033; --c-video: #4c8dff; --c-image: #2fbf71; --shared: #a07cff; }
+  body { --accent: var(--shared); --page-accent: var(--shared); }
+  body.on-shorts { --side: var(--c-shorts); }
+  body.on-video { --side: var(--c-video); }
+  body.on-image { --side: var(--c-image); }
+  body.in-generate { --page-accent: var(--side); }
+  #optionsCard, #goBar, .jump a[data-page="generate"] { --accent: var(--side); }
+  /* The preview and what opens over it (Upscale, its settings, Edit) in the colour of what it shows, as its pills. */
+  body[data-viewing="image"] { --item: var(--c-image); }
+  body[data-viewing="video"] { --item: var(--c-video); }
+  body[data-viewing="shorts"] { --item: var(--c-shorts); }
+  #imageViewer, #viewerUpscaleBar, #upscaleSettings, #editMenu { --accent: var(--item, var(--shared)); }
+  /* The side switch is Generate's alone: at its top on a desktop; a phone picks the side from the footer. */
+  .generate-switch { display: none; }
+  @media (min-width: 1000px) { .generate-switch { display: flex; width: max-content; margin: 0 auto 12px; } }
+  /* Output on Shorts is Shorts': red, as the preview of a Short is. */
+  body.on-shorts #videosCard, body.on-shorts .jump a#jumpResults { --accent: var(--c-shorts); }
+  body.on-shorts[data-page="output"] { --page-accent: var(--c-shorts); }
   .pipeline-form textarea { min-height: 84px; resize: vertical; }
   .prompt-label-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 12px 0 6px; }
   .prompt-label-row label { margin: 0; }
@@ -599,6 +665,9 @@
   .latent-custom .option-row { margin-bottom: 10px; }
   #videoLatentBox.unavailable .range-head, #videoLatentBox.unavailable select, #videoLatentBox.unavailable .count-stepper { opacity: .45; }
   .resolution-size { color: var(--muted); font-size: .78rem; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .resolution-size.would-be { opacity: .55; font-style: italic; }
+  .would-tag { font-style: normal; font-weight: 600; font-size: .68rem; padding: 0 5px; margin-right: 5px;
+    border: 1px solid currentColor; border-radius: 999px; }
   /* The chosen shape, drawn: at most 22 by 22, outlined. */
   .aspect-box { flex: none; box-sizing: border-box; border: 1.5px solid var(--muted); border-radius: 2px; }
   .aspect-box.hidden { visibility: hidden; }
@@ -824,6 +893,10 @@
   dialog.viewer .viewer-actions > button.plain { flex: 0 1 auto; min-width: 96px; max-width: none; padding: 6px 18px; font-size: .82rem;
     background: var(--panel-2); border: 1px solid var(--line); color: var(--text); }
   .viewer-tools[hidden] { display: none; }
+  /* Choosing from Output: Use beside Close, the two sharing its room. */
+  dialog.viewer .viewer-actions.choosing > button.plain { flex: 1 1 0; min-width: 0; max-width: none; padding-left: 8px; padding-right: 8px; }
+  dialog.viewer .viewer-actions > button.viewer-use { background: var(--accent); border-color: var(--accent); color: #fff; }
+  dialog.viewer .viewer-actions > button[hidden] { display: none; }
   /* The grid's button, left of Close: an icon, round as the tools above. */
   dialog.viewer .viewer-actions > button.viewer-grid { flex: none; width: 44px; padding: 0; background: transparent; color: #ddd; }
   dialog.viewer .viewer-actions > button.viewer-grid svg { width: 18px; height: 18px; }
@@ -836,7 +909,8 @@
   .thumb-grid button { position: relative; display: block; width: 100%; aspect-ratio: 1; margin: 0; padding: 0; overflow: clip;
     border: 0; border-radius: 8px; background: #000; cursor: pointer; touch-action: pan-y; content-visibility: auto; contain-intrinsic-size: auto 78px; }
   .thumb-grid-dialog .panel-dialog-body { overflow-y: auto; -webkit-overflow-scrolling: touch; }
-  .thumb-grid button img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  /* The whole picture, letterboxed on black: a portrait or a wide one isn't cut to the square. */
+  .thumb-grid button img { width: 100%; height: 100%; object-fit: contain; display: block; }
   /* Inside the picture, so the grid's edge never clips it. */
   .thumb-grid button.current { outline: 2px solid var(--accent); outline-offset: -2px; }
   /* Arrange, in the bottom-left corner on Close's line; lit while arranging. */
@@ -856,7 +930,7 @@
   .grid-ghost { margin: 0; padding: 0; border: 0; background: #000; border-radius: 8px; overflow: clip; box-shadow: 0 8px 24px rgba(0, 0, 0, .5);
     opacity: .95; outline: 2px dotted color-mix(in srgb, var(--accent) 55%, #000); outline-offset: -2px; }
   .grid-ghost .upscaled-badge { display: none; }
-  .grid-ghost img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  .grid-ghost img { width: 100%; height: 100%; object-fit: contain; display: block; }
   .thumb-grid-section { margin: 4px 0 6px; font-size: .78rem; font-weight: 600; color: var(--muted); }
   .thumb-grid + .thumb-grid-section { margin-top: 12px; }
   /* Collections: your own batches, above the generated ones, under a header that folds them away. */
@@ -871,10 +945,66 @@
   @media (prefers-reduced-motion: reduce) { .is-busy { animation: none; opacity: .6; } }
   /* Until drawn from a fresh answer (holdOutput), Output's lists keep their place but show nothing: gone at once, and
      back with a short fade, so the redraw isn't a jolt. */
-  #videos, #imageSets, #collections, #collectionsToggle, #cnav { transition: opacity .25s ease; }
+  #videos, #imageSets, #collections, #cnav { transition: opacity .25s ease; }
   body.output-pending #videos, body.output-pending #imageSets, body.output-pending #collections,
-  body.output-pending #collectionsToggle, body.output-pending #cnav { visibility: hidden; opacity: 0; transition: none; }
-  @media (prefers-reduced-motion: reduce) { #videos, #imageSets, #collections, #collectionsToggle, #cnav { transition: none; } }
+  body.output-pending #cnav { visibility: hidden; opacity: 0; transition: none; }
+  @media (prefers-reduced-motion: reduce) { #videos, #imageSets, #collections, #cnav { transition: none; } }
+  /* While the page waits for its answer: a bar sweeping along the top, and Output's rows drawn faintly where its own
+     will come. Both wait a moment before showing, so a quick answer never flickers them. */
+  .page-loader { position: fixed; top: 0; left: 0; right: 0; height: 3px; z-index: 1000; overflow: hidden; pointer-events: none;
+    display: none; animation: loader-in .3s ease .3s both; }
+  .page-loader::before { content: ""; position: absolute; top: 0; bottom: 0; width: 38%; border-radius: 0 3px 3px 0;
+    background: linear-gradient(90deg, transparent, var(--page-accent) 40%, var(--page-accent)); box-shadow: 0 0 10px var(--page-accent);
+    animation: loader-sweep 1.15s cubic-bezier(.45, 0, .25, 1) infinite; }
+  body.page-loading .page-loader, body.output-pending[data-page="output"] .page-loader { display: block; }
+  .output-loader { display: none; flex-direction: column; gap: 12px; margin-top: 6px; animation: loader-in .3s ease .3s both; }
+  body.output-pending .output-loader { display: flex; }
+  .output-loader > div { display: flex; gap: 12px; align-items: stretch; }
+  .output-loader > div:nth-child(2) i { animation-delay: .12s; }
+  .output-loader > div:nth-child(3) i { animation-delay: .24s; }
+  .output-loader i { display: block; border-radius: 10px; background: linear-gradient(100deg, var(--panel-2) 35%, #2b3040 50%, var(--panel-2) 65%);
+    background-size: 300% 100%; animation: loader-shimmer 1.5s ease-in-out infinite; }
+  .output-loader .thumb { width: 96px; height: 72px; flex: none; }
+  .output-loader .lines { flex: 1; display: flex; flex-direction: column; gap: 8px; justify-content: center; }
+  .output-loader .lines i { height: 11px; border-radius: 6px; }
+  .output-loader .lines i:first-child { width: 62%; height: 14px; }
+  .output-loader .lines i:last-child { width: 38%; }
+  /* Status, until the first answer: its lines drawn faintly where they will come (the same shimmer as Output's). */
+  .status-loader { display: none; flex-direction: column; gap: 10px; margin-top: 10px; animation: loader-in .3s ease .3s both; }
+  body.page-loading .status-loader { display: flex; }
+  body.page-loading #runCard .status-main, body.page-loading #runCard .status-head .status { visibility: hidden; }
+  .status-loader i { display: block; height: 11px; border-radius: 6px; background: linear-gradient(100deg, var(--panel-2) 35%, #2b3040 50%, var(--panel-2) 65%);
+    background-size: 300% 100%; animation: loader-shimmer 1.5s ease-in-out infinite; }
+  .status-loader i:nth-child(1) { width: 46%; height: 14px; }
+  .status-loader i:nth-child(2) { width: 72%; animation-delay: .1s; }
+  .status-loader .bar-line { width: 100%; height: 8px; margin-top: 4px; animation-delay: .2s; }
+  .status-loader i:nth-child(4) { width: 58%; animation-delay: .3s; }
+  .status-loader i:nth-child(5) { width: 34%; animation-delay: .4s; }
+  /* Nothing running or waiting: in Status, where the run's progress bar would be, a nudge to make something (a
+     different one each time it is idle again), in italics, a light passing over it now and then to catch the eye.
+     A tap makes it (makeFromNudge). */
+  .nudge { margin: 12px 0 4px; cursor: pointer; -webkit-tap-highlight-color: transparent;
+    font-size: 1rem; font-style: italic; font-weight: 500; line-height: 1.35; letter-spacing: .01em; text-align: center;
+    background: linear-gradient(100deg, var(--muted) 35%, #fff 48%, var(--shared) 52%, var(--muted) 65%); background-size: 300% 100%;
+    -webkit-background-clip: text; background-clip: text; color: transparent;
+    animation: nudge-in 1.4s ease 1s both, nudge-shine 6s ease-in-out 2.4s infinite; }
+  .nudge[hidden] { display: none; }
+  @keyframes nudge-shine { 0% { background-position: 100% 0; } 30%, 100% { background-position: 0 0; } }
+  /* Idle: after a second, it comes in slowly, rising a little as it does. */
+  @keyframes nudge-in { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+  /* A new stage: what it says eases in. The stages' marks change colour gently. */
+  .stage-in { animation: stage-in .4s ease both; }
+  @keyframes stage-in { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+  #runCard .step { transition: border-color .4s ease, color .4s ease, background-color .4s ease; }
+  @media (prefers-reduced-motion: reduce) { .stage-in { animation: none; } }
+  @media (prefers-reduced-motion: reduce) { .nudge { animation: none; background-position: 100% 0; } }
+  @keyframes loader-in { from { opacity: 0; } to { opacity: 1; } }
+  @keyframes loader-sweep { from { left: -38%; } to { left: 100%; } }
+  @keyframes loader-shimmer { from { background-position: 100% 0; } to { background-position: 0 0; } }
+  @media (prefers-reduced-motion: reduce) {
+    .page-loader::before { animation: none; left: 0; width: 100%; opacity: .6; }
+    .output-loader i, .status-loader i { animation: none; }
+  }
   .collections-fold { margin: 0 0 10px; }
   /* Open, a box of their own where they are: another background and a border, apart from the sets under it. */
   .collections:not([hidden]) { margin: 0 -11px 12px; padding: 10px 10px 2px; background: var(--bg); border: 1px solid var(--line); border-radius: 12px; }
@@ -980,10 +1110,8 @@
   .image-set h3 { margin: 0; font-size: .85rem; font-weight: 600; line-height: 1.3; overflow-wrap: anywhere; }
   .image-set-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; }
   .image-set-heading h3 { flex: 1; min-width: 0; }
-  .image-set-heading .nsfw-button { flex: none; width: 34px; height: 28px; padding: 0; margin: 0; display: inline-flex; align-items: center; justify-content: center; background: var(--panel-2); color: var(--muted); }
-  /* NSFW: films and image sets in one list, newest first (renderImageSets). */
-  body.nsfw-view .videos-card #imageSets { display: block !important; }
-  body.nsfw-view .videos-card #videos, body.nsfw-view .videos-card .vhead, body.nsfw-view .videos-card .cnav { display: none !important; }
+  /* Its tag button hangs over the line below rather than pushing it down: the details sit just under the title. */
+  .image-set-heading .nsfw-button { flex: none; width: 34px; height: 24px; padding: 0; margin: 0 0 -8px; display: inline-flex; align-items: center; justify-content: center; background: var(--panel-2); color: var(--muted); }
   /* A run that made nothing: a small word at the end of its title's line, and why under a fold. */
   .run-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; min-width: 0; }
   .run-head .what { min-width: 0; }
@@ -1000,17 +1128,17 @@
   .pills.more { cursor: pointer; padding-right: 30px; }
   .pills.open { max-height: none; padding-right: 0; }
   .pills:not(.open) .pill.spill { display: none; }
-  .pills.video { --pill: #4c8dff; }
-  .pills.image { --pill: #2fbf71; }
+  .pills.video { --pill: var(--c-video); }
+  .pills.image { --pill: var(--c-image); }
   .pill { flex: none; max-width: 100%; box-sizing: border-box; padding: 0 7px; border: 1px solid var(--line); border-radius: 999px; background: var(--panel-2);
     color: var(--muted); font-size: .66rem; line-height: 16px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .pill.diff { border-color: color-mix(in srgb, var(--pill) 60%, var(--panel)); background: color-mix(in srgb, var(--pill) 20%, var(--panel));
     color: color-mix(in srgb, var(--pill) 35%, var(--text)); font-weight: 600; }
   .pills.more:not(.open)::after { content: attr(data-more); position: absolute; right: 0; top: 0; padding: 0 2px 0 6px; background: var(--panel);
     color: var(--muted); font-size: .66rem; line-height: 18px; }
-  /* The workflow in silver, always: what made it, before what sets it apart. */
-  .pill.workflow { border-color: color-mix(in srgb, var(--neutral) 55%, var(--panel)); background: color-mix(in srgb, var(--neutral) 16%, var(--panel));
-    color: var(--neutral); font-weight: 600; }
+  /* The workflow in its kind's colour, always (image green, video blue): what made it, before what sets it apart. */
+  .pill.workflow { border-color: color-mix(in srgb, var(--pill, var(--neutral)) 75%, var(--panel)); background: color-mix(in srgb, var(--pill, var(--neutral)) 30%, var(--panel));
+    color: color-mix(in srgb, var(--pill, var(--neutral)) 25%, var(--text)); font-weight: 600; }
   /* The preview: one line, 90% of the box, growing out from the middle; the rest behind a tap. */
   .viewer-meta-details .pills { width: 96%; max-height: 18px; margin: 2px auto 0; justify-content: center; }
   .viewer-meta-details .pills.open { max-height: none; }
@@ -1031,6 +1159,9 @@
   .album-count { position: absolute; left: 4px; bottom: 4px; padding: 0 6px; border-radius: 999px; background: rgba(0, 0, 0, .7);
     color: #fff; font-size: .7rem; font-weight: 600; line-height: 1.5; pointer-events: none; }
   .album-side { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 6px; }
+  /* Beside the cover, above the buttons: its pills, up to three lines; the rest behind a tap, as elsewhere. */
+  .album-side .pills { margin-top: 0; max-height: 62px; }
+  .album-side .pills.open { max-height: none; }
   .album-strip { display: flex; gap: 4px; overflow-x: auto; scroll-snap-type: x proximity; scrollbar-width: none; overscroll-behavior-x: contain; }
   .album-strip::-webkit-scrollbar { display: none; }
   .album-strip a { position: relative; flex: none; scroll-snap-align: start; }
@@ -1056,6 +1187,22 @@
   .pipeline-form .option-row > input[type=number] { width: 6em; }
   .pipeline-form .option-row .option-choice, .pipeline-form .option-row .option-strength { margin: 0; }
   .option-sub { font-size: .8rem; opacity: .7; }
+  /* Under its switch while it's on (the LoRA setting): the file as wide as it can be, its strength at the right. */
+  .pipeline-form .option-below { flex-wrap: nowrap; margin: 4px 0 6px; }
+  /* Ticked, its box grows open, its height and opacity easing in; unticked, it folds away the same way. clip, not
+     hidden: hidden made it a scroll box of its own. */
+  .option-reveal { display: grid; grid-template-rows: 0fr; opacity: 0; transition: grid-template-rows .3s cubic-bezier(.2, .8, .2, 1), opacity .25s ease; }
+  .option-reveal.open { grid-template-rows: 1fr; opacity: 1; }
+  .option-reveal-in { min-height: 0; overflow: clip; }
+  @media (prefers-reduced-motion: reduce) { .option-reveal { transition: none; } }
+  .options-lora { margin: 4px 0 10px; }
+  .options-lora > .options-subtitle { margin-bottom: 0; }
+  .options-lora > .check { margin-top: 6px; }
+  .options-subtitle-what { text-transform: none; letter-spacing: 0; font-weight: 400; }
+  .pipeline-form .option-below select { flex: 1 1 auto; min-width: 0; }
+  .pipeline-form .option-below .option-strength { flex: none; width: 5.5em; }
+  /* What goes with a setting (Sampler, Scheduler, CFG with Steps): each on a line of its own under it. */
+  .pipeline-form .option-row .option-line { flex: 1 0 100%; display: flex; align-items: center; gap: 8px; }
   .shot-image { max-width: 100%; max-height: 300px; margin-top: 8px; border-radius: 8px; display: block; background: #000; }
   /* Phones: the page is one long column, so this stays at the bottom to get around it. */
   .stick {
@@ -1067,10 +1214,45 @@
        No paint containment: that clipped the side menu that grows up out of it. */
     transform: translateZ(0); will-change: transform; backface-visibility: hidden;
   }
-  /* The bars over the footer ease in and out, rather than jumping the page. */
-  .stick .strip { order: -1; padding-top: 6px; max-height: 3em; opacity: 1; overflow: hidden; cursor: pointer;
-    -webkit-tap-highlight-color: transparent; transition: max-height .28s ease, opacity .22s ease, padding .28s ease; }
-  .stick .strip.open { max-height: 9em; }
+  /* The progress bars sit in the header, left of its icons: one line each, and a tap grows the one tapped down over the
+     page. They float, so neither showing nor growing moves the page. */
+  .top-main { position: relative; flex: 1; min-width: 0; min-height: 26px; display: flex; align-items: center; }
+  .head-strips { position: absolute; top: 0; left: 0; right: 0; z-index: 30; display: flex; flex-direction: column; gap: 4px;
+    border-bottom: 1px solid transparent; border-radius: 0 0 12px 12px;
+    transition: left .32s cubic-bezier(.2, .8, .2, 1), right .32s cubic-bezier(.2, .8, .2, 1), padding .32s cubic-bezier(.2, .8, .2, 1), background-color .25s ease, border-color .32s ease, box-shadow .25s ease, opacity .25s ease, transform .25s ease, visibility .25s; }
+  .head-strips .strip { padding: 4px 0; overflow: hidden; cursor: pointer; -webkit-tap-highlight-color: transparent; }
+  .head-strips .strip[hidden] { display: none; }
+  /* Folded in the header, a quarter shorter than the room it has, in the middle of it; opened, the screen's full width
+     (syncOpened), square, its words kept off the edges; pinned, full width already. */
+  body:not(.strips-out) .head-strips:not(.opened) { left: 12.5%; right: 12.5%; }
+  .head-strips.opened { border-radius: 0; padding-left: 16px; padding-right: 16px; }
+  /* Folded: a thicker bar and its percentage; opened, the percentage gives way to the whole line, time left with it. */
+  .head-strips .strip .bar { height: 6px; border-radius: 3px; }
+  /* Folded, exactly the header line's height (4 + 18 + 4 = .top-main's 26px), so the bar sits level with the icons. */
+  .head-strips .strip-line { height: 18px; line-height: 18px; }
+  /* Opening swaps the percentage for the whole line by easing one narrow and out, the other wide and in: no jump. */
+  .head-strips .strip-line span { overflow: hidden; transition: max-width .32s cubic-bezier(.2, .8, .2, 1), opacity .22s ease; }
+  .head-strips .strip .strip-right { max-width: 0; opacity: 0; }
+  .head-strips .strip.open .strip-right { max-width: 70%; opacity: 1; }
+  .head-strips .strip .strip-pct { max-width: 5em; opacity: 1; }
+  .head-strips .strip.open .strip-pct, .strip-pct:empty { max-width: 0; opacity: 0; }
+  .head-strips .strip-line { gap: 0; }
+  .head-strips .strip-line .bar { margin-right: 10px; }
+  /* The details grow from nothing to their own height (rows 0fr to 1fr), not to a guessed maximum, so it eases all the way. */
+  .head-strips .strip-more { display: grid; grid-template-rows: 0fr; max-height: none; opacity: 0;
+    transition: grid-template-rows .32s cubic-bezier(.2, .8, .2, 1), opacity .25s ease; }
+  .head-strips .strip.open .strip-more { grid-template-rows: 1fr; max-height: none; opacity: 1; }
+  .head-strips .strip-more-in { min-height: 0; overflow: hidden; }
+  /* Changing place (syncPin): its own transitions wait, one animation moves it. */
+  .head-strips.pinning, .head-strips.pinning * { transition: none !important; }
+  /* Opened: no box of its own; the page's own background behind it, and a soft shadow under, so it reads over the page. */
+  .head-strips.opened { background: var(--bg); box-shadow: 0 12px 24px rgba(0, 0, 0, .5); }
+  /* Nothing going, or on Status: it eases away, and back when there is something to show (on going to another page). */
+  .head-strips.empty { opacity: 0; transform: translateY(-6px); visibility: hidden; pointer-events: none; }
+  /* Pinned and scrolled away from the top: along the top of the screen, the page's full width (syncPin eases it there). */
+  body.strips-out .head-strips { position: fixed; top: 0; left: 0; right: 0; padding: calc(4px + env(safe-area-inset-top)) 16px 4px;
+    background: var(--bg); border-bottom-color: var(--line); border-radius: 0; }
+  @media (prefers-reduced-motion: reduce) { .head-strips { transition: none; } }
   /* Folded, a bar is one line: how far along, and when it ends. Tapped, it says what is going on for a moment. */
   .strip-line { display: flex; align-items: center; gap: 10px; }
   .strip-line .bar { flex: 1; min-width: 0; margin-top: 0; }
@@ -1079,7 +1261,6 @@
   .strip.open .strip-more { max-height: 6em; opacity: 1; }
   .strip-more .strip-head { margin-top: 5px; }
   .strip-total:empty { display: none; }
-  .stick .strip[hidden] { display: block; max-height: 0; opacity: 0; padding-top: 0; padding-bottom: 0; }
   .wrap { padding-bottom: calc(var(--head, 130px) + 16px); }
   .stick { transition: opacity .2s ease, transform .2s ease; }
   .jump { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 5px; padding: 6px 16px; }
@@ -1169,21 +1350,27 @@
   .status-head #statusText:empty { display: none; }
   .status-head .status + .status-times { margin-left: -4px; }
   .switch button .dot { display: none; }
-  /* Status is shared by every side, so it is neutral; only its bars take the colour of the job they show (--job,
+  /* Status is shared by every side, so it is violet; its bars and steps take the colour of the job they show (--job,
      set while one runs: Shorts red, Video blue, Image green). Uploads are Shorts'. */
-  #runCard { --accent: var(--neutral); }
-  #runCard .bar > div, .stick #runStrip .bar > div { background: var(--job, var(--neutral)); }
-  #uploadBox, .stick #uploadStrip { --job: #ff0033; }
-  #runCard .step.now { border-color: var(--job, var(--neutral)); }
-  #runCard .step.done { border-color: var(--job, var(--neutral)); }
-  /* The side's own colour, kept before Status makes its accent neutral. */
-  body { --side-accent: var(--accent); }
+  #runCard { --accent: var(--shared); }
+  #runCard .bar > div { background: var(--job, var(--shared)); }
+  /* The header's bar is Status's own violet, whichever job it shows. */
+  #runStrip .bar > div { background: var(--shared); }
+  #uploadBox, #uploadStrip { --job: var(--c-shorts); }
+  #runCard .step.now { border-color: var(--job, var(--shared)); }
+  #runCard .step.done { border-color: var(--job, var(--shared)); }
+  /* The side's own colour, for the log's highlights. */
+  body { --side-accent: var(--side); }
   /* The log, and Status in the bottom bar, say what kind of job it is: its colour while one runs, else the side's. */
   #runCard .log-chip[aria-pressed="true"] { color: var(--job, var(--side-accent)); border-color: var(--job, var(--side-accent)); }
   #runCard .ln-more { color: var(--job, var(--side-accent)); }
   /* The log is shared too: its stage headers are silver, as Status's. */
   .ln.stage .x { color: var(--neutral); }
-  .jump a.run.active { border-color: var(--job, var(--accent)); }
+  /* Status and Output belong to no one side: a soft violet that sits with the blue and the green (Output on Shorts:
+     Shorts' red). Status's button is violet always, whatever is running. */
+  .side-menu button[data-output-kind="both"] { border-color: var(--shared); }
+  .jump a.run.active { border-color: var(--shared); }
+  body:not(.on-shorts) .jump a#jumpResults.active { border-color: var(--shared); }
   /* ComfyUI as an icon with a dot for its state; a tap shows the rest. */
   .comfy-status { position: relative; display: inline-flex; align-items: center; justify-content: center; width: 36px; height: 36px; padding: 0;
     margin: -6px -6px -6px auto; background: none; border: 0; border-radius: 8px; color: var(--muted); cursor: pointer; }
@@ -1208,10 +1395,14 @@
   .run-actions button[hidden] { display: none; }
   @media (max-width: 1279px) {
     .run-actions { position: relative; min-height: 36px; align-items: center; }
-    .run-actions:has(#finishedToggle.empty):not(:has(#skip:not([hidden]))) { display: none; }
-    .run-actions #finishedToggle { position: absolute; right: 0; width: auto; min-width: 36px; height: 36px; padding: 0 6px; border: 0; border-radius: 8px; gap: 4px; }
-    .run-actions #finishedToggle.empty { display: none; }
+    .run-actions:not(:has(#skip:not([hidden]))) { display: none; }
     #finishedCount { font-size: .75rem; }
+    /* In the header, Finished and the log are icons as the key and the gear are: the same quiet grey, no box of their own.
+       Finished only while there is something in it. */
+    .top-icons .panel-icon { width: auto; height: auto; padding: 0; gap: 3px; color: var(--muted); opacity: .7; border-radius: 0; }
+    .top-icons .panel-icon svg { width: 18px; height: 18px; }
+    .top-icons .panel-icon:hover:not(:disabled), .top-icons .panel-icon:focus-visible { opacity: 1; color: var(--text); background: none; }
+    .top-icons #finishedToggle.empty { display: none; }
   }
   .run-actions #stop { color: var(--err); border-color: color-mix(in srgb, var(--err) 45%, transparent); }
   .card > .section-title:first-child { margin-top: 0; }
@@ -1240,7 +1431,7 @@
   .jump a:active { transform: scale(.97); }
   @keyframes page-in { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
   @media (prefers-reduced-motion: reduce) {
-    .stick .strip, .strip-more, .go-bar, .jump a, .switch button, .tabs button { transition: none; }
+    .head-strips .strip, .strip-more, .go-bar, .jump a, .switch button, .tabs button { transition: none; }
     .dashboard > [data-page] { animation: none !important; }
   }
   /* Phones: one section at a time, chosen in the footer. */
@@ -1358,13 +1549,28 @@
 </style>
 
 <div class="top">
-  <div class="switch" role="tablist" aria-label="Pipeline">
-    <button type="button" id="switchShorts" data-pipeline="shorts" role="tab">Shorts<span class="dot on hidden"></span></button>
-    <button type="button" id="switchVideo" data-pipeline="video" role="tab">Video<span class="dot on hidden"></span></button>
-    <button type="button" id="switchImage" data-pipeline="image" role="tab">Image<span class="dot on hidden"></span></button>
+  <div class="top-main" id="topMain">
+    <div class="head-strips" id="headStrips">
+      <div class="strip" id="runStrip" role="button" tabindex="0" aria-expanded="false" hidden>
+        <div class="strip-line"><div class="bar"><div id="runStripBar"></div></div><span class="strip-pct" id="runStripPct"></span><span class="strip-right" id="runStripRight"></span></div>
+        <div class="strip-more"><div class="strip-more-in">
+          <div class="strip-head"><b id="runStripText"></b></div>
+          <div class="hint status-lines" id="runStripHint"></div>
+          <div class="hint strip-total" id="runStripTotal"></div>
+        </div></div>
+      </div>
+      <div class="strip only-shorts" id="uploadStrip" role="button" tabindex="0" aria-expanded="false" hidden>
+        <div class="strip-line"><div class="bar"><div id="uploadStripBar"></div></div><span class="strip-pct" id="uploadStripPct"></span><span class="strip-right" id="uploadStripRight"></span></div>
+        <div class="strip-more"><div class="strip-more-in">
+          <div class="strip-head"><b id="uploadStripText"></b></div>
+          <div class="hint status-lines" id="uploadStripHint"></div>
+          <div class="hint strip-total" id="uploadStripTotal"></div>
+        </div></div>
+      </div>
+    </div>
   </div>
   <div class="top-icons" id="topIcons">
-    <a href="#" id="privateToggle" role="button" aria-pressed="false" aria-label="Private mode (NSFW)" title="Private mode (NSFW): off"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="7.5" cy="15.5" r="4.5"/><path d="M10.7 12.3 21 2M16 7l3 3M18.5 4.5l2 2"/></svg></a>
+    <a href="#" id="privateToggle" role="button" aria-pressed="false" aria-label="Private mode (NSFW)" title="Private mode (NSFW): off"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="2" fill="currentColor"/></svg></a>
     <a href="#" id="settingsBtn" role="button" aria-haspopup="dialog" aria-label="Settings" title="Settings"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg></a>
   </div>
 </div>
@@ -1374,24 +1580,8 @@
   <nav class="jump" id="jump" aria-label="Sections">
     <a href="#runCard" data-page="status" class="run">Status</a>
     <a href="#optionsCard" data-page="generate">Generate</a>
-    <a href="#videosCard" data-page="output" id="jumpResults">Videos</a>
+    <a href="#videosCard" data-page="output" id="jumpResults">Output</a>
   </nav>
-  <div class="strip" id="runStrip" role="button" tabindex="0" aria-expanded="false" hidden>
-    <div class="strip-line"><div class="bar"><div id="runStripBar"></div></div><span id="runStripRight"></span></div>
-    <div class="strip-more">
-      <div class="strip-head"><b id="runStripText"></b></div>
-      <div class="hint status-lines" id="runStripHint"></div>
-      <div class="hint strip-total" id="runStripTotal"></div>
-    </div>
-  </div>
-  <div class="strip only-shorts" id="uploadStrip" role="button" tabindex="0" aria-expanded="false" hidden>
-    <div class="strip-line"><div class="bar"><div id="uploadStripBar"></div></div><span id="uploadStripRight"></span></div>
-    <div class="strip-more">
-      <div class="strip-head"><b id="uploadStripText"></b></div>
-      <div class="hint status-lines" id="uploadStripHint"></div>
-      <div class="hint strip-total" id="uploadStripTotal"></div>
-    </div>
-  </div>
   <div class="go-bar" id="goBar" hidden>
     <div class="go-error" id="goError" role="alert" hidden></div>
     <div class="go-eta" id="goBarEta"></div>
@@ -1415,10 +1605,12 @@
       <span class="dot" id="comfyDot"></span>
     </button>
   </div>
+  <div class="status-loader" aria-hidden="true"><i></i><i></i><i class="bar-line"></i><i></i><i></i></div>
   <div class="status-main">
   <div class="hint gpu" id="gpuLine"></div>
   <button type="button" class="current-work" id="currentWork" aria-haspopup="dialog" title="What it renders with" hidden></button>
   <div class="current-work-size" id="currentWorkSize" hidden><span id="currentWorkflow"></span><span id="currentResolution"></span></div>
+  <div class="nudge" id="nudge" role="button" tabindex="0" title="Make it: on Image, with your starred preset" hidden></div>
   <div class="progress" id="runProgress" hidden>
     <div class="strip-head"><b id="runProgressText"></b><span id="runProgressRight"></span></div>
     <div class="hint eta-detail" id="etaDetail" hidden></div>
@@ -1498,6 +1690,12 @@
 </div>
 
 <div class="options-col" id="optionsCard" data-page="generate">
+<!-- The side to make on: a desktop has no footer to choose it from, so it is here, at the top of Generate. -->
+<div class="switch generate-switch" role="tablist" aria-label="Pipeline">
+  <button type="button" id="switchShorts" data-pipeline="shorts" role="tab">Shorts<span class="dot on hidden"></span></button>
+  <button type="button" id="switchVideo" data-pipeline="video" role="tab">Video<span class="dot on hidden"></span></button>
+  <button type="button" id="switchImage" data-pipeline="image" role="tab">Image<span class="dot on hidden"></span></button>
+</div>
 <form class="card pipeline-form only-shorts" id="formShorts">
   <div class="workflow-top preset-top">
     <div class="preset-head"><label for="shortsPreset">Preset</label><span class="preset-head-actions"><button type="button" class="preset-default" data-preset-default="shorts" aria-pressed="false" hidden><svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M12 2.5l2.9 6 6.6.9-4.8 4.6 1.2 6.5L12 17.4l-5.9 3.1 1.2-6.5L2.5 9.4l6.6-.9z"/></svg></button><button type="button" class="preset-save" data-preset-save="shorts" hidden>Save as preset</button></span></div>
@@ -1989,9 +2187,12 @@
 
 <div class="card videos-card" id="videosCard" data-page="output">
   <div class="choose-banner" id="chooseBanner" hidden><span id="chooseBannerText"></span><button type="button" class="ghost" id="chooseCancel">Cancel</button></div>
-  <div class="output-filter-line">
-    <button type="button" class="collections-toggle not-shorts" id="collectionsToggle" aria-expanded="false" aria-controls="collections" title="Collections" hidden><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="8" width="14" height="12" rx="2"/><path d="M7 5h12a2 2 0 0 1 2 2v9"/></svg></button>
-    <select id="outputFilter" aria-label="Filter output"><option value="">All workflows</option><option value="__nsfw__">NSFW</option></select>
+  <div class="output-filter-line not-shorts">
+    <button type="button" class="collections-toggle" id="collectionsToggle" aria-expanded="true" aria-controls="collections" title="Collections" aria-label="Collections" hidden><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="8" width="14" height="12" rx="2"/><path d="M7 5h12a2 2 0 0 1 2 2v9"/></svg></button>
+    <div class="switch output-kinds" id="outputKinds" role="tablist" aria-label="Show">
+      <span class="kinds-thumb" id="kindsThumb" aria-hidden="true"></span><button type="button" role="tab" data-kind="image">Images</button><button type="button" role="tab" data-kind="both">Both</button><button type="button" role="tab" data-kind="video">Videos</button>
+    </div>
+    <button type="button" class="view-toggle" id="viewToggle" aria-pressed="false" aria-label="View"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="2" fill="currentColor"/></svg></button>
   </div>
   <div class="vhead">
     <div class="tabs only-shorts">
@@ -2001,10 +2202,15 @@
     <button type="button" class="ghost" id="openFolder" title="Open this tab's folder in File Explorer." {% if not can_open_folders %}hidden{% endif %}>Open folder</button>
     <button type="button" class="only-shorts" id="uploadAll" {% if not can_upload %}disabled title="Set the YouTube keys in .env first (run scripts/authorize_youtube.py once)."{% endif %}>Upload all</button>
   </div>
+  <div class="output-loader" aria-hidden="true">
+    <div><i class="thumb"></i><div class="lines"><i></i><i></i><i></i></div></div>
+    <div><i class="thumb"></i><div class="lines"><i></i><i></i><i></i></div></div>
+    <div><i class="thumb"></i><div class="lines"><i></i><i></i><i></i></div></div>
+  </div>
   <div class="collections not-shorts" id="collections" hidden></div>
-  <div class="carousel not-image" id="videos"></div>
-  <div class="only-image" id="imageSets"></div>
-  <div class="cnav not-image" id="cnav" hidden>
+  <div class="carousel only-shorts" id="videos"></div>
+  <div class="not-shorts" id="imageSets"></div>
+  <div class="cnav only-shorts" id="cnav" hidden>
     <button type="button" id="prevVid" aria-label="Previous video">‹</button>
     <span id="vidPos"></span>
     <button type="button" id="nextVid" aria-label="Next video">›</button>
@@ -2052,6 +2258,7 @@
   </div>
   <label class="settings-check"><input type="checkbox" id="lowPriority"><span>Run generation at lower priority<small>The pipeline and ComfyUI give way to your other programs, so the PC stays responsive while it renders.</small></span></label>
   <label class="settings-check"><input type="checkbox" id="privateMode"><span>Private mode<small>What you make is tagged NSFW, and Output opens on the NSFW filter. Stays on until you turn it off.</small></span></label>
+  <label class="settings-check"><input type="checkbox" id="pinProgress"><span>Pin the progress bar<small>Scrolled away from the top, the progress bar stays in sight, stretched along the top of the screen.</small></span></label>
   <label class="settings-check"><input type="checkbox" id="geminiTitles"><span>Gemini titles<small>Each new film and image set gets a short descriptive title from Gemini, based on its prompt; its files are named by it too. Uses one Gemini call per run. When Gemini refuses the prompt (it blocks NSFW ones), the local model titles it instead, which first frees ComfyUI's models and takes a little longer. If both fail, it keeps its usual title.</small></span></label>
   <label class="settings-check"><input type="checkbox" id="poweroff"><span>Shut down the PC when the queue is empty<small id="poweroffNote">This session only: it isn't saved. You get a minute to cancel it.</small></span></label>
   <div class="settings-group" id="localLlmTitle">Local LLM model</div>
@@ -2065,6 +2272,8 @@
   <div class="settings-row"><label for="defaultImage">Image</label><select id="defaultImage" data-side="image"></select></div>
   <div class="settings-group" id="editPresetTitle">Image edit (the pen in the viewer)</div>
   <div class="settings-row"><select id="editPreset" aria-labelledby="editPresetTitle"></select></div>
+  <div class="settings-group" id="editVideoPresetTitle">Video from image (the pen in the viewer)</div>
+  <div class="settings-row"><select id="editVideoPreset" aria-labelledby="editVideoPresetTitle"></select></div>
   <div class="hint">The image preset Edit opens Generate with, the picture as image 1.</div>
   <div class="settings-group">URL's</div>
   <div class="settings-row url-row"><span class="url-name">Local</span><code>{{ phone_url }}</code><button type="button" class="copy-url" data-url="{{ phone_url }}">Copy</button></div>
@@ -2202,9 +2411,17 @@
     </div>
     <div class="viewer-actions">
       <button type="button" class="viewer-grid" id="viewerGrid" aria-label="All of them" title="All of them, small: tap one to open it"></button>
+      <button type="button" class="plain viewer-use" id="viewerUse" hidden title="Put this in the box you're choosing for">Use</button>
       <button type="button" class="plain" id="viewerClose">Close</button>
       <button type="button" class="viewer-grid" id="viewerMove" aria-label="Move to a collection" title="Move it to a collection"></button>
     </div>
+  </div>
+</dialog>
+<dialog id="editMenu" class="panel-dialog upscale-dialog edit-menu" aria-label="Edit">
+  <div class="upscale-head"><span>Edit</span></div>
+  <div class="upscale-methods">
+    <button type="button" data-edit-to="image" style="--side:var(--c-image)" title="Edit it on Image, with the edit preset chosen in Settings">Edit image</button>
+    <button type="button" data-edit-to="video" style="--side:var(--c-video)" title="A video from it on Video, with the video preset chosen in Settings">Make a video</button>
   </div>
 </dialog>
 <dialog id="pillsMenu" class="panel-dialog upscale-dialog pills-menu" aria-label="Setup">
@@ -2566,6 +2783,7 @@ for (const id of ['clipsRange', 'secondsRange']) {
 // --- Videos ---
 function esc(s) { return s.replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
 const CAN_UPLOAD = {{ can_upload | tojson }};
+const CAN_OPEN_FOLDERS = {{ can_open_folders | tojson }};
 const NO_KEYS = 'Set the YouTube keys in .env first (run scripts/authorize_youtube.py once).';
 let busy = false;  // An upload is in progress or queued, or a run is uploading its own video: a new one waits.
 let uploadingNow = new Set(), uploadQueued = new Set();  // Videos an upload has already claimed.
@@ -2600,38 +2818,77 @@ function unclaimedVideos() {
   return lastVideos.output.filter(v => !uploadingNow.has(v.name) && !uploadQueued.has(v.name));
 }
 
-// --- Output, one workflow at a time if you like ---
-let outputFilter = '';
-const NSFW_FILTER = '__nsfw__';
+// --- Output: images and videos in one list, or either alone, or the collections; Shorts on its own ---
+// Shorts' output is Shorts' (pipeline === 'shorts'); the others show what outputKind says, whichever side Generate is on.
+const OUTPUT_KINDS = ['both', 'image', 'video'];
+const OUTPUT_KIND_KEY = 'gen-center.outputKind';
+let outputKind = 'both';
+try { const kept = localStorage.getItem(OUTPUT_KIND_KEY); if (OUTPUT_KINDS.includes(kept)) outputKind = kept; } catch (e) {}
+// The other view (NSFW): only what is tagged, and nothing tagged anywhere else. Never on Shorts.
+let nsfwView = false;
 function filtered(list) {
-  return list.filter(item => outputFilter === NSFW_FILTER ? !!item.nsfw : !item.nsfw && (!outputFilter || item.model === outputFilter));
+  return list.filter(item => nsfwView ? !!item.nsfw : !item.nsfw);
 }
-// The filter offers the workflows there is output from, here.
-function syncFilter(list) {
-  const models = [...new Set(list.filter(item => !item.nsfw).map(item => item.model).filter(Boolean))].sort();
-  const select = $('outputFilter'), key = pipeline + '|' + models.join('|');
-  if (outputFilter && outputFilter !== NSFW_FILTER && !models.includes(outputFilter)) outputFilter = '';
-  if (pipeline === 'shorts' && outputFilter === NSFW_FILTER) outputFilter = '';
-  if (select.dataset.key !== key) {
-    select.dataset.key = key;
-    select.innerHTML = '<option value="">All workflows</option>' + (pipeline !== 'shorts' ? '<option value="__nsfw__">NSFW</option>' : '')
-      + models.map(m => `<option value="${esc(m)}">${esc(m)}</option>`).join('');
+function showsImages() { return pipeline !== 'shorts' && (outputKind === 'both' || outputKind === 'image'); }
+function showsFilms() { return pipeline !== 'shorts' && (outputKind === 'both' || outputKind === 'video'); }
+function setOutputKind(kind) {
+  if (!OUTPUT_KINDS.includes(kind)) return;
+  outputKind = kind;
+  try { localStorage.setItem(OUTPUT_KIND_KEY, kind); } catch (e) {}
+  redrawFiltered();
+}
+function setNsfwView(on) {
+  if (pipeline === 'shorts') on = false;
+  if (nsfwView === on) return;
+  nsfwView = on;
+  redrawFiltered();
+}
+$('outputKinds').addEventListener('click', e => {
+  const button = e.target.closest && e.target.closest('[data-kind]');
+  if (button) setOutputKind(button.dataset.kind);
+});
+$('viewToggle').addEventListener('click', () => setNsfwView(!nsfwView));
+function syncOutputLine() {
+  if (pipeline === 'shorts') nsfwView = false;
+  $('outputKinds').dataset.kind = outputKind;
+  for (const button of $('outputKinds').querySelectorAll('[data-kind]')) {
+    const on = button.dataset.kind === outputKind;
+    button.classList.toggle('active', on);
+    button.setAttribute('aria-selected', String(on));
   }
-  select.value = outputFilter;
-  select.hidden = pipeline === 'shorts' && models.length < 2;
-  document.body.classList.toggle('nsfw-view', outputFilter === NSFW_FILTER);
+  placeKindsThumb();
+  $('viewToggle').classList.toggle('on', nsfwView);
+  $('viewToggle').setAttribute('aria-pressed', String(nsfwView));
+  // A folder of its own only for Images or Videos (Shorts: its tab's).
+  $('openFolder').hidden = !CAN_OPEN_FOLDERS || (pipeline !== 'shorts' && !['image', 'video'].includes(outputKind));
+  $('jumpResults').textContent = 'Output';
 }
-$('outputFilter').addEventListener('change', () => {
-  outputFilter = $('outputFilter').value;
+// The lit pill under the kind shown: it slides there. Placed without sliding the first time it can be measured
+// (the line is out of sight on Shorts and on a phone's other pages).
+function placeKindsThumb() {
+  const thumb = $('kindsThumb'), active = $('outputKinds').querySelector && $('outputKinds').querySelector('button.active');
+  if (!thumb || !active || !active.offsetWidth) return;
+  const first = !thumb.dataset.placed;
+  if (first) thumb.classList.add('still');
+  thumb.style.width = `${active.offsetWidth}px`;
+  thumb.style.transform = `translateX(${active.offsetLeft}px)`;
+  thumb.dataset.placed = '1';
+  if (first) requestAnimationFrame(() => requestAnimationFrame(() => thumb.classList.remove('still')));
+}
+window.addEventListener('resize', () => { const thumb = $('kindsThumb'); if (thumb) { delete thumb.dataset.placed; placeKindsThumb(); } });
+// All that the kind and the view decide: Output, its collections, and Finished (NSFW only in the NSFW view).
+function redrawFiltered() {
   $('videos').dataset.key = $('imageSets').dataset.key = '';
   renderVideos();
   renderImageSets();
-});
-// The films Output lists: what moved to a collection is only in its collection.
-function visibleFilms() { return filtered(lastVideos[outputFilter === NSFW_FILTER ? 'video' : folder] || []).filter(v => !v.collection); }
+  renderCollections();
+  if (lastFinished) renderFinished(...lastFinished);
+}
+// The films Output lists: Shorts' tab, or the made films. What moved to a collection is only in its collection.
+function visibleFilms() { return filtered(lastVideos[pipeline === 'shorts' ? folder : 'video'] || []).filter(v => !v.collection); }
 function renderVideos() {
-  syncFilter(pipeline === 'image' ? imageSets : (lastVideos[folder] || []));
-  const videos = visibleFilms();
+  syncOutputLine();
+  const videos = pipeline === 'shorts' ? visibleFilms() : [];
   $('countOutput').textContent = lastVideos.output.length;
   $('countUploaded').textContent = lastVideos.uploaded.length;
   $('uploadAll').hidden = folder !== 'output';
@@ -2640,15 +2897,15 @@ function renderVideos() {
     $('uploadAll').textContent = busy ? 'Queue upload all' : 'Upload all';
   }
 
-  const key = folder + '|' + outputFilter + '|' + !!choosingFor + '|' + JSON.stringify(videos.map(v => [v.name, v.mtime, v.topic, v.title, v.model, v.resolution, v.duration, v.size_mb, v.loras, v.h3_mode, v.h3_creativity, v.pills, v.nsfw]));
+  const key = pipeline + '|' + folder + '|' + !!choosingFor + '|' + JSON.stringify(videos.map(v => [v.name, v.mtime, v.topic, v.title, v.model, v.resolution, v.duration, v.size_mb, v.loras, v.h3_mode, v.h3_creativity, v.pills, v.nsfw]));
   // Keep players that already exist so a poll does not interrupt playback.
   if ($('videos').dataset.key !== key) {
     const was = (slides()[currentSlide()] || {}).dataset;
     $('videos').classList.add('as-list');
-    // NSFW: the films are listed with the image sets, in the order they were made (renderImageSets).
-    $('videos').innerHTML = outputFilter === NSFW_FILTER ? ''
+    // Shorts only: the made films are listed with the image sets, in the order they were made (renderImageSets).
+    $('videos').innerHTML = pipeline !== 'shorts' ? ''
       : videos.length ? videos.map(v => filmHtml(v, folder)).join('')
-      : `<div class="empty">${folder === 'uploaded' ? 'Nothing uploaded yet.' : folder === 'video' ? 'No films yet. Press Generate to make one.' : 'No videos waiting. Press Generate to make one.'}</div>`;
+      : `<div class="empty">${folder === 'uploaded' ? 'Nothing uploaded yet.' : 'No videos waiting. Press Generate to make one.'}</div>`;
     $('videos').dataset.key = key;
     requestAnimationFrame(() => markPillOverflow($('videos')));
     const back = was && slides().findIndex(s => s.dataset.name === was.name);
@@ -2748,7 +3005,7 @@ const onFilmClick = async e => {
   const d = e.target.dataset || {};
   const filmFolder = d.filmFolder || folder;
   if (d.nsfwVideo) {
-    await tagOutput('video', d.nsfwVideo, outputFilter !== NSFW_FILTER, e.target);
+    await tagOutput('video', d.nsfwVideo, !nsfwView, e.target);
   } else if (d.downloadFilm) {
     downloadFile(`/download/${filmFolder}/${encodeURIComponent(d.downloadFilm)}`);
   } else if (d.againFilm) {
@@ -2782,7 +3039,7 @@ $('uploadAll').addEventListener('click', () => {
   startUpload({}, $('uploadAll'));
 });
 $('openFolder').onclick = async () => {
-  const data = await (await fetch(`/folders/${folder}/open`, { method: 'POST' })).json();
+  const data = await (await fetch(`/folders/${pipeline === 'shorts' ? folder : outputKind}/open`, { method: 'POST' })).json();
   if (!data.ok) alert(data.error || 'Could not open the folder.');
 };
 $('prevVid').onclick = () => goToSlide(currentSlide() - 1);
@@ -2949,14 +3206,15 @@ function removeImage(box) {
 function syncImageInput() {
   const { min_images: low, max_images: high } = workflowTakes[$('videoWorkflow').value] || BUILT_IN_TAKES;
   const room = imageBoxCount(high);
-  const shown = imagesShown = Math.min(room, Math.max(imagesShown, low, 1));
+  // Images kept from a workflow that took more open their boxes again, as far as this one can take them.
+  const filled = imageBoxes().reduce((last, box, i) => (box.querySelector('input').files.length ? i + 1 : last), 0);
+  const shown = imagesShown = Math.min(room, Math.max(imagesShown, low, 1, filled));
   for (let number = imageBoxes().length + 1; number <= shown; number++) $('imageBoxes').insertAdjacentHTML('beforeend', imageBoxHtml(number));
   imageBoxes().forEach((box, i) => {
     const input = box.querySelector('input');
     box.hidden = i >= shown;
-    // Not sent, and what a workflow can't take doesn't wait there for the next one.
+    // Not sent; but kept, so going back to a workflow that takes it finds it still there.
     input.disabled = box.hidden;
-    if (box.hidden && input.value) clearImage(box);
     box.querySelector('label').textContent = imageLabel(i + 1, low, high);
     // An empty box after the first was opened by +, so it can be closed again.
     box.querySelector('[data-clear]').classList.toggle('hidden', !i && !input.files.length);
@@ -3004,6 +3262,7 @@ function mediaBoxHtml(number) {
     <div class="image-line">
       <input id="${name}" name="${name}" type="file" accept="video/*,audio/*">
       <select class="hidden" id="${name}_role" name="${name}_role" aria-label="What reference ${number} is for" title="What reference ${number} is for" disabled></select>
+      <button type="button" class="pick-output" data-pick="1" aria-label="Select reference ${number} from Output" title="Select a video from Output">${GALLERY_ICON}</button>
       <button type="button" class="hidden" data-clear="1" aria-label="Remove reference ${number}" title="Remove">✕</button>
     </div>
   </div>`;
@@ -3064,6 +3323,8 @@ function syncMediaInput() {
 }
 $('mediaBoxes').addEventListener('change', e => { showMedia(e.target.closest('.image-box')); syncMediaInput(); });
 $('mediaBoxes').addEventListener('click', e => {
+  const pick = e.target.closest && e.target.closest('[data-pick]');
+  if (pick) { chooseFromOutput(pick.closest('.image-box'), 'video', 'media'); return; }
   if (!e.target.dataset.clear) return;
   removeMedia(e.target.closest('.image-box'));
   syncMediaInput();
@@ -3096,6 +3357,7 @@ function formatBytes(n) {
 async function fillSettings() {
   $('lowPriority').checked = !!SETTINGS.low_priority;
   $('geminiTitles').checked = !!SETTINGS.gemini_titles;
+  $('pinProgress').checked = !!SETTINGS.pin_progress;
   $('h3Model').value = SETTINGS.h3_model;
   $('localLlmModel').value = SETTINGS.local_llm_model || SETTINGS.h3_model;
   reserveGb = reserveSaved();
@@ -3105,6 +3367,11 @@ async function fillSettings() {
     + (presets.image || []).map(p => `<option value="${esc(p.name)}">Preset: ${esc(p.name)}</option>`).join('');
   $('editPreset').value = edit;
   if ($('editPreset').value !== edit) $('editPreset').add(new Option(`Preset: ${edit} (gone)`, edit, false, true));
+  const toVideo = SETTINGS.edit_video_preset || '';
+  $('editVideoPreset').innerHTML = '<option value="">Video\'s own workflow</option>'
+    + (presets.video || []).map(p => `<option value="${esc(p.name)}">Preset: ${esc(p.name)}</option>`).join('');
+  $('editVideoPreset').value = toVideo;
+  if ($('editVideoPreset').value !== toVideo) $('editVideoPreset').add(new Option(`Preset: ${toVideo} (gone)`, toVideo, false, true));
   for (const side of ['shorts', 'video', 'image']) {
     const select = document.getElementById('default' + side[0].toUpperCase() + side.slice(1));
     const chosen = (SETTINGS.default_workflow || {})[side] || '';
@@ -3134,9 +3401,11 @@ $('settingsClose').addEventListener('click', () => settingsDialog.close());
 settingsDialog.addEventListener('click', e => { if (e.target === settingsDialog) settingsDialog.close(); });
 $('lowPriority').addEventListener('change', () => saveSettings({ low_priority: $('lowPriority').checked }));
 $('geminiTitles').addEventListener('change', () => saveSettings({ gemini_titles: $('geminiTitles').checked }));
+$('pinProgress').addEventListener('change', async () => { await saveSettings({ pin_progress: $('pinProgress').checked }); syncPin(); });
 $('h3Model').addEventListener('change', () => saveSettings({ h3_model: $('h3Model').value }));
 $('localLlmModel').addEventListener('change', () => saveSettings({ local_llm_model: $('localLlmModel').value }));
 $('editPreset').addEventListener('change', () => saveSettings({ edit_preset: $('editPreset').value }));
+$('editVideoPreset').addEventListener('change', () => saveSettings({ edit_video_preset: $('editVideoPreset').value }));
 // Free RAM ComfyUI keeps, in whole GB, 3 unless set. Saved with Set, used from ComfyUI's next start.
 const RESERVE_LEAST = 1, RESERVE_MOST = 24, RESERVE_DEFAULT = 3;
 let reserveGb = RESERVE_DEFAULT;
@@ -3221,16 +3490,20 @@ function syncComfyButton(c) {
   const text = comfyOff ? (c.starting ? 'Starting ComfyUI…' : 'Start ComfyUI') : 'Restart ComfyUI';
   if (!armed.restartComfy) label.textContent = text;
   $('restartComfy').disabled = comfyOff && (c.starting || !c.can_start);
+  // Starting: in yellow, as Restart panel is while it restarts.
+  $('restartComfy').classList.toggle('restarting', comfyOff && !!c.starting);
   if (comfyOff) $('restartComfy').classList.remove('pulse');
 }
 $('restartComfy').addEventListener('click', async () => {
   if (comfyOff) {
-    $('restartComfy').disabled = true;
+    const button = $('restartComfy'), failed = () => { button.disabled = false; button.classList.remove('restarting'); };
+    button.disabled = true;
+    button.classList.add('restarting');
     try {
       const body = await (await fetch('/comfyui/start', { method: 'POST' })).json();
-      if (!body.ok) { settingsNote(body.error || 'Could not start it.', true); $('restartComfy').disabled = false; }
+      if (!body.ok) { settingsNote(body.error || 'Could not start it.', true); failed(); }
       else { settingsNote(''); poll(); }
-    } catch (error) { settingsNote('Could not reach the panel. Try again.', true); $('restartComfy').disabled = false; }
+    } catch (error) { settingsNote('Could not reach the panel. Try again.', true); failed(); }
     return;
   }
   if (!confirmTap('restartComfy', 'Restart ComfyUI')) return;
@@ -3361,10 +3634,19 @@ function syncSize() {
   videoOffMp = sides ? base : null;
   showVideoStepper(base, 0.1, most / 1e6, sides, null, note, false);
 }
+// The size an upscale ends at; with it off, what twice each way would come to, faded and marked 2×, so the choice
+// can be weighed before turning it on.
+function showUpscaleEnd(out, end, off) {
+  const would = !end && off ? off.map(side => side * 2) : null;
+  if (would) out.innerHTML = `<span class="would-tag">2×</span>${would.join('×')}`;
+  else out.textContent = end ? end.join('×') : '';
+  out.classList.toggle('would-be', !!would);
+  out.title = would ? 'What a 2× upscale would make' : '';
+}
 function showVideoStepper(mp, least, top, sides, end, note, on) {
   // Resolution: the size it is made at. Latent upscale: the size it ends at.
   $('videoPixelSize').textContent = sides ? sides.join('×') : '';
-  $('videoLatentSize').textContent = end ? end.join('×') : '';
+  showUpscaleEnd($('videoLatentSize'), end, !on && sides);
   drawAspect($('videoAspectBox'), ...(sides || [0, 0]));
   $('videoMegapixelsValue').innerHTML = `${mp.toFixed(1)}<span class="mp-unit">MP</span>`;
   $('videoMegapixelsValue').title = on ? 'The size it ends at; the size it is made at follows. Tap for the most this workflow makes well' : 'Tap for the resolution as picked';
@@ -3770,17 +4052,18 @@ function removeSource(box) {
 }
 function syncImageSources() {
   const { min_images: low, max_images: high } = imageTakes();
-  const shown = sourcesShown = Math.min(high, Math.max(low, 1, sourcesShown));
+  const filled = sourceBoxes().reduce((last, box, i) => (box.querySelector('input').files.length ? i + 1 : last), 0);
+  const shown = sourcesShown = Math.min(high, Math.max(low, 1, sourcesShown, filled));
   for (let number = sourceBoxes().length + 1; number <= shown; number++) $('imageSources').insertAdjacentHTML('beforeend', sourceHtml(number));
   const compose = imageMode() === 'compose';
   sourceBoxes().forEach((box, i) => {
     const input = box.querySelector('input');
     box.hidden = i >= shown;
     // Not sent, and what a workflow can't take doesn't wait there for the next one.
+    // Not sent; but kept, so going back to a workflow that takes it finds it still there.
     input.disabled = box.hidden;
     const seed = box.querySelector('.source-seed');
     if (seed) seed.disabled = box.hidden;
-    if (box.hidden && input.value) clearSource(box, i === 0);
     const optional = i >= low ? ', optional' : '';
     box.querySelector('label').textContent = compose ? `Image ${i + 1} (reference${optional})`
       : i ? `Image ${i + 1} (optional)`
@@ -3797,18 +4080,18 @@ function chosenSources() { return sourceBoxes().filter(box => !box.hidden && box
 // --- One of your images in a box: Output opens to choose it, and a tap there puts it in the box ---
 // The box and side to return to after choosing an image.
 let choosingFor = null;
-function chooseFromOutput(box, side = 'image') {
-  const boxes = side === 'video' ? imageBoxes() : sourceBoxes();
+// kind: 'image' for an image box, 'media' for a reference box, which takes a film.
+function chooseFromOutput(box, side = 'image', kind = 'image') {
+  const boxes = kind === 'media' ? mediaBoxes() : side === 'video' ? imageBoxes() : sourceBoxes();
   if (!boxes.includes(box) || box.hidden || box.querySelector('input').disabled) return;
-  choosingFor = { box, side, filter: outputFilter };
-  resetOutputFilter();
-  $('chooseBannerText').textContent = `Tap an image to use it as image ${boxes.indexOf(box) + 1}.`;
+  choosingFor = { box, side, kind, outputKind };
+  resetOutputView();
+  $('chooseBannerText').textContent = kind === 'media' ? `Open a film and press Use for reference ${boxes.indexOf(box) + 1}.`
+    : `Open an image and press Use for image ${boxes.indexOf(box) + 1}.`;
   $('chooseBanner').hidden = false;
-  if (pipeline !== 'image') {
-    outputFilter = '';
-    setPipeline('image', false, true);
-    renderImageSets();
-  }
+  // Output shows only what goes in the box: images, or films for a reference. Generate stays on its side.
+  outputKind = kind === 'media' ? 'video' : 'image';
+  redrawFiltered();
   if (WIDE.matches) $('videosCard').scrollIntoView({ behavior: 'smooth' }); else showPage('output');
 }
 function stopChoosing() {
@@ -3816,11 +4099,12 @@ function stopChoosing() {
   $('chooseBanner').hidden = true;
 }
 function backToGenerate(side = 'image') {
-  if (choosingFor) desktopGenerateActive = false;
-  if (pipeline !== side) {
-    if (choosingFor) outputFilter = choosingFor.filter;
-    setPipeline(side, false, true);
+  if (choosingFor) {
+    desktopGenerateActive = false;
+    outputKind = choosingFor.outputKind;
+    redrawFiltered();
   }
+  if (pipeline !== side) setPipeline(side, false, true);
   $(side === 'video' ? 'videoGeneration' : 'imageGeneration').open = true;
   if (WIDE.matches) $('optionsCard').scrollIntoView({ behavior: 'smooth' }); else showPage('generate');
 }
@@ -4308,7 +4592,19 @@ function syncImageLimits() {
   if (plain && picked($('imageAspect')) && picked($('imageAspect')).disabled) $('imageAspect').value = 'image';
   if (picked($('imageMegapixels')) && picked($('imageMegapixels')).disabled && $('imageMegapixels').value === '1.6') $('imageMegapixels').value = 'image';
   if (most && $('imageMegapixels').value !== 'image' && +$('imageMegapixels').value > most) $('imageMegapixels').value = String(most);
+  startAtLeast(model);
   return most ? ` ${model.label} makes images up to ${most} MP.` : '';
+}
+// On coming to a model that does poorly small (MiniMax H3 Image, under 4 MP), the size starts at its least; it can
+// still be stepped down after. Only on the change, so it never fights the stepper.
+let imageLeastModel;
+function startAtLeast(model) {
+  const key = imageTakes().model || '';
+  if (key === imageLeastModel) return;
+  imageLeastModel = key;
+  const least = model && model.least_megapixels;
+  if (!least || imageUpscaleOn() || imageResolution().mp >= least - 1e-9) return;
+  imageStep = least;
 }
 const MP_STEP = 0.1;
 // Resolution, Upscale and the stepper as one block. The resolution is what the model makes (a screen exactly, an aspect
@@ -4403,7 +4699,7 @@ function syncMegapixels() {
   for (const id of ['imageUpscaleFinal', 'imageUpscaleScale', 'imageUpscaleMp']) $(id).disabled = !r.on;
   // Resolution: the size it is made at. Upscale: the size it ends at.
   $('imagePixelSize').textContent = r.sides ? r.sides.join('×') : '';
-  $('imageUpscaleSize').textContent = r.end ? r.end.join('×') : '';
+  showUpscaleEnd($('imageUpscaleSize'), r.end, !r.on && r.sides);
   if (r.on && r.sides) imageMadeAt = r.base;
   if (!r.on && r.sides) imageOffMp = r.sides[0] * r.sides[1] / MEGAPIXEL;
   if (r.sides) imageShown = r.sides;
@@ -4457,7 +4753,7 @@ function syncImageSize() {
   const upscale = !$('imageUpscaleBox').hidden;
   $('imageMegapixelsBox').classList.toggle('hidden', !sized && !imageUpscaleOn());
   $('imageResBlock').hidden = !sized && !upscale;
-  if (!sized && !imageUpscaleOn()) { $('imagePixelSize').textContent = ''; $('imageResNote').hidden = true; return; }
+  if (!sized && !imageUpscaleOn()) { $('imagePixelSize').textContent = $('imageUpscaleSize').textContent = ''; $('imageResNote').hidden = true; return; }
   const r = syncMegapixels();
   drawAspect($('imageAspectBox'), ...(r.sides || [0, 0]));
 }
@@ -4469,19 +4765,30 @@ function drawAspect(box, width, height) {
   box.style.width = `${Math.max(6, Math.round(width * scale))}px`;
   box.style.height = `${Math.max(6, Math.round(height * scale))}px`;
 }
+// A choice's options, each said as its label where it has one (a LoRA without .safetensors), sent as its value.
+function choiceOptions(option) {
+  const labels = option.labels || {};
+  return option.choices.map(value => `<option value="${esc(value)}"${value === option.default ? ' selected' : ''}>${esc(labels[value] ?? value)}</option>`).join('');
+}
+// What a switch has under it shows while it's on.
+function syncBelow(box) {
+  for (const under of box.querySelectorAll ? box.querySelectorAll('[data-below]') : []) {
+    const toggle = box.querySelector(`input[type=checkbox][name="${under.dataset.below}"]`);
+    if (toggle) under.classList.toggle('open', toggle.checked);
+  }
+}
 // The chosen workflow's own options (core/workflow_options.py). A checkbox sends a hidden 0 before its own 1, so leaving
 // it unticked still says so. Drawn again only for another workflow, so what you set stays while you fill in the rest.
 function imageOptionHtml(option, all) {
   const name = `opt_${option.id}`, locked = option.problem ? ' disabled' : '';
   const problem = option.problem ? `<div class="hint">Can't be changed: ${esc(option.problem)}</div>` : '';
-  // A setting that goes with another sits beside it, as Sampler, Scheduler and CFG do with Steps.
+  // A setting that goes with another follows it, each on a line of its own, as Sampler, Scheduler and CFG do Steps.
   const beside = child => {
     const off = child.problem ? ' disabled' : '';
     const label = `<span class="option-sub">${esc(child.label)}</span>`;
-    return child.kind === 'choice'
-      ? ` ${label}<select name="opt_${esc(child.id)}" aria-label="${esc(child.label)}" title="${esc(child.label)}" class="option-choice"${off}>${child.choices.map(value =>
-        `<option${value === child.default ? ' selected' : ''}>${esc(value)}</option>`).join('')}</select>`
-      : ` ${label}<input type="number" class="option-strength" name="opt_${esc(child.id)}" aria-label="${esc(child.label)}" title="${esc(child.label)}" min="${child.min}" max="${child.max}" step="${child.step}" value="${esc(child.default)}"${off}>`;
+    return `<span class="option-line">${child.kind === 'choice'
+      ? `${label}<select name="opt_${esc(child.id)}" aria-label="${esc(child.label)}" title="${esc(child.label)}" class="option-choice"${off}>${choiceOptions(child)}</select>`
+      : `${label}<input type="number" class="option-strength" name="opt_${esc(child.id)}" aria-label="${esc(child.label)}" title="${esc(child.label)}" min="${child.min}" max="${child.max}" step="${child.step}" value="${esc(child.default)}"${off}>`}</span>`;
   };
   const group = all.filter(other => other.parent === option.id);
   if (option.parent && all.some(other => other.id === option.parent)) return '';
@@ -4494,18 +4801,25 @@ function imageOptionHtml(option, all) {
   }
   if (option.kind === 'choice') {
     return `<div class="option-row"><label for="opt_${esc(option.id)}">${esc(option.label)}</label>
-      <select id="opt_${esc(option.id)}" name="${esc(name)}" class="option-choice"${locked}>${option.choices.map(value =>
-        `<option${value === option.default ? ' selected' : ''}>${esc(value)}</option>`).join('')}</select>${group.map(beside).join('')}</div>`;
+      <select id="opt_${esc(option.id)}" name="${esc(name)}" class="option-choice"${locked}>${choiceOptions(option)}</select>${group.map(beside).join('')}</div>`;
   }
   if (option.kind === 'number') {
     return `<div class="option-row"><label for="opt_${esc(option.id)}">${esc(option.label)}</label>
       <input type="number" id="opt_${esc(option.id)}" name="${esc(name)}" min="${option.min}" max="${option.max}" step="${option.step}" value="${esc(option.default)}"${locked}>${group.map(beside).join('')}</div>`;
   }
+  if (option.kind === 'switch' && option.below) {
+    // What goes with it on a line under it, there only while it's on: the LoRA setting's file (as the resolution's
+    // picker, the width it has) and its strength at the right.
+    const under = all.filter(other => other.parent === option.id).map(child => child.kind === 'choice'
+      ? `<select name="opt_${esc(child.id)}" aria-label="${esc(child.label)}" title="${esc(child.label)}" class="option-choice"${locked}>${choiceOptions(child)}</select>`
+      : `<input type="number" class="option-strength" name="opt_${esc(child.id)}" aria-label="${esc(child.label)}" title="${esc(child.label)}" min="${child.min}" max="${child.max}" step="${child.step}" value="${esc(child.default)}"${locked}>`).join('');
+    return `<label class="check"><input type="hidden" name="${esc(name)}" value="0"><input type="checkbox" name="${esc(name)}" value="1"${option.default === '1' ? ' checked' : ''}${locked}>
+      <span>${esc(option.label)}${problem}</span></label><div class="option-reveal${option.default === '1' ? ' open' : ''}" data-below="${esc(name)}"><div class="option-reveal-in"><div class="options-box option-row option-below">${under}</div></div></div>`;
+  }
   if (option.kind === 'switch') {
     // What goes with it, such as a LoRA's file and strength with Enable LoRA, beside it.
     const choices = all.filter(other => other.parent === option.id).map(child => child.kind === 'choice'
-      ? ` <select name="opt_${esc(child.id)}" aria-label="${esc(child.label)}" title="${esc(child.label)}" class="option-choice">${child.choices.map(value =>
-        `<option${value === child.default ? ' selected' : ''}>${esc(value)}</option>`).join('')}</select>`
+      ? ` <select name="opt_${esc(child.id)}" aria-label="${esc(child.label)}" title="${esc(child.label)}" class="option-choice">${choiceOptions(child)}</select>`
       : ` <input type="number" class="option-strength" name="opt_${esc(child.id)}" aria-label="${esc(child.label)}" title="${esc(child.label)}" min="${child.min}" max="${child.max}" step="${child.step}" value="${esc(child.default)}">`).join('');
     return `<label class="check"><input type="hidden" name="${esc(name)}" value="0"><input type="checkbox" name="${esc(name)}" value="1"${option.default === '1' ? ' checked' : ''}${locked}>
       <span>${esc(option.label)}${choices}${problem}</span></label>`;
@@ -4517,6 +4831,32 @@ function imageOptionHtml(option, all) {
   }
   return '';
 }
+// Steps, Sampler, Scheduler and CFG: each on its line, its name a button that drops a short hint under it.
+const SAMPLING_OPTIONS = ['steps', 'sampler', 'scheduler', 'cfg'];
+const SAMPLING_HINTS = {
+  steps: 'How many times the model works over the picture. More takes longer and can add detail, up to a point. A turbo or distilled model is made for few (4 to 8).',
+  sampler: 'How each step is taken. euler is the safe choice; others (res_multistep, dpmpp_2m, er_sde) can come out sharper or need more steps.',
+  scheduler: 'How the noise is spread over the steps. simple suits most models; karras and beta spend more of them on fine detail.',
+  cfg: 'How hard it follows the prompt rather than its own idea. Turbo and distilled models are made for 1; higher follows harder, but can burn the colours.',
+};
+function samplingHtml(option) {
+  const name = `opt_${option.id}`, locked = option.problem ? ' disabled' : '';
+  const control = option.kind === 'choice'
+    ? `<select id="${esc(name)}" name="${esc(name)}" class="option-choice"${locked}>${choiceOptions(option)}</select>`
+    : `<input type="number" id="${esc(name)}" name="${esc(name)}" class="option-strength" min="${option.min}" max="${option.max}" step="${option.step}" value="${esc(option.default)}"${locked}>`;
+  const hint = [SAMPLING_HINTS[option.id], option.problem && `Can't be changed: ${option.problem}`].filter(Boolean).join(' ');
+  return `<div class="option-row sampling-line"><button type="button" class="res-info option-info" aria-expanded="false" title="What it does"><span>${esc(option.label)}</span><span class="res-info-mark" aria-hidden="true">i</span></button>${control}</div>`
+    + `<div class="res-hint option-hint" hidden>${esc(hint)}</div>`;
+}
+// A tap on its name drops its hint down; the next folds it away.
+document.addEventListener('click', e => {
+  const info = e.target.closest && e.target.closest('.option-info');
+  if (!info) return;
+  const hint = info.closest('.option-row').nextElementSibling;
+  const open = info.getAttribute('aria-expanded') !== 'true';
+  info.setAttribute('aria-expanded', String(open));
+  if (hint) hint.hidden = !open;
+});
 // Any form's: its section shows when the workflow has any. A way for the workflow to write its own prompt is chosen
 // with the LLM instead (syncImageLlm), so it isn't drawn here.
 function syncOptions(section, box, options, workflow = '') {
@@ -4526,15 +4866,23 @@ function syncOptions(section, box, options, workflow = '') {
   if ($(box).dataset.key === key) return;
   $(box).dataset.key = key;
   $(box).dataset.workflow = `${section}|${workflow}`;
-  // Turbo and Steps, wherever the workflow has them, sit under Advanced at the bottom.
+  // First, in a dark box of their own: Steps, Sampler, Scheduler and CFG, wherever the workflow has them. Then Use LoRA
+  // in its own; then the rest, turbo and the like after what the workflow is about. No Advanced heading.
   const draw = list => list.map(option => imageOptionHtml(option, options)).join('');
-  // Sampler, Scheduler and CFG go with Steps, even where the workflow has no steps of its own to set.
-  const orphans = options.some(option => option.parent === 'steps') && !options.some(option => option.id === 'steps');
-  const advanced = [...(orphans ? [{ id: 'steps', kind: 'group', label: 'Steps', advanced: true }] : []), ...options.filter(option => option.advanced)];
-  $(box).innerHTML = draw(options.filter(option => !option.advanced))
-    + (advanced.length ? `<div class="options-advanced"><div class="options-subtitle">Advanced</div>${draw(advanced)}</div>` : '');
+  const sampling = SAMPLING_OPTIONS.map(id => options.find(option => option.id === id)).filter(Boolean);
+  const lora = options.filter(option => option.id === 'lora' || option.parent === 'lora');
+  const speed = options.filter(option => option.speed);
+  const rest = options.filter(option => !sampling.includes(option) && !lora.includes(option) && !speed.includes(option));
+  // Two kinds of LoRA, each under a word on what it does: a style one changes the look, a speed one (lightning,
+  // turbo, n-step) makes it in fewer steps.
+  const heading = (text, what) => `<div class="options-subtitle">${text}<span class="options-subtitle-what"> · ${what}</span></div>`;
+  $(box).innerHTML = (sampling.length ? `<div class="options-box options-sampling">${sampling.map(samplingHtml).join('')}</div>` : '')
+    + (lora.length ? `<div class="options-lora">${heading('Style LoRA', 'changes the look')}${draw(lora)}</div>` : '')
+    + (speed.length ? `<div class="options-lora options-speed">${heading('Speed LoRA', 'fewer steps, faster')}${draw(speed)}</div>` : '')
+    + draw(rest.filter(option => !option.advanced)) + draw(rest.filter(option => option.advanced));
   $(box).optionList = options;
   restoreOptions($(box));
+  syncBelow($(box));
 }
 // A turbo switch has its own step count, so Steps shows the one that goes with it once it's switched.
 function followSwitch(box, changed) {
@@ -4568,7 +4916,7 @@ function restoreOptions(box) {
   }
 }
 for (const box of ['shortsOptionsBox', 'videoOptionsBox', 'imageOptionsBox']) {
-  $(box).addEventListener('change', e => { followSwitch($(box), e.target); rememberOptions($(box)); });
+  $(box).addEventListener('change', e => { followSwitch($(box), e.target); syncBelow($(box)); rememberOptions($(box)); });
   $(box).addEventListener('input', () => rememberOptions($(box)));
 }
 function syncImageOptions() {
@@ -4659,18 +5007,20 @@ $('imageUpscaleFactor').addEventListener('change', () => {
   syncImageSize();
 });
 // The workflow writing its own prompts: its prompt enhancer, or image to prompt.
-const ROLE_LABELS = { image_to_prompt: 'Image to prompt', prompt_enhancer: 'Prompt Enhancer' };
+const ROLE_LABELS = { image_to_prompt: 'Image to prompt', prompt_enhancer: 'Prompt enhancer' };
+// One with a name of its own (named), such as MiniMax H3 Image's "Prompt enhancer H3"; otherwise the usual one.
+function roleLabel(role) { return role.named ? role.label : ROLE_LABELS[role.id] || role.label; }
 function syncImageLlm() {
   const select = $('imageLlm');
   const roles = (baseImageTakes().options || []).filter(option => option.role && !option.problem);
-  const key = roles.map(option => option.id).join(',');
+  const key = roles.map(option => `${option.id}:${roleLabel(option)}`).join(',');
   if (select.dataset.roles === key) return;
   select.dataset.roles = key;
   const wanted = select.value;
   for (const option of [...(select.options || [])].filter(option => option.dataset && option.dataset.role)) option.remove();
   const order = Object.keys(ROLE_LABELS);
   for (const role of [...roles].sort((a, b) => order.indexOf(a.id) - order.indexOf(b.id))) {
-    select.insertAdjacentHTML('beforeend', `<option value="${esc(role.id)}" data-role="1">${esc(ROLE_LABELS[role.id] || role.label)}</option>`);
+    select.insertAdjacentHTML('beforeend', `<option value="${esc(role.id)}" data-role="1">${esc(roleLabel(role))}</option>`);
   }
   // What was chosen stays chosen: a workflow with its own prompt enhancer offers it, and never picks it by itself.
   if ([...(select.options || [])].some(option => option.value === wanted)) select.value = wanted;
@@ -4767,8 +5117,8 @@ function pillsHtml(pills) {
   // The workflow first and always in colour; the others in colour when they tell it apart from its siblings.
   return (pills || []).map(p => `<span class="pill${p.kind === 'workflow' ? ' workflow' : ''}${p.diff ? ' diff' : ''}">${esc(p.text)}</span>`).join('');
 }
-function pillsLine(pills, side) {
-  return pills && pills.length ? `<div class="pills ${side}" role="button" tabindex="0" title="Tap to show all">${pillsHtml(pills)}</div>` : '';
+function pillsLine(pills, side, lines = 2) {
+  return pills && pills.length ? `<div class="pills ${side}" data-lines="${lines}" role="button" tabindex="0" title="Tap to show all">${pillsHtml(pills)}</div>` : '';
 }
 // Which lines of pills hold more than fits (two lines in Output, one in the preview): they say how many more, and a
 // tap opens them.
@@ -4920,47 +5270,58 @@ function imageSetHtml(set) {
   const picture = (p, extra = '') => `<a href="/image-runs/${id}/files/${p.position}?v=${p.version}" data-view-set="${esc(set.id)}" data-view-position="${p.position}" title="${esc(p.title)}"${extra}><img loading="lazy" alt="${esc(p.title)}" src="/image-runs/${id}/thumbnails/${p.position}?v=${p.version}">${p.upscaled ? upscaledBadge(p.upscaled) : ''}`;
   // No download here: an image is downloaded from the preview.
   const actions = `<div class="image-set-actions">`
-    + `<button type="button" class="icon-btn" data-grid-set="${esc(set.id)}" title="All of them, small: tap one to open it" aria-label="All of them">${ICONS.grid}</button>`
     + `<button type="button" class="icon-btn" data-again-set="${esc(set.id)}" title="The same again: its settings in Generate, to change first" aria-label="The same again">${ICONS.config}</button>`
     + `<button type="button" class="icon-btn" data-shots="${esc(set.id)}" title="Prompts" aria-label="Prompts">${ICONS.enhanced}</button>`
     + `<button type="button" class="icon-btn del" data-delete-set="${esc(set.id)}" title="Delete" aria-label="Delete">${ICONS.trash}</button></div>`;
-  // Every set alike: its picture (an album's cover, with how many), and beside it the strip of the rest above its icons.
+  // Every set alike: its cover (with how many), and beside it its pills, up to three lines, above its icons. The cover
+  // opens the one picture, or all of them in the grid.
   const many = set.images.length > 1;
+  const cover = many ? `<a href="#" class="album-cover" data-grid-set="${esc(set.id)}" title="All of them, small: tap one to open it"><img loading="lazy" alt="${esc(set.images[0].title)}" src="/image-runs/${id}/thumbnails/${set.images[0].position}?v=${set.images[0].version}">${set.images[0].upscaled ? upscaledBadge(set.images[0].upscaled) : ''}`
+    : set.images.length ? picture(set.images[0], ' class="album-cover"') : '';
   const row = `
     <div class="image-set-row album">
-      ${set.images.length ? `${picture(set.images[0], ' class="album-cover"')}${!set.images[0].upscaled && set.images.some(p => p.upscaled) ? `<span class="upscaled-badge" role="img" aria-label="Some of this set are upscaled">${ICONS.upscale}</span>` : ''}${many ? `<span class="album-count">${set.images.length}</span>` : ''}</a>` : ''}
+      ${cover ? `${cover}${!set.images[0].upscaled && set.images.some(p => p.upscaled) ? `<span class="upscaled-badge" role="img" aria-label="Some of this set are upscaled">${ICONS.upscale}</span>` : ''}${many ? `<span class="album-count">${set.images.length}</span>` : ''}</a>` : ''}
       <div class="album-side">
-        ${many ? `<div class="album-strip">${set.images.slice(1).map(p => picture(p) + '</a>').join('')}</div>` : ''}
+        ${set.pills ? pillsLine(set.pills, 'image', 3) : ''}
         ${actions}
       </div>
     </div>`;
   return `
   <div class="image-set">
     <div class="image-set-heading"><h3>${esc(set.label)}</h3>${nsfwButton('image', set.id, !!set.nsfw)}</div>
-    <div class="meta">${[!set.pills && set.model && esc(set.model), set.resolutions?.length && esc(set.resolutions.join(', ')), outputSize(set.size_bytes), outputCount(set)].filter(Boolean).join(' · ')}</div>${set.pills ? pillsLine(set.pills, 'image') : `${lorasLine(set.loras)}${h3Line(set)}${upscaledLine(set)}`}
+    <div class="meta">${[madeOn(madeAt(set.id, set.mtime)), !set.pills && set.model && esc(set.model), set.resolutions?.length && esc(set.resolutions.join(', ')), outputSize(set.size_bytes), outputCount(set)].filter(Boolean).join(' · ')}</div>${set.pills ? '' : `${lorasLine(set.loras)}${h3Line(set)}${upscaledLine(set)}`}
     ${row}
   </div>`;
 }
 // When a set or film was made: its run's start, in its id (image_20261108_043935, run_20261108_035819). A file's own
 // time moves when it is made again, as a film stitched anew, and would list it among the newest.
+// An RTX upscale has its original's run, but is made when it is: among the newest, not back where the original is.
+const UPSCALED_FILM = /_upscaled(?:_\d+)?\.mp4$/;  // As run_state.UPSCALED
+const filmMadeAt = v => UPSCALED_FILM.test(v.name) ? v.mtime : madeAt(v.run || v.name, v.mtime);
 function madeAt(id, mtime) {
   const m = /(\d{4})(\d{2})(\d{2})_(\d{2})(\d{2})(\d{2})/.exec(id || '');
   return m ? new Date(+m[1], m[2] - 1, +m[3], +m[4], +m[5], +m[6]).getTime() / 1000 : mtime || 0;
 }
+// The day it was made, first on its details' line: "8 Nov", with the year when it isn't this one.
+function madeOn(seconds) {
+  if (!seconds) return '';
+  const day = new Date(seconds * 1000), months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  return `${day.getDate()} ${months[day.getMonth()]}${day.getFullYear() !== new Date().getFullYear() ? ` ${day.getFullYear()}` : ''}`;
+}
 function renderImageSets() {
-  const sets = filtered(imageSets);
-  const nsfw = outputFilter === NSFW_FILTER;
-  // NSFW: films too, so both are in one list in the order they were made (choosing an image for a box: images only).
-  const films = nsfw && !choosingFor ? visibleFilms() : [];
-  const key = outputFilter + JSON.stringify(sets.map(set => [set.id, set.label, set.total, set.images, set.model, set.loras, set.resolutions, set.size_bytes, set.generating, set.llm, set.h3_mode, set.h3_creativity, set.nsfw, set.mtime, set.pills]))
+  // Images and films in one list, in the order they were made: Both, or either alone.
+  const sets = showsImages() ? filtered(imageSets) : [];
+  const films = showsFilms() ? visibleFilms() : [];
+  const key = pipeline + outputKind + nsfwView + JSON.stringify(sets.map(set => [set.id, set.label, set.total, set.images, set.model, set.loras, set.resolutions, set.size_bytes, set.generating, set.llm, set.h3_mode, set.h3_creativity, set.nsfw, set.mtime, set.pills]))
     + JSON.stringify(films.map(v => [v.name, v.mtime, v.topic, v.title, v.model, v.resolution, v.duration, v.size_mb, v.loras, v.h3_mode, v.h3_creativity, v.run]));
   // Only when it changed, so a poll doesn't reload the pictures.
   if ($('imageSets').dataset.key === key) return;
   $('imageSets').dataset.key = key;
-  const items = [...sets.map(set => [madeAt(set.id, set.mtime), imageSetHtml(set)]), ...films.map(v => [madeAt(v.run || v.name, v.mtime), filmHtml(v, 'video')])];
-  if (nsfw) items.sort((a, b) => b[0] - a[0]);
+  const items = [...sets.map(set => [madeAt(set.id, set.mtime), imageSetHtml(set)]), ...films.map(v => [filmMadeAt(v), filmHtml(v, 'video')])];
+  items.sort((a, b) => b[0] - a[0]);
+  const none = { both: 'Nothing yet. Press Generate to make something.', image: 'No images yet. Press Generate to make some.', video: 'No videos yet. Press Generate to make one.' };
   $('imageSets').innerHTML = items.length ? items.map(item => item[1]).join('')
-    : `<div class="empty">${nsfw ? 'Nothing is tagged NSFW.' : 'No images yet. Press Generate to make some.'}</div>`;
+    : pipeline === 'shorts' ? '' : `<div class="empty">${nsfwView ? 'Nothing here.' : none[outputKind]}</div>`;
   requestAnimationFrame(() => markPillOverflow($('imageSets')));
 }
 // A narrower or wider page fits more or fewer pills on a line.
@@ -5369,12 +5730,11 @@ function collectionNeighbour(by) {
   const next = albums.images[albums.images.findIndex(p => p.set === viewing.id && p.position === viewing.position) + by];
   return next ? () => openViewer(next.set, next.position) : null;
 }
-// Shown as Output is: one with anything NSFW in it only in Private mode or under the NSFW filter, which shows only those.
+// Always above the list, off Shorts: one with anything NSFW in it only in the NSFW view, which shows only those.
 function shownCollections() {
-  if (pipeline === 'shorts' || (outputFilter && outputFilter !== NSFW_FILTER)) return [];
-  return collections.filter(c => c.items.length && (outputFilter === NSFW_FILTER ? c.nsfw : !c.nsfw || privateMode));
+  if (pipeline === 'shorts') return [];
+  return collections.filter(c => c.items.length && nsfwView === !!c.nsfw);
 }
-const COLLECTIONS_OPEN_KEY = 'gen-center.collectionsOpen';
 // Folded or open as it was left, on every device: kept with the collection (panel/collections.py).
 function collectionFolded(id) { const c = collections.find(other => other.id === id); return !!(c && c.folded); }
 function rememberCollectionFold(id, folded) {
@@ -5384,6 +5744,19 @@ function rememberCollectionFold(id, folded) {
   fetch(`/api/collections/${encodeURIComponent(id)}/fold`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ folded }) })
     .catch(() => {});
 }
+// Beside the cover, three of the rest at random (no pills here), each opening itself. Drawn again each time the
+// collection or the box of them is opened, so a different few show.
+function collectionStrip(collectionId) {
+  const albums = collectionAlbums(collectionId), id = esc(collectionId), first = albums.images[0];
+  const rest = [...albums.images.slice(first ? 1 : 0).map(p => `<a href="#" data-open-collection="${id}" data-col-set="${esc(p.set)}" data-col-position="${p.position}"><img loading="lazy" alt="" src="/image-runs/${encodeURIComponent(p.set)}/thumbnails/${p.position}?v=${p.version}">${p.upscaled ? upscaledBadge(p.upscaled) : ''}</a>`),
+    ...albums.films.slice(first ? 0 : 1).map(v => `<a href="#" data-open-collection="${id}" data-col-film="${esc(v.name)}"><img loading="lazy" alt="" src="${v.run ? `/runs/${encodeURIComponent(v.run)}/image` : `/posters/video/${encodeURIComponent(v.name)}`}"></a>`)];
+  for (let i = rest.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [rest[i], rest[j]] = [rest[j], rest[i]]; }
+  return rest.slice(0, 3).join('');
+}
+function reshuffleCollection(fold) {
+  const strip = fold.querySelector && fold.querySelector('.album-strip');
+  if (strip) strip.innerHTML = collectionStrip(fold.dataset.collection);
+}
 function collectionHtml(c) {
   const albums = collectionAlbums(c.id), id = esc(c.id);
   const first = albums.images[0], film = albums.films[0];
@@ -5391,17 +5764,16 @@ function collectionHtml(c) {
     : film ? (film.run ? `/runs/${encodeURIComponent(film.run)}/image` : `/posters/video/${encodeURIComponent(film.name)}`) : '';
   const count = [albums.images.length && `${albums.images.length} ${albums.images.length === 1 ? 'image' : 'images'}`,
     albums.films.length && `${albums.films.length} ${albums.films.length === 1 ? 'video' : 'videos'}`].filter(Boolean).join(' · ');
-  const strip = [...albums.images.slice(first ? 1 : 0).map(p => `<a href="#" data-open-collection="${id}" data-col-set="${esc(p.set)}" data-col-position="${p.position}"><img loading="lazy" alt="" src="/image-runs/${encodeURIComponent(p.set)}/thumbnails/${p.position}?v=${p.version}">${p.upscaled ? upscaledBadge(p.upscaled) : ''}</a>`),
-    ...albums.films.slice(first ? 0 : 1).map(v => `<a href="#" data-open-collection="${id}" data-col-film="${esc(v.name)}"><img loading="lazy" alt="" src="${v.run ? `/runs/${encodeURIComponent(v.run)}/image` : `/posters/video/${encodeURIComponent(v.name)}`}"></a>`)].join('');
+  const strip = collectionStrip(c.id);
   const total = albums.images.length + albums.films.length;
   return `<details class="image-set collection" data-collection="${id}"${collectionFolded(c.id) ? '' : ' open'}>
     <summary class="image-set-heading"><h3>${esc(c.name)}</h3><button type="button" class="icon-btn rename-btn" data-rename-collection="${id}" data-no-fold="1" title="Rename" aria-label="Rename">${ICONS.prompts}</button></summary>
     <div class="meta">${count}</div>
     <div class="image-set-row album">
-      ${cover ? `<a href="#" class="album-cover" data-open-collection="${id}"${first ? ` data-col-set="${esc(first.set)}" data-col-position="${first.position}"` : ` data-col-film="${esc(film.name)}"`}><img loading="lazy" alt="" src="${esc(cover)}">${total > 1 ? `<span class="album-count">${total}</span>` : ''}</a>` : ''}
+      ${cover ? `<a href="#" class="album-cover" ${total > 1 ? `data-grid-collection="${id}" title="All of them, small: tap one to open it"` : `data-open-collection="${id}"${first ? ` data-col-set="${esc(first.set)}" data-col-position="${first.position}"` : ` data-col-film="${esc(film.name)}"`}`}><img loading="lazy" alt="" src="${esc(cover)}">${total > 1 ? `<span class="album-count">${total}</span>` : ''}</a>` : ''}
       <div class="album-side">
         ${strip ? `<div class="album-strip">${strip}</div>` : ''}
-        <div class="image-set-actions"><button type="button" class="icon-btn" data-grid-collection="${id}" title="All of them, small: tap one to open it" aria-label="All of them">${ICONS.grid}</button><button type="button" class="icon-btn del" data-delete-collection="${id}" title="Delete it and all in it (tap twice)" aria-label="Delete">${ICONS.trash}</button></div>
+        <div class="image-set-actions"><button type="button" class="icon-btn del" data-delete-collection="${id}" title="Delete it and all in it (tap twice)" aria-label="Delete">${ICONS.trash}</button></div>
       </div>
     </div>
   </details>`;
@@ -5409,23 +5781,27 @@ function collectionHtml(c) {
 function renderCollections() {
   const shown = shownCollections(), box = $('collections');
   // Folded or not isn't in it: changed here, the page already shows it; changed elsewhere, the next time it is drawn.
-  const key = JSON.stringify([outputFilter, pipeline, privateMode, shown.map(c => [c.id, c.name, c.items, collectionAlbums(c.id).images.map(p => p.version)])]);
+  const key = JSON.stringify([nsfwView, pipeline === 'shorts', shown.map(c => [c.id, c.name, c.items, collectionAlbums(c.id).images.map(p => p.version)])]);
   if (box.dataset.key === key) return;
   box.dataset.key = key;
   box.innerHTML = shown.map(collectionHtml).join('');
   // Each folds as the headings do, and is remembered folded or not.
   if (box.querySelectorAll) for (const fold of box.querySelectorAll('details.collection')) {
     foldDetails(fold);
-    fold.addEventListener('toggle', () => rememberCollectionFold(fold.dataset.collection, !fold.open));
+    fold.addEventListener('toggle', () => {
+      if (fold.open) reshuffleCollection(fold);
+      rememberCollectionFold(fold.dataset.collection, !fold.open);
+    });
   }
+  // Shown or hidden as you left them (shown to begin with); the icon only when there are some.
   $('collectionsToggle').hidden = !shown.length;
   showCollections(shown.length > 0 && collectionsOpen(), false);
 }
-// Open or closed as you left it: closed to begin with.
+const COLLECTIONS_OPEN_KEY = 'gen-center.collectionsShown';
 function collectionsOpen() {
-  try { return localStorage.getItem(COLLECTIONS_OPEN_KEY) === '1'; } catch (e) { return false; }
+  try { return localStorage.getItem(COLLECTIONS_OPEN_KEY) !== '0'; } catch (e) { return true; }
 }
-// Opens or closes the box, its height easing as the headings' folds do (foldDetails).
+// Shows or hides the box, its height easing as the headings' folds do (foldDetails).
 function showCollections(open, animate = true) {
   const box = $('collections');
   $('collectionsToggle').classList.toggle('on', open);
@@ -5450,6 +5826,7 @@ function showCollections(open, animate = true) {
 $('collectionsToggle').addEventListener('click', () => {
   const open = $('collections').hidden;
   try { localStorage.setItem(COLLECTIONS_OPEN_KEY, open ? '1' : '0'); } catch (e) {}
+  if (open) for (const fold of $('collections').querySelectorAll('details.collection[open]')) reshuffleCollection(fold);
   showCollections(open);
 });
 $('collections').addEventListener('click', async e => {
@@ -5498,10 +5875,10 @@ function openMoveSheet() {
   const item = viewedItem();
   if (!item) return;
   const here = viewerCollection;
-  // In Private mode only those with NSFW in them: what is made then is NSFW, so it goes with its kind. Out of it, only
-  // those without, unless under the NSFW filter, where the NSFW ones can be seen too.
+  // Those with NSFW in them only under the NSFW filter. In Private mode only those: what is made then is NSFW, so it
+  // goes with its kind.
   const others = collections.filter(c => c.id !== here
-    && (privateMode ? c.nsfw : !c.nsfw || outputFilter === NSFW_FILTER));
+    && (!c.nsfw || nsfwView) && (!privateMode || c.nsfw));
   $('moveList').innerHTML = `<button type="button" class="move-new-pick" data-move-new="1">${ICONS.plus}New</button>`
     + others.map(c => `<button type="button" data-move-to="${esc(c.id)}"${c.nsfw ? ' class="nsfw" title="Has NSFW in it"' : ''}>${esc(c.name)}</button>`).join('');
   $('moveNewName').value = '';
@@ -5797,6 +6174,23 @@ async function openEditor() {
   reopened('image');
   backToGenerate();
 }
+// A video from this image: Video with the preset chosen in Settings (else its own workflow), the image as image 1.
+async function videoFromImage(id, position) {
+  reopening('video');
+  if (pipeline !== 'video') setPipeline('video');
+  const preset = SETTINGS.edit_video_preset && (presets.video || []).find(p => p.name === SETTINGS.edit_video_preset);
+  if (preset) applyPreset('video', preset.name);
+  imageBoxes().forEach(box => clearImage(box));
+  imagesShown = 1;
+  syncVideoForm();
+  const box = imageBoxes()[0];
+  if (box) await useOutput(box, id, position, 'video');
+  syncVideoForm();
+  saveVideoForm();
+  reopened('video');
+  // Video's Generate: without saying so, it would go to Image's.
+  backToGenerate('video');
+}
 // This image in Generate as image 1, with the edit workflow chosen.
 async function editInGenerate(id, position) {
   await openEditor();
@@ -5820,12 +6214,68 @@ $('viewerPrompts').addEventListener('click', async () => {
   // Made from your exact prompt: that is what it was made from, so it opens on yours, the detailed one a tap away.
   openPromptDetail(detailed, data.brief, data.direct ? 'yours' : 'detailed');
 });
-$('viewerEdit').addEventListener('click', () => {
-  if (!viewing || viewing.film) return;
+$('viewerUse').addEventListener('click', () => {
+  if (!viewing || !choosingFor) return;
+  if (viewing.film) {
+    if (choosingFor.kind !== 'media') return;
+    const { name, folder: from } = viewing;
+    closeViewer();
+    chooseFilm(name, from);
+    return;
+  }
+  if (choosingFor.kind === 'media') return;
   const { id, position } = viewing;
   closeViewer();
-  editInGenerate(id, position);
+  chooseThis(id, position);
 });
+// A film for a reference box: the file itself, as if chosen from the disk.
+async function chooseFilm(name, from = 'video') {
+  const choice = choosingFor;
+  if (!choice) return;
+  backToGenerate(choice.side);
+  stopChoosing();
+  const input = choice.box.querySelector('input[type="file"]');
+  try {
+    const file = await runFile(`/videos/${from}/${encodeURIComponent(name)}`, name);
+    if (!mediaBoxes().includes(choice.box) || choice.box.hidden || input.disabled) {
+      showFormError('The reference box changed before the film was loaded. Choose it again.');
+      return;
+    }
+    putFile(input, new File([file], name, { type: file.type && file.type !== 'application/octet-stream' ? file.type : 'video/mp4' }));
+    showMedia(choice.box);
+    syncMediaInput();
+  } catch (e) {
+    showFormError(e.message || 'Could not load that film.');
+  }
+}
+$('viewerEdit').addEventListener('click', () => {
+  if (!viewing || viewing.film) return;
+  const box = $('editMenu');
+  box.classList.remove('closing');
+  box.showModal();
+  placeOverViewerButtons(box);
+});
+function closeEditMenu(then) {
+  const box = $('editMenu');
+  if (!box.open || box.classList.contains('closing')) return;
+  box.classList.add('closing');
+  setTimeout(() => { box.close(); box.classList.remove('closing'); if (then) then(); }, 150);
+}
+$('editMenu').addEventListener('click', e => {
+  const pick = e.target.closest && e.target.closest('[data-edit-to]');
+  if (!pick) {
+    const r = e.currentTarget.getBoundingClientRect();
+    if (e.target === e.currentTarget && (e.clientX < r.left || e.clientX > r.right || e.clientY < r.top || e.clientY > r.bottom)) closeEditMenu();
+    return;
+  }
+  if (!viewing || viewing.film) return;
+  const { id, position } = viewing, to = pick.dataset.editTo;
+  closeEditMenu(() => {
+    closeViewer();
+    if (to === 'video') videoFromImage(id, position); else editInGenerate(id, position);
+  });
+});
+$('editMenu').addEventListener('cancel', e => { e.preventDefault(); closeEditMenu(); });
 // Every option as a set had it: what it chose, else the workflow's own default.
 function applyOptions(box, options, chosen) {
   if (box === $('imageOptionsBox')) {
@@ -5915,7 +6365,15 @@ $('viewerMeta').addEventListener('click', () => {
   $('viewerMetaDetails').hidden = !$('viewerMetaDetails').hidden;
   $('viewerMeta').setAttribute('aria-expanded', String(!$('viewerMetaDetails').hidden));
 });
+// Choosing for a box: Use shows for what it takes (an image, or a film for a reference box), before Close.
+function showChoosing(video) {
+  const choosing = !!choosingFor && (choosingFor.kind === 'media' ? video : !video);
+  $('viewerUse').hidden = !choosing;
+  const row = $('viewerClose').parentElement;
+  if (row) row.classList.toggle('choosing', choosing);
+}
 function showViewerMedia(video) {
+  showChoosing(video);
   $('viewerTools').hidden = false;
   for (const id of ['viewerVariations', 'viewerEdit', 'viewerPrompts', 'viewerUpscale']) $(id).hidden = false;
   $('viewerImage').hidden = video;
@@ -5978,6 +6436,7 @@ function openFilm(name, filmFolder = folder) {
   if (at < 0) return;
   const film = films[at], url = `/videos/${filmFolder}/${encodeURIComponent(name)}`;
   viewing = { film: true, name, run: film.run || null, folder: filmFolder, latent: !!film.latent };
+  document.body.dataset.viewing = filmFolder === 'video' ? 'video' : 'shorts';
   showViewerMedia(true);
   // A film has Upscale (Video's only) and Prompts (its run's, if still saved), not the image editing.
   const canUpscale = filmFolder === 'video', canPrompt = !!film.run;
@@ -5989,7 +6448,7 @@ function openFilm(name, filmFolder = folder) {
   $('viewerUpscale').hidden = !canUpscale;
   $('viewerUpscale').classList.remove('dim');
   $('viewerPrompts').hidden = !canPrompt;
-  $('viewerRes').textContent = film.resolution || '';
+  $('viewerRes').textContent = sizeText(film.resolution);
   $('viewerCount').textContent = films.length > 1 ? `${at + 1} of ${films.length}` : '';
   viewerMetadata(film);
   $('viewerVideo').src = url;
@@ -6010,6 +6469,7 @@ function openViewer(id, position) {
   const set = findSet(id), picture = set && set.images.find(p => p.position === position);
   if (!picture) return;
   viewing = { id, position };
+  document.body.dataset.viewing = 'image';
   showViewerMedia(false);
   $('viewerVariations').title = 'More like this one: its prompt and settings in Generate, on new seeds';
   $('viewerVariations').setAttribute('aria-label', 'More like this');
@@ -6038,13 +6498,15 @@ function openViewer(id, position) {
     $('viewerUpscaled').setAttribute('aria-label', `Upscaled: ${picture.upscaled}`);
   }
   $('viewerDownload').href = `${url}&download=1`;
-  $('viewerRes').textContent = picture.resolution || '';
+  $('viewerRes').textContent = sizeText(picture.resolution);
   if (!$('imageViewer').open) $('imageViewer').showModal();
 }
+// The viewer's size, one way whichever told it (the saved "880x1920", or the picture once loaded): "880 × 1920".
+function sizeText(size) { return String(size || '').replace(/^(\d+)\s*[x×]\s*(\d+)$/i, '$1 × $2'); }
 $('viewerImage').addEventListener('load', () => {
   const img = $('viewerImage');
   if (img.dataset.full && !String(img.src).endsWith(img.dataset.full)) return;  // The small picture, while the full one comes
-  $('viewerRes').textContent = viewing && !viewing.film && img.naturalWidth ? `${img.naturalWidth} × ${img.naturalHeight}` : '';
+  $('viewerRes').textContent = viewing && !viewing.film && img.naturalWidth ? sizeText(`${img.naturalWidth}x${img.naturalHeight}`) : '';
   // Past 1440p on its shorter side, SeedVR2 can't take it: greyed, but the other ways still can.
   $('viewerUpscale').classList.toggle('dim', !!viewing && !viewing.film && Math.min(img.naturalWidth, img.naturalHeight) > UPSCALE_MOST_SIDE);
 });
@@ -6147,26 +6609,36 @@ $('viewerImage').addEventListener('touchend', e => {
     lastTap = { at: now, x: touch.clientX, y: touch.clientY };
   }
 });
+// Swipes: on the picture or film, sideways to the next or previous one and up or down to the next or previous set;
+// down on the buttons under it, the preview closes. Anywhere else a finger is only a tap or a scroll.
 $('imageViewer').addEventListener('touchstart', e => {
+  const target = e.target, onMedia = target === $('viewerImage') || target === $('viewerVideo');
+  const onBar = !onMedia && !!(target && target.closest && target.closest('.viewer-bar'));
   // Zoomed in, a finger moves the picture rather than turning to the next one.
-  swipeFrom = e.touches.length === 1 && (viewing && viewing.film || zoom.scale === 1) ? { x: e.touches[0].clientX, y: e.touches[0].clientY } : null;
+  const media = onMedia && (viewing && viewing.film || zoom.scale === 1);
+  swipeFrom = e.touches.length === 1 && (media || onBar) ? { x: e.touches[0].clientX, y: e.touches[0].clientY, onBar } : null;
 }, { passive: true });
 $('imageViewer').addEventListener('touchend', e => {
-  if (!swipeFrom || !e.changedTouches.length || (viewing && !viewing.film && zoom.scale > 1)) return;
-  const dx = e.changedTouches[0].clientX - swipeFrom.x, dy = e.changedTouches[0].clientY - swipeFrom.y;
+  if (!swipeFrom || !e.changedTouches.length) return;
+  const from = swipeFrom;
   swipeFrom = null;
+  const dx = e.changedTouches[0].clientX - from.x, dy = e.changedTouches[0].clientY - from.y;
+  if (from.onBar) {
+    if (dy > 60 && dy > Math.abs(dx) * 1.5) closeViewer();
+    return;
+  }
+  if (viewing && !viewing.film && zoom.scale > 1) return;
   // Sideways, and far enough to mean it: a tap or a scroll isn't a swipe. Up and down: the next or the previous set.
   if (Math.abs(dx) > 50 && Math.abs(dx) > Math.abs(dy) * 1.5) stepViewer(dx < 0 ? 1 : -1);
   else if (Math.abs(dy) > 60 && Math.abs(dy) > Math.abs(dx) * 1.5) stepSet(dy < 0 ? 1 : -1);
 });
-// NSFW: films and image sets in one list, in the order they were made, as the view lists them.
-function nsfwItems() {
-  const sets = filtered(imageSets).filter(set => set.images.length).map(set => ({ set, t: madeAt(set.id, set.mtime) }));
-  const films = choosingFor ? [] : visibleFilms().map(film => ({ film, t: madeAt(film.run || film.name, film.mtime) }));
+// Output's list, as it shows: films and image sets, in the order they were made.
+function outputItems() {
+  const sets = showsImages() ? filtered(imageSets).filter(set => set.images.length).map(set => ({ set, t: madeAt(set.id, set.mtime) })) : [];
+  const films = showsFilms() ? visibleFilms().map(film => ({ film, t: filmMadeAt(film) })) : [];
   return [...sets, ...films].sort((a, b) => b.t - a.t);
 }
-// The set after or before this one in Output (as filtered), from its first picture. In the NSFW view, the film or
-// set after or before it there, whichever it is.
+// The film or set after or before this one in Output, as it lists them (a set from its first picture).
 function stepSet(by) {
   if (!viewing) return false;
   // In a collection: up and down go between its images and its films, and no further.
@@ -6181,10 +6653,10 @@ function stepSet(by) {
       () => toFilms ? openFilm(first.name, 'video') : openViewer(first.set, first.position), $(toFilms ? 'viewerVideo' : 'viewerImage'));
     return true;
   }
-  if (outputFilter === NSFW_FILTER) {
-    const items = nsfwItems();
-    const at = items.findIndex(item => viewing.film ? item.film && item.film.name === viewing.name : item.set && item.set.id === viewing.id);
-    const next = at < 0 ? null : items[at + by];
+  const items = pipeline === 'shorts' ? [] : outputItems();
+  const at = items.findIndex(item => viewing.film ? item.film && item.film.name === viewing.name : item.set && item.set.id === viewing.id);
+  if (at >= 0) {
+    const next = items[at + by];
     if (!next) return false;
     disarm($('viewerDelete'));
     if (viewing.film && next.set) $('viewerVideo').pause();
@@ -6218,7 +6690,7 @@ function closeViewer() {
 }
 $('imageViewer').addEventListener('close', () => {
   clearViewerTransition();
-  for (const id of ['viewerUpscaleBar', 'upscaleSettings', 'moveSheet', 'pillsMenu']) if ($(id).open) $(id).close();
+  for (const id of ['viewerUpscaleBar', 'upscaleSettings', 'moveSheet', 'pillsMenu', 'editMenu']) if ($(id).open) $(id).close();
   viewing = null;
   viewerCollection = null;
   $('viewerMetaDetails').hidden = true;
@@ -6240,6 +6712,15 @@ $('viewerDelete').addEventListener('click', async () => {
   const index = pictures.findIndex(p => p.position === position);
   const next = index < 0 ? null : pictures[index + 1] || pictures[index - 1];
   const url = film ? `/delete/${viewing.folder}/${encodeURIComponent(name)}` : `/image-runs/${encodeURIComponent(id)}/delete/${position}`;
+  // In a collection: the one after it in the collection's album (or the one before), found again by its file once the
+  // set's places have shifted.
+  let after = null;
+  if (viewerCollection) {
+    const albums = collectionAlbums(viewerCollection), album = film ? albums.films : albums.images;
+    const at = film ? album.findIndex(v => v.name === name) : album.findIndex(p => p.set === id && p.position === position);
+    const other = at < 0 ? null : album[at + 1] || album[at - 1];
+    after = other && (film ? { film: other.name } : { set: other.set, file: other.file });
+  }
   let body;
   $('viewerDelete').disabled = true;
   try {
@@ -6250,6 +6731,14 @@ $('viewerDelete').addEventListener('click', async () => {
     $('viewerDelete').disabled = false;
   }
   if (!body.ok) { alert(body.error || 'Could not delete it.'); return; }
+  if (viewerCollection) {
+    await poll();
+    if (viewing !== original) return;  // Moved on in the meantime
+    if (after && after.film && (lastVideos.video || []).some(v => v.name === after.film)) { openFilm(after.film, 'video'); return; }
+    const set = after && after.set && findSet(after.set), picture = set && set.images.find(p => p.file === after.file);
+    if (picture) openViewer(set.id, picture.position); else closeViewer();
+    return;
+  }
   if (!film && Array.isArray(body.images)) {
     const updated = imageSets.find(s => s.id === id);
     if (updated) updated.images = body.images;
@@ -6271,19 +6760,23 @@ $('imageSets').addEventListener('click', async e => {
   if (view) {
     e.preventDefault();
     // Choosing one of your images for a box: this one goes in it, and Generate shows again.
-    if (choosingFor) { chooseThis(view.dataset.viewSet, +view.dataset.viewPosition); return; }
     openViewer(view.dataset.viewSet, +view.dataset.viewPosition);
     return;
   }
+  // A set of more than one: its cover opens them all, small.
+  const grid = e.target.closest && e.target.closest('[data-grid-set]');
+  if (grid) {
+    e.preventDefault();
+    openThumbGrid({ set: grid.dataset.gridSet });
+    return;
+  }
   const d = e.target.dataset || {};
-  if (d.gridSet) {
-    openThumbGrid({ set: d.gridSet });
-  } else if (d.againSet) {
+  if (d.againSet) {
     await sameAgain(d.againSet);
   } else if (d.downloadSet) {
     const set = imageSets.find(s => s.id === d.downloadSet);
     if (set) downloadImages(set.id, set.images.map(p => p.position));
-  } else if (d.nsfwImage) await tagOutput('image', d.nsfwImage, outputFilter !== NSFW_FILTER, e.target);
+  } else if (d.nsfwImage) await tagOutput('image', d.nsfwImage, !nsfwView, e.target);
   else if (d.shots) openShots(d.shots);
   else if (d.deleteSet) {
     if (!secondTap(e.target)) return;
@@ -6306,10 +6799,10 @@ function filmHtml(v, filmFolder = folder) {
   return `
   <div class="image-set film" data-name="${name}">
     <div class="image-set-heading"><h3>${v.title || v.topic ? esc(v.title || v.topic) : filmFolder === 'video' ? name : '<span style="color:var(--muted)">No topic recorded</span>'}</h3>${filmFolder === 'video' ? nsfwButton('video', v.name, !!v.nsfw) : ''}</div>
-    <div class="meta" title="${name}">${[!v.pills && v.model && esc(v.model), v.resolution && esc(v.resolution), v.duration != null && fmt(Math.round(v.duration)), v.size_mb != null && `${v.size_mb} MB`].filter(Boolean).join(' · ')}</div>${v.pills ? pillsLine(v.pills, 'video') : `${connectionLine(v)}${lorasLine(v.loras)}${h3Line(v)}${upscaledLine(v)}`}
+    <div class="meta" title="${name}">${[madeOn(filmMadeAt(v)), !v.pills && v.model && esc(v.model), v.resolution && esc(v.resolution), v.duration != null && fmt(Math.round(v.duration)), v.size_mb != null && `${v.size_mb} MB`].filter(Boolean).join(' · ')}</div>${v.pills ? '' : `${connectionLine(v)}${lorasLine(v.loras)}${h3Line(v)}${upscaledLine(v)}`}
     <div class="image-set-row album">
       <a href="/videos/${filmFolder}/${url}" class="album-cover film-cover" data-play-film="${name}" data-film-folder="${filmFolder}" title="Play"><img loading="lazy" alt="" src="${v.run && filmFolder === 'video' ? `/runs/${encodeURIComponent(v.run)}/image` : `/posters/${filmFolder}/${url}`}" onerror="this.onerror=null;this.src='/posters/${filmFolder}/${url}'"><span class="play">▶</span></a>
-      <div class="album-side">${actions}</div>
+      <div class="album-side">${v.pills ? pillsLine(v.pills, 'video', 3) : ''}${actions}</div>
     </div>
   </div>`;
 }
@@ -6821,7 +7314,8 @@ function renderNow(data) {
   const show = data.running && p.stage;
   const comfyBusy = c.active && c.connected;
   // The clip being rendered is said in ComfyUI's box, so it isn't said twice.
-  const clip = comfyBusy && /^(Clip|Image) \d/.test(p.detail || '') ? p.detail : '';
+  const detail = nowDetail(data);
+  const clip = comfyBusy && /^(Clip|Image) \d/.test(detail) ? detail : '';
   // ComfyUI's box shows whenever it works, even for a job with no stages of its own, such as an upscale.
   $('now').classList.toggle('hidden', !show && !comfyBusy);
   $('stepper').hidden = $('stageDetail').hidden = !show;
@@ -6834,12 +7328,18 @@ function renderNow(data) {
     // What it is doing now, in shorthand, then what it is working on unless ComfyUI's box already says so.
     // One line says what is happening: under ComfyUI's bar while it renders, else here.
     // The clip being rendered goes in ComfyUI's box, with the action; anything else, such as a scene, stays here.
-    const [count, what] = splitCount(comfyBusy && clip ? '' : p.detail);
+    const [count, what] = splitCount(comfyBusy && clip ? '' : detail);
     const first = comfyBusy ? what : [p.action, what].filter(Boolean).join(' - ') || (count ? '' : STAGE_HINTS[name] || '');
     // How long it has been at this, on the right, unless ComfyUI's box already times it.
     $('stageDetail').innerHTML = statusHtml(first, count, !comfyBusy && first && p.action_elapsed != null ? fmt(p.action_elapsed) : '',
       'How long it has been at this');
-  }
+    // On to the next stage: what it says now eases in, rather than swapping in place.
+    const stage = `${data.pipeline}:${n}`;
+    if (stage !== lastStage) {
+      if (lastStage !== null) for (const id of ['stageDetail', 'comfyNow']) replay($(id), 'stage-in');
+      lastStage = stage;
+    }
+  } else lastStage = null;
 
   // ComfyUI's own progress: which part of the workflow, and sampling steps.
   $('comfyNow').classList.toggle('hidden', !comfyBusy);
@@ -7247,7 +7747,7 @@ function renderQueue(el, q, doneIn, moving = false, idle = false) {
   const canRunNow = el.dataset.lane === 'run' && q.held && idle;
   const items = waiting.map((item, i) => `
     <div class="queue-item${el.dataset.lane === 'run' ? ' run-card' : ''}${String(item.id) === el._selected ? ' selected' : ''}" data-id="${esc(String(item.id))}" data-motion-key="queue-${esc(String(item.id))}">
-      ${el.dataset.lane === 'run' ? '<div class="queue-item-top">' : ''}<div class="what"${waiting.length > 1 ? ` role="button" tabindex="0" aria-pressed="${String(item.id) === el._selected}" aria-label="Select ${esc(item.label)} to drag or use arrow keys to reorder"` : ''}>${queueTitle(`queue-${item.id}`, el.dataset.lane === 'run' ? workHeading(item, item.pipeline) : item.label, i + 1)}<div class="hint">${el.dataset.lane === 'run' ? `${SIDE_NAMES[item.pipeline] || 'Shorts'} · ` : ''}${esc(queueDetail(item))}</div></div>${el.dataset.lane === 'run' ? '</div><div class="queue-item-actions">' : ''}
+      ${el.dataset.lane === 'run' ? '<div class="queue-item-top">' : ''}<div class="what"${waiting.length > 1 ? ` role="button" tabindex="0" aria-pressed="${String(item.id) === el._selected}" aria-label="Select ${esc(hideTitle(item) ? PLAIN_TITLE : item.label)} to drag or use arrow keys to reorder"` : ''}>${queueTitle(`queue-${item.id}`, el.dataset.lane === 'run' ? workHeading(item, item.pipeline) : item.label, i + 1)}<div class="hint">${el.dataset.lane === 'run' ? `${SIDE_NAMES[item.pipeline] || 'Shorts'} · ` : ''}${esc(queueDetail(item))}</div></div>${el.dataset.lane === 'run' ? '</div><div class="queue-item-actions">' : ''}
       ${el.dataset.lane === 'run' ? `<span class="acts-side"><button type="button" class="icon-btn" data-pause="${item.id}" aria-label="Pause: move to Pending" title="Pause: take it out of the queue and make it pending">❚❚</button>`
         + (canRunNow ? `<button type="button" class="run-item${item.continuation ? ' continue-item' : ''}" data-run="${item.id}" aria-label="Run this generation now" title="Run this now">
           <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 2.8a.8.8 0 0 1 1.2-.7l8 5a1 1 0 0 1 0 1.7l-8 5A.8.8 0 0 1 4 13.1z" fill="currentColor"/></svg></button>` : '')
@@ -7325,14 +7825,46 @@ function finishedThumb(r) {
   return `<span class="result-thumb">${src ? `<img loading="lazy" alt="" src="${esc(src)}" onerror="this.remove()">` : ''}</span>`;
 }
 let finishedSwiping = false;
+let lastFinished = null;
+// Batches opened in Finished, kept open through the polls until folded.
+const openBatches = new Set();
+// One row per batch: the whole job once it has ended (or the newest thing it made while it runs), and as its items,
+// each picture of its set once it is done (what was made one by one is no longer listed then), else what it has made
+// so far. Anything else is a row of its own.
+function finishedBatches(all) {
+  const batches = [], byRun = new Map();
+  for (const r of all) {
+    const key = r.lane === 'run' && r.run_id && (r.side === 'image' || r.side === 'video') ? `${r.side}:${r.run_id}` : null;
+    if (!key) { batches.push({ main: r, kids: [] }); continue; }
+    let batch = byRun.get(key);
+    if (!batch) { batch = { key, main: null, made: [] }; byRun.set(key, batch); batches.push(batch); }
+    if (r.job_id != null && !batch.main) batch.main = r; else batch.made.push(r);
+  }
+  for (const batch of byRun.values()) {
+    if (batch.main) {
+      const set = batch.main.side === 'image' && imageSets.find(s => s.id === batch.main.run_id);
+      batch.kids = set && set.images.length > 1
+        ? set.images.map(p => ({ ...batch.main, job_id: undefined, outcome: 'done', position: p.position, label: p.title || `Image ${p.position}`, note: '' }))
+        : batch.made;
+    } else {
+      // Still going: the newest it made heads the batch, and all of them, that one too, are its items.
+      batch.main = batch.made[0];
+      batch.kids = batch.made;
+    }
+    // One thing alone is no batch: its row opens it.
+    if (batch.kids.length < 2) batch.kids = [];
+  }
+  return batches;
+}
 function renderFinished(runs, uploads, madeNow = []) {
+  lastFinished = [runs, uploads, madeNow];
   if (finishedSwiping) return;  // Redrawn mid-swipe, the row under the finger would vanish
-  // Whole jobs, and what the one going now has made so far, such as each image of a set.
-  const all = [...runs, ...madeNow].map(r => ({ ...r, type: SIDE_NAMES[r.pipeline] || 'Shorts', side: r.pipeline || 'shorts', lane: 'run' }))
+  // Whole jobs, and what the one going now has made so far, such as each image of a set. NSFW only under its filter.
+  const all = [...runs, ...madeNow].filter(r => !r.nsfw || nsfwView).map(r => ({ ...r, type: SIDE_NAMES[r.pipeline] || 'Shorts', side: r.pipeline || 'shorts', lane: 'run' }))
     .concat(uploads.map(r => ({ ...r, type: 'Upload', side: 'shorts', lane: 'upload', tab: r.outcome === 'done' ? 'uploaded' : 'output' })))
     .filter(r => !forgottenResults.has(resultKey(r)))
-    .sort((a, b) => (b.t || 0) - (a.t || 0) || (b.at || '').localeCompare(a.at || ''))
-    .slice(0, FINISHED_SHOWN);
+    .sort((a, b) => (b.t || 0) - (a.t || 0) || (b.at || '').localeCompare(a.at || ''));
+  const batches = finishedBatches(all).slice(0, FINISHED_SHOWN);
   $('finishedToggle').disabled = !all.length;
   $('finishedToggle').classList.toggle('empty', !all.length);
   const failed = all.filter(r => r.outcome === 'failed').length;
@@ -7348,9 +7880,13 @@ function renderFinished(runs, uploads, madeNow = []) {
     $('finishedList').dataset.html = '';
     return;
   }
-  const list = all.map(r => `<button type="button" class="result ${esc(r.outcome)}" style="--side:${SIDE_COLOURS[r.side] || SIDE_COLOURS.shorts}" data-goto="${esc(r.side)}"${r.tab ? ` data-tab="${r.tab}"` : ''}${r.run_id ? ` data-run-id="${esc(r.run_id)}"` : ''}${r.job_id != null ? ` data-job-id="${esc(String(r.job_id))}"` : ''}${r.position ? ` data-position="${r.position}"` : ''}${r.film ? ` data-film="${esc(r.film)}"` : ''}${r.outcome === 'failed' && r.type !== 'Upload' ? ' data-failed="1"' : ''} data-lane="${r.lane}" data-key="${esc(resultKey(r))}">`
-    + finishedThumb(r) + `<span class="result-mark">${RESULT_MARKS[r.outcome]}</span><span class="result-type">${r.type}</span>`
-    + `<span class="result-label">${esc(r.label)}${r.note ? ` (${esc(r.note)})` : ''}</span><span class="when">${finishedWhen(r)}</span></button>`).join('');
+  const row = (r, kind = '', count = 0) => `<button type="button" class="result ${esc(r.outcome)}${kind}" style="--side:${SIDE_COLOURS[r.side] || SIDE_COLOURS.shorts}" data-goto="${esc(r.side)}"${r.tab ? ` data-tab="${r.tab}"` : ''}${r.run_id ? ` data-run-id="${esc(r.run_id)}"` : ''}${r.job_id != null ? ` data-job-id="${esc(String(r.job_id))}"` : ''}${r.position ? ` data-position="${r.position}"` : ''}${r.film ? ` data-film="${esc(r.film)}"` : ''}${r.outcome === 'failed' && r.type !== 'Upload' ? ' data-failed="1"' : ''} data-lane="${r.lane}" data-key="${esc(resultKey(r))}">`
+    + finishedThumb(r) + `<span class="result-mark">${RESULT_MARKS[r.outcome]}</span>${kind === ' batch-kid' ? '' : `<span class="result-type">${r.type}</span>`}`
+    + `<span class="result-label">${esc(r.label)}${r.note ? ` (${esc(r.note)})` : ''}</span>${count ? `<span class="batch-count">${count}</span><span class="batch-chevron" aria-hidden="true">›</span>` : ''}<span class="when">${finishedWhen(r)}</span></button>`;
+  // A batch: its main row, and under it, a tap away, each thing it made, set in a little.
+  const list = batches.map(b => !b.kids.length ? row(b.main)
+    : `<div class="result-batch${openBatches.has(b.key) ? ' open' : ''}" data-batch="${esc(b.key)}">${row(b.main, ' batch-main', b.kids.length)}`
+      + `<div class="batch-kids"><div class="batch-kids-in">${b.kids.map(k => row(k, ' batch-kid')).join('')}</div></div></div>`).join('');
   if ($('finishedList').dataset.html !== list) { $('finishedList').innerHTML = list; $('finishedList').dataset.html = list; }
 }
 // --- Finished, Log and Quota: each opens in a box over the page ---
@@ -7390,9 +7926,10 @@ function placePanelControls() {
   if (DESK.matches) {
     for (const id of ['logToggle', 'finishedToggle', 'quotaToggle']) $('statusToggles').appendChild($(id));
   } else {
+    // The header: the key, Finished beside it, the log, then the gear.
+    $('topIcons').insertBefore($('finishedToggle'), $('privateToggle').nextSibling);
     $('topIcons').insertBefore($('logToggle'), $('settingsBtn'));
     $('settingsHead').appendChild($('quotaToggle'));
-    $('runActions').appendChild($('finishedToggle'));
   }
   const running = !!(lastStatus && lastStatus.running);
   $('runActions').hidden = DESK.matches && !running;
@@ -7427,10 +7964,14 @@ $('panelDialog').addEventListener('click', e => { if (e.target === $('panelDialo
 // A result takes you to what it made: its side's output.
 function goToOutput(side, tab) {
   closePanel();
-  if (side !== pipeline) setPipeline(side);
+  // Shorts' own, or the kind it is (Both already has it). The view stays: Finished lists NSFW only in the NSFW view.
+  const view = nsfwView;
+  if (side === 'shorts' || pipeline === 'shorts') { if (side !== pipeline) setPipeline(side); }
   if (tab && side === 'shorts') setTab(tab);
-  resetOutputFilter();
+  if (['image', 'video'].includes(side) && outputKind !== 'both') outputKind = side;
   if (WIDE.matches) $('videosCard').scrollIntoView({ behavior: 'smooth' }); else showPage('output');
+  nsfwView = view && pipeline !== 'shorts';
+  redrawFiltered();
 }
 // Swiping a result to the right takes it off Finished; a short or mostly vertical drag is a tap or a scroll.
 let finishedSwipe = null, finishedSwiped = false;
@@ -7532,6 +8073,15 @@ function forgetResult(row) {
 }
 $('finishedList').addEventListener('click', async e => {
   if (finishedSwiped) { e.preventDefault(); e.stopPropagation(); return; }
+  // A batch's main row opens and folds what it made; each of those opens itself.
+  const main = e.target.closest && e.target.closest('.batch-main');
+  if (main) {
+    const batch = main.parentElement, open = !batch.classList.contains('open');
+    batch.classList.toggle('open', open);
+    if (open) openBatches.add(batch.dataset.batch); else openBatches.delete(batch.dataset.batch);
+    $('finishedList').dataset.html = '';  // Drawn again, open or not, at the next poll
+    return;
+  }
   const result = e.target.closest && e.target.closest('[data-goto]');
   if (!result) return;
   const d = result.dataset;
@@ -7559,8 +8109,7 @@ $('finishedList').addEventListener('click', async e => {
     const film = (lastVideos[targetFolder] || []).find(item => d.film ? item.name === d.film : item.run === d.runId);
     if (film) {
       goToOutput(d.goto, d.tab);
-      outputFilter = '';
-      openFilm(film.name);
+      openFilm(film.name, targetFolder);
       return;
     }
   }
@@ -7649,7 +8198,7 @@ function renderStopped(runs, parked = [], results = [], canRunNow = false) {
   const tag = run => run.outcome ? `<span class="run-tag">${esc(run.outcome.outcome === 'failed' ? 'Failed' : run.outcome.outcome)}</span>` : '';
   const runRow = (run, isFailed = false) => `
     <div class="stopped-run" data-run-id="${esc(run.id)}" data-motion-key="run-${esc(run.id)}">
-      <div class="run-head"><div class="what">${queueTitle(`run-${run.id}`, run.label)}</div>${tag(run)}</div>
+      <div class="run-head"><div class="what">${queueTitle(`run-${run.id}`, hideTitle(run) ? PLAIN_TITLE : run.label)}</div>${tag(run)}</div>
       <div class="hint">${SIDE_NAMES[run.pipeline] || 'Shorts'} · ${esc(run.detail)}${run.size && !String(run.detail).includes(run.size) ? ` · ${esc(run.size)}` : ''}</div>
       ${run.when ? `<div class="hint">${esc(run.when)}</div>` : ''}
       ${run.outcome ? whyHtml(run.outcome) : ''}
@@ -8039,7 +8588,7 @@ function runFactRows() {
     rows.push(['Started', `${d.started_at} · ${fmt(d.elapsed || 0)} ${d.running ? 'so far' : 'in all'}`]);
   }
   if (p.stage) rows.push(['Stage', `${p.stage[0]} of ${p.stage[1]}: ${p.stage[2]}${d.running ? ` · ${fmt(p.stage_elapsed || 0)}` : ''}`]);
-  if (p.detail) rows.push(['Now', p.detail]);
+  if (p.detail) rows.push(['Now', nowDetail(d)]);
   if (p.eta && d.running && p.eta.total_left != null) rows.push(['Estimate', `${fmtEta(p.eta.total_left)} left, done around ${clockIn(p.eta.total_left)}`]);
   if (c.connected) {
     const steps = c.max && c.value != null ? ` · Step ${c.value} of ${c.max}` : '';
@@ -8057,6 +8606,96 @@ $('currentWork').addEventListener('click', () => {
 });
 $('runFactsClose').addEventListener('click', () => $('runFacts').close());
 $('runFacts').addEventListener('click', e => { if (e.target === $('runFacts')) $('runFacts').close(); });
+// Plays a class's animation again, from its start.
+function replay(el, name) {
+  if (!el || !el.classList) return;
+  el.classList.remove(name);
+  void el.offsetWidth;
+  el.classList.add(name);
+}
+let lastStage = null;
+// --- Status's parts come and go smoothly: each grows open and fades in as it shows, and closes and fades out as it
+// hides (a copy of it does, the part itself hidden at once, so nothing that reads it is fooled), and nothing under it
+// jumps. The page shows and hides them as it always has (hidden, or the hidden class); this watches for that. ---
+const SMOOTH_PARTS = ['currentWork', 'currentWorkSize', 'runProgress', 'etaDetail', 'now', 'comfyNow', 'stepper', 'stageDetail',
+  'uploadBox', 'uploadProgress', 'runActions', 'queuePending', 'runQueue', 'stoppedRuns', 'failedRuns', 'uploadQueue'];
+const smoothShown = el => !el.hidden && !(el.classList && el.classList.contains('hidden'));
+const SMOOTH_MS = 320, SMOOTH_EASE = 'cubic-bezier(.2, .8, .2, 1)';
+function smoothIn(el) {
+  if (el._leaving) { el._leaving.remove(); el._leaving = null; }
+  const h = el.offsetHeight;
+  if (!h || !el.animate) return;
+  const style = window.getComputedStyle ? window.getComputedStyle(el) : {};
+  el.animate([{ height: '0px', opacity: 0, marginTop: '0px', marginBottom: '0px', paddingTop: '0px', paddingBottom: '0px', overflow: 'hidden' },
+    { height: `${h}px`, opacity: 1, marginTop: style.marginTop, marginBottom: style.marginBottom, paddingTop: style.paddingTop, paddingBottom: style.paddingBottom, overflow: 'hidden' }],
+    { duration: SMOOTH_MS, easing: SMOOTH_EASE });
+}
+function smoothOut(el, copy) {
+  if (!copy || !el.parentNode || !copy.animate) return;
+  if (el._leaving) el._leaving.remove();
+  // The copy as it was, where it was, closing; no ids, so nothing finds it.
+  copy.removeAttribute('id');
+  for (const inner of copy.querySelectorAll('[id]')) inner.removeAttribute('id');
+  copy.setAttribute('aria-hidden', 'true');
+  copy.style.pointerEvents = 'none';
+  el.parentNode.insertBefore(copy, el);
+  el._leaving = copy;
+  const h = copy.offsetHeight;
+  const leave = copy.animate([{ height: `${h}px`, opacity: 1, overflow: 'hidden' },
+    { height: '0px', opacity: 0, marginTop: '0px', marginBottom: '0px', paddingTop: '0px', paddingBottom: '0px', overflow: 'hidden' }],
+    { duration: SMOOTH_MS, easing: SMOOTH_EASE, fill: 'forwards' });
+  leave.onfinish = () => { copy.remove(); if (el._leaving === copy) el._leaving = null; };
+}
+if (window.MutationObserver) {
+  const reduced = () => window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  const watcher = new MutationObserver(records => {
+    for (const el of new Set(records.map(r => r.target))) {
+      const shown = smoothShown(el);
+      if (shown === el._smoothShown) continue;
+      el._smoothShown = shown;
+      if (reduced() || document.body.classList.contains('page-loading')) continue;
+      if (shown) { smoothIn(el); continue; }
+      // Hidden: a copy of it, shown, closes in its place.
+      const copy = el.cloneNode(true);
+      copy.hidden = false;
+      copy.classList.remove('hidden');
+      smoothOut(el, copy);
+    }
+  });
+  for (const id of SMOOTH_PARTS) {
+    const el = $(id);
+    if (!el || !el.cloneNode) continue;
+    el._smoothShown = smoothShown(el);
+    watcher.observe(el, { attributes: true, attributeFilter: ['hidden', 'class'] });
+  }
+}
+// Idle: one of Gemini's nudges (panel/nudges.json), picked at random each time Status goes idle, kept while it stays so.
+const NUDGES = {{ nudges | tojson }};
+let nudgeShown = null;
+function syncNudge(idle) {
+  const box = $('nudge');
+  if (!idle || !NUDGES.length) { box.hidden = true; nudgeShown = null; return; }
+  if (nudgeShown === null) box.textContent = nudgeShown = NUDGES[Math.floor(Math.random() * NUDGES.length)];
+  box.hidden = false;
+}
+// Tapped: Image's Generate, with its starred preset (if one is starred), and the nudge as the prompt.
+async function makeFromNudge() {
+  const text = nudgeShown;
+  if (!text) return;
+  reopening('image');
+  if (pipeline !== 'image') setPipeline('image');
+  const preset = (presets.image || []).find(p => p.default);
+  if (preset) applyPreset('image', preset.name);
+  const prompt = $('imagePrompt');
+  prompt.value = text;
+  prompt.dispatchEvent(new Event('input', { bubbles: true }));
+  syncImageForm();
+  saveImageForm();
+  if (!preset) reopened('image');
+  backToGenerate('image');
+}
+$('nudge').addEventListener('click', makeFromNudge);
+$('nudge').addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); makeFromNudge(); } });
 function showWork(text) {
   const el = $('currentWork');
   el.hidden = !text;
@@ -8066,12 +8705,15 @@ function showWork(text) {
   void el.offsetWidth;  // So it plays again
   el.classList.add('arrive');
 }
+// Out of Private mode an NSFW job's own title (its prompt, mostly) isn't shown in the queues or Status: a plain one is.
+const PLAIN_TITLE = 'Untitled';
+function hideTitle(item) { return !privateMode && !!(item && item.nsfw); }
 function workHeading(item, side) {
   const name = SIDE_NAMES[side] || 'Shorts';
   const label = (item && item.label) || 'Starting';
   const generic = /^(\d+) (?:videos?|images?)(?::\s*(.*))?$/i.exec(label);
   const count = (item && item.facts && item.facts.count) || (generic && Number(generic[1]));
-  const text = generic ? generic[2] || '' : label;
+  const text = hideTitle(item) ? PLAIN_TITLE : generic ? generic[2] || '' : label;
   return `${name}${count > 1 ? `(${count})` : ''}:${text ? ` ${text}` : ''}`;
 }
 // share is how much is done, 0 to 1, or null when that can't be told.
@@ -8082,12 +8724,45 @@ function inView(id) {
 // Status shows them in full, so the bars in the footer are for everywhere else.
 const stripActive = { run: false, upload: false };
 function syncStrips() {
-  const onStatus = inView('runCard');
-  for (const job of Object.keys(stripActive)) $(`${job}Strip`).hidden = !stripActive[job] || onStatus;
+  // Each only while its own bar on Status is out of sight: elsewhere, or on Status scrolled past it.
+  for (const job of Object.keys(stripActive)) $(`${job}Strip`).hidden = !stripActive[job] || inView(`${job}Progress`);
+  // Nothing to show: no box at all, pinned or not.
+  $('headStrips').classList.toggle('empty', Object.keys(stripActive).every(job => $(`${job}Strip`).hidden));
   document.documentElement.style.setProperty('--head', `${$('stick').offsetHeight}px`);
 }
+// Pinned (Settings): scrolled away from the top, the bars leave their place in the header and stretch along the top of
+// the screen; back at the top, they go back. Either way they ease from where they were to where they go.
+let pinnedOut = false;
+function syncPin() {
+  const out = !!SETTINGS.pin_progress && window.scrollY > 8;
+  if (out === pinnedOut) return;
+  pinnedOut = out;
+  const box = $('headStrips'), measure = el => (el.getBoundingClientRect ? el.getBoundingClientRect() : null);
+  const style = el => (window.getComputedStyle ? window.getComputedStyle(el) : {});
+  const from = measure(box), padFrom = style(box).padding;
+  // Its own transitions off while it changes place: measured mid-transition, where it goes would read as where it was,
+  // and the two would step against each other. One animation moves it, its padding with it.
+  box.classList.add('pinning');
+  document.body.classList.toggle('strips-out', out);
+  syncOpened();
+  const to = measure(box), padTo = style(box).padding;
+  const done = () => box.classList.remove('pinning');
+  if (!from || !to || !box.animate || window.matchMedia('(prefers-reduced-motion: reduce)').matches) { done(); return; }
+  // In the coordinates of what holds it now: the screen once out, the header's spot once back.
+  const base = out ? { top: 0, left: 0 } : measure($('topMain'));
+  const at = (r, padding) => ({ top: `${r.top - base.top}px`, left: `${r.left - base.left}px`, width: `${r.width}px`, ...(padding ? { padding } : {}) });
+  const move = box.animate([at(from, padFrom), at(to, padTo)], { duration: 340, easing: 'cubic-bezier(.2, .8, .2, 1)' });
+  move.onfinish = move.oncancel = done;
+}
+window.addEventListener('scroll', syncPin, { passive: true });
 // A status in two lines: "Rendering clip - The Descent to Knees, 5s", then "Clip 6 of 8" left and "0:19" right.
 // The count is split off a detail such as "Clip 6 of 8: The Descent, 5s" or Shorts' "Clip 2 of 5 - scene 3, 6s".
+// What the run is making now ("Image 2 of 4: its title"): only the count when its title is hidden (hideTitle).
+function nowDetail(data) {
+  const detail = (data.progress || {}).detail || '';
+  const [count, what] = splitCount(detail);
+  return count && what && hideTitle(data.queue && data.queue.current) ? count : detail;
+}
 function splitCount(detail) {
   const m = /^((?:Clip|Image|Scene|Video) \d+ of \d+)(?::\s*|\s+-\s+)?(.*)$/.exec(detail || '');
   return m ? [m[1], m[2]] : ['', detail || ''];
@@ -8114,6 +8789,8 @@ function setStrip(job, show, strip, status, share) {
     bar.parentElement.classList.toggle('busy', share === null);
     bar.style.width = `${share === null ? 30 : Math.round(share * 100)}%`;
   }
+  // Folded, the bar says only how far along; opened, the rest.
+  $(`${job}StripPct`).textContent = pct;
   $(`${job}StripHint`).innerHTML = strip.hint;
   $(`${job}StripTotal`).textContent = strip.total || '';
   if (job === 'upload') $('uploadProgressHint').innerHTML = status.hint;
@@ -8124,7 +8801,23 @@ function foldStrip(job) {
   clearTimeout(stripTimers[job]);
   $(`${job}Strip`).classList.remove('open');
   $(`${job}Strip`).setAttribute('aria-expanded', 'false');
+  syncOpened();
 }
+// Opened, the box they sit in has the page's background behind them, so what they say reads over the page.
+// It opens to the screen's full width, edge to edge over the icons beside it (pinned, it is full width already), and
+// back to its place when folded.
+function syncOpened() {
+  const box = $('headStrips'), opened = ['run', 'upload'].some(job => $(`${job}Strip`).classList.contains('open'));
+  box.classList.toggle('opened', opened);
+  const main = $('topMain'), wide = opened && !document.body.classList.contains('strips-out') && main.getBoundingClientRect;
+  const at = wide ? main.getBoundingClientRect() : null, screen = document.documentElement.clientWidth || window.innerWidth;
+  box.style.left = at ? `${-at.left}px` : '';
+  box.style.right = at ? `${at.right - screen}px` : '';
+}
+// Opened, a tap anywhere else, or a scroll, folds it again.
+function foldStrips() { for (const job of ['run', 'upload']) if ($(`${job}Strip`).classList.contains('open')) foldStrip(job); }
+document.addEventListener('click', e => { if (!(e.target.closest && e.target.closest('#headStrips'))) foldStrips(); });
+window.addEventListener('scroll', foldStrips, { passive: true });
 function tapStrip(job) {
   if ($(`${job}Strip`).classList.contains('open')) {
     foldStrip(job);
@@ -8133,6 +8826,7 @@ function tapStrip(job) {
   }
   $(`${job}Strip`).classList.add('open');
   $(`${job}Strip`).setAttribute('aria-expanded', 'true');
+  syncOpened();
   clearTimeout(stripTimers[job]);
   stripTimers[job] = setTimeout(() => foldStrip(job), STRIP_OPEN_MS);
 }
@@ -8149,7 +8843,7 @@ function renderStrips(data) {
   // Everything queued after it too, when there is more.
   const all = eta && queueAhead > eta.total_left + 30 ? ` · the whole queue around ${clockIn(queueAhead)}` : '';
   const total = eta ? `Done around ${clockIn(eta.total_left)}${all}` : `${fmt(data.elapsed)} so far`;
-  const [count, what] = splitCount(p.detail);
+  const [count, what] = splitCount(nowDetail(data));
   const c = data.comfyui || {};
   const hint = statusHtml([p.action, what].filter(Boolean).join(' - ') || (count ? '' : STAGE_HINTS[stage[2]] || ''), count,
     c.active && /^(Clip|Image) \d/.test(p.detail || '') ? fmt(c.elapsed || 0) : '');
@@ -8312,6 +9006,7 @@ async function pollOnce(generation) {
   const facts = (workItem && workItem.facts) || {};
   showWork(running ? workHeading(queue.current, data.pipeline)
     : nextUp ? workHeading(ready[0], ready[0].pipeline) : '');
+  syncNudge(!running && !nextUp);
   $('currentWorkSize').hidden = !workItem || !(facts.workflow || facts.resolution);
   $('currentWorkflow').textContent = facts.workflow || '';
   $('currentResolution').textContent = facts.resolution || '';
@@ -8359,7 +9054,7 @@ async function pollOnce(generation) {
   collections = data.collections || [];
   if (viewing && viewing.film) {
     const film = (lastVideos[viewing.folder] || []).find(item => item.name === viewing.name);
-    if (film) { $('viewerRes').textContent = film.resolution || ''; viewerMetadata(film); }
+    if (film) { $('viewerRes').textContent = sizeText(film.resolution); viewerMetadata(film); }
   } else if (viewing) {
     const set = findSet(viewing.id);
     const picture = set && set.images.find(p => p.position === viewing.position);
@@ -8370,6 +9065,7 @@ async function pollOnce(generation) {
   safely(() => renderCollections());
   // Drawn from an answer asked for after Output was held: what it shows is what should show, NSFW or not.
   if (askedAt >= outputHeldAt) document.body.classList.remove('output-pending');
+  document.body.classList.remove('page-loading');
 }
 
 // On a desktop the log is always open beside the run; on a phone it stays folded until asked for.
@@ -8877,6 +9573,7 @@ function setPipeline(side, remember = true, preservePrompt = false) {
     if (!preservePrompt) for (const section of document.querySelectorAll('details.section')) section.open = false;
   }
   pipeline = side;
+  if (side !== 'shorts') madeSide = side;
   syncPreviewRun();
   document.body.classList.toggle('on-shorts', side === 'shorts');
   document.body.classList.toggle('on-video', side === 'video');
@@ -8885,25 +9582,47 @@ function setPipeline(side, remember = true, preservePrompt = false) {
     $(id).classList.toggle('active', side === own);
     $(id).setAttribute('aria-selected', side === own);
   }
-  $('jumpResults').textContent = { shorts: 'Shorts', video: 'Videos', image: 'Images' }[side];
   $('formNote').hidden = true;
   $(SIDE_FORMS[side]).appendChild($('formActions'));
   // One Preview run, in the Other settings of whichever form is showing.
   if (side !== 'shorts') $(side === 'image' ? 'imageReviewBox' : 'videoReviewBox').after($('previewRunLabel'));
-  folder = side === 'shorts' ? 'output' : side;
+  // Shorts' films by its tab; the others' films are the made ones, whichever side Generate is on.
+  folder = side === 'shorts' ? 'output' : 'video';
   $('tabOutput').classList.add('active');
   $('tabUploaded').classList.remove('active');
-  $('videos').dataset.key = '';
   $('videos').scrollLeft = 0;
   if (remember) {
     try { localStorage.setItem(PIPELINE_KEY, side); } catch (e) {}
     if (window.history && history.replaceState) history.replaceState(null, '', `/${side}`);
   }
-  renderVideos();
-  renderImageSets();
+  redrawFiltered();
   refreshPlan();
 }
-for (const id of ['switchShorts', 'switchVideo', 'switchImage']) $(id).addEventListener('click', () => setPipeline($(id).dataset.pipeline));
+for (const id of ['switchShorts', 'switchVideo', 'switchImage']) $(id).addEventListener('click', () => {
+  const was = pipeline, side = $(id).dataset.pipeline;
+  setPipeline(side);
+  if (was !== side) carryImages(was, side);
+});
+// The images chosen on Image or Video, into the other's empty boxes, in order: one picked to edit is still there for
+// a video workflow that takes images. Boxes already filled there keep theirs.
+function carryImages(from, to) {
+  if (!['image', 'video'].includes(from) || !['image', 'video'].includes(to)) return;
+  const files = (from === 'image' ? sourceBoxes() : imageBoxes()).map(box => box.querySelector('input').files[0]).filter(Boolean);
+  if (!files.length) return;
+  const boxes = () => (to === 'image' ? sourceBoxes() : imageBoxes());
+  if (boxes().some(box => box.querySelector('input').files.length)) return;  // It has its own: left as it is
+  if (to === 'image') { sourcesShown = Math.max(sourcesShown, files.length); syncImageForm(); }
+  else { imagesShown = Math.max(imagesShown, files.length); syncVideoForm(); }
+  files.forEach((file, i) => {
+    const box = boxes()[i];
+    if (!box) return;
+    const list = new DataTransfer();
+    list.items.add(file);
+    box.querySelector('input').files = list.files;
+    if (to === 'image') showSource(box, i === 0); else showImage(box);
+  });
+  if (to === 'image') syncImageForm(); else syncVideoForm();
+}
 async function stopJob(url) {
   const body = await (await fetch(url, { method: 'POST' })).json();
   if (body.error) alert(body.error);
@@ -8951,7 +9670,8 @@ function renderPrivate(on) {
   $('privateToggle').classList.toggle('on', on);
   $('privateToggle').setAttribute('aria-pressed', String(on));
   $('privateToggle').title = `Private mode (NSFW): ${on ? 'on' : 'off'}`;
-  if (on && !was) resetOutputFilter();
+  // Either way the NSFW view follows: on with it, and off with it, so nothing NSFW is left in Output or Finished.
+  if (on !== was) resetOutputView();
 }
 async function setPrivate(on) {
   try {
@@ -8962,29 +9682,51 @@ async function setPrivate(on) {
 $('privateMode').addEventListener('change', () => setPrivate($('privateMode').checked));
 // The key in the top bar: Private mode on and off, as its Settings checkbox does.
 $('privateToggle').addEventListener('click', e => { e.preventDefault(); setPrivate(!privateMode); });
-function resetOutputFilter() {
-  const wanted = privateMode && pipeline !== 'shorts' ? NSFW_FILTER : '';
-  if (outputFilter === wanted) return;
-  outputFilter = wanted;
-  $('videos').dataset.key = $('imageSets').dataset.key = '';
-  renderVideos();
-  renderImageSets();
+// Output opens on the NSFW view in Private mode, and off it otherwise.
+function resetOutputView() {
+  const wanted = privateMode && pipeline !== 'shorts';
+  if (nsfwView === wanted) return;
+  nsfwView = wanted;
+  redrawFiltered();
 }
 function showPage(page) {
-  if (page === 'output' && document.body.dataset.page !== 'output') { holdOutput(); resetOutputFilter(); }
+  if (page === 'output' && document.body.dataset.page !== 'output') {
+    holdOutput();
+    resetOutputView();
+    for (const fold of $('collections').querySelectorAll('details.collection[open]')) reshuffleCollection(fold);
+  }
   document.body.dataset.page = page;
+  if (page === 'output') placeKindsThumb();
   try { sessionStorage.setItem(PAGE_KEY, page); } catch (e) {}
   if (!WIDE.matches) window.scrollTo(0, 0);
   markJump();
 }
 // Each side's colour, for the menu's dots.
-const SIDE_COLOURS = { shorts: '#ff0033', video: '#4c8dff', image: '#2fbf71' };
-// Pages that are a side's own: tapped again, they offer the same page on the other sides.
+// The sides' colours as the stylesheet has them (:root), for the menus' dots and the running job's colour.
+const SIDE_COLOURS = { shorts: 'var(--c-shorts)', video: 'var(--c-video)', image: 'var(--c-image)' };
+// Tapped again: Status offers what opens over it (Finished, the log, Quota); Generate, the other sides; Output, a
+// shortcut to what it shows, in a word.
 const SIDE_PAGES = ['status', 'generate', 'output'];
+// Shorts on top, then Videos and Images; Both at the bottom, in Output's violet.
+const OUTPUT_SHORTCUTS = { shorts: ['Shorts', SIDE_COLOURS.shorts], video: ['Videos', SIDE_COLOURS.video], image: ['Images', SIDE_COLOURS.image], both: ['Both', 'var(--shared)'] };
+// The side Generate was on before Shorts, to go back to when Output leaves Shorts.
+let madeSide = 'image';
 function openSideMenu(link) {
   const menu = $('sideMenu');
-  menu.innerHTML = Object.keys(SIDE_NAMES).filter(side => side !== pipeline).map(side =>
-    `<button type="button" role="menuitem" data-side="${side}"><span class="side-dot" style="background:${SIDE_COLOURS[side]}"></span>${SIDE_NAMES[side]}</button>`).join('');
+  const dot = colour => `<span class="side-dot" style="background:${colour}"></span>`;
+  if (link.dataset.page === 'status') {
+    // Status, tapped again: what opens over it.
+    const finished = $('finishedCount').textContent;
+    menu.innerHTML = [['finished', `Finished${finished ? ` (${finished})` : ''}`], ['log', 'Log'], ['quota', 'Quota']].map(([which, name]) =>
+      `<button type="button" role="menuitem" data-panel="${which}">${dot('var(--shared)')}${name}</button>`).join('');
+  } else if (link.dataset.page === 'output') {
+    const here = pipeline === 'shorts' ? 'shorts' : outputKind;
+    menu.innerHTML = Object.entries(OUTPUT_SHORTCUTS).filter(([kind]) => kind !== here).map(([kind, [name, colour]]) =>
+      `<button type="button" role="menuitem" data-output-kind="${kind}">${dot(colour)}${name}</button>`).join('');
+  } else {
+    menu.innerHTML = Object.keys(SIDE_NAMES).filter(side => side !== pipeline).map(side =>
+      `<button type="button" role="menuitem" data-side="${side}">${dot(SIDE_COLOURS[side])}${SIDE_NAMES[side]}</button>`).join('');
+  }
   menu.classList.remove('closing');
   menu.hidden = false;
   // Over the button it came from, at least as wide.
@@ -9018,10 +9760,18 @@ $('jump').addEventListener('click', e => {
   showPage(page);
 });
 $('sideMenu').addEventListener('click', e => {
-  const choice = e.target.closest && e.target.closest('[data-side]');
+  const choice = e.target.closest && e.target.closest('[data-side], [data-output-kind], [data-panel]');
   if (!choice) return;
   closeSideMenu();
-  setPipeline(choice.dataset.side);
+  if (choice.dataset.panel) { openPanel(choice.dataset.panel); return; }
+  const kind = choice.dataset.outputKind;
+  if (!kind) setPipeline(choice.dataset.side);
+  else if (kind === 'shorts') setPipeline('shorts');
+  else {
+    // Out of Shorts: Generate goes back to the side it was on, as Shorts is its own on both pages.
+    if (pipeline === 'shorts') setPipeline(madeSide);
+    setOutputKind(kind);
+  }
   showPage(document.body.dataset.page);
 });
 // A tap anywhere else, or Escape, puts it away.
@@ -9040,6 +9790,8 @@ function markJump() {
     const generate = !!here && here.hash === '#optionsCard';
     desktopGenerateActive = generate;
   } else desktopGenerateActive = false;
+  // In Generate (its page on a phone, scrolled to it on a desktop): what sits above every page takes the side's colour.
+  document.body.classList.toggle('in-generate', WIDE.matches ? desktopGenerateActive : document.body.dataset.page === 'generate');
   JUMPS.forEach(a => a.classList.toggle('active', a === here));
   // The form's own button is in sight at its end, so this one would only repeat it.
   $('goBar').hidden = !here || here.hash !== '#optionsCard' || inView('formActions');
@@ -9413,7 +10165,8 @@ if (window.ResizeObserver) {
 }
 
 {
-  let page = 'generate';
+  // A first visit opens on Status; coming back in the same tab (a reload), on the page it last showed.
+  let page = 'status';
   try { page = sessionStorage.getItem(PAGE_KEY) || page; } catch (e) {}
   if (!['status', 'generate', 'output'].includes(page)) page = 'status';
   document.body.dataset.page = page;

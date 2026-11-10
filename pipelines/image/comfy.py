@@ -8,7 +8,8 @@ from pipelines.image import media, models
 from pipelines.video.comfy import ComfyClient
 
 IMAGE_EXTENSIONS = (".png", ".jpg", ".jpeg", ".webp")
-TEXT_GENERATORS = ("TextGenerate",)
+TEXT_GENERATORS = ("TextGenerate", "TextGenerateV2")
+JSON_EXTRACT = "JsonExtractString"
 
 
 def watch_text_generation(workflow):
@@ -21,8 +22,11 @@ def watch_text_generation(workflow):
     used = _feeding_outputs(workflow)
     added = []
     for key in [key for key in used if workflow[key].get("class_type") in TEXT_GENERATORS]:
+        # One that answers in JSON (MiniMax H3 Image's: the caption and an aspect ratio) is read as what is taken out of it.
+        source = next((other for other in used if workflow[other].get("class_type") == JSON_EXTRACT
+                       and workflow[other]["inputs"].get("json_string") == [key, 0]), key)
         node_id = f"enhanced_{key}"
-        workflow[node_id] = {"class_type": "PreviewAny", "inputs": {"source": [key, 0]}, "_meta": {"title": "What the enhancer wrote"}}
+        workflow[node_id] = {"class_type": "PreviewAny", "inputs": {"source": [source, 0]}, "_meta": {"title": "What the enhancer wrote"}}
         added.append(node_id)
     return added
 
@@ -107,9 +111,18 @@ class ImageClient(ComfyClient):
         self._set(workflow, "height", height)
         return workflow
 
+    def enhancer_unchosen(self):
+        """
+        It has a prompt enhancer to choose, and it wasn't. Its text generator may still be wired in behind a switch the
+        workflow works out as it runs (Krea-2's, from an Or of two If None): watching it would run it for nothing, and
+        keep what it wrote as the image's detailed prompt though the image was never made from it.
+        """
+        return (any(option.get("id") == "prompt_enhancer" for option in getattr(self, "options", None) or [])
+                and (getattr(self, "chosen", None) or {}).get("prompt_enhancer") != "1")
+
     def _render_once(self, prompt, images, width, height, save_as, seed):
         workflow = self.filled(prompt, images, width, height)
-        watched = watch_text_generation(workflow)
+        watched = [] if self.enhancer_unchosen() else watch_text_generation(workflow)
         entry = self._run(workflow, seed)
         self.enhanced = generated_text(entry, watched)
         return self._download(entry, save_as, IMAGE_EXTENSIONS, "an image")

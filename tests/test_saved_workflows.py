@@ -1,4 +1,5 @@
 """Turning what ComfyUI saves into what its API takes, and finding the inputs to fill."""
+import json
 import os
 import tempfile
 import sys
@@ -288,12 +289,15 @@ class OptionsTest(unittest.TestCase):
     def test_each_switch_and_setting_is_an_option(self):
         options = self.options()
         self.assertEqual(sorted(options), ["group_color_correction", "group_sharpen", "group_upscaler", "group_upscaler.choice",
-                                           "lora_knpv3_1", "prompt_boost", "prompt_enhancer", "steps"])
+                                           "lora", "lora_name", "lora_strength", "prompt_boost", "prompt_enhancer", "steps"])
         self.assertEqual(options["prompt_enhancer"]["role"], "llm", "chosen with the LLM, not as a switch")
         self.assertNotIn("group_prompt_enhancer", options, "the pipeline writes the prompt: its own enhancer stays off")
         self.assertEqual((options["group_sharpen"]["default"], options["steps"]["default"]), ("0", "8"))
         self.assertEqual(options["group_upscaler.choice"]["choices"], ["720p", "1080p", "4K"])
-        self.assertEqual((options["lora_knpv3_1"]["default"], options["prompt_boost"]["default"]), ("0", "1.5"))
+        self.assertEqual((options["lora"]["default"], options["lora_name"]["default"], options["prompt_boost"]["default"]), ("0", "KNPV3_1.safetensors", "1.5"),
+                         "the LoRA the workflow has is the one to start from, where it's installed")
+        self.assertEqual(options["lora_name"]["labels"]["KNPV3_1.safetensors"], "KNPV3", "said without .safetensors or a download's _1")
+        self.assertTrue(options["lora"]["advanced"] and options["lora"]["below"])
 
     def test_one_that_cant_run_says_why(self):
         self.assertIn("LayerColor", self.options()["group_color_correction"]["problem"])
@@ -301,7 +305,7 @@ class OptionsTest(unittest.TestCase):
 
     def test_a_run_makes_the_workflow_again_as_chosen(self):
         api = workflow_options.convert(switchable_workflow(), OBJECT_INFO, {
-            "group_sharpen": "1", "group_upscaler": "1", "group_upscaler.choice": "1080p", "lora_knpv3_1": "0.7", "prompt_boost": "0", "steps": "12"})[0]
+            "group_sharpen": "1", "group_upscaler": "1", "group_upscaler.choice": "1080p", "lora": "1", "lora_strength": "0.7", "prompt_boost": "0", "steps": "12"})[0]
         kinds = [node["class_type"] for node in api.values()]
         self.assertEqual(kinds.count("Image Lucy Sharpen"), 2, "the sharpen group, and the one inside the upscaler")
         self.assertEqual(next(node for node in api.values() if node["class_type"] == "CustomCombo")["inputs"]["choice"], "1080p")
@@ -324,7 +328,8 @@ class OptionsTest(unittest.TestCase):
 
     def test_choices_are_checked(self):
         options = list(self.options().values())
-        self.assertIsNone(workflow_options.check(options, {"group_sharpen": "1", "steps": "20", "lora_knpv3_1": "0"}))
+        self.assertIsNone(workflow_options.check(options, {"group_sharpen": "1", "steps": "20", "lora": "0"}))
+        self.assertIsNone(workflow_options.check(options, {"lora_knpv3_1": "0.7"}), "as a run before the LoRA setting chose it")
         self.assertIn("can't be changed", workflow_options.check(options, {"group_color_correction": "1"}))
         self.assertIn("one of", workflow_options.check(options, {"group_upscaler.choice": "8K"}))
         self.assertIn("from 1 to 150", workflow_options.check(options, {"steps": "0"}))
@@ -392,13 +397,40 @@ class SamplingOptionsTest(unittest.TestCase):
     def test_ltx_options_change_their_nodes(self):
         api = self.ltx()
         found = {option["id"]: option for option in workflow_options._tune(
-            api, self.INFO, {"fps": "30", "negative": "ugly", "image_strength": "0.5", "nag_scale": "5", "lora_slot": "b.safetensors", "lora_slot_strength": "0.7"})}
-        self.assertEqual(set(found), {"sampler", "cfg", "negative", "fps", "image_strength", "nag_scale", "lora_slot", "lora_slot_strength"})
+            api, self.INFO, {"fps": "30", "negative": "ugly", "image_strength": "0.5", "nag_scale": "5"})}
+        self.assertEqual(set(found), {"sampler", "cfg", "negative", "fps", "image_strength", "nag_scale"})
         self.assertEqual(api["4"]["inputs"]["value"], 30.0)
         self.assertEqual(api["7"]["inputs"]["text"], "ugly")
         self.assertEqual([api[key]["inputs"]["strength"] for key in ("8", "9")], [0.5, 0.5], "both passes")
         self.assertEqual(api["10"]["inputs"]["nag_scale"], 5.0)
+
+    def test_the_lora_setting_goes_in_an_empty_power_lora_loader(self):
+        api = self.ltx()
+        added = workflow_options._style_lora(api, self.INFO, {"lora": "1", "lora_name": "b.safetensors", "lora_strength": "0.7"}, [])
+        self.assertEqual([option["id"] for option in added], ["lora", "lora_name", "lora_strength"])
         self.assertEqual(api["11"]["inputs"]["lora_1"], {"on": True, "lora": "b.safetensors", "strength": 0.7, "strengthTwo": None})
+
+    def test_with_nowhere_for_a_lora_one_is_put_in_before_what_samples(self):
+        # So a LoRA dropped in ComfyUI's loras folder works on any workflow, with no change to it.
+        info = {**self.INFO, "LoraLoaderModelOnly": {"input": {"required": {"model": ["MODEL"], "lora_name": [["a.safetensors", "b.safetensors",
+                                                                                                                  "x_turbo_4step.safetensors"]]}}}}
+        api = {"1": {"class_type": "UNETLoader", "inputs": {"unet_name": "m"}, "_meta": {"title": "m"}},
+               "2": {"class_type": "KSampler", "inputs": {"model": ["1", 0], "positive": ["3", 0]}, "_meta": {"title": "s"}}}
+        added = workflow_options._style_lora(api, info, {}, [])
+        self.assertEqual(added[1]["choices"], ["a.safetensors", "b.safetensors"], "speed LoRAs have switches of their own")
+        self.assertEqual(api["2"]["inputs"]["model"], ["1", 0], "off, nothing changes")
+        workflow_options._style_lora(api, info, {"lora": "1", "lora_name": "b.safetensors", "lora_strength": "0.6"}, [])
+        self.assertEqual(api["2"]["inputs"]["model"], ["style_lora", 0])
+        self.assertEqual(api["style_lora"]["inputs"], {"lora_name": "b.safetensors", "strength_model": 0.6, "model": ["1", 0]})
+
+    def test_what_earlier_runs_chose_for_a_lora_is_the_lora_setting(self):
+        options = workflow_options.lora_options("0", "KNPV3_1.safetensors", 1, ["KNPV3_1.safetensors"])
+        self.assertEqual(workflow_options.upgraded({"lora_knpv3_1": "0.7"}, options), {"lora": "1", "lora_strength": "0.7"})
+        self.assertEqual(workflow_options.upgraded({"lora_knpv3_1": "0"}, options), {"lora": "0"})
+        self.assertEqual(workflow_options.upgraded({"lora_slot": "b.safetensors", "lora_slot_strength": "0.5"}, options),
+                         {"lora": "1", "lora_name": "b.safetensors", "lora_strength": "0.5"})
+        self.assertEqual(workflow_options.upgraded({"face_enable_lora": "1"}, [{"id": "face_enable_lora"}]), {"face_enable_lora": "1"},
+                         "kept where the workflow still has it")
 
     H3_INFO = {**INFO,
                "H3MemoryOptimization": {"input": {"required": {"model": ["MODEL"], "mlp_memory": [["auto", "off"]], "chunk_rows": ["INT", {"default": 4096}]}}},
@@ -476,14 +508,18 @@ class TurboTest(unittest.TestCase):
 
     def test_turbo_on_runs_the_lora_with_its_own_steps(self):
         api = workflow_options.convert(turbo_workflow(), OBJECT_INFO, {"switch_lightning_lora": "1"}, "video")[0]
-        self.assertIs(api["22"]["inputs"]["value"], True)
-        self.assertEqual(api["24"]["inputs"]["value"], 4)
+        self.assertNotIn("ComfySwitchNode", [node["class_type"] for node in api.values()], "settled: only the side it takes is sent")
+        scheduler = next(node for node in api.values() if node["class_type"] == "BasicScheduler")
+        self.assertEqual((scheduler["inputs"]["steps"], api["24"]["inputs"]["value"]), (["24", 0], 4))
+        self.assertEqual(scheduler["inputs"]["model"], ["21", 0], "through the LoRA")
 
     def test_steps_set_go_to_the_side_the_switch_takes(self):
         api = workflow_options.convert(turbo_workflow(), OBJECT_INFO, {"switch_lightning_lora": "1", "steps": "6"}, "video")[0]
-        self.assertEqual((api["24"]["inputs"]["value"], api["23"]["inputs"]["value"]), (6, 20))
+        self.assertEqual(api["24"]["inputs"]["value"], 6)
+        self.assertNotIn("23", api, "the other side's steps aren't sent")
         api = workflow_options.convert(turbo_workflow(), OBJECT_INFO, {"steps": "12"}, "video")[0]
-        self.assertEqual((api["23"]["inputs"]["value"], api["24"]["inputs"]["value"]), (12, 4))
+        self.assertEqual(api["23"]["inputs"]["value"], 12)
+        self.assertNotIn("21", api, "nor its LoRA")
 
     def test_on_the_image_side_the_switch_is_settled_as_chosen(self):
         api = workflow_options.convert(self.workflow("image"), OBJECT_INFO, {"switch_lightning_lora": "1"}, "image")[0]
@@ -497,7 +533,7 @@ class TurboTest(unittest.TestCase):
         ui["nodes"].append(_ui_node(40, "PrimitiveBoolean", {"value": True}, title="Boolean (Spare)"))
         next(node for node in ui["nodes"] if node["id"] == 22)["title"] = None
         options = workflow_options.offered(ui, OBJECT_INFO, "video")
-        self.assertEqual([option["id"] for option in options if option["kind"] == "switch"], [])
+        self.assertEqual([option["id"] for option in options if option["kind"] == "switch" and option["id"] != "lora"], [])
 
 
 class ShorthandTest(unittest.TestCase):
@@ -535,7 +571,7 @@ class LorasTest(unittest.TestCase):
             # Switched out of the way: still in the workflow, but nothing reads it.
             "9": {"class_type": "LoraLoaderModelOnly", "inputs": {"model": ["1", 0], "lora_name": "Unused.safetensors", "strength_model": 1}},
         }
-        self.assertEqual(workflow_options.loras_in(api), ["Film (0.8)", "KNPV3_1"])
+        self.assertEqual(workflow_options.loras_in(api), ["Film (0.8)", "KNPV3 (1)"], "its strength said, 1 too; without a download's _1")
         self.assertEqual(workflow_options.loras_used(None), [])
 
 
@@ -760,6 +796,42 @@ class QwenImage21TemplateTest(unittest.TestCase):
         self.assertEqual(image_model(made), "qwen_image_21")
         self.assertEqual(image_model(edited), "qwen_image_21_edit")
 
+    def test_which_minimax_h3_image_it_is_follows_whether_it_is_given_an_image(self):
+        made = {"1": {"class_type": "MiniMaxH3ImageConditioning", "inputs": {"prompt": "x", "width": 1024, "height": 1024}}}
+        edited = {"1": {"class_type": "MiniMaxH3ImageConditioning", "inputs": {"prompt": "x", "images.image_1": ["2", 0]}}}
+        self.assertEqual(image_model(made), "minimax_h3_image")
+        self.assertEqual(image_model(edited), "minimax_h3_image_edit")
+
+    def test_the_prompt_is_what_goes_into_a_prompt_writers_instructions_not_the_instructions(self):
+        # MiniMax H3 Image's prompt enhancer: its instructions (task_prompt) have the prompt (user_prompt) put into them.
+        api = {"39": {"class_type": "PrimitiveStringMultiline", "inputs": {"value": "Rewrite {input text}"}, "_meta": {"title": "Text (task_prompt)"}},
+               "43": {"class_type": "PrimitiveStringMultiline", "inputs": {"value": "a fox"}, "_meta": {"title": "Text (user_prompt)"}},
+               "40": {"class_type": "StringReplace", "inputs": {"string": ["39", 0], "find": "{input text}", "replace": ["43", 0]}, "_meta": {"title": "Replace Text"}},
+               "34": {"class_type": "TextGenerateV2", "inputs": {"prompt": ["40", 0]}, "_meta": {"title": "Generate Text"}},
+               "32": {"class_type": "MiniMaxH3ImageConditioning", "inputs": {"prompt": ["34", 0]}, "_meta": {"title": "Conditioning"}},
+               "38": {"class_type": "KSampler", "inputs": {"positive": ["32", 0]}, "_meta": {"title": "KSampler"}}}
+        self.assertEqual(saved_workflows._prompt_input(api), ["43", "value"])
+
+    def test_an_enhancer_not_chosen_is_not_watched(self):
+        # Krea-2's runs behind a switch worked out as it runs: watched, it ran for nothing and its text was kept as the
+        # image's detailed prompt, though the image was made from the prompt as written.
+        from pipelines.image.comfy import ImageClient
+        client = object.__new__(ImageClient)
+        client.options = [{"id": "prompt_enhancer", "role": "llm"}]
+        client.chosen = {}
+        self.assertTrue(client.enhancer_unchosen())
+        client.chosen = {"prompt_enhancer": "1"}
+        self.assertFalse(client.enhancer_unchosen())
+        client.options = []
+        client.chosen = {}
+        self.assertFalse(client.enhancer_unchosen(), "one with no enhancer to choose keeps showing what its own wrote")
+
+    def test_pe_is_said_as_prompt_enhancer(self):
+        self.assertEqual(workflow_options._words("enable_pe"), "Enable prompt enhancer")
+        self.assertEqual(workflow_options._words("pe_model"), "Prompt enhancer model")
+        self.assertEqual(workflow_options._primitive_label("PE?"), "Prompt enhancer")
+        self.assertEqual(workflow_options._words("enable_lora"), "Enable LoRA")
+
 
 
 class LoraFamilyTest(unittest.TestCase):
@@ -790,3 +862,81 @@ class LoraFamilyTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class OnlyWhatIsChosenTest(unittest.TestCase):
+    """
+    Each setting does something only when it's chosen: chosen as the workflow has it, nothing changes; chosen another
+    way, what's sent changes. And nothing that isn't switched on (a LoRA, a group) is sent at all.
+    """
+    WORKFLOWS = (("switchable", switchable_workflow, "image"), ("turbo", turbo_workflow, "video"),
+                 ("text to image", lambda: text_to_image_workflow(), "image"), ("fibo2", fibo2_workflow, "image"))
+
+    @staticmethod
+    def other(option):
+        kind, default = option["kind"], option["default"]
+        if kind == "switch":
+            return workflow_options.ON if default == workflow_options.OFF else workflow_options.OFF
+        if kind == "choice":
+            return next((choice for choice in option["choices"] if choice != default), None)
+        if kind == "number":
+            value = float(default)
+            return f"{value + option['step'] if value + option['step'] <= option['max'] else value - option['step']:g}"
+        if kind == "strength":
+            return workflow_options.OFF if default != workflow_options.OFF else "0.5"
+        return None
+
+    def test_a_setting_changes_what_is_sent_only_when_chosen(self):
+        for name, make, pipeline in self.WORKFLOWS:
+            ui = make()
+            base = json.dumps(workflow_options.convert(ui, OBJECT_INFO, {}, pipeline)[0], sort_keys=True)
+            options = workflow_options.offered(ui, OBJECT_INFO, pipeline)
+            for option in options:
+                if option.get("problem") or option.get("role") or option["id"].startswith("image_upscale"):
+                    continue
+                with self.subTest(workflow=name, option=option["id"]):
+                    same = workflow_options.convert(ui, OBJECT_INFO, {option["id"]: option["default"]}, pipeline)[0]
+                    self.assertEqual(json.dumps(same, sort_keys=True), base, "chosen as the workflow has it, nothing changes")
+                    value = self.other(option)
+                    parent = next((other for other in options if other["id"] == option.get("parent")), None)
+                    if value is None or (parent and parent["kind"] != "switch"):
+                        continue
+                    chosen = {option["id"]: value, **({parent["id"]: workflow_options.ON} if parent else {})}
+                    changed = workflow_options.convert(ui, OBJECT_INFO, chosen, pipeline)[0]
+                    self.assertNotEqual(json.dumps(changed, sort_keys=True), base, f"chosen as {value}, it's used")
+
+    def test_a_lora_switched_off_isnt_sent(self):
+        # MiniMax H3's turbo LoRA, behind its switch: off, it was still in what was sent, and in the pills.
+        api = workflow_options.convert(turbo_workflow(), OBJECT_INFO, {}, "video")[0]
+        self.assertEqual(workflow_options.loras_in(api), [])
+        self.assertNotIn("LoraLoaderModelOnly", [node["class_type"] for node in api.values()])
+
+    def test_a_lora_at_strength_0_isnt_sent(self):
+        api = {"1": {"class_type": "UNETLoader", "inputs": {}, "_meta": {"title": "m"}},
+               "2": {"class_type": "FloatConstant", "inputs": {"value": 0}, "_meta": {"title": "off"}},
+               "3": {"class_type": "LoraLoaderModelOnly", "inputs": {"model": ["1", 0], "lora_name": "t.safetensors", "strength_model": ["2", 0]},
+                     "_meta": {"title": "turbo"}},
+               "4": {"class_type": "KSampler", "inputs": {"model": ["3", 0]}, "_meta": {"title": "s"}}}
+        workflow_options._drop_idle_loras(api)
+        self.assertNotIn("3", api)
+        self.assertEqual(api["4"]["inputs"]["model"], ["1", 0])
+
+
+class SamplingPillTest(unittest.TestCase):
+    def test_the_main_sampler_and_its_steps_and_cfg(self):
+        # Krea-2's: a 2nd pass at 0.2 only refines; the picture is made by the one at full denoise.
+        api = {"1": {"class_type": "KSampler", "inputs": {"sampler_name": "res_2s", "steps": 8, "cfg": 1, "denoise": 0.2, "latent_image": ["2", 0]}},
+               "2": {"class_type": "KSampler", "inputs": {"sampler_name": "linear/euler", "steps": ["3", 0], "cfg": 4.5, "denoise": 1, "latent_image": ["9", 0]}},
+               "3": {"class_type": "PrimitiveInt", "inputs": {"value": 6}},
+               "4": {"class_type": "PreviewImage", "inputs": {"images": ["1", 0]}}}
+        self.assertEqual((workflow_options.sampling_in(api), workflow_options.cfg_in(api)), ("euler, 6 steps", "4.5"))
+
+    def test_a_sampler_fed_its_sampler_and_sigmas_runs_with_those(self):
+        # MiniMax H3's Motion Director keeps a sampler and steps of its own, unused when it's fed them.
+        api = {"17": {"class_type": "MiniMaxH3MotionDirector", "inputs": {"steps": 25, "sampler_name": "res_multistep", "sampler": ["65", 0],
+                                                                         "sigmas": ["68", 0], "guider": ["70", 0]}},
+               "65": {"class_type": "KSamplerSelect", "inputs": {"sampler_name": "er_sde"}},
+               "68": {"class_type": "BasicScheduler", "inputs": {"steps": 8, "model": ["1", 0]}},
+               "70": {"class_type": "BasicGuider", "inputs": {}},
+               "99": {"class_type": "SaveVideo", "inputs": {"video": ["17", 0]}}}
+        self.assertEqual((workflow_options.sampling_in(api), workflow_options.cfg_in(api)), ("er_sde, 8 steps", "1"))

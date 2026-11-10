@@ -19,7 +19,7 @@ from core.paths import LOGS_DIR
 from core.saved_workflows import shorthand, title_words, unique_name
 from pipelines.video import h3_infinite, h3_multishot, h3_prompt, media, paths, planner, roles
 from pipelines.video.comfy import ComfyClient
-from pipelines.video.run_state import STAGES, RunState, list_runs
+from pipelines.video.run_state import STAGES, RunState, claimed_films, list_runs
 
 # The built-in workflow's short name in a film's file name.
 BUILT_IN = "LTX23_I2V_T2V"
@@ -537,12 +537,18 @@ def film_tag(state, workflow):
 
 def stitch_film(state):
     print("🧵 Stitching the film...")
-    # Made again (a shot redone), it keeps its name; a new film never takes another's.
+    # Made again (a shot redone), it keeps its name; a new film never takes another's, nor a name another run has chosen.
+    taken = claimed_films(state.id)
     if not state.film_name:
         workflow = shorthand(state.workflow, BUILT_IN)
         name = f"{title_words(state.title, 'film')}_{workflow}"
         tag = film_tag(state, workflow)
-        state.update(film_name=unique_name(paths.OUTPUT_DIR, f"{name}_{tag}" if tag else name, ".mp4"))
+        state.update(film_name=unique_name(paths.OUTPUT_DIR, f"{name}_{tag}" if tag else name, ".mp4", taken))
+    elif state.film_name in taken:
+        # Named when queued, as a latent upscale's copy is: another run has it now, so this one goes beside it.
+        clash = state.film_name
+        state.update(film_name=unique_name(paths.OUTPUT_DIR, clash, ".mp4", taken))
+        print(f"   ⚠️ {clash}.mp4 is another run's film: this one is {state.film_name}.mp4.")
     output = os.path.join(paths.OUTPUT_DIR, f"{state.film_name}.mp4")
     if state.start == "multishot":
         shutil.copyfile(os.path.join(state.parts_dir, state.take_file), output)

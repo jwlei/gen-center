@@ -851,7 +851,11 @@ class JobQueue:
     def snapshot(self):
         with self.lock:
             self._advance()
+            argv_flag = lambda item, name: (item.get("argv") or [])[(item.get("argv") or []).index(name) + 1] \
+                if name in (item.get("argv") or [])[:-1] else None
             public = lambda item: {**{key: item.get(key) for key in ("id", "label", "detail", "estimate", "videos", "pipeline", "later", "resume")},
+                                   # What tells whether it is NSFW (_apply_nsfw): made in Private mode, or the run or film it works on.
+                                   "private": bool(item.get("private")), "film": argv_flag(item, "--film"),
                                    "editing": bool(item.get("edit_token")),
                                    "continuation": bool(item.get("resume") and "--redo" not in (item.get("argv") or [])
                                                         and not upscale_queue_settings(item)),
@@ -1080,6 +1084,18 @@ def _video_nsfw_key(name, films=None):
     return ("video", run) if run else ("video_file", name)
 
 
+def _current_films(results, film_runs):
+    """
+    Finished opens a run's film by its name as it is now: one stitched again under another name (it had a name another
+    run had) is found there. An upscaled copy is a file of its own, and keeps the name it was given.
+    """
+    finals = {state.id: name for name, state in film_runs.items() if state.final}
+    for result in results:
+        name = finals.get(result.get("run_id"))
+        if result.get("pipeline") == "video" and name and result.get("film") and not UPSCALED.search(result["film"]):
+            result["film"] = name
+
+
 def _apply_nsfw(payload, tags, film_runs, private=False):
     image_tags, video_tags, video_files = (set(tags[key]) for key in ("image", "video", "video_file"))
     tagged_films = set()
@@ -1092,18 +1108,24 @@ def _apply_nsfw(payload, tags, film_runs, private=False):
     for image_set in payload["image_sets"]:
         image_set["nsfw"] = image_set["id"] in image_tags
 
-    def visible_result(result):
-        # Private mode: what is made is NSFW, so Finished shows it rather than hiding all of it.
-        if private:
-            return True
+    def tagged(result):
         if result.get("pipeline") == "image":
-            return result.get("run_id") not in image_tags
+            return result.get("run_id") in image_tags
         if result.get("pipeline") == "video":
-            return result.get("run_id") not in video_tags and result.get("film") not in tagged_films
-        return True
+            return result.get("run_id") in video_tags or result.get("film") in tagged_films
+        return False
 
-    payload["finished_results"] = [result for result in payload["queue"]["results"] if visible_result(result)]
-    payload["made_now"] = [result for result in payload["made_now"] if visible_result(result)]
+    # Kept and marked: Finished shows what is NSFW only under the NSFW filter, which only the page knows.
+    # What the job going now makes in Private mode is NSFW even before its run is tagged.
+    payload["finished_results"] = [{**result, "nsfw": tagged(result)} for result in payload["queue"]["results"]]
+    payload["made_now"] = [{**result, "nsfw": private or tagged(result)} for result in payload["made_now"]]
+    # What waits, what runs and what is pending: out of Private mode the page shows a plain title for these instead.
+    queue = payload["queue"]
+    for item in [*queue.get("items", []), *([queue["current"]] if queue.get("current") else [])]:
+        item["nsfw"] = bool(item.get("private")) or tagged({"pipeline": item.get("pipeline"), "run_id": item.get("resume"),
+                                                            "film": item.get("film")})
+    for run in payload.get("stopped_runs", []):
+        run["nsfw"] = tagged({"pipeline": run.get("pipeline"), "run_id": run.get("id")})
 
 
 @app.route("/api/output/nsfw", methods=["POST"])
@@ -1450,7 +1472,13 @@ def _comfyui_workflow(item):
     env = (item or {}).get("env") or {}
     if env.get("COMFYUI_WORKFLOW"):
         return env["COMFYUI_WORKFLOW"]
-    return None if (item or {}).get("pipeline", "shorts") == "shorts" and env.get("AVATAR_SOURCE") != "comfyui" else "built-in"
+    if (item or {}).get("pipeline", "shorts") == "shorts" and env.get("AVATAR_SOURCE") != "comfyui":
+        return None
+    # No workflow file: told apart by what runs it. An RTX upscale, an image upscale and Shorts' avatars each load
+    # their own models, and one ending must free them before another starts.
+    argv = (item or {}).get("argv") or []
+    module = argv[argv.index("-m") + 1] if "-m" in argv[:-1] else (item or {}).get("pipeline")
+    return f"built-in:{module}"
 
 
 def frees_comfyui(item, ahead):
@@ -1988,6 +2016,20 @@ def can_open_folders():
     return os.name == "nt" and on_this_pc()
 
 
+# Status's idle nudges ("Why not try something neon today?"), written by Gemini once (scripts/make_nudges.py).
+NUDGES_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "nudges.json")
+
+
+def nudges():
+    """The nudges, or none when the file is missing or broken: Status then simply says nothing."""
+    try:
+        with open(NUDGES_PATH, encoding="utf-8") as f:
+            lines = json.load(f)
+    except (OSError, ValueError):
+        return []
+    return [line for line in lines if isinstance(line, str) and line.strip()] if isinstance(lines, list) else []
+
+
 @app.route("/")
 @app.route("/shorts", endpoint="shorts_page")
 @app.route("/video", endpoint="video_page")
@@ -2008,6 +2050,7 @@ def index():
         tailscale_problem=tailscale_problem,
         settings=settings.load(),
         can_open_folders=can_open_folders(),
+        nudges=nudges(),
         # The page you asked for by address, or else the one it last showed.
         initial_pipeline=request.path.strip("/"),
         **context,
@@ -2896,7 +2939,9 @@ def status():
     with _nsfw_lock:
         tags = _read_nsfw()
     payload["private"] = private_mode()
-    _apply_nsfw(payload, tags, films_of_runs(), payload["private"])
+    film_runs = films_of_runs()
+    _current_films(payload["queue"]["results"], film_runs)
+    _apply_nsfw(payload, tags, film_runs, payload["private"])
     for hook in STATUS_HOOKS:
         try:
             hook(payload)

@@ -234,6 +234,26 @@ class PipelineTest(unittest.TestCase):
         self.assertEqual(len(self.server.prompts), 3)
         self.assertTrue(os.path.exists(self.only_run().final))
 
+    def test_a_film_never_takes_a_name_another_run_has(self):
+        self.assertEqual(self.film(), 0)
+        first = self.only_run()
+        made = os.path.getmtime(first.final)
+        # A copy named when it was queued, as a latent upscale's is, with the same name as the film now there.
+        copy = run_state.RunState(**{name: getattr(first, name) for name in run_state.RunState.__dataclass_fields__})
+        copy.id, copy.final = "run_20990101_000000", None
+        copy.save()
+        self.addCleanup(copy.remove)
+        for index in range(len(copy.shots)):
+            os.makedirs(os.path.dirname(copy.clip_path(index)), exist_ok=True)
+            shutil.copyfile(first.clip_path(index), copy.clip_path(index))
+        output = main.stitch_film(copy)
+        self.assertEqual(os.path.basename(output), f"{first.film_name}_2.mp4", "beside it, numbered")
+        self.assertEqual(os.path.getmtime(first.final), made, "the other run's film is left as it was")
+        # Its own film, made again after a redo, keeps its name.
+        first = run_state.RunState.load(first.id)
+        first.update(final=None)
+        self.assertEqual(os.path.basename(main.stitch_film(first)), f"{first.film_name}.mp4")
+
     def test_comfyui_down_doesnt_cost_a_redos_clips(self):
         self.assertEqual(self.film(), 0)
         state = self.only_run()

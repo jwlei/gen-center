@@ -30,6 +30,8 @@ SEED_CONTROLS = ("fixed", "increment", "decrement", "randomize")
 # Latent video comes in 4n+1 frames.
 FRAME_STEP = 4
 PROMPT_INPUTS = ("text", "prompt", "value")
+# Fill a template with the prompt: its "replace" is the prompt, its "string" the template around it.
+TEMPLATE_FILLS = ("StringReplace",)
 # Tuned for Shorts, and all Shorts offers. Everything else saved in ComfyUI is for Video.
 SHORTS_SUFFIX = "_shorts"
 # SaveVideo always writes to ComfyUI's output folder, which the pipeline stays out of.
@@ -60,6 +62,7 @@ IMAGE_MODEL_NODES = {"TextEncodeFibo2": "fibo2", "TextEncodeQwenImageEditPlus": 
 IMAGE_MODEL_ENCODERS = ("fibo2", "krea2", "moss_image")
 # Qwen-Image 2.1's encoder, for making images and editing them: which it does depends on whether it's given an image.
 QWEN_IMAGE_21_ENCODER = "TextEncodeQwenImage21"
+MINIMAX_H3_IMAGE_ENCODER = "MiniMaxH3ImageConditioning"
 # How a subgraph's links name the two ends it has in place of nodes.
 SUBGRAPH_IN, SUBGRAPH_OUT = -10, -20
 # Far more than any workflow has. Only subgraphs that contain each other get this far.
@@ -386,14 +389,17 @@ def _replace_uses(api, node_id, slot, source):
                     node["inputs"][name] = source
 
 
-def _settle_switches(api, enhance=False):
+TEXT_TO_VIDEO = re.compile(r"text.?to.?video", re.I)
+
+
+def _settle_switches(api, enhance=False, refine=True):
     """
     A switch set on the workflow's face goes the way it's set, for good. So a style LoRA that's off needs
     no file, and with Refine Prompt off nothing rewrites the prompt: the LLM's or yours reaches the model as it is.
     enhance turns it on instead, for the workflow's own enhancer to write the prompt from yours.
     """
     for node in api.values():
-        if re.search(r"refine|enhance", node["_meta"]["title"], re.I) and isinstance(node["inputs"].get("value"), bool):
+        if refine and re.search(r"refine|enhance", node["_meta"]["title"], re.I) and isinstance(node["inputs"].get("value"), bool):
             node["inputs"]["value"] = enhance
     while True:
         for node_id, node in api.items():
@@ -401,6 +407,9 @@ def _settle_switches(api, enhance=False):
                 continue
             switch = node["inputs"].get("switch")
             setter = api.get(switch[0]) if isinstance(switch, list) else None
+            # Text to video is the pipeline's to set as each run goes (find_fields): left as a switch.
+            if setter and TEXT_TO_VIDEO.search(setter["_meta"]["title"]):
+                continue
             value = setter["inputs"].get("value") if setter else switch
             if isinstance(value, bool):
                 _replace_uses(api, node_id, 0, node["inputs"].get("on_true" if value else "on_false"))
@@ -518,6 +527,8 @@ def to_api(ui, info, images=False, enhance=False):
         saves = [node_id for node_id, node in api.items() if "save_output" in node["inputs"]]
         if not saves:
             raise Unusable("It doesn't make a video the pipeline can pick up.")
+        # The side a switch doesn't take isn't sent: a turbo LoRA switched off is no part of what runs, nor of its pills.
+        _settle_switches(api, refine=False)
     api = _upstream(api, saves)
     _check_installed(api, info)
     director.adapt(api)
@@ -557,7 +568,10 @@ def _prompt_input(api):
         for name in PROMPT_INPUTS if not SYSTEM_PROMPT.search(api[node_id]["_meta"]["title"]) else ():
             if isinstance(inputs.get(name), str):
                 return [node_id, name]
-        waiting += [value[0] for name, value in inputs.items() if isinstance(value, list) and name != "negative"]
+        # A Replace Text puts the prompt (replace) into a prompt writer's instructions (string): the prompt is looked
+        # for first, as MiniMax H3 Image's prompt enhancer has it, so the instructions are left as they are.
+        order = sorted(inputs.items(), key=lambda item: api[node_id]["class_type"] in TEMPLATE_FILLS and item[0] != "replace")
+        waiting += [value[0] for name, value in order if isinstance(value, list) and name != "negative"]
     return None
 
 
@@ -711,7 +725,7 @@ def find_fields(api, info, needs_audio=False):
     elif needs_audio:
         raise Unusable("It has no Load Audio node feeding the video, so she can't lip-sync.")
 
-    switch = _titled(api, r"text.?to.?video", (bool,))
+    switch = _titled(api, TEXT_TO_VIDEO.pattern, (bool,))
     if switch:
         fields["text_to_video"] = switch
     seconds = _titled(api, r"\b(seconds?|duration)\b", (int, float))
@@ -787,10 +801,12 @@ def image_model(api):
         if node["class_type"] in IMAGE_MODEL_NODES:
             return IMAGE_MODEL_NODES[node["class_type"]]
     for node in api.values():
-        if node["class_type"] == QWEN_IMAGE_21_ENCODER:
+        # Both make images, and edit them when given one: which it is depends on whether it's given an image.
+        if node["class_type"] in (QWEN_IMAGE_21_ENCODER, MINIMAX_H3_IMAGE_ENCODER):
             # An edit shows the model its image as well as making one that size, so it holds less: models.py.
             edits = any(name.startswith("images.") and isinstance(value, list) for name, value in node["inputs"].items())
-            return "qwen_image_21_edit" if edits else "qwen_image_21"
+            model = "qwen_image_21" if node["class_type"] == QWEN_IMAGE_21_ENCODER else "minimax_h3_image"
+            return f"{model}_edit" if edits else model
     for node in api.values():
         if node["class_type"] == "CLIPLoader" and node["inputs"].get("type") in IMAGE_MODEL_ENCODERS:
             return node["inputs"]["type"]
@@ -855,10 +871,13 @@ def title_words(title, default):
     return re.sub(r"[^\w-]+", "_", title or "").strip("_")[:60] or default
 
 
-def unique_name(folder, name, extension=""):
-    """name, or name_2, name_3... if folder already has one: a second film with the same title keeps the first."""
+def unique_name(folder, name, extension="", taken=()):
+    """
+    name, or name_2, name_3... if folder already has one: a second film with the same title keeps the first. taken:
+    names other runs have already chosen but not made yet, as a copy queued before them is.
+    """
     candidate, number = name, 1
-    while os.path.exists(os.path.join(folder, candidate + extension)):
+    while candidate in taken or os.path.exists(os.path.join(folder, candidate + extension)):
         number += 1
         candidate = f"{name}_{number}"
     return candidate

@@ -229,6 +229,15 @@ def films_of_runs():
     return films
 
 
+def claimed_films(run_id=None):
+    """The film names every other run has chosen, made yet or not: a name is chosen before the film is written."""
+    names = set()
+    for state in list_runs():
+        if state.id != run_id:
+            names.update(name for name in (state.film_name, state.final and os.path.splitext(os.path.basename(state.final))[0]) if name)
+    return names
+
+
 def run_of_film(name, films=None):
     """The run a film came from: by the run in its name (older films), else by the film the run made. An upscaled one has its source's."""
     films = films_of_runs() if films is None else films

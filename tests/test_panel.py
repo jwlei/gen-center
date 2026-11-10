@@ -51,6 +51,22 @@ SAVED_OPTIONS = [{"id": "steps", "kind": "number", "label": "Steps", "default": 
                  {"id": "negative", "kind": "text", "label": "Negative prompt", "default": "saved negative", "advanced": True}]
 
 
+def without_lora(workflows, test):
+    """
+    The workflows as listed, less the LoRA setting each now has (core/workflow_options.py style_lora): the test checks
+    each has it, and compares the rest as it was.
+    """
+    found = []
+    for workflow in workflows:
+        takes = dict(workflow["takes"])
+        options = takes.pop("options", [])
+        test.assertEqual([option["id"] for option in options if option["id"].startswith("lora")], ["lora", "lora_name", "lora_strength"],
+                         f"{workflow['name']} offers Use LoRA")
+        rest = [option for option in options if not option["id"].startswith("lora")]
+        found.append({**workflow, "takes": {**takes, **({"options": rest} if rest else {})}})
+    return found
+
+
 class VideoMetadataTest(unittest.TestCase):
     def test_probe_is_nonblocking_and_invalidates_changed_files(self):
         started = threading.Event()
@@ -1145,7 +1161,7 @@ class PanelTest(unittest.TestCase):
         with open(os.path.join(webapp.SAVED_WORKFLOWS_DIR, "not_listed.json"), encoding="utf-8") as f:
             self.assertEqual(json.load(f), {"broken": "Needs gone.safetensors, which isn't installed."})
         self.assertEqual(self.client.get("/api/workflows?pipeline=shorts").get_json()["workflows"], [], "none are tuned for Shorts")
-        self.assertEqual(reply["workflows"], [
+        self.assertEqual(without_lora(reply["workflows"], self), [
             {"name": "r2v.json", "label": "r2v", "takes": {"min_images": 0, "max_images": 20}, "clip_seconds": [5, 10, 8], "openh3": False, "h3_multishot": False, "h3_director": False},
             {"name": "t2v.json", "label": "t2v", "takes": {"min_images": 0, "max_images": 0, "options": SAVED_OPTIONS}, "clip_seconds": [5, 10, 8], "openh3": False, "h3_multishot": False, "h3_director": False},
             {"name": "wan.json", "label": "wan", "takes": {"min_images": 0, "max_images": 1, "options": SAVED_OPTIONS}, "clip_seconds": [5, 10, 8], "openh3": False, "h3_multishot": False, "h3_director": False}],
@@ -1317,7 +1333,7 @@ class PanelTest(unittest.TestCase):
         with mock.patch.dict(os.environ, {"COMFYUI_URL": "http://127.0.0.1:9"}):
             reply = self.client.get("/api/workflows").get_json()
             self.assertFalse(reply["online"])
-            self.assertEqual(reply["workflows"], [
+            self.assertEqual(without_lora(reply["workflows"], self), [
                 {"name": "r2v.json", "label": "r2v", "takes": {"min_images": 0, "max_images": 20}, "clip_seconds": [5, 10, 8], "openh3": False, "h3_multishot": False, "h3_director": False},
                 {"name": "t2v.json", "label": "t2v", "takes": {"min_images": 0, "max_images": 0, "options": SAVED_OPTIONS}, "clip_seconds": [5, 10, 8], "openh3": False, "h3_multishot": False, "h3_director": False},
                 {"name": "wan.json", "label": "wan", "takes": {"min_images": 0, "max_images": 1, "options": SAVED_OPTIONS}, "clip_seconds": [5, 10, 8], "openh3": False, "h3_multishot": False, "h3_director": False}])
@@ -1386,13 +1402,14 @@ class PanelTest(unittest.TestCase):
             webapp._apply_nsfw(payload, tags, {})
             self.assertTrue(all(film["nsfw"] for film in payload["videos"]["video"]))
             self.assertEqual([s["nsfw"] for s in payload["image_sets"]], [True, False])
-            self.assertEqual([r["pipeline"] for r in payload["finished_results"]], ["shorts"])
-            self.assertEqual([r["run_id"] for r in payload["made_now"]], ["image_b"])
+            self.assertEqual([r["nsfw"] for r in payload["finished_results"]], [True, True, False],
+                             "marked, so Finished shows them only under the NSFW filter")
+            self.assertEqual([r["nsfw"] for r in payload["made_now"]], [True, False])
             self.assertEqual(len(payload["queue"]["results"]), 3, "Failed and queue history remain intact")
-            payload["made_now"] = [{"pipeline": "image", "run_id": "image_a"}]
+            payload["made_now"] = [{"pipeline": "image", "run_id": "image_b"}]
             webapp._apply_nsfw(payload, tags, {}, private=True)
-            self.assertEqual([r["pipeline"] for r in payload["finished_results"]], ["image", "video", "shorts"], "Private mode: NSFW stays in Finished")
-            self.assertEqual([r["run_id"] for r in payload["made_now"]], ["image_a"])
+            self.assertEqual([r["nsfw"] for r in payload["finished_results"]], [True, True, False], "Private mode: tags as they are")
+            self.assertEqual([r["nsfw"] for r in payload["made_now"]], [True], "made in Private mode: NSFW before it is tagged")
             self.assertTrue(post("video", "upscaled.mp4", False).get_json()["ok"])
             self.assertTrue(post("image", "image_a", False).get_json()["ok"])
             self.assertEqual(webapp._read_nsfw(), {"image": [], "video": [], "video_file": [], "video_sources": {}})
@@ -1514,6 +1531,9 @@ class PanelTest(unittest.TestCase):
             saved = self.client.post("/api/settings", json={"low_priority": True, "default_workflow": {"image": "image_x", "bogus": "y"}}).get_json()
             self.assertTrue(saved["settings"]["low_priority"])
             self.assertEqual(saved["settings"]["default_workflow"], {"shorts": "", "video": "", "image": "image_x"})
+            self.assertFalse(saved["settings"]["pin_progress"], "the progress bar is not pinned until asked")
+            self.assertTrue(self.client.post("/api/settings", json={"pin_progress": True}).get_json()["settings"]["pin_progress"])
+            self.assertTrue(webapp.settings.load()["pin_progress"], "kept")
             self.assertTrue(webapp.settings.load()["low_priority"], "kept in the file")
             self.assertEqual(self.client.post("/api/settings", json={"h3_model": "qwen3-14b"}).get_json()["settings"]["h3_model"], "qwen3-14b")
             self.assertEqual(self.client.post("/api/settings", json={"h3_model": "unknown"}).status_code, 400)
@@ -1570,6 +1590,13 @@ class PanelTest(unittest.TestCase):
         self.assertTrue(copy.film_name.endswith("_latent"))
         self.assertEqual((copy.clips, copy.final, copy.inputs), ({}, None, None))
         self.assertTrue(RunState.load(state.id).final, "the original stays as it is")
+        # Queued again before the first is made: its name is taken already, though no file has it yet.
+        with mock.patch.object(webapp.run_queue, "add", lambda item: added.append(item) or 1), \
+                mock.patch.object(video_panel, "offers_latent_upscale", return_value=True):
+            self.assertTrue(self.client.post(f"/films/{name}/upscale?method=latent&preset=Clean&mp=2").get_json()["ok"])
+        second = RunState.load(added[1]["resume"])
+        self.addCleanup(second.remove)
+        self.assertEqual(second.film_name, copy.film_name + "_2", "never the same film as the one queued before it")
 
     def test_private_mode_tags_new_creations_nsfw_and_is_kept(self):
         self.addCleanup(lambda: webapp.settings.update({"private_mode": False}))

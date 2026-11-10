@@ -18,7 +18,7 @@ from pipelines.video.comfy import workflow_model
 from pipelines.video.main import BUILT_IN
 from pipelines.video.run_eta import RunEta
 from core.saved_workflows import display_label, shorthand
-from pipelines.video.run_state import STAGES, UPSCALED, RunState, films_of_runs, folder_size, list_runs, run_of_film
+from pipelines.video.run_state import STAGES, UPSCALED, RunState, claimed_films, films_of_runs, folder_size, list_runs, run_of_film
 from pipelines.video import upscale as film_upscale
 
 COMMAND = [sys.executable, "-m", "pipelines.video.main"]
@@ -686,7 +686,8 @@ def latent_copy(state, preset, megapixels):
         shots.append(made)
     base = state.film_name or os.path.splitext(os.path.basename(state.final or state.id))[0]
     copy.shots, copy.clips, copy.final, copy.take_file = shots, {}, None, None
-    copy.film_name = unique_name(paths.OUTPUT_DIR, base + LATENT_SUFFIX, ".mp4")
+    # Not only the films made: one queued before it has its name already, and would be written over.
+    copy.film_name = unique_name(paths.OUTPUT_DIR, base + LATENT_SUFFIX, ".mp4", claimed_films(copy.id))
     copy.options = {**(state.options or {}), "latent_upscale": preset, "latent_upscale_mp": f"{megapixels:g}"}
     copy.plan_only = copy.first_only = False
     copy.inputs = None  # Generate never takes it for the original run to continue
@@ -778,7 +779,8 @@ def preserve_upscales(run_id=None, source_name=None):
 def with_facts(caption, brief):
     """A film's caption, with what Output's pills are made from (core/pills.py): list_videos turns them into pills."""
     caption["_facts"] = pills.facts(caption["model"], caption["upscaled"], caption["connection"], caption["h3_mode"],
-                                    caption["h3_creativity"], caption["loras"], caption["llm"], caption.pop("_direct", False))
+                                    caption["h3_creativity"], caption["loras"], caption["llm"], caption.pop("_direct", False),
+                                    caption.pop("_sampling", None), caption.pop("_cfg", None))
     caption["_sibling"] = pills.sibling_key("video", brief)
     return caption
 
@@ -815,6 +817,8 @@ def captions():
                 # How its clips connect: chain, image, director, multishot or infinite.
                 "connection": (made_by.connection_mode or made_by.start) if made_by else None,
                 "loras": workflow_options.loras_used(made_by.workflow, made_by.options, "video") if made_by else [],
+                "_sampling": workflow_options.sampling_used(made_by.workflow, made_by.options, "video") if made_by else None,
+                "_cfg": workflow_options.cfg_used(made_by.workflow, made_by.options, "video") if made_by else None,
                 "upscaled": "RTX VSR" if UPSCALED.search(name) else latent_used(made_by),
                 # The viewer's Latent upscale: greyed out where it can't be used (see latent_upscale_film).
                 "latent": bool(made_by and made_by.final and not UPSCALED.search(name)
