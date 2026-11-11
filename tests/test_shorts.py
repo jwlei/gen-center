@@ -47,7 +47,9 @@ MINUTE_429 = "429 RESOURCE_EXHAUSTED. {'error': {'message': 'limit: 5', 'details
 
 
 class Refused(Exception):
-    code = 429
+    def __init__(self, message):
+        super().__init__(message)
+        self.code = int(message[:3]) if message[:3].isdigit() else 429
 
 
 class QuotaTest(unittest.TestCase):
@@ -75,6 +77,7 @@ class QuotaTest(unittest.TestCase):
         if os.path.exists(api_log.EXHAUSTED_PATH):
             os.remove(api_log.EXHAUSTED_PATH)
         gemini._skipped_models.clear()
+        gemini._cooldowns.clear()
 
     def saved(self):
         with open(api_log.EXHAUSTED_PATH, encoding="utf-8") as f:
@@ -132,24 +135,54 @@ class QuotaTest(unittest.TestCase):
             gemini._generate("x", models=["m1", "m2"])
         self.assertEqual(self.asked, [])
 
-    def test_a_per_minute_limit_is_waited_out_and_never_marked(self):
-        calls = []
+    def test_an_error_hands_over_to_the_next_model_without_waiting(self):
+        slept = []
+        self.refuse.update({"m1": MINUTE_429, "m2": "503 UNAVAILABLE. high demand"})
+        with mock.patch.object(gemini.time, "sleep", slept.append):
+            gemini._generate("x", models=["m1", "m2", "m3"])
+        self.assertEqual(self.asked, ["m1", "m2", "m3"])
+        self.assertEqual(slept, [])
+        self.assertFalse(api_log.is_exhausted("m1"), "a per-minute limit is never marked as a day's")
 
-        def once(model):
-            calls.append(model)
-            return Refused(MINUTE_429) if len(calls) == 1 else None
+    def test_a_model_that_just_failed_is_tried_last_by_the_next_call(self):
+        self.refuse["m1"] = "503 UNAVAILABLE. high demand"
+        gemini._generate("x", models=["m1", "m2"])
+        self.asked.clear()
+        gemini._generate("x", models=["m1", "m2"])
+        self.assertEqual(self.asked, ["m2"])
+        gemini._cooldowns["m1"] = time.time() - 1  # Its rest is over
+        self.asked.clear()
+        self.refuse.clear()
+        gemini._generate("x", models=["m1", "m2"])
+        self.assertEqual(self.asked, ["m1"])
+
+    def test_waits_only_when_every_model_has_failed_then_goes_through_them_again(self):
+        slept, calls = [], []
 
         class Models:
             def generate_content(self, model, contents, config=None):
-                problem = once(model)
-                if problem:
-                    raise problem
+                calls.append(model)
+                if len(calls) <= 2:
+                    raise Refused("503 UNAVAILABLE. high demand")
                 return mock.Mock(text="fine")
 
-        with mock.patch.object(gemini, "_get_client", lambda: mock.Mock(models=Models())):
+        with mock.patch.object(gemini, "_get_client", lambda: mock.Mock(models=Models())), \
+                mock.patch.object(gemini.time, "sleep", slept.append):
             gemini._generate("x", models=["m1", "m2"])
-        self.assertEqual(calls, ["m1", "m1"])
-        self.assertFalse(api_log.is_exhausted("m1"))
+        self.assertEqual(calls, ["m1", "m2", "m1"])
+        self.assertEqual(len(slept), 1)
+
+    def test_a_failing_chain_gives_up_after_its_passes(self):
+        self.refuse.update({"m1": "503 UNAVAILABLE", "m2": "503 UNAVAILABLE"})
+        with self.assertRaisesRegex(RuntimeError, "m1, m2"):
+            gemini._generate("x", retries=2, models=["m1", "m2"])
+        self.assertEqual(self.asked, ["m1", "m2", "m1", "m2"])
+
+    def test_a_request_that_is_wrong_is_not_tried_again(self):
+        self.refuse["m1"] = "400 INVALID_ARGUMENT. bad request"
+        with self.assertRaises(RuntimeError):
+            gemini._generate("x", models=["m1"])
+        self.assertEqual(self.asked, ["m1"])
 
     def test_a_used_up_voice_model_is_skipped_by_later_runs(self):
         engine = audio.AudioEngine.__new__(audio.AudioEngine)

@@ -1,14 +1,17 @@
 import os
 
-# Tried in order; each has its own free-tier daily quota (20/day for the Flash
-# models, 500/day for 3.5 Flash Lite), so a used-up model just hands over to the
-# next. Override with GEMINI_MODEL (one model or a comma-separated chain).
-DEFAULT_MODELS = ("gemini-3.8-flash", "gemini-3.5-flash", "gemini-3-flash-preview",
-                  "gemini-3.5-flash-lite")
+# Tried in order, a failing one handing over to the next at once. Checked against the
+# key's own model list and a live call each: 3.8, 3.6, 3.5, 3.5 Lite, 3.1 Lite and 3
+# Flash Preview answer. Left out: 3.7 Flash (503s under load), the 2.5 models (retired),
+# the Pro and Gemini 4 models (no free quota) and Gemma (500s). The Flash models have
+# their own daily quota (20/day on the first three, 500/day on 3.5 Flash Lite).
+# Override with GEMINI_MODEL (one model or a comma-separated chain).
+DEFAULT_MODELS = ("gemini-3.8-flash", "gemini-3.6-flash", "gemini-3.5-flash", "gemini-3-flash-preview",
+                  "gemini-3.1-flash-lite", "gemini-3.5-flash-lite")
 
 # Small yes/no decisions (is this topic a repeat?) don't need the big models or
 # their 20/day quota. Override with GEMINI_FAST_MODEL.
-DEFAULT_FAST_MODELS = ("gemini-3.5-flash-lite", "gemini-3.5-flash")
+DEFAULT_FAST_MODELS = ("gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-3.5-flash")
 
 # Tried in order. Both share the voice library, so a fallback keeps the same voice.
 # Override with GEMINI_TTS_MODEL (one model or a comma-separated chain).
