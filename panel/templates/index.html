@@ -2275,8 +2275,9 @@
   <label class="settings-check"><input type="checkbox" id="lowPriority"><span>Run generation at lower priority<small>The pipeline and ComfyUI give way to your other programs, so the PC stays responsive while it renders.</small></span></label>
   <label class="settings-check"><input type="checkbox" id="privateMode"><span>Private mode<small>What you make is tagged NSFW, and Output opens on the NSFW filter. Stays on until you turn it off.</small></span></label>
   <label class="settings-check"><input type="checkbox" id="pinProgress"><span>Pin the progress bar<small>Scrolled away from the top, the progress bar stays in sight, stretched along the top of the screen.</small></span></label>
-  <label class="settings-check"><input type="checkbox" id="geminiTitles"><span>Gemini titles<small>Each new film and image set gets a short descriptive title from Gemini, based on its prompt; its files are named by it too. Uses one Gemini call per run. When Gemini refuses the prompt (it blocks NSFW ones), the local model titles it instead, which first frees ComfyUI's models and takes a little longer. If both fail, it keeps its usual title.</small></span></label>
-  <label class="settings-check"><input type="checkbox" id="poweroff"><span>Shut down the PC when the queue is empty<small id="poweroffNote">This session only: it isn't saved. You get a minute to cancel it.</small></span></label>
+  <div class="settings-group" id="titlesTitle">Titles</div>
+  <div class="settings-row"><select id="titleSource" aria-labelledby="titlesTitle"><option value="off">Off: keep its usual title</option><option value="gemini">Gemini, the local model as fallback</option><option value="local">Local model only</option></select></div>
+  <div class="hint" id="titleSourceHint">Each new film and image set gets a short descriptive title from its prompt; its files are named by it too. Gemini uses one call per run, and when it refuses the prompt (it blocks NSFW ones) the local model titles it instead. Local model only never sends a prompt to Gemini. Either way the local model first frees ComfyUI's models and takes a little longer. If every one asked fails, it keeps its usual title.</div>  <label class="settings-check"><input type="checkbox" id="poweroff"><span>Shut down the PC when the queue is empty<small id="poweroffNote">This session only: it isn't saved. You get a minute to cancel it.</small></span></label>
   <div class="settings-group" id="localLlmTitle">Local LLM model</div>
   <div class="settings-row"><select id="localLlmModel" aria-labelledby="localLlmTitle"><option value="gemma-4-12b">Gemma 4 12B (vision)</option><option value="qwen3-14b">Qwen3 14B (text only)</option></select></div>
   <div class="settings-group" id="h3ModelTitle">OpenH3-IR model</div>
@@ -3372,7 +3373,7 @@ function formatBytes(n) {
 }
 async function fillSettings() {
   $('lowPriority').checked = !!SETTINGS.low_priority;
-  $('geminiTitles').checked = !!SETTINGS.gemini_titles;
+  $('titleSource').value = SETTINGS.title_source || 'off';
   $('pinProgress').checked = !!SETTINGS.pin_progress;
   $('h3Model').value = SETTINGS.h3_model;
   $('localLlmModel').value = SETTINGS.local_llm_model || SETTINGS.h3_model;
@@ -3416,7 +3417,7 @@ $('settingsBtn').addEventListener('click', e => {
 $('settingsClose').addEventListener('click', () => settingsDialog.close());
 settingsDialog.addEventListener('click', e => { if (e.target === settingsDialog) settingsDialog.close(); });
 $('lowPriority').addEventListener('change', () => saveSettings({ low_priority: $('lowPriority').checked }));
-$('geminiTitles').addEventListener('change', () => saveSettings({ gemini_titles: $('geminiTitles').checked }));
+$('titleSource').addEventListener('change', () => saveSettings({ title_source: $('titleSource').value }));
 $('pinProgress').addEventListener('change', async () => { await saveSettings({ pin_progress: $('pinProgress').checked }); syncPin(); });
 $('h3Model').addEventListener('change', () => saveSettings({ h3_model: $('h3Model').value }));
 $('localLlmModel').addEventListener('change', () => saveSettings({ local_llm_model: $('localLlmModel').value }));

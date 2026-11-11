@@ -1,4 +1,4 @@
-"""Gemini titles (Settings): a short title from Gemini for a new film or set; its own title when off or failing."""
+"""Titles (Settings): a short title from Gemini or the local model for a new film or set; its own title when off or failing."""
 import os
 import sys
 import tempfile
@@ -25,17 +25,17 @@ class TitlesTest(unittest.TestCase):
         reply = types.SimpleNamespace(text="Elven Dancer at Dusk")
         with mock.patch.object(titles, "_generate", return_value=reply) as ask, \
                 mock.patch.dict(os.environ, {"GEMINI_API_KEY": "x"}):
-            with mock.patch.object(titles.panel_settings, "load", return_value={"gemini_titles": True}):
+            with mock.patch.object(titles.panel_settings, "load", return_value={"title_source": "gemini"}):
                 self.assertEqual(titles.titled("An elf sways in", "An elf sways in a dim hall", "a short film"), "Elven Dancer at Dusk")
                 self.assertIn("An elf sways in a dim hall", ask.call_args.args[0], "from its prompt")
                 self.assertEqual(titles.titled("Own", "  ", "a short film"), "Own", "no prompt: nothing to title from")
-            with mock.patch.object(titles.panel_settings, "load", return_value={"gemini_titles": False}):
+            with mock.patch.object(titles.panel_settings, "load", return_value={"title_source": "off"}):
                 ask.reset_mock()
                 self.assertEqual(titles.titled("Own", "A prompt", "a short film"), "Own")
                 ask.assert_not_called()
 
     def test_without_a_key_or_when_gemini_fails_it_keeps_its_own(self):
-        with mock.patch.object(titles.panel_settings, "load", return_value={"gemini_titles": True}):
+        with mock.patch.object(titles.panel_settings, "load", return_value={"title_source": "gemini"}):
             with mock.patch.dict(os.environ, {"GEMINI_API_KEY": ""}), mock.patch.object(titles, "_generate") as ask:
                 self.assertEqual(titles.titled("Own", "A prompt", "a set of images"), "Own")
                 ask.assert_not_called()
@@ -45,7 +45,7 @@ class TitlesTest(unittest.TestCase):
 
     def test_refused_by_gemini_the_local_model_titles_it(self):
         refused = types.SimpleNamespace(text=None, prompt_feedback=types.SimpleNamespace(block_reason=types.SimpleNamespace(name="PROHIBITED_CONTENT")))
-        with mock.patch.object(titles.panel_settings, "load", return_value={"gemini_titles": True}), \
+        with mock.patch.object(titles.panel_settings, "load", return_value={"title_source": "gemini"}), \
                 mock.patch.dict(os.environ, {"GEMINI_API_KEY": "x"}), mock.patch.object(titles, "_generate", return_value=refused), \
                 mock.patch.object(titles, "local_title", return_value="Highborn Portrait") as local:
             self.assertEqual(titles.titled("Own", "A prompt", "a set of images", "http://comfy", "gemini"), "Highborn Portrait")
@@ -67,9 +67,28 @@ class TitlesTest(unittest.TestCase):
 
     def test_the_setting_is_kept(self):
         with tempfile.TemporaryDirectory() as folder, mock.patch.object(settings, "PATH", os.path.join(folder, "settings.json")):
-            self.assertFalse(settings.load()["gemini_titles"], "off until turned on")
-            self.assertTrue(settings.update({"gemini_titles": True})["gemini_titles"])
-            self.assertTrue(settings.load()["gemini_titles"])
+            self.assertEqual(settings.load()["title_source"], "off", "off until chosen")
+            self.assertEqual(settings.update({"title_source": "local"})["title_source"], "local")
+            self.assertEqual(settings.load()["title_source"], "local")
+            with self.assertRaises(ValueError):
+                settings.update({"title_source": "claude"})
+        with tempfile.TemporaryDirectory() as folder, mock.patch.object(settings, "PATH", os.path.join(folder, "settings.json")):
+            with open(settings.PATH, "w", encoding="utf-8") as f:
+                f.write('{"gemini_titles": true}')
+            self.assertEqual(settings.load()["title_source"], "gemini", "Gemini titles on, before it was a choice")
+
+    def test_local_only_never_asks_gemini(self):
+        with mock.patch.object(titles.panel_settings, "load", return_value={"title_source": "local"}), \
+                mock.patch.dict(os.environ, {"GEMINI_API_KEY": "x"}), mock.patch.object(titles, "_generate") as ask, \
+                mock.patch.object(titles, "local_title", return_value="Highborn Portrait") as local:
+            self.assertEqual(titles.titled("Own", "A prompt", "a set of images", "http://comfy", "gemini"), "Highborn Portrait")
+            ask.assert_not_called()
+            local.assert_called_once_with("A prompt", "a set of images", "http://comfy")
+            local.reset_mock()
+            self.assertEqual(titles.titled("Own", "A prompt", "a set of images", "http://comfy", "local"), "Own")
+            local.assert_not_called()
+            local.return_value = None
+            self.assertEqual(titles.titled("Own", "A prompt", "a set of images", "http://comfy", None), "Own", "it fails: its own")
 
 
 if __name__ == "__main__":

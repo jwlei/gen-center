@@ -1,9 +1,11 @@
 """
-Gemini titles (Settings): a short descriptive title for a new film or image set, written by Gemini from its prompt,
-in place of the one it would get otherwise (the LLM's, or an exact prompt's first words). It names the files too.
-When Gemini refuses the prompt (it blocks NSFW ones) or fails, the local model (Settings) titles it instead, unless
-the local model already wrote its prompts, and with them its title. Off, without a Gemini key, or when both fail, the
-run keeps its own title and goes on.
+Titles (Settings, Titles): a short descriptive title for a new film or image set, from its prompt, in place of the one
+it would get otherwise (the LLM's, or an exact prompt's first words). It names the files too. Chosen from three:
+    off      the run keeps its own title
+    gemini   Gemini writes it. When Gemini refuses the prompt (it blocks NSFW ones) or fails, the local model (Settings)
+             titles it instead, unless the local model already wrote its prompts, and with them its title.
+    local    only the local model writes it, and Gemini is never asked.
+Without a Gemini key, "gemini" is off. When every one asked fails, the run keeps its own title and goes on.
 """
 import json
 import os
@@ -23,12 +25,15 @@ TITLE_SCHEMA = {"type": "object", "properties": {"title": {"type": "string"}}, "
                 "additionalProperties": False}
 
 
-def wanted():
-    """Whether Settings asks for Gemini titles, and Gemini can be asked."""
+def source():
+    """Who titles a new run, as Settings has it: "off", "gemini" (with the local model behind it) or "local"."""
     try:
-        return bool(panel_settings.load().get("gemini_titles")) and bool(os.getenv("GEMINI_API_KEY"))
+        chosen = panel_settings.load().get("title_source")
     except (OSError, ValueError):
-        return False
+        return "off"
+    if chosen == "gemini" and not os.getenv("GEMINI_API_KEY"):
+        return "off"
+    return chosen if chosen in panel_settings.TITLE_SOURCES else "off"
 
 
 def clean(text):
@@ -67,17 +72,20 @@ def local_title(prompt, what, comfy_url):
 
 def titled(title, prompt, what, comfy_url=None, llm=None):
     """
-    title, or Gemini's in its place when Settings asks for it; the local model's when Gemini gives none, unless the
-    local model (llm "local") wrote the prompts and so its title already.
+    title, or the one Settings asks for in its place: Gemini's (the local model's when Gemini gives none), or the local
+    model's alone. Not asked of the local model when it (llm "local") wrote the prompts and so its title already.
     """
-    if not (prompt or "").strip() or not wanted():
+    chosen = source()
+    if not (prompt or "").strip() or chosen == "off":
         return title
-    better = gemini_title(prompt, what)
-    if better:
-        print(f"🏷️ Gemini titled it: {better}")
-        return better
+    better = None
+    if chosen == "gemini":
+        better = gemini_title(prompt, what)
+        if better:
+            print(f"🏷️ Gemini titled it: {better}")
+            return better
     if comfy_url and llm != "local":
-        print("🏷️ Asking the local model for a title instead...")
+        print("🏷️ Asking the local model for a title..." if chosen == "local" else "🏷️ Asking the local model for a title instead...")
         better = local_title(prompt, what, comfy_url)
         if better:
             print(f"🏷️ The local model titled it: {better}")

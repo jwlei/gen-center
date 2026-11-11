@@ -1777,8 +1777,12 @@ assert(run("filmHtml({ name: 'f.mp4', model: 'wan', resolution: '864x480', durat
     run("syncNudge(false)");
     assert(els.nudge.hidden && run('nudgeShown') === null, 'something going: none, and a new one next time');
   }
-  assert(/<input type="checkbox" id="geminiTitles"><span>Gemini titles<small>/.test(html) && script.includes("saveSettings({ gemini_titles: $('geminiTitles').checked })")
-    && script.includes("$('geminiTitles').checked = !!SETTINGS.gemini_titles;"), 'Gemini titles: a setting of its own, saved like the others');
+  assert(/<select id="titleSource" aria-labelledby="titlesTitle"><option value="off">[^<]*<\/option><option value="gemini">[^<]*<\/option><option value="local">/.test(html)
+    && script.includes("saveSettings({ title_source: $('titleSource').value })")
+    && script.includes("$('titleSource').value = SETTINGS.title_source || 'off';"), 'Titles: Off, Gemini with the local model behind it, or the local model only, saved like the others');
+  assert(/<div class="settings-actions settings-force">\s*<button type="button" id="forceRestartComfy"[^>]*>[\s\S]*?<span>Force restart ComfyUI<\/span><\/button>\s*<\/div>\s*<button type="button" class="panel-close" id="settingsClose">/.test(html)
+    && script.includes("body: JSON.stringify({ force: true })") && script.includes("confirmTap('forceRestartComfy', 'Force restart ComfyUI')"),
+    'Settings has a Force restart ComfyUI, asking for a second tap, that restarts it whatever is running');
   assert(/\.viewer-meta \{ width: 100%;/.test(html), 'the preview line is 90% of the bar, not of its own content');
 }
 assert(filmRow.includes(run('ICONS.config')), 'film same-again uses the settings slider');
