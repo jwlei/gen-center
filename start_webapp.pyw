@@ -3,7 +3,7 @@ Double-click to open the gen-center panel.
 
 Starts the web UI in the background if it isn't already running (no console
 window; its output goes to logs/webapp.log) and opens it in your default
-browser. A running server older than the panel's code is replaced first,
+browser unless --headless is passed. A running server older than the panel's code is replaced first,
 unless a video is being made. Stop it with "Shut down" in the panel.
 
 The .pyw extension makes Windows run this with pythonw, which has no window.
@@ -91,4 +91,5 @@ if not server_running():
             break
         time.sleep(0.5)
 
-webbrowser.open(URL)
+if "--headless" not in sys.argv[1:]:
+    webbrowser.open(URL)

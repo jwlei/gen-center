@@ -62,6 +62,10 @@ powershell -ExecutionPolicy Bypass -File scripts/create_shortcut.ps1
 That makes a **gen-center** shortcut, which starts the panel and opens it at http://localhost:8800. `/shorts`,
 `/video` and `/image` open each side directly. **Shut down** in Settings stops it. Or run `python webapp.py --host 0.0.0.0 --port 8800`.
 
+To start the panel without opening a browser when you sign in to Windows, run
+`powershell -ExecutionPolicy Bypass -File scripts\create_shortcut.ps1 -Startup`. Remove the **gen-center**
+shortcut from Windows' Startup folder to disable it.
+
 **From your phone, anywhere:** install [Tailscale](https://tailscale.com/download) on this PC and your phone and sign
 in to the same account on both. Starting the panel also starts Tailscale and reconnects it if it was off. Settings shows the address to open on your phone, `http://100.x.y.z:8800`, which stays the same, so it's worth
 bookmarking. Tailscale encrypts the connection, and only your own devices can reach it. `python webapp.py` on its own
