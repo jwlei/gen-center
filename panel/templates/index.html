@@ -251,13 +251,27 @@
   .preset-line .preset-delete[hidden] { display: none; }
   .section-title { font-size: .72rem; letter-spacing: .08em; text-transform: uppercase; color: var(--accent); margin: 14px 0 0; font-weight: 700; }
   .options-advanced { margin-top: 12px; padding-top: 8px; border-top: 1px solid var(--line); }
+  /* Workflow, and on its line all the way to the right, Use default: just quiet text, no button around it. */
+  .workflow-head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
+  .workflow-head > label { flex: 1 1 auto; width: auto; }
+  .use-default { flex: none; width: auto; margin: 0; padding: 0; font: inherit; font-size: .75rem; font-weight: 400; line-height: 1.2;
+    background: none; border: 0; border-radius: 0; color: var(--muted); cursor: pointer; }
+  .use-default:hover, .use-default:focus-visible { color: var(--text); text-decoration: underline; }
+  .use-default[hidden] { display: none; }
   /* Steps, Sampler, Scheduler and CFG, and Use LoRA: each set apart in a dark box, as Resolution is. */
   .options-box { margin: 4px 0 12px; padding: 8px 12px 10px; border: 1px solid var(--line); border-radius: 12px; background: var(--bg); }
   .options-box > .check:first-child, .options-box > .option-row:first-child { margin-top: 0; }
-  .pipeline-form .sampling-line { flex-wrap: nowrap; }
-  .sampling-line .option-info { flex: none; min-width: 7.5em; justify-content: flex-start; }
-  .sampling-line select { flex: 1 1 auto; min-width: 0; }
-  .sampling-line .option-strength { flex: none; width: 6em; }
+  /* Sampling: under its heading, no box. Names in one column, settings lined up in the next, each the same width (a
+     picker doesn't take the whole line); a hint drops across both. */
+  .options-section { margin: 4px 0 10px; }
+  .options-section > .options-subtitle { margin-bottom: 4px; }
+  .options-sampling { display: grid; grid-template-columns: max-content minmax(0, 13em); column-gap: 14px; row-gap: 6px; align-items: center; }
+  .pipeline-form .options-sampling .sampling-line { display: contents; }
+  .sampling-line .option-info { justify-content: flex-start; }
+  .options-sampling select, .options-sampling .option-strength { width: 100%; min-width: 0; margin: 0; }
+  /* Its width doesn't count towards the columns (contain: inline-size): a hint across both would otherwise widen
+     the names' column to its whole sentence, and never wrap. It wraps inside what the names and settings take. */
+  .options-sampling .option-hint { grid-column: 1 / -1; margin: 0; contain: inline-size; overflow-wrap: anywhere; }
   .option-hint { font-size: .8rem; color: var(--muted); }
   .options-subtitle { font-size: .68rem; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); font-weight: 700; margin-bottom: 2px; }
   .check { display: flex; gap: 10px; align-items: flex-start; margin-top: 14px; cursor: pointer; text-transform: none; letter-spacing: 0; font-size: .95rem; color: var(--text); }
@@ -901,14 +915,16 @@
   dialog.viewer .viewer-actions > button.viewer-grid { flex: none; width: 44px; padding: 0; background: transparent; color: #ddd; }
   dialog.viewer .viewer-actions > button.viewer-grid svg { width: 18px; height: 18px; }
   /* All of a set (or the films), small: as many across as fit, square, the one open now outlined. */
-  .thumb-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(78px, 1fr)); gap: 6px; }
+  /* As big as a pinch made them (--thumb-size, set on the dialog), as many to a row as fit. */
+  .thumb-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(var(--thumb-size, 78px), 1fr)); gap: 6px; }
   /* Smooth to scroll through a hundred: a swipe on a picture scrolls (touch-action), and those out of sight aren't laid
      out or painted until they come near (content-visibility). */
   /* clip, not hidden: hidden made each picture a scroll box of its own, and in a dialog (overscroll contained) a swipe
      starting on one scrolled nothing; only the gaps between them scrolled the grid. */
   .thumb-grid button { position: relative; display: block; width: 100%; aspect-ratio: 1; margin: 0; padding: 0; overflow: clip;
-    border: 0; border-radius: 8px; background: #000; cursor: pointer; touch-action: pan-y; content-visibility: auto; contain-intrinsic-size: auto 78px; }
-  .thumb-grid-dialog .panel-dialog-body { overflow-y: auto; -webkit-overflow-scrolling: touch; }
+    border: 0; border-radius: 8px; background: #000; cursor: pointer; touch-action: pan-y; content-visibility: auto; contain-intrinsic-size: auto var(--thumb-size, 78px); }
+  /* pan-y: a swipe scrolls it, and two fingers pinch the grid (the pictures' size), never zoom the page. */
+  .thumb-grid-dialog .panel-dialog-body { overflow-y: auto; -webkit-overflow-scrolling: touch; touch-action: pan-y; }
   /* The whole picture, letterboxed on black: a portrait or a wide one isn't cut to the square. */
   .thumb-grid button img { width: 100%; height: 100%; object-fit: contain; display: block; }
   /* Inside the picture, so the grid's edge never clips it. */
@@ -1708,7 +1724,7 @@
     <details class="section" id="formTopic">
       <summary class="section-title">Generation</summary>
       <div class="workflow-in" id="workflowBox">
-        <label for="workflow">Workflow</label>
+        <div class="workflow-head"><label for="workflow">Workflow</label><button type="button" class="use-default" data-defaults="shortsOptionsBox" hidden title="Its settings back to how the workflow is saved in ComfyUI">Use default</button></div>
         <select id="workflow" name="workflow">
           <option value="">LTX23_I2V_T2V_shorts</option>
         </select>
@@ -1833,7 +1849,7 @@
   <details class="section" id="videoGeneration">
     <summary class="section-title">Generation</summary>
     <div class="workflow-in">
-      <label for="videoWorkflow">Workflow</label>
+      <div class="workflow-head"><label for="videoWorkflow">Workflow</label><button type="button" class="use-default" data-defaults="videoOptionsBox" hidden title="Its settings back to how the workflow is saved in ComfyUI">Use default</button></div>
       <select id="videoWorkflow" name="workflow">
         <option value="">LTX23_I2V_T2V</option>
       </select>
@@ -2029,7 +2045,7 @@
   <details class="section" id="imageGeneration">
     <summary class="section-title">Generation</summary>
     <div class="workflow-in">
-      <label for="imageWorkflow">Workflow</label>
+      <div class="workflow-head"><label for="imageWorkflow">Workflow</label><button type="button" class="use-default" data-defaults="imageOptionsBox" hidden title="Its settings back to how the workflow is saved in ComfyUI">Use default</button></div>
       <select id="imageWorkflow" name="workflow">
         <option value="">Automatic: edits if you give it an image, otherwise from text</option>
       </select>
@@ -4876,14 +4892,37 @@ function syncOptions(section, box, options, workflow = '') {
   // Two kinds of LoRA, each under a word on what it does: a style one changes the look, a speed one (lightning,
   // turbo, n-step) makes it in fewer steps.
   const heading = (text, what) => `<div class="options-subtitle">${text}<span class="options-subtitle-what"> · ${what}</span></div>`;
-  $(box).innerHTML = (sampling.length ? `<div class="options-box options-sampling">${sampling.map(samplingHtml).join('')}</div>` : '')
+  $(box).innerHTML = (sampling.length ? `<div class="options-section">${heading('Sampling', 'how each picture is worked')}<div class="options-sampling">${sampling.map(samplingHtml).join('')}</div></div>` : '')
     + (lora.length ? `<div class="options-lora">${heading('Style LoRA', 'changes the look')}${draw(lora)}</div>` : '')
     + (speed.length ? `<div class="options-lora options-speed">${heading('Speed LoRA', 'fewer steps, faster')}${draw(speed)}</div>` : '')
     + draw(rest.filter(option => !option.advanced)) + draw(rest.filter(option => option.advanced));
   $(box).optionList = options;
   restoreOptions($(box));
   syncBelow($(box));
+  const reset = document.querySelector && document.querySelector(`[data-defaults="${box}"]`);
+  if (reset) reset.hidden = !options.length;
 }
+// Use default, beside the workflow: its settings back to how the workflow is saved in ComfyUI, and what was
+// remembered for it forgotten.
+function useDefaultOptions(box) {
+  for (const option of box.optionList || []) {
+    const field = suffix => box.querySelector(`[name="opt_${option.id}${suffix}"]:not([type=hidden])`);
+    if (option.kind === 'switch') { const el = field(''); if (el) el.checked = option.default === '1'; }
+    else if (option.kind === 'strength') {
+      const on = field('_on'), strength = field('_strength'), active = option.default !== '0';
+      if (on) on.checked = active;
+      if (strength) strength.value = active ? option.default : option.usual || '1';
+    } else { const el = field(''); if (el) el.value = option.default; }
+  }
+  syncBelow(box);
+  const all = savedOptions();
+  delete all[box.dataset.workflow];
+  try { localStorage.setItem(OPTIONS_KEY, JSON.stringify(all)); } catch (e) {}
+}
+document.addEventListener('click', e => {
+  const button = e.target.closest && e.target.closest('[data-defaults]');
+  if (button) useDefaultOptions($(button.dataset.defaults));
+});
 // A turbo switch has its own step count, so Steps shows the one that goes with it once it's switched.
 function followSwitch(box, changed) {
   if (!changed || changed.type !== 'checkbox') return;
@@ -6116,9 +6155,49 @@ $('thumbGridBody').addEventListener('scroll', () => { gridScrolledAt = performan
 $('thumbGridBody').addEventListener('pointerdown', e => {
   gridTap = { x: e.clientX, y: e.clientY, at: performance.now(), moving: performance.now() - gridScrolledAt < 120 };
 }, true);
+// Pinch: two fingers apart, bigger pictures (fewer to a row); together, smaller. On a laptop a trackpad pinch, which
+// comes as Ctrl and the wheel. The size is kept (per browser), and what's under the fingers stays under them.
+const THUMB_SIZE_KEY = 'gen-center.thumbSize', THUMB_LEAST = 48, THUMB_MOST = 260, THUMB_USUAL = 78;
+let thumbSize = (() => { try { return Number(localStorage.getItem(THUMB_SIZE_KEY)) || THUMB_USUAL; } catch (e) { return THUMB_USUAL; } })();
+let gridPinch = null, gridPinchedAt = -Infinity;
+function setThumbSize(size, aroundY = null) {
+  const body = $('thumbGridBody'), next = Math.round(Math.min(THUMB_MOST, Math.max(THUMB_LEAST, size)));
+  const before = body.scrollHeight || 0, y = aroundY ?? (body.clientHeight || 0) / 2;
+  thumbSize = next;
+  const style = $('thumbGrid').style;
+  if (style && style.setProperty) style.setProperty('--thumb-size', `${next}px`);
+  // The grid grows or shrinks around the fingers: the same picture stays under them.
+  if (before && body.scrollHeight) body.scrollTop = (body.scrollTop + y) * (body.scrollHeight / before) - y;
+  try { localStorage.setItem(THUMB_SIZE_KEY, String(next)); } catch (e) {}
+}
+setThumbSize(thumbSize);
+const pinchSpan = touches => Math.hypot(touches[0].clientX - touches[1].clientX, touches[0].clientY - touches[1].clientY);
+$('thumbGridBody').addEventListener('touchstart', e => {
+  if (e.touches.length !== 2 || thumbGridArranging) return;
+  gridPinch = { span: pinchSpan(e.touches) || 1, size: thumbSize };
+  gridTap = null;
+}, { passive: true });
+// Not passive: two fingers on the grid zoom it, not the page, and don't scroll it.
+$('thumbGridBody').addEventListener('touchmove', e => {
+  if (!gridPinch || e.touches.length !== 2) return;
+  e.preventDefault();
+  const box = $('thumbGridBody').getBoundingClientRect();
+  setThumbSize(gridPinch.size * pinchSpan(e.touches) / gridPinch.span, (e.touches[0].clientY + e.touches[1].clientY) / 2 - box.top);
+  gridPinchedAt = performance.now();
+}, { passive: false });
+$('thumbGridBody').addEventListener('touchend', e => {
+  if (gridPinch && e.touches.length < 2) { gridPinch = null; gridPinchedAt = performance.now(); }
+}, { passive: true });
+$('thumbGridBody').addEventListener('wheel', e => {
+  if (!e.ctrlKey) return;
+  e.preventDefault();
+  setThumbSize(thumbSize * Math.exp(-e.deltaY * 0.01), e.clientY - $('thumbGridBody').getBoundingClientRect().top);
+}, { passive: false });
 function gridTapped(e) {
   const tap = gridTap;
   gridTap = null;
+  // Fingers lifted off a pinch: that was the pinch, not a tap on a picture.
+  if (performance.now() - gridPinchedAt < 400) return false;
   if (!tap || e.clientX == null || !e.pointerType) return true;  // A key press, or no pointer seen: as it is
   if (tap.moving || gridScrolledAt > tap.at) return false;
   return Math.hypot(e.clientX - tap.x, e.clientY - tap.y) < 10;

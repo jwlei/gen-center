@@ -762,6 +762,18 @@ assert(setHtml.includes('data-grid-set="image_20261102_120000"') && /<button typ
   assert.strictEqual(run("gridTapped({ clientX: 10, clientY: 60, pointerType: 'touch' })"), false, 'a scroll is not a tap');
   run('gridTap = { x: 10, y: 10, at: 100, moving: true }; gridScrolledAt = 90');
   assert.strictEqual(run("gridTapped({ clientX: 10, clientY: 10, pointerType: 'touch' })"), false, 'a tap that stops a fling only stops it');
+  // Pinch: the pictures' size between its least and most, kept; fingers lifted off a pinch don't open one.
+  run('setThumbSize(1000)');
+  assert.strictEqual(run('thumbSize'), 260, 'no bigger than its most');
+  run('setThumbSize(5)');
+  assert.strictEqual(run('thumbSize'), 48, 'no smaller than its least');
+  run('setThumbSize(78); gridTap = { x: 10, y: 10, at: 100, moving: false }; gridScrolledAt = 0; gridPinchedAt = performance.now()');
+  assert.strictEqual(run("gridTapped({ clientX: 10, clientY: 10, pointerType: 'touch' })"), false, 'the end of a pinch is no tap');
+  run('gridPinchedAt = -Infinity');
+  assert(/\.thumb-grid \{ display: grid; grid-template-columns: repeat\(auto-fill, minmax\(var\(--thumb-size, 78px\), 1fr\)\);/.test(html)
+    && /\.thumb-grid-dialog \.panel-dialog-body \{[^}]*touch-action: pan-y; \}/.test(html)
+    && script.includes("$('thumbGridBody').addEventListener('touchmove', e => {") && script.includes('}, { passive: false });'),
+    'the grid sizes its pictures by the pinch, and two fingers pinch it rather than zoom the page');
   assert(/\.thumb-grid button\.current \{ outline: 2px solid var\(--accent\); outline-offset: -2px; \}/.test(html)
     && /button\.selected \{ outline: 2px dotted var\(--accent\); outline-offset: -2px;/.test(html), 'outlines inside the picture; the one held dotted');
   assert(/\.grid-ghost \{ margin: 0; padding: 0; border: 0; background: #000;[^}]*outline: 2px dotted color-mix\(in srgb, var\(--accent\) 55%, #000\)/.test(html) && script.includes("ghost.classList.add('grid-ghost')"), 'dragged, a copy follows the finger');
@@ -961,8 +973,11 @@ run(`syncOptions('testOptions', 'testOptionsBox', [{ id: 'group_x', kind: 'switc
     { id: 'sampler', kind: 'choice', label: 'Sampler', parent: 'steps', default: 'euler', choices: ['euler', 'er_sde'], advanced: true },
     { id: 'switch_lightning_lora', kind: 'switch', label: 'Lightning LoRA (turbo)', default: '0', advanced: true, speed: true, primitive: true }], 'w')`);
 const laidOut = els.testOptionsBox.innerHTML;
-assert(/^<div class="options-box options-sampling"><div class="option-row sampling-line"><button type="button" class="res-info option-info"[^>]*><span>Steps<\/span>[\s\S]*?<span>Sampler<\/span>[\s\S]*?<span>CFG<\/span>[\s\S]*?<\/div><div class="options-lora"><div class="options-subtitle">Style LoRA<span class="options-subtitle-what"> · changes the look<\/span><\/div>/.test(laidOut)
+assert(/^<div class="options-section"><div class="options-subtitle">Sampling<span class="options-subtitle-what"> · how each picture is worked<\/span><\/div><div class="options-sampling"><div class="option-row sampling-line"><button type="button" class="res-info option-info"[^>]*><span>Steps<\/span>[\s\S]*?<span>Sampler<\/span>[\s\S]*?<span>CFG<\/span>[\s\S]*?<\/div><div class="options-lora"><div class="options-subtitle">Style LoRA<span class="options-subtitle-what"> · changes the look<\/span><\/div>/.test(laidOut)
   && !laidOut.includes('Advanced') && laidOut.indexOf('opt_group_x') > laidOut.indexOf('options-speed'), 'the four first, in their order, then Use LoRA, then the rest; no Advanced');
+assert(/\.options-sampling \{ display: grid; grid-template-columns: max-content minmax\(0, 13em\);/.test(html) && /\.options-sampling \.sampling-line \{ display: contents; \}/.test(html)
+  && !laidOut.includes('options-box options-sampling'), 'under a heading, no box; names and settings in two lined-up columns');
+assert(/\.options-sampling \.option-hint \{ grid-column: 1 \/ -1; margin: 0; contain: inline-size;/.test(html), 'a hint wraps inside the columns, not widening them');
 assert(/<div class="options-lora options-speed"><div class="options-subtitle">Speed LoRA<span class="options-subtitle-what"> · fewer steps, faster<\/span><\/div><label class="check">[^]*?name="opt_switch_lightning_lora"/.test(laidOut)
   && laidOut.indexOf('options-speed') > laidOut.indexOf('opt_lora_name'), 'the speed LoRAs next, under Use LoRA, with a word on what sets them apart');
 assert(laidOut.includes('<div class="res-hint option-hint" hidden>How many times') && script.includes("const info = e.target.closest && e.target.closest('.option-info');"), 'each name drops its hint');
@@ -1025,7 +1040,7 @@ for (const form of ['formShorts', 'formVideo', 'formImage']) {
   const top = html.indexOf('class="workflow-top preset-top"', start);
   assert(top > start && top < section, `${form}: Preset first`);
   const inside = html.slice(section, html.indexOf('</details>', section));
-  assert(/<summary class="section-title">Generation<\/summary>\s*<div class="workflow-in"[^>]*>\s*<label for="\w+">Workflow<\/label>/.test(inside), `${form}: Workflow at the top of Generation`);
+  assert(/<summary class="section-title">Generation<\/summary>\s*<div class="workflow-in"[^>]*>\s*<div class="workflow-head"><label for="\w+">Workflow<\/label><button type="button" class="use-default"/.test(inside), `${form}: Workflow at the top of Generation`);
 }
 assert(!html.includes('first-child > .section:first-child'), 'every form has the line above Generation');
 assert(!html.includes('id="check"') && !script.includes('/check/'), 'no Check setup');
@@ -1917,7 +1932,24 @@ assert(/if \(shot\) Object\.assign\(s, \{ prompt: shot\.prompt, direct: true, co
 
 // Presets: the picker where the workflow was, the workflow at the top of Generation; "Save as preset" only while what's set isn't one.
 assert(/<div class="workflow-top preset-top">\s*<div class="preset-head"><label for="imagePreset">Preset<\/label><span class="preset-head-actions"><button type="button" class="preset-default" data-preset-default="image" aria-pressed="false" hidden><svg[^>]*><path[^>]*\/><\/svg><\/button><button type="button" class="preset-save" data-preset-save="image" hidden>Save as preset<\/button><\/span><\/div>/.test(html));
-assert(/<summary class="section-title">Generation<\/summary>\s*<div class="workflow-in">\s*<label for="imageWorkflow">Workflow<\/label>/.test(html), 'the workflow at the top of Generation');
+assert(/<summary class="section-title">Generation<\/summary>\s*<div class="workflow-in">\s*<div class="workflow-head"><label for="imageWorkflow">Workflow<\/label><button type="button" class="use-default" data-defaults="imageOptionsBox" hidden[^>]*>Use default<\/button><\/div>/.test(html), 'the workflow at the top of Generation, Use default at its right');
+assert(['shortsOptionsBox', 'videoOptionsBox'].every(box => html.includes(`data-defaults="${box}"`)), 'each side has one');
+// Use default: each setting back to how the workflow is saved, and what was remembered for it forgotten.
+{
+  const field = (name, props) => ({ name, type: props.type || 'number', ...props });
+  const fields = { 'opt_steps': field('opt_steps', { value: '30' }), 'opt_lora': field('opt_lora', { type: 'checkbox', checked: true }),
+    'opt_lora_k_on': field('opt_lora_k_on', { type: 'checkbox', checked: false }), 'opt_lora_k_strength': field('opt_lora_k_strength', { value: '1' }) };
+  context.resetBox = { dataset: { workflow: 'imageOptions|w.json' }, querySelectorAll: () => [],
+    querySelector: selector => fields[(/name="([^"]+)"/.exec(selector) || [])[1]] || null,
+    optionList: [{ id: 'steps', kind: 'number', default: '8' }, { id: 'lora', kind: 'switch', default: '0' },
+      { id: 'lora_k', kind: 'strength', default: '0.8', usual: '1' }] };
+  const keptStorage = context.localStorage, store = {};
+  context.localStorage = { getItem: key => store[key] ?? null, setItem: (key, value) => { store[key] = String(value); } };
+  run(`localStorage.setItem(OPTIONS_KEY, JSON.stringify({ 'imageOptions|w.json': { opt_steps: '30' }, other: { a: 1 } })); useDefaultOptions(resetBox)`);
+  assert.deepStrictEqual([fields.opt_steps.value, fields.opt_lora.checked, fields.opt_lora_k_on.checked, fields.opt_lora_k_strength.value], ['8', false, true, '0.8'], 'as saved');
+  assert.deepStrictEqual(Object.keys(run('savedOptions()')), ['other'], 'its remembered settings forgotten, no other workflow\'s');
+  context.localStorage = keptStorage;
+}
 assert(run("samePreset({ a: '1', b: true }, { b: true, a: '1' })") === true && run("samePreset({ a: '1' }, { a: '2' })") === false);
 assert(run("samePreset({ a: '1' }, { a: '1', transparent: false })") === true, 'a field added since a preset was saved does not unmatch it');
 assert(/presetPicked\[side\] = \{ name, values: presetValues\(side\) \};\s*syncPresets\(side\);\s*\}/.test(script), 'the preset picked stays in the box, even where it could not set a field');
