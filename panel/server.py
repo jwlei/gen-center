@@ -39,7 +39,7 @@ from flask import (Flask, abort, has_request_context, redirect, render_template,
 from werkzeug.exceptions import NotFound
 from werkzeug.datastructures import MultiDict
 
-from core import batch_stop, eta_keys, pills, run_form, workflow_options
+from core import batch_stop, eta_keys, model_guide, pills, run_form, workflow_options
 from core.upscale_eta import UpscaleEta, is_upscale
 from core.paths import LOGS_DIR, PROJECT_ROOT, SAVED_WORKFLOWS_DIR, comfyui_client_id
 from core.quota import quota_summary
@@ -3101,6 +3101,11 @@ def workflows():
     # The image_, video_ or shorts_ in front only sorts them in ComfyUI: here the side already says it.
     for w in found:
         w["label"] = display_label(w["label"])
+    paths_by_name = {w["name"]: w.get("path") for w in saved_workflows()}
+    for w in found:
+        guide = model_guide.entry(model_guide.key_for_path(paths_by_name.get(w["name"]), pipeline))
+        if guide:
+            w["guide"] = guide
     if pipeline == "video":
         # How long its video model makes a clip, for the form to say.
         paths = {w["name"]: w.get("path") for w in saved_workflows()}
@@ -3125,7 +3130,17 @@ def workflows():
         paths = {w["name"]: w.get("path") for w in saved_workflows()}
         for w in found:
             w["openh3"] = workflow_model(paths.get(w["name"])) == "minimax_h3"
-    return {"online": comfyui_online(), "workflows": found}
+    return {"online": comfyui_online(), "workflows": found, "built_in_guide": model_guide.entry(model_guide.BUILT_IN.get(pipeline))}
+
+
+@app.route("/api/model-guide/<key>")
+@password_required
+def api_model_guide(key):
+    """The guide to one diffusion model, for the link under the workflow picker."""
+    found = model_guide.guide(key)
+    if not found:
+        abort(404)
+    return {"ok": True, "guide": found}
 
 
 @app.route("/comfyui/start", methods=["POST"])

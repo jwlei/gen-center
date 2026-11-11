@@ -53,6 +53,29 @@ assert(html.includes('value="gemma-4-12b"') && html.includes('value="qwen3-14b"'
 assert(els.writeVideoPrompt.innerHTML === run('ICONS.enhanced') && els.writeImagePrompt.innerHTML === run('ICONS.enhanced'), 'prompt writers use the detailed prompt icon');
 assert(!html.includes('Local model uses the model in Settings.'), 'no local model hint');
 assert(html.includes('value="review">Enhance before review') && html.includes('value="render">Enhance before each clip'));
+// The model guide: a quiet link under each workflow picker, there when the workflow's model has a guide.
+for (const id of ['shortsGuideLink', 'videoGuideLink', 'imageGuideLink']) assert(new RegExp(`<button type="button" class="guide-link" id="${id}" hidden></button>`).test(html), `${id} is under its picker`);
+assert(/<dialog id="modelGuide"[^>]*>[\s\S]*id="modelGuideBody"[\s\S]*id="modelGuideClose"/.test(html), 'the guide opens in a box like the detailed prompt');
+run(`setGuides('image', { workflows: [{ name: 'k.json', guide: { key: 'krea2', title: 'Krea-2 Turbo' } }, { name: 'x.json' }], built_in_guide: null })`);
+els.imageWorkflow.value = 'k.json';
+run("syncGuideLink('image')");
+assert(!els.imageGuideLink.hidden && els.imageGuideLink.textContent === 'About Krea-2 Turbo' && els.imageGuideLink.dataset.guide === 'krea2', 'the link names the model');
+els.imageWorkflow.value = 'x.json';
+run("syncGuideLink('image')");
+assert(els.imageGuideLink.hidden, 'a model with no guide has no link');
+els.imageWorkflow.value = '';
+run("syncGuideLink('image')");
+assert(els.imageGuideLink.hidden, 'Automatic has no one model to describe');
+run(`setGuides('video', { workflows: [], built_in_guide: { key: 'ltx23', title: 'LTX-2.3' } })`);
+els.videoWorkflow.value = '';
+assert(els.videoGuideLink.textContent === 'About LTX-2.3' && !els.videoGuideLink.hidden, 'the built-in workflow has its guide');
+{
+  const guide = run(`guideHtml({ lead: 'A <b>lead', facts: [['Size', '1 MP']], sections: [{ title: 'One', items: ['a'] }, { title: 'Two', items: ['b'] }, { title: 'Three', items: ['c'] }],
+    faq: [['Q?', 'A.']], sources: [['Card', 'https://x.test/a?b=1&c=2']] })`);
+  assert(guide.includes('A &lt;b&gt;lead') && guide.includes('<dt>Size</dt><dd>1 MP</dd>'), 'a guide is escaped, its facts a list');
+  assert((guide.match(/<details open>/g) || []).length === 2 && guide.includes('<details><summary>Three</summary>'), 'the first two parts start open, the rest folded');
+  assert(guide.includes('<summary>Q?</summary><p>A.</p>') && guide.includes('href="https://x.test/a?b=1&amp;c=2" target="_blank" rel="noopener noreferrer"'), 'questions fold, sources open elsewhere');
+}
 for (const side of ['video', 'shorts']) {
   const mode = els[side + 'H3Mode'], toggle = els[side + 'H3Enabled'], options = els[side + 'H3CreativityBox'];
   mode.value = 'off';
@@ -2319,7 +2342,7 @@ assert(/#runCard \.ln-more \{ color: var\(--job, var\(--side-accent\)\); \}/.tes
   'the log\'s highlights keep the type colour; Status in the bottom bar always violet');
 assert(/\.ln\.stage \.x \{ color: var\(--neutral\); \}/.test(html) && /\.settings-group \{[^}]*color: var\(--neutral\);/.test(html), 'the log\'s and settings\' headers are silver, as Status\'s');
 assert(!html.includes('id="logWorkflow"') && /\.log-tools #logComfy \{ margin-left: auto; \}/.test(html), 'no Workflow in the log; ComfyUI and Errors on the right');
-// Titles in the queues: two lines and "…", opened by a tap when cut, kept open when the list is drawn again.
+// Titles in the queues: two lines and "…", with no tap to open them.
 assert(queue.innerHTML.includes('<span class="queue-title" data-title-key="queue-4"><span class="queue-pos">1.</span> Video: continue</span>'), 'a queue title is cut to two lines, titled as the running one, its place greyed');
 assert(/\.queue-pos \{ color: var\(--muted\);/.test(html), 'the place in the queue is grey');
 run(`renderQueue(queue, { items: [{ id: 5, label: '1 video: a storm', detail: 'd', pipeline: 'video' }, { id: 6, label: '3 images: cats', detail: 'd', pipeline: 'image', facts: { count: 3 } }], held: true }, 0)`);

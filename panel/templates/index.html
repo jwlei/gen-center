@@ -72,7 +72,7 @@
   .queue-item.run-card .queue-item-top { display: flex; align-items: center; gap: 10px; }
   .queue-item.run-card .what { font-weight: 600; }
   .queue-item.run-card .hint { margin-top: 2px; font-weight: 400; }
-  /* Every title in the queues: two lines at most, "…" where it is cut; a tap opens it in full, another closes it. */
+  /* Every title in the queues: two lines at most, "…" where it is cut. */
   .queue-title { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; overflow: hidden; overflow-wrap: anywhere; }
   /* Its place in the queue, quietly: the title is what matters. */
   .queue-pos { color: var(--muted); font-weight: 500; }
@@ -257,6 +257,11 @@
     background: none; border: 0; border-radius: 0; color: var(--muted); cursor: pointer; }
   .use-default:hover, .use-default:focus-visible { color: var(--text); text-decoration: underline; }
   .use-default[hidden] { display: none; }
+  /* About the model, under the workflow: just quiet underlined text that opens the guide. */
+  .guide-link { display: block; width: auto; margin: 5px 0 0; padding: 0; font: inherit; font-size: .75rem; font-weight: 400; line-height: 1.2; text-align: left;
+    background: none; border: 0; border-radius: 0; color: var(--muted); text-decoration: underline; text-underline-offset: 2px; cursor: pointer; }
+  .guide-link:hover, .guide-link:focus-visible { color: var(--text); }
+  .guide-link[hidden] { display: none; }
   /* Steps, Sampler, Scheduler and CFG, and Use LoRA: each set apart in a dark box, as Resolution is. */
   .options-box { margin: 4px 0 12px; padding: 8px 12px 10px; border: 1px solid var(--line); border-radius: 12px; background: var(--bg); }
   .options-box > .check:first-child, .options-box > .option-row:first-child { margin-top: 0; }
@@ -483,15 +488,15 @@
   @keyframes pulse { 50% { box-shadow: 0 0 0 4px color-mix(in srgb, var(--warn) 35%, transparent); } }
   .settings-actions #shutdown { background: rgba(229, 83, 75, .14); border-color: var(--err); color: var(--err); }
   .settings-actions #shutdown.armed { background: var(--err); color: #fff; }
+  /* Force restart ComfyUI: a line of its own under the others, in the warning yellow. */
+  .settings-actions.settings-force { margin-top: 6px; padding-top: 0; border-top: 0; }
+  .settings-force button { flex-direction: row; justify-content: center; gap: 8px; font-size: .74rem; color: var(--warn); border-color: color-mix(in srgb, var(--warn) 55%, var(--line)); }
+  .settings-force button.armed { background: color-mix(in srgb, var(--warn) 18%, transparent); }
   .settings-note { margin: 0; }
   .settings-group { margin-top: 6px; padding-top: 10px; border-top: 1px solid var(--line); font-size: .78rem; text-transform: uppercase; letter-spacing: .04em; color: var(--neutral); font-weight: 600; }
   .settings-check { display: flex; align-items: flex-start; gap: 10px; margin: 0; text-transform: none; letter-spacing: 0; font-size: .9rem; color: var(--text); cursor: pointer; }
   .settings-check input { width: auto; margin: 3px 0 0; }
   .settings-check small { display: block; margin-top: 2px; color: var(--muted); font-size: .78rem; }
-  /* Force restart ComfyUI: a line of its own under the others, in the warning yellow. */
-  .settings-actions.settings-force { margin-top: 6px; padding-top: 0; border-top: 0; }
-  .settings-force button { flex-direction: row; justify-content: center; gap: 8px; font-size: .74rem; color: var(--warn); border-color: color-mix(in srgb, var(--warn) 55%, var(--line)); }
-  .settings-force button.armed { background: color-mix(in srgb, var(--warn) 18%, transparent); }
   .settings-row { display: flex; align-items: center; gap: 10px; }
   .settings-row > label { flex: 0 0 64px; margin: 0; }
   .settings-row select { margin: 0; }
@@ -1093,6 +1098,26 @@
   .prompt-detail-text { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 16px; white-space: pre-wrap; overflow-wrap: anywhere; }
   .prompt-detail-actions { flex: none; display: flex; justify-content: flex-end; align-items: center; gap: 8px; padding: 10px 16px; border-top: 1px solid var(--line); background: var(--panel); }
   .prompt-detail-actions .panel-close { width: auto; margin: 0; }
+  /* The model guide: short lines under headings that fold, so a phone reads it a part at a time. */
+  dialog.model-guide { width: min(560px, calc(100vw - 16px)); max-height: min(86dvh, 780px); padding: 0; gap: 0; overflow: hidden; }
+  .model-guide .panel-dialog-title { flex: none; padding: 14px 16px 0; font-size: 1.05rem; }
+  .model-guide-body { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 6px 16px 12px; font-size: .88rem; line-height: 1.5; overflow-wrap: anywhere; -webkit-overflow-scrolling: touch; }
+  .model-guide-lead { margin: 2px 0 10px; color: var(--muted); }
+  .guide-facts { display: grid; grid-template-columns: minmax(78px, auto) minmax(0, 1fr); gap: 6px 12px; margin: 0 0 10px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 12px; background: var(--bg); }
+  .guide-facts dt { color: var(--muted); }
+  .guide-facts dd { margin: 0; }
+  .model-guide details { border-top: 1px solid var(--line); }
+  .model-guide summary { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 9px 0; font-weight: 600; cursor: pointer; list-style: none; }
+  .model-guide summary::-webkit-details-marker { display: none; }
+  .model-guide summary::after { content: ""; flex: none; width: 7px; height: 7px; border-right: 2px solid var(--muted); border-bottom: 2px solid var(--muted); transform: rotate(45deg); transition: transform .2s ease; }
+  .model-guide details[open] > summary::after { transform: rotate(-135deg); }
+  .model-guide ul { margin: 0 0 10px; padding-left: 18px; }
+  .model-guide li { margin: 0 0 6px; }
+  .model-guide details.guide-q { border-top: 0; margin: 0 0 4px; }
+  .model-guide details.guide-q > summary { padding: 5px 0; font-weight: 500; color: var(--text); }
+  .model-guide details.guide-q > p { margin: 0 0 8px; padding-left: 12px; border-left: 2px solid var(--line); color: var(--muted); }
+  .model-guide .guide-sources a { color: var(--muted); }
+  .model-guide-actions { flex: none; display: flex; justify-content: center; padding: 10px 16px; border-top: 1px solid var(--line); background: var(--panel); }
   /* Each image's icons: make again, save and delete; on the right what the enhancer wrote, and its seed. */
   .shot-actions { justify-content: space-between; }
   .shot-actions-left, .shot-actions-right { display: flex; gap: 6px; align-items: center; }
@@ -1731,6 +1756,7 @@
         <select id="workflow" name="workflow">
           <option value="">LTX23_I2V_T2V_shorts</option>
         </select>
+        <button type="button" class="guide-link" id="shortsGuideLink" hidden></button>
       </div>
 
       <label for="runs">How many videos</label>
@@ -1856,6 +1882,7 @@
       <select id="videoWorkflow" name="workflow">
         <option value="">LTX23_I2V_T2V</option>
       </select>
+      <button type="button" class="guide-link" id="videoGuideLink" hidden></button>
       <div class="hint" id="videoWorkflowHint">The image boxes below change to what it takes.</div>
       <div class="hint centred-hint" id="videoWorkflowOff" hidden>ComfyUI is off: this is the last list.</div>
     </div>
@@ -2052,6 +2079,7 @@
       <select id="imageWorkflow" name="workflow">
         <option value="">Automatic: edits if you give it an image, otherwise from text</option>
       </select>
+      <button type="button" class="guide-link" id="imageGuideLink" hidden></button>
       <div class="hint" id="imageWorkflowHint" hidden></div>
       <div class="hint centred-hint" id="imageWorkflowOff" hidden>ComfyUI is off: this is the last list.</div>
     </div>
@@ -2264,6 +2292,11 @@
     <button type="button" class="panel-close" id="promptDetailClose" autofocus>Close</button>
   </div>
 </dialog>
+<dialog id="modelGuide" class="panel-dialog model-guide" aria-labelledby="modelGuideTitle">
+  <div class="panel-dialog-title" id="modelGuideTitle">About the model</div>
+  <div class="model-guide-body" id="modelGuideBody" tabindex="0"></div>
+  <div class="model-guide-actions"><button type="button" class="panel-close" id="modelGuideClose" autofocus>Close</button></div>
+</dialog>
 <dialog id="settingsDialog" class="panel-dialog settings-dialog" aria-labelledby="settingsTitle">
   <div class="settings-head" id="settingsHead">
     <div class="panel-dialog-title" id="settingsTitle">Settings</div>
@@ -2308,6 +2341,9 @@
     <a class="button" href="/logout" id="logout" title="Log out on this device: the panel keeps running."><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 4h3a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-3"/><path d="M10 17l5-5-5-5"/><path d="M15 12H4"/></svg><span>Log out</span></a>
     <button type="button" id="shutdown" title="Shut down: force-stops everything, then the panel's server. Start it again with start_webapp.pyw or the gen-center shortcut."><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M12 3v9"/><path d="M6.3 7.3a8 8 0 1 0 11.4 0"/></svg><span>Shut down</span></button>
   </div>
+  <div class="settings-actions settings-force">
+    <button type="button" id="forceRestartComfy" title="Closes ComfyUI and starts it again even while a run is going or the panel thinks one is: that run fails, and is tried once more once ComfyUI is back. Use it when ComfyUI is stuck or has died."><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M13 2 4 14h7l-1 8 9-12h-7z"/></svg><span>Force restart ComfyUI</span></button>
+  </div>
   <button type="button" class="panel-close" id="settingsClose">Close</button>
 </dialog>
 <dialog id="panelDialog" class="panel-dialog" aria-labelledby="panelDialogTitle">
@@ -2341,9 +2377,6 @@
   <div class="paint-title" id="paintDialogTitle">Inpaint</div>
   <div class="paint-error" id="paintError" role="alert" hidden></div>
   <div class="paint-stage" id="paintStage">
-  <div class="settings-actions settings-force">
-    <button type="button" id="forceRestartComfy" title="Closes ComfyUI and starts it again even while a run is going or the panel thinks one is: that run fails, and is tried once more once ComfyUI is back. Use it when ComfyUI is stuck or has died."><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M13 2 4 14h7l-1 8 9-12h-7z"/></svg><span>Force restart ComfyUI</span></button>
-  </div>
     <div class="paint-board" id="paintBoard">
       <img id="paintImage" alt="Image 1" draggable="false">
       <canvas id="paintCanvas"></canvas>
@@ -2732,6 +2765,55 @@ function wirePresets() {
   }
 }
 
+// --- About the model: a quiet link under each workflow picker opens its guide (core/model_guide.py) ---
+const GUIDE_SELECTS = { shorts: 'workflow', video: 'videoWorkflow', image: 'imageWorkflow' };
+const workflowGuides = { shorts: {}, video: {}, image: {} }, builtInGuides = { shorts: null, video: null, image: null }, guideCache = {};
+// The link says which model the workflow chosen runs; with none known (Automatic on Image) there's no link.
+function syncGuideLink(side) {
+  const link = $(`${side}GuideLink`), chosen = $(GUIDE_SELECTS[side]).value;
+  const guide = workflowGuides[side][chosen] || (chosen ? null : builtInGuides[side]);
+  link.hidden = !guide;
+  link.dataset.guide = guide ? guide.key : '';
+  link.textContent = guide ? `About ${guide.title}` : '';
+}
+function setGuides(side, data) {
+  workflowGuides[side] = Object.fromEntries(data.workflows.filter(w => w.guide).map(w => [w.name, w.guide]));
+  builtInGuides[side] = data.built_in_guide || null;
+  syncGuideLink(side);
+}
+// Short lines under headings that fold, so a phone reads it a part at a time; the first two parts start open.
+function guideHtml(guide) {
+  const list = items => `<ul>${items.map(item => `<li>${esc(item)}</li>`).join('')}</ul>`;
+  return `<p class="model-guide-lead">${esc(guide.lead)}</p>`
+    + `<dl class="guide-facts">${guide.facts.map(([what, value]) => `<dt>${esc(what)}</dt><dd>${esc(value)}</dd>`).join('')}</dl>`
+    + guide.sections.map((part, number) => `<details${number < 2 ? ' open' : ''}><summary>${esc(part.title)}</summary>${list(part.items)}</details>`).join('')
+    + (guide.faq.length ? `<details><summary>FAQ</summary>${guide.faq.map(([question, answer]) => `<details class="guide-q"><summary>${esc(question)}</summary><p>${esc(answer)}</p></details>`).join('')}</details>` : '')
+    + `<details class="guide-sources"><summary>Sources</summary><ul>${guide.sources.map(([name, url]) => `<li><a href="${esc(url)}" target="_blank" rel="noopener noreferrer">${esc(name)}</a></li>`).join('')}</ul></details>`;
+}
+async function openModelGuide(key) {
+  let guide = guideCache[key];
+  if (!guide) {
+    try { guide = (await (await fetch(`/api/model-guide/${encodeURIComponent(key)}`)).json()).guide; } catch (e) { guide = null; }
+    if (!guide) { alert('Could not open the guide.'); return; }
+    guideCache[key] = guide;
+  }
+  $('modelGuideTitle').textContent = guide.title;
+  $('modelGuideBody').innerHTML = guideHtml(guide);
+  $('modelGuideBody').scrollTop = 0;
+  if (!$('modelGuide').open) $('modelGuide').showModal();
+}
+for (const side of Object.keys(GUIDE_SELECTS)) {
+  $(`${side}GuideLink`).addEventListener('click', e => openModelGuide(e.currentTarget.dataset.guide));
+  $(GUIDE_SELECTS[side]).addEventListener('change', () => syncGuideLink(side));
+}
+$('modelGuideClose').addEventListener('click', () => $('modelGuide').close());
+// A tap outside it closes it, as the other boxes over the page do.
+$('modelGuide').addEventListener('click', e => {
+  if (e.target !== $('modelGuide')) return;
+  const box = $('modelGuide').getBoundingClientRect();
+  if (e.clientX < box.left || e.clientX > box.right || e.clientY < box.top || e.clientY > box.bottom) $('modelGuide').close();
+});
+
 // --- Workflows saved in ComfyUI ---
 let workflowsFor = null, shortsTakes = {}, shortsH3 = {};
 function rememberedWorkflow() {
@@ -2753,12 +2835,14 @@ async function loadWorkflows() {
   if (data.workflows.some(w => w.name === wanted)) select.value = wanted;
   shortsTakes = Object.fromEntries(data.workflows.map(w => [w.name, w.takes]));
   shortsH3 = Object.fromEntries(data.workflows.map(w => [w.name, !!w.openh3]));
+  setGuides('shorts', data);
   syncForm();
   applyDefaultPreset('shorts');
 }
 $('workflow').addEventListener('focus', loadWorkflows);
 
 function syncForm() {
+  syncGuideLink('shorts');
   $('avatarOpts').classList.toggle('hidden', $('avatar_clips').value === '0');
   $('workflowBox').classList.toggle('hidden', $('avatar_clips').value === '0');
   $('clipsSlider').classList.toggle('hidden', $('avatar_clips').value !== 'auto');
@@ -3149,6 +3233,7 @@ async function loadVideoWorkflows() {
   workflowH3 = Object.fromEntries(data.workflows.map(w => [w.name, !!w.openh3]));
   workflowMultishot = Object.fromEntries(data.workflows.map(w => [w.name, !!w.h3_multishot]));
   workflowDirector = Object.fromEntries(data.workflows.map(w => [w.name, !!w.h3_director]));
+  setGuides('video', data);
   if (firstLoad) {
     // Read before the workflows were known, the form fell back on the built-in model: its 10 s clip cap cut a
     // remembered 12 s clip, and the H3 modes weren't there to choose. Now they are, so read it again.
@@ -3534,6 +3619,17 @@ $('restartComfy').addEventListener('click', async () => {
   const body = await (await fetch('/restart/comfyui', { method: 'POST' })).json();
   settingsNote(body.ok ? '' : body.error || 'Could not restart it.', !body.ok);
 });
+// Force: ComfyUI closed and started again at once, even while a run is going or the panel believes one is. That run
+// fails and is tried once more (exit code 1 restarts and retries it).
+$('forceRestartComfy').addEventListener('click', async () => {
+  if (!confirmTap('forceRestartComfy', 'Force restart ComfyUI')) return;
+  $('restartComfy').classList.remove('pulse');
+  try {
+    const body = await (await fetch('/restart/comfyui', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ force: true }) })).json();
+    settingsNote(body.ok ? '' : body.error || 'Could not restart it.', !body.ok);
+    if (body.ok) poll();
+  } catch (error) { settingsNote('Could not reach the panel. Try again.', true); }
+});
 // The three buttons ask for a second tap within a few seconds instead of a box: the first arms it, the second does it.
 function confirmTap(id, label) {
   const label_ = $(id).querySelector('span');
@@ -3619,17 +3715,6 @@ function videoLatentOn() {
 }
 // Resolution, latent upscale and the stepper as one: the resolution is what the clip is made at (a screen exactly, an
 // aspect ratio at 480p's pixel count); the stepper scales it, whatever was picked. With latent upscale on, the stepper
-// Force: ComfyUI closed and started again at once, even while a run is going or the panel believes one is. That run
-// fails and is tried once more (exit code 1 restarts and retries it).
-$('forceRestartComfy').addEventListener('click', async () => {
-  if (!confirmTap('forceRestartComfy', 'Force restart ComfyUI')) return;
-  $('restartComfy').classList.remove('pulse');
-  try {
-    const body = await (await fetch('/restart/comfyui', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ force: true }) })).json();
-    settingsNote(body.ok ? '' : body.error || 'Could not restart it.', !body.ok);
-    if (body.ok) poll();
-  } catch (error) { settingsNote('Could not reach the panel. Try again.', true); }
-});
 // sets the size it ends at instead. Past what the workflow makes well it would very likely run out of memory: held to
 // the nearest below.
 let videoBase = null;
@@ -3881,6 +3966,7 @@ for (const side of ['video', 'shorts']) {
   });
 }
 function syncVideoForm() {
+  syncGuideLink('video');
   syncImageInput();
   const seconds = +$('duration').value, [shortest] = videoClips();
   const adjusted = $('videoClipFixed').checked
@@ -3998,6 +4084,7 @@ async function loadImageWorkflows() {
   // Each knows its name, so what you set for it is remembered under it, Automatic's pick too.
   imageWorkflows = Object.fromEntries(usable.map(w => [w.name, { ...w.takes, name: w.name }]));
   imageWorkflowList = usable.map(w => ({ ...w.takes, name: w.name }));
+  setGuides('image', data);
   const notes = stuck.map(w => `${w.label}: ${w.problem}`);
   if (!data.workflows.length) notes.push('Save one in ComfyUI with a name starting image_ and it appears here.');
   $('imageWorkflowHint').hidden = !notes.length;
@@ -5085,6 +5172,7 @@ function syncImageLlm() {
 }
 function imageRole() { return ROLE_LABELS[$('imageLlm').value] && $('imagePromptMode').value === 'llm' ? $('imageLlm').value : null; }
 function syncImageForm() {
+  syncGuideLink('image');
   syncImageLlm();
   // For image to prompt, the image it describes goes right under that choice; otherwise back in Generation.
   const slot = imageRole() === 'image_to_prompt' ? $('imageToPromptSlot') : $('imageSourcesHome');
