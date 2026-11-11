@@ -488,10 +488,16 @@
   @keyframes pulse { 50% { box-shadow: 0 0 0 4px color-mix(in srgb, var(--warn) 35%, transparent); } }
   .settings-actions #shutdown { background: rgba(229, 83, 75, .14); border-color: var(--err); color: var(--err); }
   .settings-actions #shutdown.armed { background: var(--err); color: #fff; }
-  /* Force restart ComfyUI: a line of its own under the others, in the warning yellow. */
-  .settings-actions.settings-force { margin-top: 6px; padding-top: 0; border-top: 0; }
-  .settings-force button { flex-direction: row; justify-content: center; gap: 8px; font-size: .74rem; color: var(--warn); border-color: color-mix(in srgb, var(--warn) 55%, var(--line)); }
-  .settings-force button.armed { background: color-mix(in srgb, var(--warn) 18%, transparent); }
+  /* Force restart ComfyUI: in the warning yellow, left of Log out. */
+  .settings-actions #forceRestartComfy { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 55%, var(--line)); }
+  .settings-actions #forceRestartComfy.armed { background: color-mix(in srgb, var(--warn) 18%, transparent); }
+  .settings-actions button { position: relative; }
+  .settings-actions button[data-taps]::after { content: attr(data-taps); position: absolute; top: 2px; right: 5px; font-size: .68rem; font-weight: 700; }
+  /* Icons only: the words stay for screen readers. */
+  .settings-actions button { justify-content: center; }
+  .settings-actions a.button { justify-content: center; }
+  .settings-actions svg { width: 20px; height: 20px; }
+  .settings-actions button > span, .settings-actions a.button > span { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
   .settings-note { margin: 0; }
   .settings-group { margin-top: 6px; padding-top: 10px; border-top: 1px solid var(--line); font-size: .78rem; text-transform: uppercase; letter-spacing: .04em; color: var(--neutral); font-weight: 600; }
   .settings-check { display: flex; align-items: flex-start; gap: 10px; margin: 0; text-transform: none; letter-spacing: 0; font-size: .9rem; color: var(--text); cursor: pointer; }
@@ -1054,8 +1060,10 @@
     border: 0; border-radius: 999px; background: rgba(0, 0, 0, .55); color: #fff; opacity: .85; }
   .tile-edit svg { width: 13px; height: 13px; }
   .collections.arranging .tile-edit { display: none; }
-  .collections.arranging .collection-tile.selected .tile-cover { outline: 2px dotted var(--accent); outline-offset: -2px; touch-action: none; }
-  .collections.arranging .collection-tile.dragging .tile-cover { outline: 2px dotted var(--accent); outline-offset: -2px; }
+  .collections.arranging .collection-tile.selected .tile-cover { touch-action: none; }
+  /* Drawn over the picture: an outline on the button itself is painted under its image. */
+  .collections.arranging .collection-tile.selected .tile-cover::after, .collections.arranging .collection-tile.dragging .tile-cover::after {
+    content: ""; position: absolute; inset: 0; z-index: 1; border: 2px dotted var(--accent); border-radius: inherit; pointer-events: none; }
   .collection-tile.grid-ghost { background: var(--bg); border-radius: 8px; }
   .collection-tile.grid-ghost .tile-edit { display: none; }
   /* Arrange, on a thin line of its own above the tiles when there are two or more; lit while arranging. */
@@ -1330,6 +1338,10 @@
   .strip.open .strip-more { max-height: 6em; opacity: 1; }
   .strip-more .strip-head { margin-top: 5px; }
   .strip-total:empty { display: none; }
+  /* Opened: two lines. What it is and which of how many; then what it is doing, and when it ends. */
+  .strip-sub { display: flex; justify-content: space-between; gap: 10px; }
+  .strip-sub span:first-child { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+  .strip-sub span:last-child { flex: none; white-space: nowrap; font-variant-numeric: tabular-nums; }
   .wrap { padding-bottom: calc(var(--head, 130px) + 16px); }
   .stick { transition: opacity .2s ease, transform .2s ease; }
   .jump { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 5px; padding: 6px 16px; }
@@ -1517,6 +1529,11 @@
   .go-error:not([hidden]) + .go-eta { display: none; }
   .go-eta b { color: var(--text); }
   .go-bar button { width: auto; flex: none; margin: 0; padding: 8px 14px; font-size: .85rem; }
+  /* Add to top of queue and Add to pending, as symbols beside the main button; they go as the form's own do. */
+  .go-bar .go-icon { display: inline-flex; align-items: center; justify-content: center; padding: 8px; background: var(--panel-2); border: 1px solid var(--line); color: var(--muted); }
+  .go-bar .go-icon[hidden] { display: none; }
+  .go-bar .go-icon:hover, .go-bar .go-icon:focus-visible { color: var(--text); }
+  .go-bar .go-icon:disabled { opacity: .5; }
   /* Desktop: options (two columns), the run, queue, log and
      quota cards and, from 1280px, the portrait videos on the far right, all on one
      screen. Narrower desktops put the videos underneath. Phones keep one column. */
@@ -1623,17 +1640,15 @@
       <div class="strip" id="runStrip" role="button" tabindex="0" aria-expanded="false" hidden>
         <div class="strip-line"><div class="bar"><div id="runStripBar"></div></div><span class="strip-pct" id="runStripPct"></span><span class="strip-right" id="runStripRight"></span></div>
         <div class="strip-more"><div class="strip-more-in">
-          <div class="strip-head"><b id="runStripText"></b></div>
-          <div class="hint status-lines" id="runStripHint"></div>
-          <div class="hint strip-total" id="runStripTotal"></div>
+          <div class="strip-head"><b id="runStripText"></b><span id="runStripCount"></span></div>
+          <div class="hint strip-sub"><span id="runStripHint"></span><span id="runStripTotal"></span></div>
         </div></div>
       </div>
       <div class="strip only-shorts" id="uploadStrip" role="button" tabindex="0" aria-expanded="false" hidden>
         <div class="strip-line"><div class="bar"><div id="uploadStripBar"></div></div><span class="strip-pct" id="uploadStripPct"></span><span class="strip-right" id="uploadStripRight"></span></div>
         <div class="strip-more"><div class="strip-more-in">
-          <div class="strip-head"><b id="uploadStripText"></b></div>
-          <div class="hint status-lines" id="uploadStripHint"></div>
-          <div class="hint strip-total" id="uploadStripTotal"></div>
+          <div class="strip-head"><b id="uploadStripText"></b><span id="uploadStripCount"></span></div>
+          <div class="hint strip-sub"><span id="uploadStripHint"></span><span id="uploadStripTotal"></span></div>
         </div></div>
       </div>
     </div>
@@ -1654,6 +1669,8 @@
   <div class="go-bar" id="goBar" hidden>
     <div class="go-error" id="goError" role="alert" hidden></div>
     <div class="go-eta" id="goBarEta"></div>
+    <button type="button" class="go-icon" id="goStickTop" aria-label="Add to top of queue" title="Add to top of queue: ahead of everything waiting"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 4h14"/><path d="M12 20V9"/><path d="m7 13 5-5 5 5"/></svg></button>
+    <button type="button" class="go-icon" id="goStickLater" aria-label="Add to pending" title="Add to pending: waits until you start it"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="8"/><path d="M12 8v4l3 2"/></svg></button>
     <button type="button" id="goStick">Generate</button>
   </div>
 </div>
@@ -2367,11 +2384,9 @@
   <div class="settings-actions">
     <button type="button" id="restartPanel" title="Start the panel again, to load new code. Not while a run or upload is going."><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 11a8 8 0 1 0-2.3 5.7"/><path d="M20 4v7h-7"/></svg><span>Restart panel</span></button>
     <button type="button" id="restartComfy" title="Start fresh: closes local ComfyUI processes, including work started outside the panel. Not while a panel run is going."><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="2"/><rect x="9.5" y="9.5" width="5" height="5" rx=".5"/><path d="M9 2.5v3M15 2.5v3M9 18.5v3M15 18.5v3M2.5 9h3M2.5 15h3M18.5 9h3M18.5 15h3"/></svg><span>Restart ComfyUI</span></button>
+    <button type="button" id="forceRestartComfy" title="Force restart ComfyUI (three taps): closes ComfyUI and starts it again even while a run is going or the panel thinks one is: that run fails, and is tried once more once ComfyUI is back. Use it when ComfyUI is stuck or has died."><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M13 2 4 14h7l-1 8 9-12h-7z"/></svg><span>Force restart ComfyUI</span></button>
     <a class="button" href="/logout" id="logout" title="Log out on this device: the panel keeps running."><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 4h3a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-3"/><path d="M10 17l5-5-5-5"/><path d="M15 12H4"/></svg><span>Log out</span></a>
     <button type="button" id="shutdown" title="Shut down: force-stops everything, then the panel's server. Start it again with start_webapp.pyw or the gen-center shortcut."><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M12 3v9"/><path d="M6.3 7.3a8 8 0 1 0 11.4 0"/></svg><span>Shut down</span></button>
-  </div>
-  <div class="settings-actions settings-force">
-    <button type="button" id="forceRestartComfy" title="Closes ComfyUI and starts it again even while a run is going or the panel thinks one is: that run fails, and is tried once more once ComfyUI is back. Use it when ComfyUI is stuck or has died."><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M13 2 4 14h7l-1 8 9-12h-7z"/></svg><span>Force restart ComfyUI</span></button>
   </div>
   <button type="button" class="panel-close" id="settingsClose">Close</button>
 </dialog>
@@ -3710,12 +3725,13 @@ $('forceRestartComfy').addEventListener('click', async () => {
 const tapsLeft = {};
 function confirmTap(id, label, taps = 2) {
   const text = $(id).querySelector('span');
-  const disarm = () => { clearTimeout(armed[id]); delete armed[id]; delete tapsLeft[id]; text.textContent = label; $(id).classList.remove('armed'); };
+  const disarm = () => { clearTimeout(armed[id]); delete armed[id]; delete tapsLeft[id]; text.textContent = label; $(id).classList.remove('armed'); if ($(id).dataset) delete $(id).dataset.taps; };
   if (tapsLeft[id] <= 1) { disarm(); return true; }
   tapsLeft[id] = tapsLeft[id] ? tapsLeft[id] - 1 : taps - 1;
   clearTimeout(armed[id]);
   $(id).classList.add('armed');
-  if (taps > 2) text.textContent = tapsLeft[id] === 1 ? 'Tap once more' : `Tap ${tapsLeft[id]} more times`;
+  // The words are for screen readers; what's seen is the taps left, as a number on the icon.
+  if (taps > 2) { text.textContent = tapsLeft[id] === 1 ? 'Tap once more' : `Tap ${tapsLeft[id]} more times`; if ($(id).dataset) $(id).dataset.taps = tapsLeft[id]; }
   armed[id] = setTimeout(disarm, 4000);
   return false;
 }
@@ -9142,9 +9158,11 @@ function setStrip(job, show, strip, status, share) {
     bar.parentElement.classList.toggle('busy', share === null);
     bar.style.width = `${share === null ? 30 : Math.round(share * 100)}%`;
   }
-  // Folded, the bar says only how far along; opened, the rest.
+  // Folded, the bar says only how far along; opened, two lines: what it is and which of how many, then what it is doing
+  // and when it ends.
   $(`${job}StripPct`).textContent = pct;
-  $(`${job}StripHint`).innerHTML = strip.hint;
+  $(`${job}StripCount`).textContent = strip.count || '';
+  $(`${job}StripHint`).textContent = strip.line || '';
   $(`${job}StripTotal`).textContent = strip.total || '';
   if (job === 'upload') $('uploadProgressHint').innerHTML = status.hint;
 }
@@ -9191,24 +9209,25 @@ for (const job of ['run', 'upload']) {
 }
 function renderStrips(data) {
   const p = data.progress || {}, stage = p.stage || [], eta = p.eta;
-  const video = p.run && p.run[1] > 1 ? `Video ${p.run[0]}/${p.run[1]} · ` : '';
+  const video = p.run && p.run[1] > 1 ? `Video ${p.run[0]} of ${p.run[1]}` : '';
   const left = eta ? `${fmtEta(eta.total_left)} left` : fmt(data.elapsed);
   // Everything queued after it too, when there is more.
   const all = eta && queueAhead > eta.total_left + 30 ? ` · the whole queue around ${clockIn(queueAhead)}` : '';
   const total = eta ? `Done around ${clockIn(eta.total_left)}${all}` : `${fmt(data.elapsed)} so far`;
   const [count, what] = splitCount(nowDetail(data));
-  const c = data.comfyui || {};
-  const hint = statusHtml([p.action, what].filter(Boolean).join(' - ') || (count ? '' : STAGE_HINTS[stage[2]] || ''), count,
-    c.active && /^(Clip|Image) \d/.test(p.detail || '') ? fmt(c.elapsed || 0) : '');
+  const current = data.queue && data.queue.current;
+  const doing = [stage[2] || 'Starting', [p.action, what].filter(Boolean).join(' - ') || (count ? '' : STAGE_HINTS[stage[2]] || '')].filter(Boolean).join(' · ');
   setStrip('run', data.running,
-    { text: video + (stage[2] || 'Starting'), right: left + (runsQueued ? ` · +${runsQueued} queued` : ''), hint, total },
+    { text: current ? workHeading(current, data.pipeline) : stage[2] || 'Starting', count: [video, count].filter(Boolean).join(' · '), line: doing,
+      right: left + (runsQueued ? ` · +${runsQueued} queued` : ''), total },
     { text: p.run && p.run[1] > 1 ? `Video ${p.run[0]} of ${p.run[1]}` : '', right: eta ? `${left}, done around ${clockIn(eta.total_left)}${etaShift(eta) ? ` (${etaShift(eta)})` : ''}` : '' },
     eta && eta.adjusted_total ? 1 - eta.total_left / eta.adjusted_total : null);
   const up = data.upload, at = (up.progress || {}).upload;
   const sending = statusHtml(at ? `Uploading - ${at[2]}` : 'Writing the title and description', at ? `Video ${at[0]} of ${at[1]}` : '',
     fmt(up.elapsed || 0));
   setStrip('upload', up.running,
-    { text: at ? `Uploading ${at[0]}/${at[1]}` : 'Uploading', right: fmt(up.elapsed), hint: sending, total: '' },
+    { text: at ? `Uploading ${at[2]}` : 'Writing the title and description', count: at ? `Video ${at[0]} of ${at[1]}` : '', line: at ? 'Sending to YouTube' : 'Preparing', right: fmt(up.elapsed),
+      total: `${fmt(up.elapsed || 0)} so far` },
     { text: at ? 'Uploading' : 'Getting ready', right: '', hint: sending },
     at && at[1] > 1 ? (at[0] - 1) / at[1] : null);
   syncStrips();
@@ -9587,7 +9606,7 @@ function syncContinued() {
 function queueEditLabel() {
   syncContinued();
   $('cancelQueueEdit').hidden = !queueEdit;
-  $('goLater').hidden = $('goTop').hidden = !!queueEdit;
+  $('goLater').hidden = $('goTop').hidden = $('goStickLater').hidden = $('goStickTop').hidden = !!queueEdit;
   if (!submitting) $('go').textContent = $('goStick').textContent = queueEdit ? 'Save to queue' : goLabel(wasRunning);
 }
 async function editQueued(id, button) {
@@ -9741,7 +9760,7 @@ async function startJob(url, later = false, top = false) {
   }
   showFormError('');
   submitting = true;
-  $('go').disabled = $('goStick').disabled = $('goLater').disabled = $('goTop').disabled = true;
+  $('go').disabled = $('goStick').disabled = $('goLater').disabled = $('goTop').disabled = $('goStickLater').disabled = $('goStickTop').disabled = true;
   showSending(0);
   if (later) $('goLater').textContent = 'Adding…';
   if (top) $('goTop').textContent = 'Adding…';
@@ -9761,7 +9780,7 @@ async function startJob(url, later = false, top = false) {
     await new Promise(resolve => setTimeout(resolve, 800));
   }
   submitting = false;
-  $('go').disabled = $('goStick').disabled = $('goLater').disabled = $('goTop').disabled = false;
+  $('go').disabled = $('goStick').disabled = $('goLater').disabled = $('goTop').disabled = $('goStickLater').disabled = $('goStickTop').disabled = false;
   $('goLater').textContent = 'Add to pending';
   $('goTop').textContent = 'Add to top of queue';
   if (body.ok && queueEdit) queueEdit = null;
@@ -9797,6 +9816,8 @@ $('go').addEventListener('click', () => {
   startJob(`/generate/${pipeline}`);
 });
 $('goStick').addEventListener('click', () => $('go').click());
+$('goStickLater').addEventListener('click', () => $('goLater').click());
+$('goStickTop').addEventListener('click', () => $('goTop').click());
 // Into the queue, waiting at its end until you start it there.
 $('goLater').addEventListener('click', () => {
   if (pipeline === 'video') saveVideoForm(); else if (pipeline === 'image') saveImageForm(); else saveForm();

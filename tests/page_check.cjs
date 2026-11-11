@@ -1351,12 +1351,18 @@ const lines = el => ({ first: (/class="status-first">([^<]*)</.exec(el.innerHTML
   count: (/class="status-count">([^<]*)</.exec(el.innerHTML) || [])[1] || '', time: (/class="time"[^>]*>([^<]*)</.exec(el.innerHTML) || [])[1] || '',
   twoLines: el.innerHTML.startsWith('<div class="status-first">') });
 context.statusLinesOf = lines;
-assert.strictEqual(lines(els.runStripHint).count, 'Clip 2 of 75', 'the footer says which clip on its second line');
+assert.strictEqual(els.runStripCount.textContent, 'Clip 2 of 75', 'opened: which clip, on the first line');
+assert.strictEqual(els.runStripHint.textContent, 'Clips · The harbour, 8s', 'and what it is doing on the second, with when it ends');
+context.titled = { ...rendering, pipeline: 'video', queue: { current: { label: '3 videos: Harbour at dusk', facts: { count: 3 } } }, progress: { ...rendering.progress, run: [2, 3] } };
+run('renderStrips(titled)');
+assert.strictEqual(els.runStripText.textContent, 'Video(3): Harbour at dusk', 'the title');
+assert.strictEqual(els.runStripCount.textContent, 'Video 2 of 3 · Clip 2 of 75');
 context.uploading = { ...idle, upload: { running: true, elapsed: 75, progress: { upload: [2, 3, 'A.mp4'] } } };
 run('renderStrips(uploading)');
-assert.strictEqual(els.uploadStripText.textContent, 'Uploading 2/3');
-assert.deepStrictEqual(lines(els.uploadStripHint), { first: 'Uploading - A.mp4', count: 'Video 2 of 3', time: '1:15', twoLines: true },
-  'an upload: what it sends, then which of how many and its time');
+assert.strictEqual(els.uploadStripText.textContent, 'Uploading A.mp4');
+assert.strictEqual(els.uploadStripCount.textContent, 'Video 2 of 3');
+assert.strictEqual(els.uploadStripTotal.textContent, '1:15 so far', 'an upload: what it sends, which of how many and its time');
+assert.strictEqual(lines(els.uploadProgressHint).first, 'Uploading - A.mp4');
 assert.strictEqual(els.uploadStripBar.style.width, '33%');
 assert.strictEqual(els.uploadProgressBar.style.width, '33%');
 assert.strictEqual(lines(els.uploadProgressHint).first, 'Uploading - A.mp4');
@@ -1364,7 +1370,7 @@ assert.strictEqual(els.uploadProgressRight.textContent, '33%', 'the status line 
 assert.strictEqual(els.uploadProgress.hidden, false);
 
 // Folded, a footer bar is one line: the bar, how far along and when it ends. The rest opens when tapped.
-assert(/id="runStrip" role="button"[^>]*>\s*<div class="strip-line"><div class="bar"><div id="runStripBar"><\/div><\/div><span class="strip-pct" id="runStripPct"><\/span><span class="strip-right" id="runStripRight"><\/span><\/div>\s*<div class="strip-more">[\s\S]*?id="runStripText"[\s\S]*?id="runStripHint"[\s\S]*?id="runStripTotal"/.test(html));
+assert(/id="runStrip" role="button"[^>]*>\s*<div class="strip-line"><div class="bar"><div id="runStripBar"><\/div><\/div><span class="strip-pct" id="runStripPct"><\/span><span class="strip-right" id="runStripRight"><\/span><\/div>\s*<div class="strip-more"><div class="strip-more-in">\s*<div class="strip-head"><b id="runStripText"><\/b><span id="runStripCount"><\/span><\/div>\s*<div class="hint strip-sub"><span id="runStripHint"><\/span><span id="runStripTotal"><\/span><\/div>/.test(html), 'opened: two lines under the bar');
 assert(/^Done around \d/.test(els.runStripTotal.textContent), 'opened, it says when the run ends');
 const classes = () => { const on = new Set(); return { add: c => on.add(c), remove: c => on.delete(c), contains: c => on.has(c), toggle(c, yes) { if (yes) on.add(c); else on.delete(c); } }; };
 els.runStrip.classList = classes();
@@ -1847,9 +1853,10 @@ assert(run("filmHtml({ name: 'f.mp4', model: 'wan', resolution: '864x480', durat
   assert(/<select id="titleSource" aria-labelledby="titlesTitle"><option value="off">[^<]*<\/option><option value="gemini">[^<]*<\/option><option value="gemini_sfw">[^<]*<\/option><option value="local">/.test(html)
     && script.includes("saveSettings({ title_source: $('titleSource').value })")
     && script.includes("$('titleSource').value = SETTINGS.title_source || 'off';"), 'Titles: Off, Gemini with the local model behind it, or the local model only, saved like the others');
-  assert(/<div class="settings-actions settings-force">\s*<button type="button" id="forceRestartComfy"[^>]*>[\s\S]*?<span>Force restart ComfyUI<\/span><\/button>\s*<\/div>\s*<button type="button" class="panel-close" id="settingsClose">/.test(html)
+  assert(/id="restartComfy"[\s\S]*?<button type="button" id="forceRestartComfy"[^>]*>[\s\S]*?<span>Force restart ComfyUI<\/span><\/button>\s*<a class="button" href="\/logout" id="logout"/.test(html) && !html.includes('settings-force')
+    && /\.settings-actions button > span, \.settings-actions a\.button > span \{ position: absolute; width: 1px;/.test(html)
     && script.includes("body: JSON.stringify({ force: true })") && script.includes("confirmTap('forceRestartComfy', 'Force restart ComfyUI', 3)"),
-    'Settings has a Force restart ComfyUI, asking for three taps, that restarts it whatever is running');
+    'Force restart ComfyUI sits left of Log out, in the row of icon-only buttons, asking for three taps, and restarts it whatever is running');
   {
     const taps = JSON.parse(run(`(() => {
       const span = { textContent: 'Force restart ComfyUI' }, shut = { textContent: 'Shut down' }, on = new Set();
@@ -2294,9 +2301,13 @@ assert(/\.switch button\.active \{[^}]*color: var\(--accent\)/.test(html) && /bo
 // The side switch is Generate's, at its top; the header has no title, only the progress bars and the gear; shut down is in the settings box.
 assert(html.indexOf('id="switchShorts"') > html.indexOf('id="optionsCard"') && !/<h1>/.test(html.slice(0, html.indexOf('<script>'))));
 assert(/id="settingsBtn"[^>]*aria-label="Settings"/.test(html) && !/Sign out/.test(html));
-assert(/<dialog id="settingsDialog"[\s\S]*id="lowPriority"[\s\S]*id="localLlmModel"[\s\S]*id="h3Model"[\s\S]*id="defaultShorts"[\s\S]*id="diskBox"[\s\S]*<div class="settings-actions">[\s\S]*id="restartPanel"[\s\S]*id="restartComfy"[\s\S]*href="\/logout" id="logout"[\s\S]*id="shutdown"[\s\S]*id="settingsClose"/.test(html),
+assert(/<dialog id="settingsDialog"[\s\S]*id="lowPriority"[\s\S]*id="localLlmModel"[\s\S]*id="h3Model"[\s\S]*id="defaultShorts"[\s\S]*id="diskBox"[\s\S]*<div class="settings-actions">[\s\S]*id="restartPanel"[\s\S]*id="restartComfy"[\s\S]*id="forceRestartComfy"[\s\S]*href="\/logout" id="logout"[\s\S]*id="shutdown"[\s\S]*id="settingsClose"/.test(html),
   'settings, then at the foot Restart, Log out left of Shut down; the local LLM above OpenH3-IR');
 assert(/\.settings-actions \{ display: flex; gap: 6px; flex: none;/.test(html), 'the buttons stay at the foot, smaller');
+assert(/<div class="go-bar" id="goBar" hidden>[\s\S]*?id="goStickTop" aria-label="Add to top of queue"[\s\S]*?id="goStickLater" aria-label="Add to pending"[\s\S]*?id="goStick">/.test(html)
+  && script.includes("$('goStickTop').addEventListener('click', () => $('goTop').click());") && script.includes("$('goStickLater').addEventListener('click', () => $('goLater').click());")
+  && script.includes("$('goLater').hidden = $('goTop').hidden = $('goStickLater').hidden = $('goStickTop').hidden = !!queueEdit;"), 'the footer bar has symbol buttons for top of queue and pending, beside Add to queue');
+assert(/\.tile-cover::after \{\s*content: ""; position: absolute; inset: 0; z-index: 1; border: 2px dotted var\(--accent\)/.test(html), 'a collection being moved: its outline over the picture');
 assert(/<div class="settings-group" id="reserveTitle">Reserve free RAM<\/div>\s*<div class="reserve-row"[^>]*>\s*<button type="button" id="reserveSet" hidden>Set<\/button>\s*<div class="count-stepper"><button type="button" id="reserveDown"/.test(html),
   'free RAM: its heading, then Set left of a stepper as Generate\'s');
 run('SETTINGS.reserve_ram_gb = 0; reserveGb = reserveSaved(); showReserve()');
