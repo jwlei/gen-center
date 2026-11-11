@@ -62,6 +62,16 @@ class MultishotTest(unittest.TestCase):
         result = h3_multishot.build(graph(), [prompt], ["a.png"], 10, 864, 480, 1)
         sampler = next(node for node in result.values() if node["class_type"] == h3_multishot.SAMPLER)
         self.assertEqual(json.loads(sampler["inputs"]["script"])["prompts"], [flat])
+        from pipelines.video.comfy import ComfyClient
+        client = object.__new__(ComfyClient)
+        client.workflow = graph()
+        captured = mock.Mock()
+        with mock.patch.object(client, "_run", return_value={}) as submitted, \
+                mock.patch.object(client, "_download", return_value="take.mp4"):
+            client.render_take([prompt], ["a.png"], 10, 864, 480, "take", 1, on_prompt=captured)
+        captured.assert_called_once_with([flat])
+        sent = next(node for node in submitted.call_args.args[0].values() if node["class_type"] == h3_multishot.SAMPLER)
+        self.assertEqual(json.loads(sent["inputs"]["script"])["prompts"], captured.call_args.args[0])
 
     def test_unsupported_graphs_and_missing_start_frame_are_refused(self):
         self.assertFalse(h3_multishot.supports({}))
@@ -95,7 +105,9 @@ class MultishotTest(unittest.TestCase):
             state.title = "Test"
             state.save()
             comfy = mock.Mock(url="http://comfy")
-            def save_take(prompts, images, seconds, width, height, path, seed, first_frame, steps):
+            def save_take(prompts, images, seconds, width, height, path, seed, first_frame, steps, on_prompt=None):
+                if on_prompt:
+                    on_prompt(prompts)
                 os.makedirs(os.path.dirname(path), exist_ok=True)
                 with open(path + ".mp4", "wb") as file:
                     file.write(b"master")

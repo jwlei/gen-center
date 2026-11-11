@@ -30,12 +30,12 @@ const documentListeners = {}, windowListeners = {};
 const context = {
   // A picture loading in the background: it never finishes here, so the viewer keeps the small one it shows first.
   Image: class { constructor() { this.onload = null; this.src = ''; } },
-  document: { getElementById: id => (els[id] = els[id] || element(id)), querySelectorAll: () => [], documentElement: { style: { setProperty() {} } }, body: element('body'), addEventListener(name, fn) { (documentListeners[name] = documentListeners[name] || []).push(fn); }, hidden: false },
+  document: { getElementById: id => (els[id] = els[id] || element(id)), querySelectorAll: () => [], documentElement: { dataset: {}, style: { setProperty() {} } }, body: element('body'), addEventListener(name, fn) { (documentListeners[name] = documentListeners[name] || []).push(fn); }, hidden: false },
   history: { replaceState() {} },
   window: { addEventListener(name, fn) { (windowListeners[name] = windowListeners[name] || []).push(fn); }, innerHeight: 800, matchMedia: () => wide, scrollTo() {} },
   localStorage: { getItem: () => null, setItem() {} },
   fetch: async () => { throw new Error('offline'); },
-  FormData: class { delete() {} append() {} },
+  FormData: class { delete() {} append() {} set() {} },
   location: { reload() { context.reloads++; } }, reloads: 0, AbortController,
   URL, Event: class { constructor(type, options) { this.type = type; this.bubbles = options.bubbles; } }, setTimeout: () => 0, clearTimeout() {}, setInterval: () => 0, clearInterval() {}, requestAnimationFrame: () => 0, cancelAnimationFrame() {},
   confirm: () => true, alert() {}, console, Date, performance: { now: () => 0 }, Math, JSON, Set, Object, String,
@@ -1866,7 +1866,7 @@ assert(run("filmHtml({ name: 'f.mp4', model: 'wan', resolution: '864x480', durat
   assert(/<select id="titleSource" aria-labelledby="titlesTitle"><option value="off">[^<]*<\/option><option value="gemini">[^<]*<\/option><option value="gemini_sfw">[^<]*<\/option><option value="local">/.test(html)
     && script.includes("saveSettings({ title_source: $('titleSource').value })")
     && script.includes("$('titleSource').value = SETTINGS.title_source || 'off';"), 'Titles: Off, Gemini with the local model behind it, or the local model only, saved like the others');
-  assert(/id="restartComfy"[\s\S]*?<button type="button" id="forceRestartComfy"[^>]*>[\s\S]*?<span>Force restart ComfyUI<\/span><\/button>\s*<a class="button" href="\/logout" id="logout"/.test(html) && !html.includes('settings-force')
+  assert(/id="restartComfy"[\s\S]*?<a class="button" href="\/logout" id="logout"[\s\S]*?<button type="button" id="forceRestartComfy"[^>]*>[\s\S]*?<span>Force restart ComfyUI<\/span><\/button>/.test(html) && !html.includes('settings-force')
     && /\.settings-actions button > span, \.settings-actions a\.button > span \{ position: absolute; width: 1px;/.test(html)
     && script.includes("body: JSON.stringify({ force: true })") && script.includes("confirmTap('forceRestartComfy', 'Force restart ComfyUI', 3)"),
     'Force restart ComfyUI sits left of Log out, in the row of icon-only buttons, asking for three taps, and restarts it whatever is running');
@@ -2314,7 +2314,7 @@ assert(/\.switch button\.active \{[^}]*color: var\(--accent\)/.test(html) && /bo
 // The side switch is Generate's, at its top; the header has no title, only the progress bars and the gear; shut down is in the settings box.
 assert(html.indexOf('id="switchShorts"') > html.indexOf('id="optionsCard"') && !/<h1>/.test(html.slice(0, html.indexOf('<script>'))));
 assert(/id="settingsBtn"[^>]*aria-label="Settings"/.test(html) && !/Sign out/.test(html));
-assert(/<dialog id="settingsDialog"[\s\S]*id="lowPriority"[\s\S]*id="localLlmModel"[\s\S]*id="h3Model"[\s\S]*id="defaultShorts"[\s\S]*id="diskBox"[\s\S]*<div class="settings-actions">[\s\S]*id="restartPanel"[\s\S]*id="restartComfy"[\s\S]*id="forceRestartComfy"[\s\S]*href="\/logout" id="logout"[\s\S]*id="shutdown"[\s\S]*id="settingsClose"/.test(html),
+assert(/<dialog id="settingsDialog"[\s\S]*id="lowPriority"[\s\S]*id="localLlmModel"[\s\S]*id="h3Model"[\s\S]*id="defaultShorts"[\s\S]*id="diskBox"[\s\S]*<div class="settings-actions">[\s\S]*id="restartPanel"[\s\S]*id="restartComfy"[\s\S]*href="\/logout" id="logout"[\s\S]*id="forceRestartComfy"[\s\S]*id="shutdown"[\s\S]*id="settingsClose"/.test(html),
   'settings, then at the foot Restart, Log out left of Shut down; the local LLM above OpenH3-IR');
 assert(/\.settings-actions \{ display: flex; gap: 6px; flex: none;/.test(html), 'the buttons stay at the foot, smaller');
 assert(/<div class="go-bar" id="goBar" hidden>[\s\S]*?id="goStickTop" aria-label="Add to top of queue"[\s\S]*?id="goStickLater" aria-label="Add to pending"[\s\S]*?id="goStick">/.test(html)
@@ -3268,9 +3268,31 @@ assert(els.comfyFacts.innerHTML.includes('Generating the image · 3/8') && els.c
       run('openPromptEditor(shotBox)');
       assert(!els.promptEditorEnhance.hidden, 'the prompts view has the LLM button too');
       const savedFetch = context.fetch;
-      context.fetch = async (url, options) => ({ ok: true, json: async () => options ? { ok: true, prompt: 'A full prompt' } : { ok: true, seconds: 30, model: 'm' } });
-      await run('enhanceInEditor()');
+      els.llm.options = [{ value: 'local', disabled: false }, { value: 'gemini', disabled: false }];
+      run("promptEditorWriterSelected.video = 'local:qwen3-14b'");
+      await run('openPromptWriterMenu()');
+      assert(els.promptEditorWriterMenu.innerHTML.includes('data-model="qwen3-14b"') && els.promptEditorWriterMenu.innerHTML.includes('class="selected"'),
+        'the selected Qwen writer is highlighted when the menu opens again');
+      assert(/has-selection #promptEditorEnhance/.test(html), 'the writer icon has a persistent selected colour');
+      let releaseEstimate;
+      context.fetch = (url, options) => options
+        ? Promise.resolve({ ok: true, json: async () => ({ ok: true, prompt: 'A full prompt' }) })
+        : new Promise(resolve => { releaseEstimate = resolve; });
+      const writing = run("enhanceInEditor({ id: 'local', model: 'qwen3-14b' })");
+      assert(!els.promptEditorThinking.hidden && !els.promptEditorReset.hidden, 'the animated header and reset control show while the writer is loading');
+      const openingPhrase = els.promptEditorThinkingCurrent.innerHTML.replace(/<[^>]*>/g, '').replace(/&nbsp;/g, ' ');
+      assert(openingPhrase.startsWith('Prompting'), 'the header starts with a prompting phrase');
+      releaseEstimate({ ok: true, json: async () => ({ ok: true, seconds: 30, model: 'qwen3-14b' }) });
+      await writing;
       assert.strictEqual(els.promptEditorText.value, 'A full prompt', 'what it writes goes in the editor');
+      assert(els.promptEditorThinking.hidden, 'the thinking header stops after writing');
+      assert(!els.promptEditorReset.hidden, 'enhancement exposes a restore-original button');
+      els.promptEditorReset.listeners.click();
+      assert.strictEqual(els.promptEditorText.value, 'a shot idea', 'restore brings back the exact pre-enhancement prompt');
+      assert(els.promptEditorReset.hidden, 'restore disappears once the original is back');
+      context.fetch = async (url, options) => ({ ok: true, json: async () => options
+        ? { ok: true, prompt: 'A full prompt' } : { ok: true, seconds: 30, model: 'qwen3-14b' } });
+      await run("enhanceInEditor({ id: 'local', model: 'qwen3-14b' })");
       assert.strictEqual(shotBox.value, 'a shot idea', 'and the prompt stays as it was until Save');
       run('closePromptEditor(true)');
       assert.strictEqual(shotBox.value, 'A full prompt', 'Save keeps it');
@@ -3283,6 +3305,48 @@ assert(els.comfyFacts.innerHTML.includes('Generating the image · 3/8') && els.c
     field.readOnly = false;
   }
 
+  {
+    const runData = { id: 'run_history', title: 'Film', brief: 'My original idea', start: 'image', h3_mode: 'review',
+      shots: [{ title: 'First', seconds: 10, prompt: 'edited', planner_prompt: 'planned', enhanced_prompt: 'enhanced',
+        comfy_prompt: 'submitted', rendered: true }] };
+    context.historyRun = runData;
+    run('openClipPromptHistory(historyRun, historyRun.shots[0])');
+    assert(!els.promptDetailStages.hidden && els.promptDetailStages.innerHTML.includes('Planner output'));
+    assert.strictEqual(els.promptDetailText.textContent, 'submitted', 'history opens on the recorded ComfyUI payload');
+    run("showPromptDetail('planner')");
+    assert.strictEqual(els.promptDetailText.textContent, 'planned', 'the planner output is not overwritten by enhancement or editing');
+    run("showPromptDetail('enhancer')");
+    assert.strictEqual(els.promptDetailText.textContent, 'enhanced');
+    run("showPromptDetail('yours')");
+    assert.strictEqual(els.promptDetailText.textContent, 'My original idea');
+    assert(run('shotItemHtml(historyRun, historyRun.shots[0], 0)').includes('data-history="1"'), 'every video clip exposes its prompt history');
+    run("openPromptDetail('ordinary', 'brief')");
+    assert(els.promptDetailStages.hidden, 'ordinary detailed prompts do not inherit clip-history tabs');
+    context.warningItem = { id: 901, pipeline: 'video', label: 'Flagged film', resume: 'run_history', later: true,
+      prompt_warnings: [{ items: [1, 2], similarity: .96 }] };
+    run('renderStopped([], [warningItem], [], true)');
+    assert(!els.warningRuns.hidden && els.stoppedRuns.hidden, 'flagged jobs appear only in Warning, not Pending');
+    assert(els.warningRuns.innerHTML.includes('Warning (1)') && els.warningRuns.innerHTML.includes('Check prompts (Items 1 and 2)'));
+    assert(els.warningRuns.innerHTML.includes('class="icon-btn prompt-warning" data-shots="run_history"'), 'warning prompt buttons are highlighted');
+    for (const action of ['data-start="901"', 'data-run-now="901"', 'data-edit="901"', 'data-remove="901"', 'data-shots="run_history"']) {
+      assert(els.warningRuns.innerHTML.includes(action), `Warning retains Pending action ${action}`);
+    }
+    assert(html.indexOf('id="warningRuns"') < html.indexOf('id="runQueue"'), 'Warning is the top queue section');
+    run('renderStopped([], [])');
+    assert(els.warningRuns.hidden, 'Warning disappears when empty');
+    run(`pipeline = 'video'; folder = 'video'; viewerCollection = 'c_history';
+      lastVideos.video = [{ name: 'collection.mp4', title: 'Collected film', run: 'run_history', collection: 'c_history' }];
+      collections = [{ id: 'c_history', items: [{ kind: 'film', name: 'collection.mp4' }] }];
+      openFilm('collection.mp4', 'video')`);
+    assert(!els.viewerClips.hidden, 'a video inside a collection has a clips button');
+    let opened;
+    context.captureClips = id => { opened = id; };
+    context.savedOpenShots = run('openShots');
+    run('openShots = captureClips');
+    els.viewerClips.listeners.click();
+    assert.strictEqual(opened, 'run_history', 'collection preview opens the same saved run and its clips');
+    run('openShots = savedOpenShots; viewerCollection = null');
+  }
   console.log('all page checks passed');
 })().catch(e => { console.error(e); process.exit(1); });
 

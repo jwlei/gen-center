@@ -196,17 +196,27 @@ def _format(images, low, high, roles=()):
     {_what_to_describe(low, high)}"""
 
 
-def instructions(brief, seconds, count, images, shortest, longest, second_image="", roles=(), references=None, start="image", first_frame=False):
+def instructions(brief, seconds, count, images, shortest, longest, second_image="", roles=(), references=None, start="image",
+                 first_frame=False, clip_relationship="progressive"):
     clips = "one clip" if count == 1 else f"{count} clips"
     shots = "one shot" if count == 1 else f"{count} shots in order"
     together = f"Use {seconds}." if count == 1 else f"All of them together add up to {seconds}."
     low, high = _detail_words(count)
     shape = ("Show one clear moment that feels complete." if count == 1 else
+             "Make every clip a distinct, self-contained moment in the same world." if clip_relationship == "related" else
              f"Give the film a beginning, a development and a real ending, rather than {count} versions of the same moment.")
     separate = "" if count == 1 else """Every clip is a separate render that knows nothing of the others, joined to the next with a fade. So
     each is its own moment: a different action, a different camera move, a new development of the idea, in an order
     that still builds. Plan each action as the next development after the previous clip, rather than repeating or
     restarting it. Keep clothes, place and time of day the same from clip to clip unless the story changes them."""
+    if count > 1 and clip_relationship == "related" and start not in ("chain", "multishot", "infinite"):
+        separate = """Every clip is a separate render, joined to the next with a fade. Each is a complete, distinct scene
+    in the same world, sharing the brief's subject and visual identity. They need no before-and-after order. Vary
+    the action and framing; do not repeat the same moment."""
+    elif count > 1 and clip_relationship == "related":
+        separate += """
+    Keep the clips physically continuous, but do not invent a larger escalating story arc. Give each a distinct
+    action that picks up naturally from the previous clip."""
     if count > 1 and start in ("chain", "multishot", "infinite"):
         separate = """The clips form one continuous take. Each clip starts from the previous clip's final frame,
     without a cut or fade, and H3 is also told to keep the subject, the place and the light the same. So whatever

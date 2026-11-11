@@ -2,11 +2,27 @@
   "version": "2.0.0",
   "tasks": [
     {
+      "label": "all-tests",
+      "type": "shell",
+      "command": "python -m unittest discover tests",
+      "group": { "kind": "test", "isDefault": true },
+      "presentation": { "reveal": "silent", "panel": "shared", "clear": true, "close": true },
+      "problemMatcher": []
+    },
+    {
       "label": "relevant-panel-tests",
       "type": "shell",
       "command": "python -m unittest tests.test_panel -k page_script -k test_skip_starts -k test_stop_kills -k queueing_a_pending -k pending_jobs_arrow",
       "group": "test",
-      "presentation": { "reveal": "silent", "panel": "shared", "clear": true },
+      "presentation": { "reveal": "silent", "panel": "shared", "clear": true, "close": true },
+      "problemMatcher": []
+    },
+    {
+      "label": "prompt-feature-tests",
+      "type": "shell",
+      "command": "python -m unittest tests.test_panel.PanelTest.test_page_script tests.test_panel.PanelTest.test_prompt_warning_parks_the_run_and_start_approves_the_saved_plan tests.test_panel.PanelTest.test_clip_history_survives_edits_and_multishot_clips_can_be_previewed tests.test_panel.PanelTest.test_review_change_a_prompt_render_watch_download_delete tests.test_panel.PanelTest.test_prompt_writer_can_use_gemini_or_the_selected_image_workflow_enhancer tests.test_panel.PanelTest.test_prompt_writer_estimates_learn_per_model_and_pipeline tests.test_panel.PanelTest.test_prompt_writer_can_select_qwen_when_gemma_is_configured tests.test_panel.PanelTest.test_video_clip_relationship_is_validated_and_passed_to_the_planner tests.test_pipeline.PlanTest.test_related_clip_guidance_is_distinct_from_story_progression tests.test_pipeline.PlanTest.test_near_duplicate_warning_threshold_and_h3_shared_identity tests.test_pipeline.PlanTest.test_duplicate_plan_is_held_before_render_and_approval_survives_reload tests.test_pipeline.PipelineTest.test_chained_film tests.test_pipeline.ArgsTest.test_clip_relationship_is_a_planner_option tests.test_h3_refiner tests.test_h3_multishot tests.test_h3_infinite",
+      "group": "test",
+      "presentation": { "reveal": "silent", "panel": "shared", "clear": true, "close": true },
       "problemMatcher": []
     }
   ]

@@ -3,6 +3,7 @@ import io
 import math
 import os
 import shutil
+import subprocess
 
 import ffmpeg
 from PIL import Image, ImageOps
@@ -240,6 +241,16 @@ def audio_slice(path, start, seconds, output):
     os.makedirs(os.path.dirname(output), exist_ok=True)
     (ffmpeg.input(path, ss=start).filter("apad", whole_dur=seconds)
      .output(output, t=seconds, ac=2, ar=48000).run(overwrite_output=True, quiet=True))
+    return output
+
+
+def video_slice(path, start, seconds, output):
+    """A playable preview of one shot from a take rendered as a single file."""
+    command = ffmpeg.input(path, ss=start).output(output, t=seconds, vcodec="libx264", acodec="aac",
+                                                movflags="+faststart").compile(overwrite_output=True)
+    result = subprocess.run(command, capture_output=True, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    if result.returncode:
+        raise RuntimeError(f"Could not extract the clip preview: {result.stderr.decode('utf-8', errors='replace')[-800:]}")
     return output
 
 

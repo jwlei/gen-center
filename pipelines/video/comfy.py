@@ -40,9 +40,9 @@ class ComfyClient:
     Every 'seed' / 'noise_seed' input gets the render's seed: the one asked for, or a random one.
     """
 
-    def __init__(self, options=None):
+    def __init__(self, options=None, workflow_path=None):
         self.url = (os.getenv("COMFYUI_URL") or DEFAULT_COMFYUI_URL).rstrip("/")
-        self.workflow_path = os.getenv("COMFYUI_WORKFLOW") or DEFAULT_WORKFLOW
+        self.workflow_path = workflow_path or os.getenv("COMFYUI_WORKFLOW") or DEFAULT_WORKFLOW
         self.timeout = int(os.getenv("COMFYUI_TIMEOUT") or DEFAULT_TIMEOUT)
         # Fixed, so the panel can listen on ComfyUI's websocket for this run's progress
         # (ComfyUI only sends progress to the client that queued the job), and so
@@ -159,8 +159,12 @@ class ComfyClient:
     def takes_audio(self):
         return "audio" in self.fields
 
-    def render_take(self, prompts, images, seconds, width, height, save_as, seed, first_frame=False, steps=20):
+    def render_take(self, prompts, images, seconds, width, height, save_as, seed, first_frame=False, steps=20,
+                    on_prompt=None):
         workflow = h3_multishot.build(self.workflow, prompts, images, seconds, width, height, seed, first_frame, steps)
+        if on_prompt:
+            sampler = next(node for node in workflow.values() if node.get("class_type") == h3_multishot.SAMPLER)
+            on_prompt(json.loads(sampler["inputs"]["script"])["prompts"])
         return self._download(self._run(workflow, seed), save_as)
 
     def infinite_nodes(self):
@@ -180,10 +184,12 @@ class ComfyClient:
         return info
 
     def render_continuation(self, run_id, index, prompt, seconds, width, height, save_as, seed, first_frame=None,
-                            last_frame=None, previous=None):
+                            last_frame=None, previous=None, on_prompt=None):
         """Clip index + 1 of an H3 Infinite chain: its latent saved in ComfyUI for the next, the clip downloaded."""
         workflow = h3_infinite.build_clip(self.workflow, self.infinite_nodes(), run_id, index, prompt, seconds, width,
                                           height, seed, first_frame, last_frame, previous)
+        if on_prompt:
+            on_prompt([prompt])
         return self._download(self._run(workflow, seed), save_as)
 
     def stitch_continuation(self, run_id, count, save_as):
@@ -196,7 +202,7 @@ class ComfyClient:
         return self._download({"outputs": {"stitch": {"videos": [made]}}}, save_as)
 
     def render(self, prompt, images, seconds, width, height, save_as, audio=None, ref_videos=(), ref_audios=(), seed=None,
-               h3_refined=False):
+               h3_refined=False, on_prompt=None):
         """
         Renders one clip from these uploaded images, and reference videos and audio clips, and saves it as
         save_as plus its extension. Returns the path, or raises.
@@ -218,7 +224,14 @@ class ComfyClient:
         director.shape(workflow)
         if audio:
             self._set(workflow, "audio", audio)
-        return self._download(self._run(workflow, seed), save_as)
+        from pipelines.image.comfy import generated_text, watch_text_generation
+        watched = watch_text_generation(workflow)
+        if on_prompt:
+            node_id, input_name = self.fields["prompt"]
+            on_prompt([workflow[node_id]["inputs"][input_name]])
+        entry = self._run(workflow, seed)
+        self.enhanced = generated_text(entry, watched)
+        return self._download(entry, save_as)
 
     def _run(self, workflow, seed=None):
         """Queues the filled-in workflow with this seed, or a random one, and waits. Returns its history entry, or raises."""

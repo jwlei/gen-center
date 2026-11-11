@@ -61,6 +61,35 @@ The progress bar and remaining time are estimates, learned separately for each m
 The writer receives only the text in the prompt box, not attached references or the selected duration. Its video
 instructions describe shot composition, motion, sound and user-supplied dialogue and text; it cannot inspect references.
 
+The prompt editor's writer menu offers Gemini and both local models (Gemma and Qwen), independently of the
+local model selected in Settings. A workflow Prompt Enhancer appears when the setup supports it.
+The selected writer stays highlighted; the reset button restores the text from before enhancement.
+Enhancing a video brief does not replace planning: in LLM mode the planner still turns that brief into per-clip prompts.
+
+### One story or related scenes
+
+**One story** asks the planner for a beginning, development and ending, with each clip advancing the action.
+**Related scenes** asks for distinct, self-contained moments sharing the subject and visual identity, without a
+required chronological story. With continuous connections, Related scenes still has to continue physically from
+the previous clip: it cannot jump to a different location without getting there on screen.
+
+Write the subject, desired actions, look, constraints and any essential ending or dialogue. You can omit
+"plan N clips", clip lengths, general continuity instructions and "do not repeat the same scene": Generation and
+these options supply that guidance. A story brief might be "A courier finds a sealed letter, follows its clue,
+and reaches an abandoned lighthouse." A related-scenes brief might be "Quiet moments around the same harbour:
+repairing fishing nets, unloading a boat and watching the evening tide. Warm documentary photography."
+Use independent clips if those moments should have different starting frames.
+
+These choices apply to the clip planner, not to Exact mode or the text-only prompt-editor writer.
+Exact mode repeats the same prompt in every clip, even if a writer enhanced that text first.
+
+For a 30-second film with fixed 10-second clips, an event at film second 12 belongs two seconds into clip 2.
+For example: "Action A continues for the first 12 seconds, then transitions into action B.
+Clip 1 (0-10s): A throughout. Clip 2 (10-20s): A for its first two seconds, then B.
+Clip 3 (20-30s): continue and complete B." Choose LLM planning, One story and a continuous connection
+when the movement must flow across clip boundaries. Review clip 2's prompt to confirm it expresses local timing.
+This is guidance to the model, not an enforced event scheduler: generation, H3's frame grid and stitching can shift timing.
+
 Select **LLM** under **Prompt source** and **Local model** under **Model** to plan a separate prompt per clip using
 the existing workflow-specific planner. Gemma can analyze attached images; Qwen rejects them because it is text-only.
 The local model unloads before rendering and needs an idle, reachable ComfyUI. Large plans can take substantial
@@ -76,8 +105,28 @@ The latter happens after prompt review; its resulting brief is saved with the sh
 (default), **Bold**, or **Extreme** for how much the compiler may introduce. Your written constraints still apply.
 
 The LLM plans the clips together, with a different action in each. If it returns identical prompts, the planner asks
-again and reports an error if it cannot get a usable plan. It cannot guarantee that different wording describes different
-actions, so review the prompts before rendering. Exact prompt mode intentionally repeats your text in every clip.
+again and reports an error if it cannot get a usable plan. Near-duplicate wording is checked before rendering:
+pairs with at least 92% token-sequence similarity stop the run in the red **Warning** section above Queue/Pending.
+For structured H3 reference prompts, the check compares `detailed_description`, rather than repeated subject definitions.
+Each entry says **Check prompts (Items x and y)** and highlights its prompts button in red.
+It has Pending's controls: inspect/edit the prompts, change setup, remove the queued entry, or start it.
+Starting approves the exact prompts reviewed; editing them invalidates that approval if duplicates remain.
+For a run already held by this warning, explicitly continuing with CLI `--resume RUN` also approves it.
+Warning entries do not auto-start with the queue, and their saved plans and warnings survive a restart.
+Exact mode is excluded because repetition is intentional. This wording check cannot detect every semantic repetition
+and can flag deliberately similar actions, so it is a review warning rather than an automatic rewrite.
+
+### Clip prompt history
+
+The video's preview has a **Clips and prompt history** filmstrip button, including inside collections.
+It opens the saved run's constituent clips. Each clip's prompt-history button shows the **Original brief**,
+immutable **Planner output**, **Enhancer output**, and **Final ComfyUI text** recorded at submission.
+The final text is the actual submitted input, including H3 Multishot's flattened sampler prompt, not a reconstruction
+from the current editor. A later edit does not overwrite the last submitted text; rendering again updates it.
+When an in-workflow text enhancer returns its output, a separate **Workflow enhancer** stage shows it:
+that output is produced inside ComfyUI, after submission. Stages not used or not yet generated are identified explicitly.
+Older runs cannot recover stages that were never recorded and say so rather than presenting current text as history.
+H3 Multishot's one-file take provides cached per-shot video previews.
 
 The compiler runs locally through the installed [ComfyUI-OpenH3-IR](https://github.com/ruashots/ComfyUI-OpenH3-IR)
 pack and its `open-h3-ir` dependency in ComfyUI's Python. It starts llama.cpp for the compile and stops it before

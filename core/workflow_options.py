@@ -43,7 +43,7 @@ BYPASSED = 4
 # settings of a prompt writer it keeps off, and which model files it loads.
 FACE_SKIP = re.compile(r"prompt|enhance|refine|thinking|max_tok|max_length|width|height|seed|unet|clip|vae|ckpt|trigger"
                        r"|text.?to.?video|duration|length|frames|fps|audio", re.I)
-# The two ways a workflow can write its own prompt, offered beside Gemini and Claude on the Image side: a prompt
+# The two ways a workflow can write its own prompt, offered beside Gemini and the local model on the Image side: a prompt
 # enhancer that expands yours, and image to prompt, which describes a picture. Each is a group, or for the enhancer
 # a Refine Prompt switch as Krea-2's template has. On Video and Shorts the LLM always writes them, so they stay off.
 ENHANCER_GROUP = re.compile(r"enhanc", re.I)

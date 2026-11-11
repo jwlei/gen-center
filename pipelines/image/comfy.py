@@ -51,11 +51,11 @@ class ImageClient(ComfyClient):
     no built-in one: COMFYUI_WORKFLOW names it, with the '.map.json' core/saved_workflows.py wrote next to it.
     """
 
-    def __init__(self, options=None):
-        if not os.getenv("COMFYUI_WORKFLOW"):
+    def __init__(self, options=None, workflow_path=None):
+        if not (workflow_path or os.getenv("COMFYUI_WORKFLOW")):
             raise RuntimeError("No workflow chosen: save one in ComfyUI named image_<something>, or set COMFYUI_WORKFLOW.")
         # Its options come with the run's flags (--option), and are kept with the run.
-        super().__init__(options or {})
+        super().__init__(options or {}, workflow_path=workflow_path)
 
     def model(self):
         """The image model it runs, if it's one with prompts or limits of its own (pipelines/image/models.py)."""

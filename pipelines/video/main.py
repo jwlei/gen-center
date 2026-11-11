@@ -81,6 +81,8 @@ def parse_args(argv=None):
                         help="Start each clip on the last frame of the one before (chain, default), or on the input image. "
                              "infinite: H3 Infinite Continuation Suite, each clip continuing the one before's video and "
                              "audio; image 1 is the first frame and each image after it where the next clip ends.")
+    parser.add_argument("--clip-relationship", choices=planner.CLIP_RELATIONSHIPS, default="progressive",
+                        help="How LLM-planned clips relate: build one story (default), or make related but self-contained scenes.")
     parser.add_argument("--h3-first-frame", action="store_true", help="Use image 1 as the Multishot first frame as well as a reference.")
     parser.add_argument("--h3-multishot-steps", type=int, default=20, choices=range(1, 51), metavar="1-50",
                         help="Sampling steps for H3 Multishot (default: 20).")
@@ -290,6 +292,7 @@ def plan_run(args, stages):
     state.inputs = inputs
     state.options = workflow_options.chosen_in_env() or None
     state.h3_mode, state.h3_creativity, state.image_roles = args.h3_enhance, args.h3_creativity, args.image_roles
+    state.clip_relationship = args.clip_relationship
     state.h3_first_frame, state.h3_multishot_steps = args.h3_first_frame, args.h3_multishot_steps
     state.connection_mode = args.start if args.start in ("director", "multishot", "infinite") else start
     state.direct, state.seed, state.plan_only, state.first_only = args.direct, args.seed, args.plan_only, args.first_only
@@ -343,14 +346,17 @@ def plan_run(args, stages):
     if llm == "local":
         with h3_refiner.Refiner(comfy.url, require_compiler=False, model_id=h3_refiner.local_llm_model()) as refiner:
             title, shots = planner.plan_film(*plan_args, chosen=args.clip_seconds, refiner=refiner,
-                                             first_frame=state.start == "multishot" and state.h3_first_frame)
+                                             first_frame=state.start == "multishot" and state.h3_first_frame,
+                                             clip_relationship=state.clip_relationship)
     else:
         title, shots = planner.plan_film(*plan_args, chosen=args.clip_seconds,
-                                         first_frame=state.start == "multishot" and state.h3_first_frame)
+                                         first_frame=state.start == "multishot" and state.h3_first_frame,
+                                         clip_relationship=state.clip_relationship)
     for image, path in zip(images, state.image_paths):
         media.save_input(image, path)
     for index, shot in enumerate(shots):
         shot["seed"] = seeds.nth(args.seed, index)
+        shot["planner_prompt"] = shot["prompt"]
     title = titles.titled(title, state.brief, "a short film", comfy.url, llm)
     state.update(title=title, shots=shots)
 
@@ -408,6 +414,7 @@ def refine_review(state):
     pending = [shot for shot in state.shots if not shot.get("h3_reviewed")]
     if not pending:
         return
+    approved = state.approved_prompt_key == state.prompt_key()
     url = (os.getenv("COMFYUI_URL") or "http://127.0.0.1:8188").rstrip("/")
     try:
         online = requests.get(f"{url}/system_stats", timeout=5).ok
@@ -416,8 +423,13 @@ def refine_review(state):
     with h3_refiner.Refiner(url if online else None) as refiner:
         workflow = ComfyClient().workflow
         for shot in pending:
-            shot["prompt"] = refine_shot(refiner, state, shot, state.image_paths, workflow)
+            enhanced = refine_shot(refiner, state, shot, state.image_paths, workflow)
+            shot["enhanced_prompt"] = enhanced
+            shot["enhancer_prompt"] = enhanced
+            shot["prompt"] = enhanced
             shot["h3_reviewed"] = True
+            if approved:
+                state.approved_prompt_key = state.prompt_key()
             state.save()
 
 
@@ -436,9 +448,16 @@ def upload_references(state, comfy):
             [comfy.upload(state.reference_path(audio), f"autogen_{state.id}_{audio['file']}") for audio in state.ref_audios])
 
 
-def render_shot(state, comfy, index, images, audio=None, references=((), ())):
+def record_comfy_prompts(state, index, prompts):
+    for shot, prompt in zip(state.shots[index:], prompts):
+        shot["comfy_prompt"] = prompt
+    state.save()
+
+
+def render_shot(state, comfy, index, images, audio=None, references=((), ()), prompt=None):
     """Renders until the file holds up, on a new seed each time. Returns its path, or None."""
     shot = state.shots[index]
+    prompt = shot["prompt"] if prompt is None else prompt
     save_as = os.path.join(state.clips_dir, f"shot_{index + 1:03d}")
     for attempt in range(1, CLIP_ATTEMPTS + 1):
         seed = seeds.pick(shot.get("seed"), attempt)
@@ -446,16 +465,23 @@ def render_shot(state, comfy, index, images, audio=None, references=((), ())):
         try:
             kwargs = {"h3_refined": True} if state.h3_mode != "off" else {}
             if state.start == "infinite":
-                clip = comfy.render_continuation(state.id, index, shot["prompt"], shot["seconds"], state.width, state.height,
-                                                 save_as, seed, *images, previous=previous_clip(state, index))
+                clip = comfy.render_continuation(state.id, index, prompt, shot["seconds"], state.width, state.height,
+                                                 save_as, seed, *images, previous=previous_clip(state, index),
+                                                 on_prompt=lambda prompts: record_comfy_prompts(state, index, prompts))
             else:
-                clip = comfy.render(shot["prompt"], images, shot["seconds"], state.width, state.height, save_as, audio, *references, seed=seed, **kwargs)
+                clip = comfy.render(prompt, images, shot["seconds"], state.width, state.height, save_as, audio, *references,
+                                    seed=seed, on_prompt=lambda prompts: record_comfy_prompts(state, index, prompts), **kwargs)
         except (RuntimeError, OSError, ValueError) as e:
             print(f"      ❌ {e} (attempt {attempt}/{CLIP_ATTEMPTS}).")
             continue
         problem = media.clip_problem(clip, shot["seconds"])
         if not problem:
             shot["used_seed"] = seed
+            workflow_enhanced = getattr(comfy, "enhanced", None)
+            if isinstance(workflow_enhanced, str) and workflow_enhanced:
+                shot["workflow_enhanced_prompt"] = workflow_enhanced
+            else:
+                shot.pop("workflow_enhanced_prompt", None)
             return clip
         print(f"      ⚠️ Rejected: {problem} (attempt {attempt}/{CLIP_ATTEMPTS}).")
     return None
@@ -488,6 +514,7 @@ def render_clips(state, comfy, most=None):
                     enhanced = refine_shot(refiner, state, shot, image_paths, comfy.workflow)
                     key = refinement_key(state, shot, image_paths, refiner.model_id)
                 shot["enhanced_prompt"], shot["h3_key"] = enhanced, key
+                shot["enhancer_prompt"] = enhanced
                 state.save()
             print(f"   ✍️ OpenH3-IR prompt:\n{enhanced}")
         else:
@@ -505,13 +532,7 @@ def render_clips(state, comfy, most=None):
         except (OSError, ffmpeg.Error, requests.RequestException) as e:
             print(f"   ❌ Could not give ComfyUI the start frame or references: {e}")
             return False
-        original = shot["prompt"]
-        if enhanced is not None:
-            shot["prompt"] = enhanced
-        try:
-            clip = render_shot(state, comfy, index, images, clip_audio(state, comfy, index), references)
-        finally:
-            shot["prompt"] = original
+        clip = render_shot(state, comfy, index, images, clip_audio(state, comfy, index), references, prompt=enhanced)
         if not clip:
             print(f"   ❌ Clip {index + 1} failed.")
             return False
@@ -583,7 +604,8 @@ def render_take(state, comfy):
     print(f"      🌱 Seed {seed}")
     path = comfy.render_take([shot["prompt"] for shot in state.shots], images, state.shots[0]["seconds"],
                              state.width, state.height, os.path.join(state.parts_dir, "multishot"),
-                             seed, state.h3_first_frame, state.h3_multishot_steps)
+                             seed, state.h3_first_frame, state.h3_multishot_steps,
+                             on_prompt=lambda prompts: record_comfy_prompts(state, 0, prompts))
     problem = media.clip_problem(path, state.seconds)
     if problem:
         raise RuntimeError(f"H3 Multishot output was rejected: {problem}.")
@@ -594,6 +616,16 @@ def render_take(state, comfy):
         raise RuntimeError(f"H3 Multishot output was rejected: it is {actual:.2f}s long, expected about {expected:.2f}s.")
     state.shots[0]["used_seed"] = seed
     state.update(take_file=os.path.basename(path))
+
+
+def hold_prompt_warnings(state):
+    state.check_prompts()
+    state.save()
+    if not state.prompt_warning_pending:
+        return False
+    pairs = "; ".join(f"Items {warning['items'][0]} and {warning['items'][1]}" for warning in state.prompt_warnings)
+    print(f"Warning: Check prompts ({pairs}). Rendering is held; starting this run in the panel approves it.")
+    return True
 
 
 def run(args):
@@ -623,6 +655,10 @@ def run(args):
         if state.final:
             print(f"✅ Already finished: {state.final}")
             return 0
+        if state.prompt_warning_pending:
+            state.approve_prompts()
+        if hold_prompt_warnings(state):
+            return 0
         # Only stitching left needs no ComfyUI. Saved after this, or a ComfyUI that's
         # down would cost a redo's clips without rendering anything.
         preflight(needs_comfy=state.next_stage() == "Clips" or state.start == "infinite")
@@ -634,6 +670,8 @@ def run(args):
         preflight(needs_comfy=not args.plan_only)
         stages = STAGES[:1] if args.plan_only else STAGES
         state = plan_run(args, stages)
+        if hold_prompt_warnings(state):
+            return 0
         if state.h3_mode == "review":
             refine_review(state)
         if args.plan_only:

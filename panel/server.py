@@ -614,6 +614,20 @@ class JobQueue:
             note_outcome(self.job, item, STOPPED)
             self._record(item, "stopped")
         elif code == 0:
+            if self is run_queue and item.get("pipeline") == "video":
+                run_id = (self.job.progress or {}).get("run_id") or item.get("resume")
+                state = PIPELINES["video"].load_run(run_id) if run_id else None
+                if state and state.prompt_warning_pending:
+                    argv = PIPELINES["video"].resume_argv(state)
+                    if item.get("first_only"):
+                        argv += ["--first-only"]
+                    waiting = {**item, "argv": argv, "resume": state.id, "later": True, "waited": True,
+                               "plan_only": False, "prompt_warnings": state.prompt_warnings,
+                               "estimate": PIPELINES["video"].estimate(argv, item.get("env") or {})}
+                    self.items.append(waiting)
+                    self._save()
+                    _runs_cache["at"] = 0.0
+                    return
             note_outcome(self.job, item, NOT_RENDERED if item.get("plan_only") else FIRST_ONLY if item.get("first_only") else None)
             self._record(item, "done")
         else:
@@ -767,6 +781,7 @@ class JobQueue:
                 return False
             if item.get("edit_token"):
                 return False
+            self._approve_prompt_warning(item)
             item.pop("later", None)
             self.items.remove(item)
             # Ahead of those still pending, which stay at the end.
@@ -801,6 +816,7 @@ class JobQueue:
                 return "not_found", None
             if item.get("edit_token"):
                 return "not_ready", None
+            self._approve_prompt_warning(item)
             self.items.remove(item)
             item.pop("later", None)
             self.held = self.held and bool(self.items)
@@ -809,6 +825,13 @@ class JobQueue:
             if self.current is item:
                 return "started", None
             return "failed", item.get("error", "Could not start the queued job.")
+
+    def _approve_prompt_warning(self, item):
+        if self is run_queue and item.get("pipeline") == "video" and item.get("resume"):
+            state = PIPELINES["video"].load_run(item["resume"])
+            if state and state.prompt_warning_pending:
+                state.approve_prompts()
+            item.pop("prompt_warnings", None)
 
     def reorder(self, ids):
         """
@@ -863,7 +886,7 @@ class JobQueue:
             self._advance()
             argv_flag = lambda item, name: (item.get("argv") or [])[(item.get("argv") or []).index(name) + 1] \
                 if name in (item.get("argv") or [])[:-1] else None
-            public = lambda item: {**{key: item.get(key) for key in ("id", "label", "detail", "estimate", "videos", "pipeline", "later", "resume")},
+            public = lambda item: {**{key: item.get(key) for key in ("id", "label", "detail", "estimate", "videos", "pipeline", "later", "resume", "prompt_warnings")},
                                    # What tells whether it is NSFW (_apply_nsfw): made in Private mode, or the run or film it works on.
                                    "private": bool(item.get("private")), "film": argv_flag(item, "--film"),
                                    "editing": bool(item.get("edit_token")),
@@ -2073,6 +2096,7 @@ def index():
         tailscale_url=tailscale_url,
         tailscale_problem=tailscale_problem,
         settings=settings.load(),
+        themes=settings.THEMES,
         can_open_folders=can_open_folders(),
         nudges=nudges(),
         # The page you asked for by address, or else the one it last showed.
@@ -2452,6 +2476,8 @@ def queue_edit_continue(item_id):
             replacement.pop(key, None)
         if request.form.get("start_later"):
             replacement["later"] = True
+        else:
+            run_queue._approve_prompt_warning(replacement)
         run_queue.items.remove(old)
         run_queue.items.insert(len(run_queue.items) if replacement.get("later") else 0, replacement)
         run_queue._save()
@@ -2684,43 +2710,114 @@ def api_settings():
 @password_required
 def write_prompt():
     from core import h3_refiner
+    from google.genai.errors import APIError
 
     if request.method == "GET":
         side = request.args.get("pipeline")
+        writer = request.args.get("writer") or "local"
         if side not in ("image", "video"):
             return {"ok": False, "error": "Choose an image or video prompt."}, 400
+        if writer not in ("local", "gemini", "prompt_enhancer") or (writer == "prompt_enhancer" and side != "image"):
+            return {"ok": False, "error": "Choose a prompt writer supported for this generation setup."}, 400
+        if writer == "gemini" and not os.getenv("GEMINI_API_KEY"):
+            return {"ok": False, "error": "Gemini has no API key in .env."}, 400
         try:
-            model = h3_refiner.local_llm_model()
+            model = (request.args.get("model") or h3_refiner.local_llm_model()) if writer == "local" else writer.replace("_", "-")
         except ValueError as e:
             return {"ok": False, "error": str(e)}, 500
+        if writer == "local" and model not in settings.H3_MODELS:
+            return {"ok": False, "error": "Choose a local prompt model available in Settings."}, 400
         timings = eta_keys.Timings(PROMPT_WRITER_TIMINGS, {})
         estimate = timings.step(f"{model} | {side}")
         if estimate is not None and (not math.isfinite(estimate) or estimate <= 0):
             app.logger.warning("Invalid prompt writer timing for %s / %s: %s", model, side, estimate)
             estimate = None
-        return {"ok": True, "model": model, "seconds": estimate if estimate is not None else
-                (300 if model == "qwen3-14b" else 180)}
-    data = request.get_json(silent=True)
+        default = (300 if model == "qwen3-14b" else 180) if writer == "local" else (180 if writer == "prompt-enhancer" else 45)
+        return {"ok": True, "writer": writer, "model": model, "seconds": estimate if estimate is not None else default}
+    data = request.get_json(silent=True) if request.is_json else request.form
     if not isinstance(data, dict) or data.get("pipeline") not in ("image", "video"):
         return {"ok": False, "error": "Choose an image or video prompt."}, 400
     text = data.get("prompt")
     if not isinstance(text, str) or not text.strip() or len(text) > 16000:
         return {"ok": False, "error": "Enter a prompt of up to 16,000 characters."}, 400
+    writer = data.get("writer") or "local"
+    side = data["pipeline"]
+    if writer not in ("local", "gemini", "prompt_enhancer") or (writer == "prompt_enhancer" and side != "image"):
+        return {"ok": False, "error": "Choose a prompt writer supported for this generation setup."}, 400
+    if writer == "gemini" and not os.getenv("GEMINI_API_KEY"):
+        return {"ok": False, "error": "Gemini has no API key in .env."}, 400
+    if writer == "local":
+        try:
+            model = data.get("model") or h3_refiner.local_llm_model()
+        except ValueError as e:
+            return {"ok": False, "error": str(e)}, 500
+        if model not in settings.H3_MODELS:
+            return {"ok": False, "error": "Choose a local prompt model available in Settings."}, 400
+    else:
+        model = writer.replace("_", "-")
     global _writing_prompt
     with run_queue.lock:
         if _writing_prompt or _panel_closing or _comfy_restarting or job.running or (run_queue.pending() and not run_queue.held):
             return {"ok": False, "error": "Wait for the current generation or prompt writer to finish."}, 409
         _writing_prompt = True
     try:
-        url = (os.getenv("COMFYUI_URL") or "http://127.0.0.1:8188").rstrip("/")
         started = time.monotonic()
-        refiner = h3_refiner.Refiner(url, require_compiler=False, model_id=h3_refiner.local_llm_model())
-        if data.get("model") is not None and data["model"] != refiner.model_id:
-            return {"ok": False, "error": "The selected model changed. Try writing the prompt again."}, 409
-        with refiner:
-            prompt = refiner.write_prompt(text.strip(), data["pipeline"])
+        if writer == "local":
+            url = (os.getenv("COMFYUI_URL") or "http://127.0.0.1:8188").rstrip("/")
+            refiner = h3_refiner.Refiner(url, require_compiler=False, model_id=model)
+            if refiner.model_id != model:
+                return {"ok": False, "error": "The selected model changed. Try writing the prompt again."}, 409
+            with refiner:
+                prompt = refiner.write_prompt(text.strip(), side)
+        elif writer == "gemini":
+            from google.genai import types
+            from core import gemini, prompt_writer_instructions
+            response = gemini._generate(
+                text.strip(),
+                config=types.GenerateContentConfig(system_instruction=prompt_writer_instructions.INSTRUCTIONS[side]))
+            prompt = getattr(response, "text", None)
+            if not isinstance(prompt, str) or not prompt.strip():
+                raise RuntimeError("Gemini returned an empty prompt.")
+            prompt = prompt.strip()
+        else:
+            from panel import image as image_panel
+            from pipelines.image.comfy import ImageClient
+            uploads = image_panel.form_uploads(request.files)
+            env, takes, error = image_panel.chosen_workflow(request.form, len(uploads))
+            if error:
+                return {"ok": False, "error": error}, 400
+            enhancer = next((option for option in takes.get("options", []) if option.get("id") == "prompt_enhancer"), None)
+            if not enhancer:
+                return {"ok": False, "error": "The selected image workflow has no prompt enhancer."}, 400
+            if enhancer.get("problem"):
+                return {"ok": False, "error": f"{enhancer['label']} can't run: {enhancer['problem']}"}, 400
+            if not takes["min_images"] <= len(uploads) <= takes["max_images"]:
+                return {"ok": False, "error": "Choose the number of source images this workflow needs."}, 400
+            workflow_path = env.get("COMFYUI_WORKFLOW")
+            if not workflow_path:
+                return {"ok": False, "error": "Choose an image workflow with a prompt enhancer."}, 400
+            options, error = form_options(request.form, takes)
+            if error:
+                return {"ok": False, "error": error}, 400
+            options["prompt_enhancer"] = "1"
+            comfy = ImageClient(options, workflow_path=workflow_path)
+            if not comfy.wait_until_reachable():
+                raise RuntimeError(f"ComfyUI isn't running at {comfy.url}. Start it first.")
+            images = []
+            for upload in uploads:
+                try:
+                    video_media.load_image(upload.stream)
+                except RuntimeError:
+                    return {"ok": False, "error": "That file isn't an image this can read."}, 400
+                upload.stream.seek(0)
+                extension = os.path.splitext(upload.filename)[1].lower()
+                extension = extension if re.fullmatch(r"\.[a-z0-9]{1,5}", extension) else ""
+                images.append(comfy._send_image(upload.stream, f"prompt-editor-{secrets.token_hex(8)}{extension}"))
+            prompt = comfy.enhance(text.strip(), images)
+            if not prompt or not prompt.strip():
+                raise RuntimeError("The workflow's prompt enhancer returned no text.")
         timings = eta_keys.Timings(PROMPT_WRITER_TIMINGS, {})
-        key = f"{refiner.model_id} | {data['pipeline']}"
+        key = f"{model} | {side}"
         old = timings.step(key)
         if old is not None and (not math.isfinite(old) or old <= 0):
             app.logger.warning("Discarding invalid prompt writer timing for %s: %s", key, old)
@@ -2735,7 +2832,7 @@ def write_prompt():
         except OSError as e:
             app.logger.warning("Could not save local prompt writer timings: %s", e)
         return {"ok": True, "prompt": prompt}
-    except (RuntimeError, OSError, ValueError) as e:
+    except (RuntimeError, OSError, ValueError, APIError) as e:
         return {"ok": False, "error": str(e)}, 500
     finally:
         with run_queue.lock:

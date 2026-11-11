@@ -85,6 +85,8 @@
   .queue-item:hover { background: color-mix(in srgb, var(--panel-2) 60%, transparent); }
   .stopped-fold > summary { display: flex; align-items: center; justify-content: space-between; gap: 10px; cursor: pointer; list-style: none; padding: 2px 0; font-size: .84rem; }
   .stopped-fold > summary b { font-weight: 600; }
+  #warningRuns .stopped-fold > summary, .prompt-warning { color: #ef5350; }
+  .queue .icon-btn.prompt-warning { color: #ef5350; border-color: #ef5350; }
   .stopped-fold[open] > summary { padding-bottom: 6px; border-bottom: 1px solid var(--line); }
   .run-status, .run-tabs { display: contents; }
   .stopped-fold > summary::-webkit-details-marker { display: none; }
@@ -487,9 +489,6 @@
   @keyframes pulse { 50% { box-shadow: 0 0 0 4px color-mix(in srgb, var(--warn) 35%, transparent); } }
   .settings-actions #shutdown { background: rgba(229, 83, 75, .14); border-color: var(--err); color: var(--err); }
   .settings-actions #shutdown.armed { background: var(--err); color: #fff; }
-  /* Force restart ComfyUI: in the warning yellow, left of Log out. */
-  .settings-actions #forceRestartComfy { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 55%, var(--line)); }
-  .settings-actions #forceRestartComfy.armed { background: color-mix(in srgb, var(--warn) 18%, transparent); }
   .settings-actions button { position: relative; }
   .settings-actions button[data-taps]::after { content: attr(data-taps); position: absolute; top: 2px; right: 5px; font-size: .68rem; font-weight: 700; }
   /* Icons only: the words stay for screen readers. */
@@ -505,6 +504,14 @@
   .settings-row { display: flex; align-items: center; gap: 10px; }
   .settings-row > label { flex: 0 0 64px; margin: 0; }
   .settings-row select { margin: 0; }
+  .theme-picker { margin: 0; padding: 11px 12px; text-align: left; background: var(--panel-2); border: 1px solid var(--line); color: var(--text); }
+  .theme-list { display: flex; flex-direction: column; gap: 6px; }
+  .theme-choice { display: flex; align-items: center; gap: 10px; margin: 0; padding: 9px 10px; text-align: left; background: var(--panel-2); border: 1px solid var(--line); color: var(--text); font-size: .9rem; }
+  .theme-choice[aria-pressed="true"] { border-color: var(--accent); }
+  .theme-choice:focus-visible, .theme-picker:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .theme-name { flex: 1; }
+  .theme-swatches { display: flex; flex: none; }
+  .theme-swatches i { width: 20px; height: 20px; border: 1px solid rgba(255,255,255,.25); border-radius: 50%; margin-left: -3px; }
   .url-row .url-name { flex: 0 0 auto; font-size: .8rem; color: var(--muted); }
   .url-row code { flex: 1 1 0; min-width: 0; overflow-wrap: anywhere; color: var(--text); background: var(--panel-2); padding: 4px 8px; border-radius: 6px; font-size: .8rem; user-select: all; }
   .url-row button { width: auto; flex: none; margin: 0; padding: 4px 10px; font-size: .78rem; background: var(--panel-2); border: 1px solid var(--line); color: var(--text); }
@@ -819,6 +826,9 @@
   .paint-pop[hidden] { display: none; }
   .paint-pop.left { left: 0; transform-origin: bottom left; }
   .paint-pop.right { right: 0; transform-origin: bottom right; }
+  .prompt-writer-wrap { position: relative; }
+  .prompt-writer-menu { width: min(230px, calc(100vw - 40px)); display: grid; gap: 5px; }
+  .prompt-writer-menu button { width: 100%; margin: 0; padding: 8px 10px; text-align: left; background: var(--panel-2); border: 1px solid var(--line); color: var(--text); }
   @keyframes paint-pop-in { from { opacity: 0; transform: scale(.5); } to { opacity: 1; transform: none; } }
   @media (prefers-reduced-motion: reduce) { .paint-pop, dialog.paint-dialog { animation: none; } }
   .paint-colours { display: grid; grid-template-columns: repeat(4, 30px); gap: 8px; }
@@ -865,19 +875,31 @@
   @media (prefers-reduced-motion: reduce) { .prompt-editor-pages { scroll-behavior: auto; } }
   .prompt-editor-gap { flex: 1 1 auto; }
   .prompt-editor-head { display: flex; align-items: baseline; gap: 8px; }
-  .prompt-editor-head .panel-dialog-title { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .prompt-editor-heading { flex: 1 1 auto; min-width: 0; display: flex; align-items: baseline; gap: 8px; }
+  .prompt-editor-heading .panel-dialog-title { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .prompt-editor-thinking { flex: 0 1 180px; min-width: 0; display: inline-grid; position: relative; overflow: hidden; color: #9864bd; font-size: .82rem; font-weight: 600; white-space: nowrap; }
+  .prompt-editor-thinking[hidden] { display: none; }
+  .prompt-thinking-line { grid-area: 1 / 1; }
+  .prompt-thinking-line.exiting { animation: prompt-phrase-out .32s ease forwards; }
+  .prompt-thinking-line.entering .prompt-thinking-letter { display: inline-block; animation: prompt-letter-in .36s ease both; }
+  @keyframes prompt-phrase-out { to { opacity: 0; transform: translateX(7px); } }
+  @keyframes prompt-letter-in { from { opacity: 0; transform: translateX(-3px); letter-spacing: .035em; } to { opacity: 1; transform: none; letter-spacing: 0; } }
   .prompt-editor-head .hint { flex: none; margin: 0; font-size: .72rem; opacity: .8; font-variant-numeric: tabular-nums; }
   /* Copy and Clear: quiet icons, no box of their own. */
   /* Write with the LLM, Copy and Clear: quiet icons in a row on the left, no box of their own. */
-  #promptEditorEnhance, #promptEditorCopy, #promptEditorClear { width: 26px; height: 26px; background: transparent; border: 0; padding: 3px; }
-  #promptEditorEnhance svg, #promptEditorCopy svg, #promptEditorClear svg { width: 18px; height: 18px; }
+  #promptEditorEnhance, #promptEditorCopy, #promptEditorClear, #promptEditorReset { width: 26px; height: 26px; background: transparent; border: 0; padding: 3px; }
+  #promptEditorEnhance svg, #promptEditorCopy svg, #promptEditorClear svg, #promptEditorReset svg { width: 18px; height: 18px; }
+  #promptEditorReset { flex: none; color: var(--accent); }
+  .prompt-writer-wrap.has-selection #promptEditorEnhance, .prompt-writer-wrap.has-selection #promptEditorEnhance.working { color: #9864bd; opacity: 1; }
+  .prompt-writer-menu button.selected { color: #9864bd; border-color: #9864bd; box-shadow: 0 0 0 1px #9864bd; }
   .prompt-copy[hidden] { display: none; }
   .prompt-editor-foot .panel-close { align-self: auto; }
-  /* While the LLM writes: a bar along the inside top of the box, and the write button pulsing. */
+  /* While a writer runs: a bar along the inside top of the box, and the write button pulsing. */
   @keyframes prompt-writing-icon { 50% { opacity: .35; transform: scale(.82) rotate(-14deg); } }
   .prompt-write.working, #promptEditorEnhance.working { color: var(--accent); opacity: 1; }
   .prompt-write.working svg, #promptEditorEnhance.working svg { animation: prompt-writing-icon 1.1s ease-in-out infinite; }
   @media (prefers-reduced-motion: reduce) { .prompt-write.working svg, #promptEditorEnhance.working svg { animation: none; } }
+  @media (prefers-reduced-motion: reduce) { .prompt-editor-thinking *, .prompt-thinking-line.exiting { animation: none !important; } }
   /* The image viewer: the picture as large as fits, its buttons under it. */
   dialog.viewer { width: auto; max-width: calc(100vw - 24px); max-height: calc(100dvh - 24px); background: transparent; border: 0;
     display: none; flex-direction: column; align-items: center; gap: 10px; overflow: visible; }
@@ -1130,7 +1152,14 @@
   dialog.prompt-detail { width: min(520px, calc(100vw - 24px)); max-height: min(75dvh, 640px); padding: 0; gap: 0; overflow: hidden; }
   .prompt-detail .panel-dialog-title { flex: none; padding: 14px 16px 0; }
   .prompt-detail-text { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 16px; white-space: pre-wrap; overflow-wrap: anywhere; }
-  .prompt-detail-actions { flex: none; display: flex; justify-content: flex-end; align-items: center; gap: 8px; padding: 10px 16px; border-top: 1px solid var(--line); background: var(--panel); }
+  .prompt-detail-actions { flex: none; display: flex; align-items: center; gap: 8px; padding: 10px 16px; border-top: 1px solid var(--line); background: var(--panel); }
+  .prompt-detail-left { display: flex; align-items: center; gap: 8px; margin-right: auto; }
+  .prompt-detail-actions .copy-btn { width: 48px; height: 48px; }
+  #promptDetailYours { color: var(--shared); border-color: var(--shared); }
+  .prompt-detail-stages { display: flex; flex-wrap: wrap; gap: 6px; padding: 0 16px 10px; }
+  .prompt-detail-stages[hidden] { display: none; }
+  .prompt-detail-stages button { width: auto; margin: 0; padding: 5px 9px; font-size: .78rem; }
+  .prompt-detail-stages button[aria-pressed="true"] { color: var(--shared); border-color: var(--shared); }
   .prompt-detail-actions .panel-close { width: auto; margin: 0; }
   /* The model guide: short lines under headings that fold, so a phone reads it a part at a time. */
   dialog.model-guide { width: min(560px, calc(100vw - 16px)); max-height: min(86dvh, 780px); padding: 0; gap: 0; overflow: hidden; }
@@ -1736,6 +1765,7 @@
       <div class="queue-pending-head"><b id="queuePendingText"></b><span id="queuePendingPct"></span></div>
       <div class="bar"><div id="queuePendingBar"></div></div>
     </div>
+    <div class="queue" id="warningRuns" hidden></div>
     <div class="queue" id="runQueue" data-lane="run" data-title="Queue" hidden></div>
     <div class="queue" id="stoppedRuns" hidden></div>
     <div class="queue" id="failedRuns" hidden></div>
@@ -2025,6 +2055,12 @@
     <div class="hint" id="videoClipFixedHint" hidden>Film length is rounded to whole clips. Audio may be trimmed or padded with silence.</div>
 
     <div id="connectionBox">
+      <label for="clipRelationship">How clips relate</label>
+      <select id="clipRelationship" name="clip_relationship">
+        <option value="progressive">One story: each clip moves it forward</option>
+        <option value="related">Related scenes: distinct moments in the same world</option>
+      </select>
+      <div class="hint">For LLM-planned clips. Exact prompt repeats your wording; OpenH3-IR may still refine each clip. Continuous takes still continue physically.</div>
       <label for="start">How clips connect</label>
       <select id="start" name="start">
         <option id="startChain" value="chain">One continuous take: each clip starts on the last frame of the one before</option>
@@ -2331,10 +2367,13 @@
 <dialog id="shotsDialog"><div id="shotsBody"></div></dialog>
 <dialog id="promptDetail" class="panel-dialog prompt-detail" aria-labelledby="promptDetailTitle">
   <div class="panel-dialog-title" id="promptDetailTitle">Detailed prompt</div>
+  <div class="prompt-detail-stages" id="promptDetailStages" hidden></div>
   <div class="prompt-detail-text" id="promptDetailText" tabindex="0"></div>
   <div class="prompt-detail-actions">
-    <button type="button" class="copy-btn" id="promptDetailYours" aria-pressed="false" aria-label="Show your prompt" title="Your prompt" hidden></button>
-    <button type="button" class="copy-btn" id="promptDetailCopy" aria-label="Copy detailed prompt" title="Copy detailed prompt"></button>
+    <div class="prompt-detail-left">
+      <button type="button" class="copy-btn" id="promptDetailYours" aria-pressed="false" aria-label="Show your prompt" title="Your prompt" hidden></button>
+      <button type="button" class="copy-btn" id="promptDetailCopy" aria-label="Copy detailed prompt" title="Copy detailed prompt"></button>
+    </div>
     <button type="button" class="panel-close" id="promptDetailClose" autofocus>Close</button>
   </div>
 </dialog>
@@ -2349,6 +2388,8 @@
   </div>
   <div class="panel-dialog-body settings-body">
   <div class="hint settings-note" id="settingsNote" hidden></div>
+  <div class="settings-group" id="themeSettingTitle">Theme</div>
+  <button type="button" class="theme-picker" id="themePicker" aria-haspopup="dialog" aria-labelledby="themeSettingTitle themePicker"></button>
   <div class="settings-group" id="reserveTitle">Reserve free RAM</div>
   <div class="reserve-row" role="group" aria-labelledby="reserveTitle">
     <button type="button" id="reserveSet" hidden>Set</button>
@@ -2384,11 +2425,24 @@
   <div class="settings-actions">
     <button type="button" id="restartPanel" title="Start the panel again, to load new code. Not while a run or upload is going."><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 11a8 8 0 1 0-2.3 5.7"/><path d="M20 4v7h-7"/></svg><span>Restart panel</span></button>
     <button type="button" id="restartComfy" title="Start fresh: closes local ComfyUI processes, including work started outside the panel. Not while a panel run is going."><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="2"/><rect x="9.5" y="9.5" width="5" height="5" rx=".5"/><path d="M9 2.5v3M15 2.5v3M9 18.5v3M15 18.5v3M2.5 9h3M2.5 15h3M18.5 9h3M18.5 15h3"/></svg><span>Restart ComfyUI</span></button>
-    <button type="button" id="forceRestartComfy" title="Force restart ComfyUI (three taps): closes ComfyUI and starts it again even while a run is going or the panel thinks one is: that run fails, and is tried once more once ComfyUI is back. Use it when ComfyUI is stuck or has died."><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M13 2 4 14h7l-1 8 9-12h-7z"/></svg><span>Force restart ComfyUI</span></button>
     <a class="button" href="/logout" id="logout" title="Log out on this device: the panel keeps running."><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 4h3a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-3"/><path d="M10 17l5-5-5-5"/><path d="M15 12H4"/></svg><span>Log out</span></a>
+    <button type="button" id="forceRestartComfy" title="Force restart ComfyUI (three taps): closes ComfyUI and starts it again even while a run is going or the panel thinks one is: that run fails, and is tried once more once ComfyUI is back. Use it when ComfyUI is stuck or has died."><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M13 2 4 14h7l-1 8 9-12h-7z"/></svg><span>Force restart ComfyUI</span></button>
     <button type="button" id="shutdown" title="Shut down: force-stops everything, then the panel's server. Start it again with start_webapp.pyw or the gen-center shortcut."><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M12 3v9"/><path d="M6.3 7.3a8 8 0 1 0 11.4 0"/></svg><span>Shut down</span></button>
   </div>
   <button type="button" class="panel-close" id="settingsClose">Close</button>
+</dialog>
+<dialog id="themeDialog" class="panel-dialog" aria-labelledby="themeTitle">
+  <div class="panel-dialog-title" id="themeTitle">Choose a theme</div>
+  <div class="hint" id="themeNote" role="alert" hidden></div>
+  <div class="panel-dialog-body theme-list">
+    {% for id, theme in themes.items() %}
+    <button type="button" class="theme-choice" data-theme="{{ id }}" aria-pressed="{{ 'true' if settings.theme == id else 'false' }}">
+      <span class="theme-name">{{ theme[0] }}</span>
+      <span class="theme-swatches" aria-hidden="true">{% for color in [theme[1], theme[2], theme[3], theme[5], theme[7]] %}<i style="background: {{ color }}"></i>{% endfor %}</span>
+    </button>
+    {% endfor %}
+  </div>
+  <button type="button" class="panel-close" id="themeClose">Close</button>
 </dialog>
 <dialog id="panelDialog" class="panel-dialog" aria-labelledby="panelDialogTitle">
   <div class="panel-dialog-title" id="panelDialogTitle"></div>
@@ -2469,14 +2523,17 @@
   </div>
 </dialog>
 <dialog id="promptEditor" class="panel-dialog prompt-editor" aria-labelledby="promptEditorTitle">
-  <div class="prompt-editor-head"><div class="panel-dialog-title" id="promptEditorTitle">Prompt</div><span class="hint" id="promptEditorCount" aria-live="polite"></span><span class="prompt-editor-turn" id="promptEditorTurn" hidden><button type="button" id="promptEditorPrev" aria-label="Previous prompt" title="Previous">&#8249;</button><button type="button" id="promptEditorNext" aria-label="Next prompt" title="Next">&#8250;</button></span></div>
+  <div class="prompt-editor-head"><div class="prompt-editor-heading"><div class="panel-dialog-title" id="promptEditorTitle">Prompt</div><span class="prompt-editor-thinking" id="promptEditorThinking" aria-live="polite" hidden><span class="prompt-thinking-line" id="promptEditorThinkingPrevious" aria-hidden="true"></span><span class="prompt-thinking-line" id="promptEditorThinkingCurrent"></span></span></div><button type="button" id="promptEditorReset" aria-label="Restore original prompt" title="Restore the prompt from before enhancement" hidden></button><span class="hint" id="promptEditorCount" aria-live="polite"></span><span class="prompt-editor-turn" id="promptEditorTurn" hidden><button type="button" id="promptEditorPrev" aria-label="Previous prompt" title="Previous">&#8249;</button><button type="button" id="promptEditorNext" aria-label="Next prompt" title="Next">&#8250;</button></span></div>
   <div class="prompt-editor-box">
     <textarea id="promptEditorText" aria-labelledby="promptEditorTitle" spellcheck="true"></textarea>
     <div class="prompt-progress-track"><div class="prompt-progress" id="promptEditorProgress" hidden></div></div>
     <div class="prompt-editor-pages" id="promptEditorPages" hidden></div>
   </div>
   <div class="prompt-editor-foot">
-    <button type="button" class="prompt-copy prompt-enhance" id="promptEditorEnhance" aria-label="Write it with the LLM" title="Write it with the LLM: your idea becomes a full prompt" hidden></button>
+    <div class="prompt-writer-wrap" id="promptEditorWriterWrap">
+      <div class="paint-pop prompt-writer-menu left" id="promptEditorWriterMenu" role="menu" hidden></div>
+      <button type="button" class="prompt-copy prompt-enhance" id="promptEditorEnhance" aria-label="Enhance prompt" title="Choose a prompt writer" aria-haspopup="menu" aria-expanded="false" hidden></button>
+    </div>
     <button type="button" class="prompt-copy" id="promptEditorCopy" aria-label="Copy" title="Copy"></button>
     <button type="button" class="prompt-copy prompt-clear" id="promptEditorClear" aria-label="Clear" title="Clear"></button>
     <span class="prompt-editor-gap"></span>
@@ -2501,6 +2558,7 @@
       <div class="viewer-tools-left">
       <button type="button" class="icon-btn" id="viewerVariations" aria-label="More like this" title="More like this one: its prompt and settings in Generate, on new seeds"></button>
       <button type="button" class="icon-btn" id="viewerPrompts" aria-label="Detailed prompt" title="Detailed prompt, with your own a tap away"></button>
+      <button type="button" class="icon-btn" id="viewerClips" aria-label="Clips and prompt history" title="All clips in this video, with their prompt history" hidden></button>
       <button type="button" class="icon-btn" id="viewerUpscale" aria-label="Upscale" title="Make this one bigger, as a new image in its set"></button>
       <button type="button" class="icon-btn" id="viewerEdit" aria-label="Edit" title="Edit this one: it goes to Generate as image 1, with the edit preset chosen in Settings"></button>
       </div>
@@ -3259,7 +3317,7 @@ $('tabUploaded').onclick = () => setTab('uploaded');
 
 // --- Video: an image, a prompt, and prompts you can read before rendering ---
 const VIDEO_STORE_KEY = 'comfyui-auto-gen.video.v1';
-const VIDEO_DEFAULTS = { llm: {{ default_llm | tojson }}, review: false, duration: {{ film_limits[2] | tojson }}, privacy: 'private', start: 'chain' };
+const VIDEO_DEFAULTS = { llm: {{ default_llm | tojson }}, review: false, duration: {{ film_limits[2] | tojson }}, privacy: 'private', start: 'chain', clip_relationship: 'progressive' };
 // What belongs to one film rather than being the way you like to work.
 // A seed is for one run: kept, it would quietly make the next film the same.
 const NOT_REMEMBERED = ['prompt', 'size', 'narration', 'seed', 'areas', 'source_seed'];
@@ -3538,14 +3596,44 @@ function settingsNote(text, bad) {
   $('settingsNote').textContent = text || '';
   $('settingsNote').style.color = bad ? 'var(--err)' : '';
 }
-async function saveSettings(changes) {
+async function saveSettings(changes, note = settingsNote) {
   try {
     const body = await (await fetch('/api/settings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(changes) })).json();
-    if (!body.ok) { settingsNote(body.error || 'Could not save it.', true); return; }
+    if (!body.ok) { note(body.error || 'Could not save it.', true); return false; }
     Object.assign(SETTINGS, body.settings);
-    settingsNote('');
-  } catch (e) { settingsNote('Could not save it.', true); }
+    note('');
+    return true;
+  } catch (e) { note('Could not save it.', true); return false; }
 }
+const themeDialog = $('themeDialog');
+function themeNote(text, bad) {
+  $('themeNote').hidden = !text;
+  $('themeNote').textContent = text || '';
+  $('themeNote').style.color = bad ? 'var(--err)' : '';
+}
+function syncTheme() {
+  document.documentElement.dataset.theme = SETTINGS.theme;
+  for (const choice of themeDialog.querySelectorAll('.theme-choice')) {
+    const selected = choice.dataset.theme === SETTINGS.theme;
+    choice.setAttribute('aria-pressed', String(selected));
+    if (selected) $('themePicker').textContent = choice.querySelector('.theme-name').textContent;
+  }
+}
+syncTheme();
+$('themePicker').addEventListener('click', () => { themeNote(''); themeDialog.showModal(); });
+$('themeClose').addEventListener('click', () => themeDialog.close());
+themeDialog.addEventListener('click', async e => {
+  if (e.target === themeDialog) { themeDialog.close(); return; }
+  const choice = e.target.closest ? e.target.closest('.theme-choice') : null;
+  if (!choice || choice.dataset.theme === SETTINGS.theme) return;
+  const choices = themeDialog.querySelectorAll('.theme-choice');
+  for (const button of choices) button.disabled = true;
+  if (await saveSettings({ theme: choice.dataset.theme }, themeNote)) {
+    syncTheme();
+    themeDialog.close();
+  }
+  for (const button of choices) button.disabled = false;
+});
 function formatBytes(n) {
   const gb = n / 2 ** 30;
   return gb >= 100 ? `${Math.round(gb)} GB` : gb >= 1 ? `${gb.toFixed(1)} GB` : `${Math.round(n / 2 ** 20)} MB`;
@@ -5513,10 +5601,11 @@ const ICONS = {
   up: ICON_SVG('<path d="m6 15 6-6 6 6"/>'),
   down: ICON_SVG('<path d="m6 9 6 6 6-6"/>'),
   grid: ICON_SVG('<rect x="4" y="4" width="6.5" height="6.5" rx="1.2"/><rect x="13.5" y="4" width="6.5" height="6.5" rx="1.2"/><rect x="4" y="13.5" width="6.5" height="6.5" rx="1.2"/><rect x="13.5" y="13.5" width="6.5" height="6.5" rx="1.2"/>'),
+  clips: ICON_SVG('<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 4v16M17 4v16M3 9h4M3 15h4M17 9h4M17 15h4"/><path d="m10 9 4 3-4 3z"/>'),
 };
 $('writeVideoPrompt').innerHTML = $('writeImagePrompt').innerHTML = ICONS.enhanced;
-for (const [id, icon] of Object.entries({ viewerDownload: 'download', viewerDelete: 'trash', promptDetailYours: 'brief', promptEditorCopy: 'copy', promptEditorClear: 'eraser', promptEditorEnhance: 'enhanced', viewerVariations: 'config', viewerUpscale: 'upscale',
-  viewerEdit: 'prompts', viewerPrompts: 'enhanced' })) $(id).innerHTML = ICONS[icon];
+for (const [id, icon] of Object.entries({ viewerDownload: 'download', viewerDelete: 'trash', promptDetailYours: 'brief', promptEditorCopy: 'copy', promptEditorClear: 'eraser', promptEditorEnhance: 'enhanced', promptEditorReset: 'again', viewerVariations: 'config', viewerUpscale: 'upscale',
+  viewerEdit: 'prompts', viewerPrompts: 'enhanced', viewerClips: 'clips' })) $(id).innerHTML = ICONS[icon];
 function outputSize(bytes) {
   if (bytes == null) return '';
   return bytes >= 1024 * 1024 ? `${(bytes / (1024 * 1024)).toFixed(1)} MB` : `${Math.max(1, Math.round(bytes / 1024))} KB`;
@@ -6609,9 +6698,14 @@ $('viewerPrompts').addEventListener('click', async () => {
   // An image: its own prompt. A film: each shot's, in order.
   const shot = viewing.film ? null : data.shots[viewing.position - 1];
   const detailed = shot ? shot.enhanced_prompt || shot.prompt
-    : data.shots.map((s, i) => `${i + 1}. ${s.title}\n${s.enhanced_prompt || s.prompt}`).join('\n\n');
+    : data.shots.map((s, i) => `${i + 1}. ${s.title}\n${s.comfy_prompt || s.enhanced_prompt || s.prompt}`).join('\n\n');
   // Made from your exact prompt: that is what it was made from, so it opens on yours, the detailed one a tap away.
   openPromptDetail(detailed, data.brief, data.direct ? 'yours' : 'detailed');
+});
+$('viewerClips').addEventListener('click', () => {
+  if (!viewing || !viewing.film || !viewing.run) return;
+  $('viewerVideo').pause();
+  openShots(viewing.run);
 });
 $('viewerUse').addEventListener('click', () => {
   if (!viewing || !choosingFor) return;
@@ -6772,6 +6866,7 @@ function showChoosing(video) {
   if (row) row.classList.toggle('choosing', choosing);
 }
 function showViewerMedia(video) {
+  $('viewerClips').hidden = true;
   showChoosing(video);
   $('viewerTools').hidden = false;
   for (const id of ['viewerVariations', 'viewerEdit', 'viewerPrompts', 'viewerUpscale']) $(id).hidden = false;
@@ -6847,6 +6942,7 @@ function openFilm(name, filmFolder = folder) {
   $('viewerUpscale').hidden = !canUpscale;
   $('viewerUpscale').classList.remove('dim');
   $('viewerPrompts').hidden = !canPrompt;
+  $('viewerClips').hidden = filmFolder !== 'video' || !canPrompt;
   $('viewerRes').textContent = sizeText(film.resolution);
   $('viewerCount').textContent = films.length > 1 ? `${at + 1} of ${films.length}` : '';
   viewerMetadata(film);
@@ -7303,7 +7399,8 @@ function shotItemHtml(run, shot, i) {
   const status = film ? `<span>${shot.seconds}s</span>` : '';
   const like = icon(`data-create="${number}"`, 'More like this: its prompt and settings in Generate, on new seeds', ICONS.config);
   // The prompt is the box itself: a tap opens it. Only what an enhancer wrote from it needs a button of its own.
-  const enhanced = shot.enhanced_prompt ? icon(`data-enhanced="${number}" aria-haspopup="dialog"`, 'Detailed prompt: what the prompt enhancer wrote', ICONS.enhanced) : '';
+  const enhanced = film ? icon(`data-history="${number}" aria-haspopup="dialog"`, 'Prompt history: original, planner, enhancer and final ComfyUI text', ICONS.enhanced)
+    : shot.enhanced_prompt ? icon(`data-enhanced="${number}" aria-haspopup="dialog"`, 'Detailed prompt: what the prompt enhancer wrote', ICONS.enhanced) : '';
   // An image an upscale waits on stays; the rest of the set can go while upscales wait.
   const remove = !film && !run.busy && !run.pending && !shot.locked ? icon(`data-delete-image="${number}"`, 'Delete', ICONS.trash, ' del') : '';
   const save = run.busy ? '' : icon('data-save="1"', 'Save the prompts', ICONS.save);
@@ -7409,6 +7506,12 @@ $('shotsBody').addEventListener('click', async e => {
     closeSeedFolds();
     const box = $('shotsBody').querySelectorAll('textarea[data-prompt]')[number - 1];
     openPromptDetail(shot.enhanced_prompt || (box ? box.value : shot.prompt), shotsRun.brief);
+    return;
+  }
+  if (d.history) {
+    const shot = shotsRun.shots[Number(d.history) - 1];
+    if (!shot) { alert('Could not open the prompt history.'); return; }
+    openClipPromptHistory(shotsRun, shot);
     return;
   }
   const toggle = e.target.closest && e.target.closest('[data-fold]');
@@ -7528,6 +7631,7 @@ let promptCopyTimer, promptDetailTexts = { detailed: '', yours: '' };
 // The prompt as it went to the model (the enhancer's, else the one written for it), with your own prompt a tap away.
 function openPromptDetail(detailed, yours, first = 'detailed') {
   promptDetailTexts = { detailed: detailed || '', yours: yours || '' };
+  $('promptDetailStages').hidden = true;
   $('promptDetailYours').hidden = !yours;
   showPromptDetail(first === 'yours' && yours ? 'yours' : 'detailed');
   clearTimeout(promptCopyTimer);
@@ -7535,11 +7639,35 @@ function openPromptDetail(detailed, yours, first = 'detailed') {
   $('promptDetailCopy').innerHTML = ICONS.copy;
   $('promptDetail').showModal();
 }
+function openClipPromptHistory(run, shot) {
+  const stages = [
+    ['yours', 'Original brief', run.brief],
+    ['planner', 'Planner output', shot.planner_prompt || (run.direct ? 'Not used: Exact mode repeats your brief.' : 'Not recorded for this older run.')],
+    ['enhancer', 'Enhancer output', shot.enhancer_prompt || shot.enhanced_prompt || (run.h3_mode && run.h3_mode !== 'off' ? 'Not generated yet, or not recorded for this older run.' : 'Not used.')],
+    ['detailed', 'Final ComfyUI text', shot.comfy_prompt || (shot.rendered ? 'Not recorded for this older render.' : 'Not submitted to ComfyUI yet.')],
+  ];
+  if (shot.workflow_enhanced_prompt) stages.push(['workflow', 'Workflow enhancer', shot.workflow_enhanced_prompt]);
+  openPromptDetail(stages[3][2], run.brief);
+  promptDetailTexts = Object.fromEntries(stages.map(([key, , text]) => [key, text || 'No text recorded.']));
+  const bar = $('promptDetailStages');
+  bar.innerHTML = stages.map(([key, label]) => `<button type="button" data-stage="${key}" aria-pressed="${key === 'detailed'}">${label}</button>`).join('');
+  bar.hidden = false;
+  $('promptDetailTitle').textContent = 'Final ComfyUI text';
+}
+$('promptDetailStages').addEventListener('click', e => {
+  const button = e.target.closest && e.target.closest('button[data-stage]');
+  if (!button) return;
+  showPromptDetail(button.dataset.stage);
+  $('promptDetailTitle').textContent = button.textContent;
+});
 function showPromptDetail(which) {
   $('promptDetailTitle').textContent = which === 'yours' ? 'Your prompt' : 'Detailed prompt';
   $('promptDetailText').textContent = promptDetailTexts[which];
   $('promptDetailText').scrollTop = 0;
   $('promptDetailYours').setAttribute('aria-pressed', String(which === 'yours'));
+  for (const button of $('promptDetailStages').querySelectorAll('button[data-stage]')) {
+    button.setAttribute('aria-pressed', String(button.dataset.stage === which));
+  }
   // The button below says where it goes: to the detailed prompt from yours, to yours from the detailed one.
   $('promptDetailYours').setAttribute('aria-label', which === 'yours' ? 'Show the detailed prompt' : 'Show your prompt');
   $('promptDetailYours').title = which === 'yours' ? 'Detailed prompt' : 'Your prompt';
@@ -8513,7 +8641,7 @@ function whyHtml(outcome) {
 // Draw all three sections together, so their height changes move the rest of the page gradually.
 let runSectionsDrawn = false;
 function renderRunSections(draw) {
-  const sections = ['runQueue', 'stoppedRuns', 'failedRuns'].map(id => $(id));
+  const sections = ['warningRuns', 'runQueue', 'stoppedRuns', 'failedRuns'].map(id => $(id));
   const motion = runSectionsDrawn && !window.matchMedia('(prefers-reduced-motion: reduce)').matches
     && $('queueBox').getClientRects().length;
   runSectionsDrawn = true;
@@ -8585,13 +8713,18 @@ function renderRunSections(draw) {
 }
 // canRunNow: the queue is on hold and nothing is running, so a pending job can be started on its own, at once.
 function renderStopped(runs, parked = [], results = [], canRunNow = false) {
-  const failed = runs.filter(run => run.outcome && run.outcome.outcome === 'failed');
-  const idle = runs.filter(run => !failed.includes(run));
+  const warned = runs.filter(run => run.prompt_warnings && run.prompt_warnings.length);
+  const warnedParked = parked.filter(item => item.prompt_warnings && item.prompt_warnings.length);
+  const failed = runs.filter(run => !warned.includes(run) && run.outcome && run.outcome.outcome === 'failed');
+  const idle = runs.filter(run => !failed.includes(run) && !warned.includes(run));
+  const warningText = item => item.prompt_warnings && item.prompt_warnings.length
+    ? `<div class="hint prompt-warning">Check prompts (${item.prompt_warnings.map(w => `Items ${esc(String(w.items[0]))} and ${esc(String(w.items[1]))}`).join('; ')}). Starting approves this warning.</div>` : '';
   const tag = run => run.outcome ? `<span class="run-tag${run.outcome.outcome === 'stopped' ? ' stopped' : ''}">${esc(run.outcome.outcome === 'failed' ? 'Failed' : run.outcome.outcome === 'stopped' ? 'Stopped' : run.outcome.outcome)}</span>` : '';
   const runRow = (run, isFailed = false) => `
     <div class="stopped-run" data-run-id="${esc(run.id)}" data-motion-key="run-${esc(run.id)}">
       <div class="run-head"><div class="what">${queueTitle(`run-${run.id}`, hideTitle(run) ? PLAIN_TITLE : run.label)}</div>${tag(run)}</div>
       <div class="hint">${SIDE_NAMES[run.pipeline] || 'Shorts'} · ${esc(run.detail)}${run.size && !String(run.detail).includes(run.size) ? ` · ${esc(run.size)}` : ''}</div>
+      ${warningText(run)}
       ${run.when ? `<div class="hint">${esc(run.when)}</div>` : ''}
       ${run.outcome && run.outcome.why ? whyHtml(run.outcome) : ''}
       <div class="stopped-actions">
@@ -8600,7 +8733,7 @@ function renderStopped(runs, parked = [], results = [], canRunNow = false) {
           : `<button type="button" class="icon-btn start-item continue-item" data-continue="${esc(run.id)}" aria-label="${run.pipeline !== 'shorts' && !run.clips ? 'Render' : 'Continue'}" title="${run.pipeline !== 'shorts' && !run.clips ? 'Render' : 'Continue'}: it starts when the queue gets to it">${ICONS.queue}</button>`
             + `<button type="button" class="icon-btn start-item continue-item" data-continue-top="${esc(run.id)}" aria-label="Add to the top of the queue" title="Add to the top of the queue: ahead of everything waiting">${ICONS.top}</button>`}</span>
         <span class="when">${fmtEta(run.estimate)}</span>
-        <span class="acts-side acts-end">${run.pipeline !== 'shorts' ? `<button type="button" class="icon-btn" data-shots="${esc(run.id)}" aria-label="Prompts" title="View prompts">${ICONS.enhanced}</button>` : ''}<button type="button" class="icon-btn" data-config="${esc(run.id)}" data-pipeline="${esc(run.pipeline)}" aria-label="Change settings" title="Back to Generate with its settings, to change them">${ICONS.config}</button><button type="button" class="icon-btn" data-discard="${esc(run.id)}" data-pipeline="${esc(run.pipeline)}" data-clips="${run.clips}" aria-label="Discard this run" title="Discard what it has still to do: anything it made stays (tap twice)">${ICONS.trash}</button></span>
+        <span class="acts-side acts-end">${run.pipeline !== 'shorts' ? `<button type="button" class="icon-btn${run.prompt_warnings && run.prompt_warnings.length ? ' prompt-warning' : ''}" data-shots="${esc(run.id)}" aria-label="Prompts" title="View prompts">${ICONS.enhanced}</button>` : ''}<button type="button" class="icon-btn" data-config="${esc(run.id)}" data-pipeline="${esc(run.pipeline)}" aria-label="Change settings" title="Back to Generate with its settings, to change them">${ICONS.config}</button><button type="button" class="icon-btn" data-discard="${esc(run.id)}" data-pipeline="${esc(run.pipeline)}" data-clips="${run.clips}" aria-label="Discard this run" title="Discard what it has still to do: anything it made stays (tap twice)">${ICONS.trash}</button></span>
       </div>
     </div>`;
   // Waiting to be started: put there by Add to pending or Pause, and not in the queue until you start it.
@@ -8608,12 +8741,13 @@ function renderStopped(runs, parked = [], results = [], canRunNow = false) {
     <div class="stopped-run" data-motion-key="queue-${esc(String(item.id))}">
       <div class="run-head"><div class="what">${queueTitle(`queue-${item.id}`, workHeading(item, item.pipeline))}</div></div>
       <div class="hint">${SIDE_NAMES[item.pipeline] || 'Shorts'} · ${esc(queueDetail(item))}</div>
+      ${warningText(item)}
       <div class="stopped-actions">
         <span class="acts-side">${item.editing ? '<span class="when">Editing</span>' : `<button type="button" class="icon-btn start-item${item.continuation ? ' continue-item' : ''}" data-start="${item.id}" aria-label="Add to the queue" title="Add to the queue: it starts when the queue gets to it">${ICONS.queue}</button>`
           + `<button type="button" class="icon-btn start-item${item.continuation ? ' continue-item' : ''}" data-start="${item.id}" data-top="1" aria-label="Add to the top of the queue" title="Add to the top of the queue: ahead of everything waiting">${ICONS.top}</button>`
           + (canRunNow ? `<button type="button" class="icon-btn start-item${item.continuation ? ' continue-item' : ''}" data-run-now="${item.id}" aria-label="Run this now" title="Run this now: the rest of the queue stays on hold">${ICONS.play}</button>` : '')}</span>
         <span class="when">${item.estimate ? fmtEta(item.estimate) : ''}</span>
-        <span class="acts-side acts-end">${item.resume && item.pipeline !== 'shorts' ? `<button type="button" class="icon-btn" data-shots="${esc(item.resume)}" aria-label="Prompts" title="View prompts">${ICONS.enhanced}</button>` : ''}<button type="button" class="icon-btn" data-edit="${item.id}" aria-label="Go to setup" title="Edit this pending job">${ICONS.config}</button><button type="button" class="icon-btn" data-remove="${item.id}" aria-label="Remove it" title="Remove it (tap twice)">${ICONS.trash}</button></span>
+        <span class="acts-side acts-end">${item.resume && item.pipeline !== 'shorts' ? `<button type="button" class="icon-btn${item.prompt_warnings && item.prompt_warnings.length ? ' prompt-warning' : ''}" data-shots="${esc(item.resume)}" aria-label="Prompts" title="View prompts">${ICONS.enhanced}</button>` : ''}<button type="button" class="icon-btn" data-edit="${item.id}" aria-label="Go to setup" title="Edit this pending job">${ICONS.config}</button><button type="button" class="icon-btn" data-remove="${item.id}" aria-label="Remove it" title="Remove it (tap twice)">${ICONS.trash}</button></span>
       </div>
     </div>`;
   const unsavedFailures = results.filter(result => result.outcome === 'failed' && !result.run_id && result.job_id != null);
@@ -8644,11 +8778,12 @@ function renderStopped(runs, parked = [], results = [], canRunNow = false) {
       setupQueueScroll(el, '.stopped-body', '.stopped-run', top);
     }
   };
-  fold('stoppedRuns', 'Pending', [...parked.map(parkedRow), ...idle.map(run => runRow(run))]);
+  fold('warningRuns', 'Warning', [...warnedParked.map(parkedRow), ...warned.map(run => runRow(run))]);
+  fold('stoppedRuns', 'Pending', [...parked.filter(item => !warnedParked.includes(item)).map(parkedRow), ...idle.map(run => runRow(run))]);
   fold('failedRuns', 'Failed', [...failed.map(run => runRow(run, true)), ...unsavedFailures.map(unsavedRow)]);
 }
 // Open or shut stays as it was left, through the redraws.
-for (const id of ['stoppedRuns', 'failedRuns']) {
+for (const id of ['warningRuns', 'stoppedRuns', 'failedRuns']) {
   $(id).addEventListener('toggle', e => {
     if (!e.target.matches('.stopped-fold')) return;
     const wasOpen = !!$(id)._open;
@@ -9022,7 +9157,7 @@ let lastStage = null;
 // hides (a copy of it does, the part itself hidden at once, so nothing that reads it is fooled), and nothing under it
 // jumps. The page shows and hides them as it always has (hidden, or the hidden class); this watches for that. ---
 const SMOOTH_PARTS = ['currentWork', 'currentWorkSize', 'runProgress', 'etaDetail', 'now', 'comfyNow', 'stepper', 'stageDetail',
-  'uploadBox', 'uploadProgress', 'runActions', 'queuePending', 'runQueue', 'stoppedRuns', 'failedRuns', 'uploadQueue'];
+  'uploadBox', 'uploadProgress', 'runActions', 'queuePending', 'warningRuns', 'runQueue', 'stoppedRuns', 'failedRuns', 'uploadQueue'];
 const smoothShown = el => !el.hidden && !(el.classList && el.classList.contains('hidden'));
 const SMOOTH_MS = 320, SMOOTH_EASE = 'cubic-bezier(.2, .8, .2, 1)';
 function smoothIn(el) {
@@ -10228,7 +10363,10 @@ window.addEventListener('scroll', markJump, { passive: true });
 
 for (const section of document.querySelectorAll('details.section')) section.addEventListener('toggle', markJump);
 // --- The prompt editor: a prompt box shows two lines, and a tap opens all of it here to change, copy, save or drop ---
-let promptField = null, promptEditorEnhanced = false, promptWriting = null;
+let promptField = null, promptEditorEnhanced = false, promptEditorOriginal = null, promptWriting = null;
+const promptEditorWriterSelected = { image: null, video: null };
+let promptThinkingTimer = null, promptThinkingIndex = -1;
+const PROMPT_THOUGHTS = ['Prompting…', 'Thinking…', 'Shaping the details…', 'Finding the right words…', 'Polishing…'];
 function promptSide(field) {
   if (!field) return null;
   const generate = Object.entries(PROMPT_FIELDS).find(([side, id]) => side !== 'shorts' && $(id) === field);
@@ -10288,6 +10426,8 @@ async function openGeneratedPrompts() {
   $('promptEditorTitle').textContent = 'Generated prompts';
   $('promptEditorSave').hidden = $('promptEditorClear').hidden = false;
   $('promptEditorEnhance').hidden = true;
+  $('promptEditorReset').hidden = true;
+  closePromptWriterMenu();
   $('promptEditorCancel').textContent = 'Cancel';
   setPromptEditorBusy(false);
   $('promptEditor').showModal();
@@ -10354,6 +10494,7 @@ function openPromptEditor(field) {
   if (!field || field.disabled || field.closest('.prompt-writing.busy')) return;
   promptField = field;
   promptEditorEnhanced = false;
+  promptEditorOriginal = null;
   promptWriting = null;
   const locked = field.readOnly, text = $('promptEditorText');
   $('promptEditorTitle').textContent = promptLabel(field);
@@ -10363,9 +10504,12 @@ function openPromptEditor(field) {
   text.maxLength = field.maxLength > 0 ? field.maxLength : 100000;
   $('promptEditorSave').hidden = locked;
   setPromptEditorBusy(false);
-  // The Video and Image prompts can be written by the LLM from the idea in them, from here as from beside the box.
+  // The Video and Image prompts can be written from the idea in them, from here as from beside the box.
   const side = promptSide(field);
   $('promptEditorEnhance').hidden = locked || !side;
+  syncPromptWriterHighlight(side);
+  $('promptEditorReset').hidden = true;
+  closePromptWriterMenu();
   $('promptEditorClear').hidden = locked;
   $('promptEditorCancel').textContent = locked ? 'Close' : 'Cancel';
   countPrompt();
@@ -10379,6 +10523,7 @@ function openPromptEditor(field) {
 function closePromptEditor(save) {
   const field = promptField;
   promptWriting = null;  // A reply still on its way is dropped
+  setPromptEditorBusy(false);
   // Generate's image prompt, written by the LLM, is used word for word from then on, as the prompt writer always did.
   if (save && promptEditorEnhanced && field === $(PROMPT_FIELDS.image)) {
     const mode = $('imagePromptMode');
@@ -10410,6 +10555,77 @@ document.addEventListener('paste', e => {
 });
 document.addEventListener('input', e => { if (e.target && e.target.matches && e.target.matches('textarea[data-prompt]')) syncPromptBox(e.target); });
 $('promptEditorText').addEventListener('input', countPrompt);
+function closePromptWriterMenu() {
+  const menu = $('promptEditorWriterMenu');
+  if (!menu) return;
+  menu.hidden = true;
+  $('promptEditorEnhance').setAttribute('aria-expanded', 'false');
+}
+const PROMPT_LOCAL_MODELS = ['gemma-4-12b', 'qwen3-14b'];
+function promptWriterKey(writer) { return `${writer.id}:${writer.model || ''}`; }
+function syncPromptWriterHighlight(side) {
+  $('promptEditorWriterWrap').classList.toggle('has-selection', !!(side && promptEditorWriterSelected[side]));
+}
+function promptWriterChoices(side) {
+  const select = $(side === 'image' ? 'imageLlm' : 'llm');
+  const enabled = value => [...select.options].some(option => option.value === value && !option.disabled);
+  const choices = [];
+  if (enabled('gemini')) choices.push({ id: 'gemini', label: 'Gemini' });
+  if (enabled('local')) choices.push(...PROMPT_LOCAL_MODELS.map(model => ({
+    id: 'local', model, label: model === 'qwen3-14b' ? 'Qwen3' : 'Gemma 4',
+  })));
+  if (side === 'image' && enabled('prompt_enhancer')) choices.push({ id: 'prompt_enhancer', label: 'Prompt enhancer' });
+  return choices;
+}
+async function openPromptWriterMenu() {
+  const side = promptSide(promptField);
+  if (!side) return;
+  if (side === 'image') await loadImageWorkflows();
+  const menu = $('promptEditorWriterMenu');
+  const writers = promptWriterChoices(side);
+  const selected = promptEditorWriterSelected[side];
+  syncPromptWriterHighlight(side);
+  menu.innerHTML = writers.map(writer => {
+    const active = selected === promptWriterKey(writer);
+    return `<button type="button" role="menuitemradio" aria-checked="${active}" class="${active ? 'selected' : ''}" data-writer="${writer.id}"${writer.model ? ` data-model="${writer.model}"` : ''}>${esc(writer.label)}</button>`;
+  }).join('');
+  menu.hidden = false;
+  $('promptEditorEnhance').setAttribute('aria-expanded', 'true');
+}
+$('promptEditorEnhance').addEventListener('click', () => {
+  if (!$('promptEditorWriterMenu').hidden) { closePromptWriterMenu(); return; }
+  openPromptWriterMenu();
+});
+$('promptEditorWriterMenu').addEventListener('click', e => {
+  const button = e.target.closest && e.target.closest('[data-writer]');
+  if (!button) return;
+  const writer = { id: button.dataset.writer, model: button.dataset.model || null };
+  const side = promptSide(promptField);
+  if (side) promptEditorWriterSelected[side] = promptWriterKey(writer);
+  syncPromptWriterHighlight(side);
+  closePromptWriterMenu();
+  enhanceInEditor(writer);
+});
+document.addEventListener('click', e => {
+  if (!$('promptEditorWriterMenu').hidden && !e.target.closest('.prompt-writer-wrap')) closePromptWriterMenu();
+});
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape' && !$('promptEditorWriterMenu').hidden) {
+    e.preventDefault();
+    e.stopPropagation();
+    closePromptWriterMenu();
+    $('promptEditorEnhance').focus();
+  }
+});
+$('promptEditorReset').addEventListener('click', () => {
+  if (promptEditorOriginal === null) return;
+  $('promptEditorText').value = promptEditorOriginal;
+  promptEditorOriginal = null;
+  promptEditorEnhanced = false;
+  $('promptEditorReset').hidden = true;
+  countPrompt();
+  $('promptEditorText').focus();
+});
 // Ctrl or Cmd + Enter saves, as in most editors.
 $('promptEditorText').addEventListener('keydown', e => {
   if (e.key === 'Enter' && (e.ctrlKey || e.metaKey) && !$('promptEditorSave').hidden) { e.preventDefault(); closePromptEditor(true); }
@@ -10423,26 +10639,67 @@ $('promptEditorClear').addEventListener('click', () => {
   countPrompt();
   text.focus();
 });
-// The LLM writes here, the same wherever the editor is opened: its prompt goes in the box, to Save or Cancel.
+// The selected writer fills this box, wherever the editor is opened: its prompt waits here for Save or Cancel.
 function setPromptEditorBusy(busy) {
   $('promptEditorText').readOnly = busy || !!(promptField && promptField.readOnly);
-  for (const id of ['promptEditorEnhance', 'promptEditorClear', 'promptEditorSave']) $(id).disabled = busy;
+  for (const id of ['promptEditorEnhance', 'promptEditorReset', 'promptEditorClear', 'promptEditorSave']) $(id).disabled = busy;
+  if (busy) closePromptWriterMenu();
   $('promptEditorEnhance').classList.toggle('working', busy);
   $('promptEditorEnhance').setAttribute('aria-busy', String(busy));
+  syncPromptThinking(busy);
   const bar = $('promptEditorProgress');
   bar.hidden = !busy;
   if (!busy) bar.style.width = '0%';
 }
-async function enhanceInEditor() {
+function setPromptThinkingPhrase(phrase) {
+  const previous = $('promptEditorThinkingPrevious'), current = $('promptEditorThinkingCurrent');
+  previous.textContent = current.textContent;
+  previous.className = 'prompt-thinking-line';
+  if (previous.textContent) {
+    void previous.offsetWidth;
+    previous.className = 'prompt-thinking-line exiting';
+  }
+  current.innerHTML = [...phrase].map((letter, index) =>
+    `<span class="prompt-thinking-letter" style="animation-delay:${Math.min(index * 16, 320)}ms">${letter === ' ' ? '&nbsp;' : esc(letter)}</span>`).join('');
+  current.className = 'prompt-thinking-line';
+  void current.offsetWidth;
+  current.className = 'prompt-thinking-line entering';
+}
+function syncPromptThinking(busy) {
+  const box = $('promptEditorThinking');
+  if (promptThinkingTimer !== null) {
+    clearInterval(promptThinkingTimer);
+    promptThinkingTimer = null;
+  }
+  if (!busy) {
+    box.hidden = true;
+    $('promptEditorThinkingPrevious').textContent = '';
+    $('promptEditorThinkingCurrent').textContent = '';
+    return;
+  }
+  box.hidden = false;
+  promptThinkingIndex = -1;
+  const advance = () => {
+    promptThinkingIndex = (promptThinkingIndex + 1) % PROMPT_THOUGHTS.length;
+    setPromptThinkingPhrase(PROMPT_THOUGHTS[promptThinkingIndex]);
+  };
+  advance();
+  promptThinkingTimer = setInterval(advance, 2200);
+}
+async function enhanceInEditor(writer) {
   const side = promptSide(promptField), text = $('promptEditorText'), idea = text.value;
-  if (!side) return;
+  if (!side || !writer) return;
   if (!idea.trim()) { $('promptEditorCount').textContent = 'Enter an idea first.'; return; }
+  const originalBeforeRun = promptEditorOriginal;
+  if (promptEditorOriginal === null) promptEditorOriginal = idea;
+  $('promptEditorReset').hidden = false;
   const writing = promptWriting = {};
   setPromptEditorBusy(true);
   $('promptEditorCount').textContent = 'Estimating…';
   let timer;
   try {
-    const estimateResponse = await fetch('/api/write-prompt?pipeline=' + encodeURIComponent(side));
+    const model = writer.model ? `&model=${encodeURIComponent(writer.model)}` : '';
+    const estimateResponse = await fetch(`/api/write-prompt?pipeline=${encodeURIComponent(side)}&writer=${encodeURIComponent(writer.id)}${model}`);
     const estimate = await estimateResponse.json();
     if (!estimateResponse.ok || !estimate.ok || !Number.isFinite(estimate.seconds) || estimate.seconds <= 0) throw new Error(estimate.error || 'Could not estimate prompt writing.');
     const start = performance.now();
@@ -10455,8 +10712,12 @@ async function enhanceInEditor() {
     };
     update();
     timer = setInterval(update, 1000);
-    const response = await fetch('/api/write-prompt', { method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ pipeline: side, prompt: idea, model: estimate.model }) });
+    const form = new FormData($(side === 'image' ? 'formImage' : 'formVideo'));
+    form.set('pipeline', side);
+    form.set('prompt', idea);
+    form.set('writer', writer.id);
+    if (writer.model) form.set('model', writer.model);
+    const response = await fetch('/api/write-prompt', { method: 'POST', body: form });
     const result = await response.json();
     if (!response.ok || !result.ok) throw new Error(result.error || 'Could not write the prompt.');
     if (promptWriting !== writing) return;  // Closed or written again meanwhile
@@ -10464,13 +10725,18 @@ async function enhanceInEditor() {
     promptEditorEnhanced = true;
     countPrompt();
   } catch (e) {
-    if (promptWriting === writing) $('promptEditorCount').textContent = e.message || 'Could not write the prompt.';
+    if (promptWriting === writing) {
+      $('promptEditorCount').textContent = e.message || 'Could not write the prompt.';
+      if (!promptEditorEnhanced && originalBeforeRun === null) {
+        promptEditorOriginal = null;
+        $('promptEditorReset').hidden = true;
+      }
+    }
   } finally {
     clearInterval(timer);
     if (promptWriting === writing) { promptWriting = null; setPromptEditorBusy(false); }
   }
 }
-$('promptEditorEnhance').addEventListener('click', enhanceInEditor);
 $('promptEditorCancel').addEventListener('click', () => {
   if (!generatedEdit) { closePromptEditor(false); return; }
   if (generatedEdit.dirty && !confirm('Close without saving your changes to the prompts?')) return;

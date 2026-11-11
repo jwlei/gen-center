@@ -1,4 +1,5 @@
 import json
+import hashlib
 import os
 import re
 import shutil
@@ -43,6 +44,7 @@ class RunState:
     inputs: str = None  # Fingerprint of the images and audio it was planned from, for Generate to recognise them
     has_audio: bool = False  # The film has an audio track of its own, in the run's folder
     fixed_clip: bool = False
+    clip_relationship: str = "progressive"
     options: dict = None  # The workflow's own options as chosen, such as {"steps": "30"} (core/workflow_options.py)
     # Reference videos and audio clips every clip gets, in the run's folder: [{file, role, sound}] and [{file, role}]
     ref_videos: list = field(default_factory=list)
@@ -62,6 +64,24 @@ class RunState:
     plan_only: bool = False  # Stopped to review the prompts before rendering
     first_only: bool = False  # Rendered the first clip only, to see it first
     form: dict = None  # The panel's Generate form as it was sent, files aside
+    prompt_warnings: list = field(default_factory=list)
+    approved_prompt_key: str = None
+
+    def prompt_key(self):
+        return hashlib.sha256(json.dumps([shot["prompt"] for shot in self.shots or []],
+                                         ensure_ascii=False).encode("utf-8")).hexdigest()
+
+    @property
+    def prompt_warning_pending(self):
+        return bool(not self.direct and self.prompt_warnings and self.approved_prompt_key != self.prompt_key())
+
+    def check_prompts(self):
+        from pipelines.video.planner import similar_clip_prompts
+        self.prompt_warnings = [] if self.direct else similar_clip_prompts(self.shots or [])
+
+    def approve_prompts(self):
+        self.approved_prompt_key = self.prompt_key()
+        self.save()
 
     @classmethod
     def new(cls, brief, seconds, start, width, height, llm="gemini", workflow=None, image_count=1):

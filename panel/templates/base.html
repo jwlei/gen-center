@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-theme="{{ settings.theme if settings is defined else 'standard' }}">
 <head>
 <meta charset="utf-8">
 <!-- No zooming: zoomed in, the page slides under the fixed footer and the footer under the browser's own bar. -->
@@ -22,6 +22,12 @@
        and green, the amber of warnings and the orange accent. */
     --neutral: #c3c9d6;
   }
+  {% if themes is defined %}{% for id, theme in themes.items() if id != 'standard' %}
+  :root[data-theme="{{ id }}"] {
+    --bg: {{ theme[1] }}; --panel: {{ theme[2] }}; --panel-2: {{ theme[3] }};
+    --line: {{ theme[4] }}; --text: {{ theme[5] }}; --muted: {{ theme[6] }}; --accent: {{ theme[7] }};
+  }
+  {% endfor %}{% endif %}
   * { box-sizing: border-box; }
   /* Nothing may make the page wider than the screen: a phone would shrink it, and the fixed footer slide off. */
   html { overflow-x: clip; touch-action: manipulation; }  /* No double-tap zoom either */

@@ -80,6 +80,7 @@ Each pipeline also runs alone: `python -m pipelines.shorts.main --help`, `python
 
 The gear in the header opens Settings:
 
+- **Theme**: choose the standard appearance or one of 15 other dark palettes, with color previews. The choice is saved for all devices.
 - **Restart panel**, **Restart ComfyUI** and **Shut down**, each confirmed with a second tap. When ComfyUI is off, the
   restart button reads **Start ComfyUI**. Starting it manually stops local ComfyUI processes first, including renders
   started outside the panel, then launches a fresh instance. It refuses while panel work is active or about to start.
@@ -106,9 +107,8 @@ output/       shorts/ready, shorts/uploaded, shorts/bad, video and image
 
 ## Tests
 
-```
-python -m unittest discover tests
-```
+In VS Code, run **Tasks: Run Test Task** and choose **all-tests**. The tests run in the integrated terminal, which
+closes when they finish.
 
 They use a fake ComfyUI and Claude on localhost, real ffmpeg, and a throwaway folder. Nothing costs anything.
 

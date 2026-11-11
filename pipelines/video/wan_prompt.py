@@ -29,11 +29,12 @@ def _what_to_write(images):
       the place. Describe the subject, the place and the light in the same words every time, or the clips won't match."""
 
 
-def instructions(brief, seconds, count, images, continuity, shortest, longest, second_image=""):
+def instructions(brief, seconds, count, images, continuity, shortest, longest, second_image="", relationship="", clip_relationship="progressive"):
     clips = "one clip" if count == 1 else f"{count} consecutive clips"
     shots = "one shot" if count == 1 else f"{count} shots in order"
     together = f"Use {seconds}." if count == 1 else f"All of them together add up to {seconds}."
     shape = ("Show one clear moment that feels complete." if count == 1 else
+             "Make each clip a distinct, self-contained moment in the same world." if clip_relationship == "related" else
              f"Give the film a beginning, a development and a real ending, rather than {count} versions of the same moment.")
     return f"""
     You are directing a {seconds}-second film made of {clips} from Wan, an AI video model. {_what_it_opens_on(images)}
@@ -47,6 +48,8 @@ def instructions(brief, seconds, count, images, continuity, shortest, longest, s
     {second_image}
 
     {continuity}
+
+    {relationship}
 
     Return a title for the film, and exactly {shots}. For each shot:
     - title: 2-5 words.

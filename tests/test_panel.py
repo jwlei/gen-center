@@ -32,7 +32,7 @@ from panel import server as webapp
 from panel import video as video_panel
 from pipelines.shorts.paths import OUTPUT_DIR as SHORTS_READY, UPLOADED_DIR as SHORTS_UPLOADED
 from pipelines.shorts import topic_history
-from pipelines.video import media, paths
+from pipelines.video import h3_prompt, media, paths
 from pipelines.video import output_metadata, upscale as video_upscale
 from pipelines.video.run_state import RunState, list_runs
 
@@ -395,6 +395,12 @@ class PanelTest(unittest.TestCase):
         item["argv"].remove("--fixed-clips")
         self.assertNotIn("clip_fixed", webapp.legacy_queue_form(item)[0])
 
+    def test_video_clip_relationship_is_validated_and_passed_to_the_planner(self):
+        flags, error = video_panel.build_options({"clip_relationship": "related"})
+        self.assertIsNone(error)
+        self.assertEqual(flags[flags.index("--clip-relationship") + 1], "related")
+        self.assertEqual(video_panel.build_options({"clip_relationship": "unknown"})[1], "Unknown clip relationship.")
+
     def test_fixed_clip_only_continues_matching_plan(self):
         state = types.SimpleNamespace(id="old", shots=[{"seconds": 8}] * 4, final=None, inputs="same", brief="idea",
                                       seconds=32, workflow=None, llm="gemini", h3_mode="off",
@@ -494,10 +500,53 @@ class PanelTest(unittest.TestCase):
             self.assertEqual(self.client.get("/api/write-prompt?pipeline=video").get_json()["seconds"], 300)
             self.assertEqual(self.client.post("/api/write-prompt", json={"pipeline": "video", "prompt": "idea",
                                                                           "model": "qwen3-14b"}).status_code, 409)
+            refiner.model_id = "qwen3-14b"
             refiner.write_prompt.side_effect = RuntimeError("failed")
             self.assertEqual(self.client.post("/api/write-prompt", json={"pipeline": "video", "prompt": "idea"}).status_code, 500)
             with open(webapp.PROMPT_WRITER_TIMINGS, encoding="utf-8") as file:
                 self.assertEqual(json.load(file), saved)
+
+    def test_prompt_writer_can_use_gemini_or_the_selected_image_workflow_enhancer(self):
+        from core import gemini
+        with mock.patch.dict(os.environ, {"GEMINI_API_KEY": "test-key"}), \
+                mock.patch.object(gemini, "_generate", return_value=types.SimpleNamespace(text="Gemini prompt")):
+            response = self.client.post("/api/write-prompt", json={
+                "pipeline": "video", "prompt": "idea", "writer": "gemini",
+            })
+        self.assertEqual(response.get_json()["prompt"], "Gemini prompt")
+
+        enhancer = {"id": "prompt_enhancer", "role": True, "label": "Prompt enhancer"}
+        takes = {"min_images": 1, "max_images": 1, "options": [enhancer]}
+        comfy = mock.MagicMock()
+        comfy.wait_until_reachable.return_value = True
+        comfy._send_image.return_value = "input.png"
+        comfy.enhance.return_value = "Workflow prompt"
+        with mock.patch.object(image_panel, "chosen_workflow", return_value=({"COMFYUI_WORKFLOW": "image_test.json"}, takes, None)), \
+                mock.patch("pipelines.image.comfy.ImageClient", return_value=comfy) as client:
+            response = self.client.post("/api/write-prompt", data={
+                "pipeline": "image", "prompt": "idea", "writer": "prompt_enhancer",
+                "image": (io.BytesIO(png_bytes()), "source.png"),
+            }, content_type="multipart/form-data")
+        self.assertTrue(response.get_json()["ok"], response.get_json())
+        self.assertEqual(response.get_json()["prompt"], "Workflow prompt")
+        client.assert_called_once_with({"prompt_enhancer": "1"}, workflow_path="image_test.json")
+        comfy.enhance.assert_called_once_with("idea", ["input.png"])
+
+    def test_prompt_writer_can_select_qwen_when_gemma_is_configured(self):
+        from core import h3_refiner
+        refiner = mock.MagicMock()
+        refiner.__enter__.return_value = refiner
+        refiner.model_id = "qwen3-14b"
+        refiner.write_prompt.return_value = "Qwen prompt"
+        with mock.patch.object(h3_refiner, "local_llm_model", return_value="gemma-4-12b"), \
+                mock.patch.object(h3_refiner, "Refiner", return_value=refiner):
+            estimate = self.client.get("/api/write-prompt?pipeline=video&writer=local&model=qwen3-14b")
+            response = self.client.post("/api/write-prompt", json={
+                "pipeline": "video", "prompt": "idea", "writer": "local", "model": "qwen3-14b",
+            })
+        self.assertEqual(estimate.get_json()["model"], "qwen3-14b")
+        self.assertEqual(response.get_json()["prompt"], "Qwen prompt")
+        self.assertEqual(refiner.write_prompt.call_args.args, ("idea", "video"))
 
     def test_prompt_writer_invalid_timing_and_save_failure_are_logged(self):
         from core import h3_refiner
@@ -644,7 +693,8 @@ class PanelTest(unittest.TestCase):
         pid = webapp.job.process.pid
         self.assertTrue(self.client.post("/stop").get_json()["ok"])
         self.assertFalse(webapp.job.running)
-        self.assertNotIn(str(pid), subprocess.run(["tasklist", "/FI", f"PID eq {pid}"], capture_output=True, text=True).stdout)
+        self.assertNotIn(str(pid), subprocess.run(["tasklist", "/FI", f"PID eq {pid}"], capture_output=True, text=True,
+                                                 creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0)).stdout)
         self.assertIn(("/interrupt", {"prompt_id": "p3"}), self.comfy.cancels)
 
         self.wait_until(lambda: webapp.job.idle, "the job to wind up")
@@ -1650,6 +1700,34 @@ class PanelTest(unittest.TestCase):
             self.assertEqual(self.client.post("/api/settings", data="no").status_code, 400)
             self.assertIn("disk", self.client.get("/api/settings").get_json())
 
+    def test_theme_selection_is_saved_validated_and_rendered(self):
+        path = os.path.join(self.temp, "settings.json")
+        with mock.patch.object(webapp.settings, "PATH", path):
+            self.assertEqual(self.client.get("/api/settings").get_json()["settings"]["theme"], "standard")
+            page = self.client.get("/").get_data(as_text=True)
+            self.assertEqual(page.count('class="theme-choice"'), 16)
+            self.assertIn('data-theme="standard"', page)
+            for theme in ("nord", "amoled", "solarized"):
+                self.assertIn(f'data-theme="{theme}"', page)
+            self.assertEqual(self.client.post("/api/settings", json={"theme": "nord"}).get_json()["settings"]["theme"], "nord")
+            self.assertEqual(webapp.settings.load()["theme"], "nord")
+            self.assertIn('<html lang="en" data-theme="nord">', self.client.get("/").get_data(as_text=True))
+            for invalid in ("unknown", [], None):
+                self.assertEqual(self.client.post("/api/settings", json={"theme": invalid}).status_code, 400)
+                self.assertEqual(webapp.settings.load()["theme"], "nord")
+
+    def test_theme_picker_script(self):
+        node = shutil.which("node")
+        if not node:
+            self.skipTest("node isn't installed")
+        page = os.path.join(self.temp, "page.html")
+        with open(page, "wb") as f:
+            f.write(self.client.get("/").data)
+        result = subprocess.run([node, os.path.join(ROOT, "tests", "theme_check.cjs"), page],
+                                capture_output=True, text=True, encoding="utf-8", timeout=60,
+                                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
     def test_film_upscale_is_queued_and_checked(self):
         added = []
         film = os.path.join(webapp.VIDEO_OUTPUT, "zz_upscale_test.mp4")
@@ -1765,6 +1843,62 @@ class PanelTest(unittest.TestCase):
         with webapp.run_queue.lock:
             webapp.run_queue.items.remove(item)
 
+    def test_prompt_warning_parks_the_run_and_start_approves_the_saved_plan(self):
+        state = RunState.new("Brief", 20, "image", 64, 64, image_count=0)
+        prompt = "A woman gently opens the wooden door and looks into the dark room."
+        state.shots = [{"title": "First", "seconds": 10, "prompt": prompt, "planner_prompt": prompt},
+                       {"title": "Second", "seconds": 10, "prompt": prompt + " Slowly.", "planner_prompt": prompt + " Slowly."}]
+        state.check_prompts()
+        state.save()
+        item = {"id": 991, "pipeline": "video", "label": "Warning film", "argv": [], "env": {}, "first_only": True}
+        with webapp.run_queue.lock, mock.patch.object(webapp.job, "progress", {"run_id": state.id}), \
+                mock.patch.object(webapp.job, "returncode", 0), mock.patch.object(webapp.job, "stopped", False), \
+                mock.patch.object(webapp, "free_comfyui"), mock.patch.object(webapp.run_queue, "_advance"):
+            webapp.run_queue.current = item
+            webapp.run_queue._finish_current()
+            self.assertIsNone(webapp.run_queue.current)
+            waiting = webapp.run_queue.items[0]
+            self.assertEqual(waiting["resume"], state.id)
+            self.assertTrue(waiting["later"])
+            self.assertIn("--first-only", waiting["argv"])
+            self.assertNotIn("--plan-only", waiting["argv"])
+            self.assertEqual(webapp.run_queue.results, [], "a warning is not a successful render or failure")
+            snapshot = webapp.run_queue.snapshot()["items"][0]
+            self.assertEqual(snapshot["prompt_warnings"][0]["items"], [1, 2])
+            self.assertTrue(self.client.post("/queue/run/start/991").get_json()["ok"])
+            self.assertFalse(RunState.load(state.id).prompt_warning_pending)
+            self.assertNotIn("prompt_warnings", waiting)
+            self.assertEqual(RunState.load(state.id).shots, state.shots, "starting approves without rewriting")
+
+    def test_clip_history_survives_edits_and_multishot_clips_can_be_previewed(self):
+        state = RunState.new("Original brief", 20, "multishot", 64, 64, image_count=0)
+        state.shots = [{"title": "First", "seconds": 10, "prompt": "Enhanced", "planner_prompt": "Planned",
+                        "enhanced_prompt": "Enhanced", "comfy_prompt": "Flattened"},
+                       {"title": "Second", "seconds": 10, "prompt": "Next", "planner_prompt": "Next"}]
+        state.take_file = "take.mp4"
+        os.makedirs(state.parts_dir)
+        with open(os.path.join(state.parts_dir, state.take_file), "wb") as file:
+            file.write(b"take")
+        state.save()
+        detail = self.client.get(f"/runs/{state.id}").get_json()
+        self.assertTrue(all(shot["rendered"] for shot in detail["shots"]))
+        self.assertEqual(detail["shots"][0]["comfy_prompt"], "Flattened")
+        self.assertTrue(self.client.post(f"/runs/{state.id}/shots", json={"prompts": ["Edited", "Next"]}).get_json()["ok"])
+        edited = self.client.get(f"/runs/{state.id}").get_json()["shots"][0]
+        self.assertEqual(edited["planner_prompt"], "Planned")
+        self.assertEqual(edited["enhancer_prompt"], "Enhanced", "editing does not erase the enhancer history")
+        self.assertEqual(edited["comfy_prompt"], "Flattened", "last submitted text remains distinct from a later edit")
+        def extract(source, start, seconds, output):
+            with open(output, "wb") as file:
+                file.write(b"preview")
+        with mock.patch.object(media, "video_slice", side_effect=extract) as slice_video:
+            for _ in range(2):
+                with self.client.get(f"/runs/{state.id}/clips/2") as response:
+                    self.assertEqual(response.data, b"preview")
+        self.assertEqual(slice_video.call_count, 1, "a take's clip preview is cached")
+        self.assertAlmostEqual(slice_video.call_args.args[1], (h3_prompt.clip_frames(10) - 1) / h3_prompt.FPS)
+        self.assertEqual(self.client.get(f"/runs/{state.id}/clips/3").status_code, 404)
+
     def test_a_continued_run_opens_its_setup_and_keeps_its_prompts(self):
         self.assertTrue(self.generate(review="1").get_json()["ok"])
         self.wait_idle()
@@ -1856,8 +1990,10 @@ class PanelTest(unittest.TestCase):
         with open(page, "wb") as f:
             f.write(self.client.get("/").data)
         result = subprocess.run([node, os.path.join(ROOT, "tests", "page_check.cjs"), page],
-                                capture_output=True, text=True, encoding="utf-8", timeout=60)
+                                capture_output=True, text=True, encoding="utf-8", timeout=60,
+                                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("all page checks passed", result.stdout, "an unfinished async check must not count as passing")
 
     def test_upscale_dialog_picks_only_method_buttons(self):
         # The dialog itself carries data-method, so a bare [data-method] lookup swallowed the Add to queue click.

@@ -13,7 +13,7 @@ from core.upscale_eta import UpscaleEta
 from panel.server import (OUTCOME_FILE, read_outcome, form_options, PIPELINES, VIDEO_TIMINGS, _runs_cache, active_runs, app, busy_runs, item_images, job,
                           password_required, safe_video_path, saved_at, run_queue, saved_runs, saved_workflows, queue_form_snapshot)
 from panel.shorts import VOICES
-from pipelines.video import h3_infinite, h3_multishot, media, output_metadata, paths, planner, roles
+from pipelines.video import h3_infinite, h3_multishot, h3_prompt, media, output_metadata, paths, planner, roles
 from pipelines.video.comfy import workflow_model
 from pipelines.video.main import BUILT_IN
 from pipelines.video.run_eta import RunEta
@@ -80,6 +80,7 @@ def describe_run(state):
     parts.append(f"{folder_size(state.folder) / 2 ** 20:.0f} MB")
     return {"id": state.id, "pipeline": "video", "label": state.title or state.brief, "detail": " · ".join(parts), "when": saved_at(state.path),
             "clips": len(state.clips), "finished": bool(state.final), "outcome": read_outcome(state.folder),
+            "prompt_warnings": state.prompt_warnings if state.prompt_warning_pending else [],
             "size": f"{state.width}x{state.height}",
             "estimate": RunEta(resume_argv(state), VIDEO_TIMINGS).plan()["total"]}
 
@@ -113,6 +114,10 @@ def build_options(form):
     if start not in ("chain", "image", "director", "multishot", "infinite"):
         return None, "Unknown start mode."
     flags += ["--start", start]
+    relationship = form.get("clip_relationship") or "progressive"
+    if relationship not in planner.CLIP_RELATIONSHIPS:
+        return None, "Unknown clip relationship."
+    flags += ["--clip-relationship", relationship]
     if start == "multishot":
         if not form.get("clip_fixed"):
             return None, "H3 Multishot needs a fixed clip length."
@@ -449,6 +454,8 @@ def edit_continuation(state, form):
 
 
 def queue_saved_run(state, redo=None):
+    if state.prompt_warning_pending and not request.args.get("later"):
+        state.approve_prompts()
     argv = resume_argv(state, redo)
     what = f"Redo from shot {redo}" if redo else "Continue"
     item = {"pipeline": "video", "label": queue_label(state.title or state.brief), "detail": what, "argv": argv, "env": {},
@@ -482,12 +489,19 @@ def run_detail(run_id):
         pending = not busy and run_id in busy_runs()
     return {"ok": True, "id": state.id, "title": state.title, "brief": state.brief, "start": state.start,
             "llm": state.llm, "direct": state.direct, "size": f"{state.width}x{state.height}",
+            "h3_mode": state.h3_mode,
             "busy": busy, "pending": pending, "finished": bool(state.final),
             "take_rendered": bool(state.take_file), "settings": settings_of(state),
+            "prompt_warnings": state.prompt_warnings if state.prompt_warning_pending else [],
             "shots": [{"title": shot["title"], "seconds": shot["seconds"], "prompt": shot["prompt"],
                        "enhanced_prompt": shot.get("enhanced_prompt"),
+                       "enhancer_prompt": shot.get("enhancer_prompt", shot.get("enhanced_prompt")),
+                       "planner_prompt": shot.get("planner_prompt"),
+                       "comfy_prompt": shot.get("comfy_prompt"),
+                       "workflow_enhanced_prompt": shot.get("workflow_enhanced_prompt"),
                        "seed": shot.get("seed"), "used_seed": shot.get("used_seed"),
-                       "rendered": i in state.clips} for i, shot in enumerate(state.shots)]}
+                       "rendered": i in state.clips or (state.start == "multishot" and bool(state.take_file))}
+                      for i, shot in enumerate(state.shots)]}
 
 
 def run_inputs(state):
@@ -513,6 +527,7 @@ def settings_of(state):
             "prompt_mode": "direct" if state.direct else "llm", "seed": state.seed,
             "clip_range": state.clip_seconds, "h3_model": state.h3_model,
             "review": state.plan_only, "try_first": state.first_only,
+            "clip_relationship": state.clip_relationship,
             # The form as it was sent: anything above that it doesn't hold comes from the run itself.
             "form": run_form.flat(state.form)}
 
@@ -541,7 +556,25 @@ def run_image(run_id):
 @password_required
 def run_clip(run_id, shot):
     state = RunState.load(run_id)
-    if not state or shot - 1 not in state.clips:
+    if not state or not 1 <= shot <= len(state.shots or []):
+        abort(404)
+    if state.start == "multishot" and state.take_file:
+        source = os.path.join(state.parts_dir, state.take_file)
+        preview = os.path.join(state.parts_dir, f"preview_shot_{shot}.mp4")
+        if not os.path.exists(preview) or os.path.getmtime(preview) < os.path.getmtime(source):
+            temporary = os.path.join(state.parts_dir, f"preview_{secrets.token_hex(8)}.mp4")
+            frames = h3_prompt.clip_frames(state.shots[0]["seconds"])
+            try:
+                media.video_slice(source, (shot - 1) * (frames - 1) / h3_prompt.FPS, frames / h3_prompt.FPS, temporary)
+                os.replace(temporary, preview)
+            except (RuntimeError, OSError) as error:
+                app.logger.error("Could not preview clip %s of %s: %s", shot, run_id, error)
+                abort(500, description="Could not extract this clip preview.")
+            finally:
+                if os.path.exists(temporary):
+                    os.remove(temporary)
+        return send_file(preview, mimetype="video/mp4", conditional=True)
+    if shot - 1 not in state.clips:
         abort(404)
     return send_file(state.clip_path(shot - 1), mimetype="video/mp4", conditional=True)
 
@@ -563,11 +596,20 @@ def save_shots(run_id):
             return {"ok": False, "error": error}, 400
         for shot, prompt, seed in zip(state.shots, prompts, chosen):
             if shot["prompt"] != prompt.strip():
+                if shot.get("enhanced_prompt"):
+                    shot.setdefault("enhancer_prompt", shot["enhanced_prompt"])
                 shot.pop("enhanced_prompt", None)
                 shot.pop("h3_key", None)
+                shot.pop("h3_reviewed", None)
             shot["prompt"] = prompt.strip()
             shot["seed"] = seed
+        state.check_prompts()
         state.save()
+        for item in run_queue.items:
+            if item.get("resume") == state.id:
+                item["prompt_warnings"] = state.prompt_warnings if state.prompt_warning_pending else []
+        run_queue._save()
+        _runs_cache["at"] = 0.0
     return {"ok": True}
 
 

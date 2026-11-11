@@ -258,7 +258,9 @@ class H3RefinerTest(unittest.TestCase):
     def test_before_review_saves_each_prompt_and_skips_completed(self):
         state = RunState.new("brief", 10, "image", 1280, 736, image_count=0)
         state.h3_mode, state.h3_creativity = "review", "extreme"
-        state.shots = [{"prompt": "first", "seconds": 5}, {"prompt": "second", "seconds": 5}]
+        state.shots = [{"prompt": "first", "planner_prompt": "first", "seconds": 5},
+                       {"prompt": "second", "planner_prompt": "second", "seconds": 5}]
+        state.approved_prompt_key = state.prompt_key()
         refiner = mock.MagicMock()
         refiner.__enter__.return_value = refiner
         refiner.compile.side_effect = ["first enhanced", "second enhanced"]
@@ -269,6 +271,9 @@ class H3RefinerTest(unittest.TestCase):
             main.refine_review(state)
             main.refine_review(state)
         self.assertEqual([s["prompt"] for s in state.shots], ["first enhanced", "second enhanced"])
+        self.assertEqual([s["planner_prompt"] for s in state.shots], ["first", "second"])
+        self.assertEqual([s["enhanced_prompt"] for s in state.shots], ["first enhanced", "second enhanced"])
+        self.assertEqual(state.approved_prompt_key, state.prompt_key(), "chosen review enhancement does not revoke approval")
         self.assertEqual(refiner.compile.call_count, 2)
         self.assertEqual(save.call_count, 2)
         self.assertEqual(refiner.compile.call_args.args[4], "extreme")

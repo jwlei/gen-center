@@ -2,6 +2,7 @@ import base64
 import math
 import os
 import re
+from difflib import SequenceMatcher
 
 import anthropic
 from google.genai import types
@@ -67,6 +68,29 @@ CONTINUITY = {
 SEPARATE_CLIPS = """Every clip is made on its own, with a fade between clips. So each shot is its own
     moment: a different action, a different camera move, a different development of the idea, in an
     order that still builds."""
+CLIP_RELATIONSHIPS = ("progressive", "related")
+PROMPT_SIMILARITY = 0.92
+
+
+def similar_clip_prompts(shots):
+    """Compare wording, using H3's action section rather than its repeated reference definitions."""
+    prompts = []
+    for shot in shots:
+        text = shot["prompt"]
+        action = re.search(r"(?ms)^detailed_description:[ \t]*(.*?)(?=^[a-z_]+:|\Z)", text)
+        if action:
+            text = action.group(1)
+        text = re.sub(r"\[Shot \d+\]", "", text, flags=re.I)
+        prompts.append(re.findall(r"\w+", text.casefold()))
+    warnings = []
+    for right, prompt in enumerate(prompts):
+        for left in range(right):
+            if not prompt or not prompts[left]:
+                continue
+            similarity = SequenceMatcher(None, prompts[left], prompt, autojunk=False).ratio()
+            if similarity >= PROMPT_SIMILARITY:
+                warnings.append({"items": [left + 1, right + 1], "similarity": round(similarity, 3)})
+    return warnings
 
 
 class Shot(BaseModel):
@@ -267,28 +291,52 @@ def _more_images(image_roles, video_model):
 
 
 def _instructions(brief, seconds, start, images=1, video_model=None, image_2_role=EXTRA_CONTEXT, image_2_in_words=False,
-                  references=None, chosen=None, first_frame=False):
+                  references=None, chosen=None, first_frame=False, clip_relationship="progressive"):
     """references: the reference videos and audio the clips get, as h3_prompt.References."""
+    if clip_relationship not in CLIP_RELATIONSHIPS:
+        raise ValueError(f"Unknown clip relationship: {clip_relationship}")
     second_image = _second_image(images, image_2_role, image_2_in_words, start, video_model)
-    guide = _guide(brief, seconds, start, images, video_model, image_2_role, second_image, references, chosen, first_frame)
+    guide = _guide(brief, seconds, start, images, video_model, image_2_role, second_image, references, chosen, first_frame,
+                   clip_relationship)
     # Every guide speaks of one attached image, and now there are two.
     return guide.replace("attached image", "first attached image") if image_2_in_words else guide
 
 
-def _guide(brief, seconds, start, images, video_model, image_2_role, second_image, references=None, chosen=None, first_frame=False):
+def _relationship_guidance(clip_relationship, count, start):
+    if count < 2 or clip_relationship != "related":
+        return ""
+    if start in ("chain", "infinite", "multishot"):
+        return """Although the clips must remain physically continuous, do not invent a larger escalating story arc.
+    Make each clip a distinct, self-contained beat in the same world, with a different action that still picks up
+    naturally from the previous clip."""
+    return """These are related scenes, not steps in one story. Give each clip a complete, distinct moment in the same
+    world, sharing the brief's subject and visual identity. They need no before-and-after order, and must not repeat
+    the same action, framing or camera move."""
+
+
+def _guide(brief, seconds, start, images, video_model, image_2_role, second_image, references=None, chosen=None, first_frame=False,
+           clip_relationship="progressive"):
     count = shot_count(seconds, video_model, chosen)
     shortest, longest, _ = clip_seconds(video_model, chosen)
     if video_model == h3_prompt.MODEL:
         return h3_prompt.instructions(brief, seconds, count, images, shortest, longest,
-                                      second_image, roles.image_roles(image_2_role, images), references, start, first_frame)
+                                      second_image, roles.image_roles(image_2_role, images), references, start, first_frame,
+                                      clip_relationship)
     clips = "one clip" if count == 1 else f"{count} consecutive clips"
     shots = "one shot" if count == 1 else f"{count} shots in order"
     shape = ("Show one clear moment that feels complete." if count == 1 else
+             "Make each clip a distinct, self-contained moment in the same world." if clip_relationship == "related" else
              f"Give the film a beginning, a development and a real ending, rather than {count} versions of the same moment.")
     together = f"Use {seconds}." if count == 1 else f"All of them together add up to {seconds}."
-    continuity = "" if count == 1 else SEPARATE_CLIPS if start == "image" and images != 1 else CONTINUITY[start]
+    continuity = "" if count == 1 else (
+        """Every clip is independent, with a fade between clips. Keep the same subject and visual identity, but give
+        each scene its own complete moment; the scenes need not build in chronological order.""" if
+        clip_relationship == "related" and start == "image" else
+        SEPARATE_CLIPS if start == "image" and images != 1 else CONTINUITY[start])
+    relation = _relationship_guidance(clip_relationship, count, start)
     if video_model == wan_prompt.MODEL:
-        return wan_prompt.instructions(brief, seconds, count, images, continuity, shortest, longest, second_image)
+        return wan_prompt.instructions(brief, seconds, count, images, continuity, shortest, longest, second_image,
+                                       relation, clip_relationship)
     in_keeping = "the brief and\n    the image, and never contradicting them" if images else "the brief, and never contradicting it"
     sees = "one prompt and one start frame" if images == 1 else "one prompt and its images" if images else "one prompt"
     return f"""
@@ -303,6 +351,8 @@ def _guide(brief, seconds, start, images, video_model, image_2_role, second_imag
     {second_image}
 
     {continuity}
+
+    {relation}
 
     Return a title for the film, and exactly {shots}. For each shot:
     - title: 2-5 words.
@@ -389,7 +439,7 @@ def _ask(llm, prompt, model, schema, image_jpeg=None, refiner=None):
 # --- What the pipeline asks for ---
 
 def plan_film(image_jpeg, brief, seconds, start, llm="gemini", video_model=None, image_2_role=EXTRA_CONTEXT, image_2_in_words=None,
-              references=None, chosen=None, refiner=None, first_frame=False):
+              references=None, chosen=None, refiner=None, first_frame=False, clip_relationship="progressive"):
     """
     Turns the image (several in a list, or none) and the short brief into a film's shot list. One request for the
     whole film rather than one per clip: the prompts have to know each other, and a
@@ -400,7 +450,8 @@ def plan_film(image_jpeg, brief, seconds, start, llm="gemini", video_model=None,
     """
     images = len(_image_list(image_jpeg))
     shortest, longest, _ = clip_seconds(video_model, chosen)
-    instructions = _instructions(brief, seconds, start, images, video_model, image_2_role, bool(image_2_in_words), references, chosen, first_frame)
+    instructions = _instructions(brief, seconds, start, images, video_model, image_2_role, bool(image_2_in_words), references,
+                                 chosen, first_frame, clip_relationship)
     attached = _image_list(image_jpeg) + _image_list(image_2_in_words)
     image_roles = roles.image_roles(image_2_role, images)
     is_h3 = video_model == h3_prompt.MODEL

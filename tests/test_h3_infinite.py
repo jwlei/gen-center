@@ -155,7 +155,10 @@ class RunTest(unittest.TestCase):
             state.save()
             comfy = mock.Mock(url="http://comfy")
 
-            def save_clip(run_id, index, prompt, seconds, width, height, path, seed, first, last, previous=None):
+            def save_clip(run_id, index, prompt, seconds, width, height, path, seed, first, last, previous=None,
+                          on_prompt=None):
+                if on_prompt:
+                    on_prompt([prompt])
                 os.makedirs(os.path.dirname(path), exist_ok=True)
                 with open(path + ".mp4", "wb") as file:
                     file.write(prompt.encode())

@@ -103,6 +103,14 @@ class PipelineTest(unittest.TestCase):
             media.with_audio(video, audio, pad=True)
             self.assertAlmostEqual(media.duration(video), 4, delta=0.15)
 
+    def test_take_clip_preview_extracts_only_the_requested_time(self):
+        source = os.path.join(self.temp, "take.mp4")
+        output = os.path.join(self.temp, "preview.mp4")
+        make_clip(source, 3)
+        media.video_slice(source, 1, 1, output)
+        self.assertAlmostEqual(media.duration(output), 1, delta=0.1)
+        self.assertAlmostEqual(media.duration(source), 3, delta=0.1)
+
     def test_audio_and_narration_are_one_or_the_other(self):
         with self.assertRaises(SystemExit):
             main.parse_args([self.image, "a prompt", "--audio", "a.wav", "--narration", "Hello"])
@@ -119,6 +127,10 @@ class PipelineTest(unittest.TestCase):
         self.assertEqual(first["client_id"], "comfyui-auto-gen")
         workflow = first["prompt"]
         self.assertEqual(workflow["121"]["inputs"]["text"], "Opening prompt")
+        self.assertEqual(state.brief, "a short prompt")
+        self.assertEqual([shot["planner_prompt"] for shot in state.shots], ["Opening prompt", "Middle prompt", "Ending prompt"])
+        self.assertEqual([shot["comfy_prompt"] for shot in state.shots],
+                         [sent["prompt"]["121"]["inputs"]["text"] for sent in self.server.prompts])
         self.assertEqual(workflow["167"]["inputs"]["image"], "uploaded.png")
         self.assertIs(workflow["290"]["inputs"]["value"], False)
         self.assertEqual(workflow["291"]["inputs"]["value"], 2)
@@ -430,6 +442,44 @@ class PartsTest(unittest.TestCase):
 
 
 class PlanTest(unittest.TestCase):
+    def test_near_duplicate_warning_threshold_and_h3_shared_identity(self):
+        first = "The woman in a red coat slowly opens the old wooden door and looks into the dark hallway."
+        close = first.replace("slowly", "gently")
+        different = "The woman climbs the narrow staircase, then kneels to pick up a fallen letter."
+        warnings = planner.similar_clip_prompts([{"prompt": first}, {"prompt": close}, {"prompt": different}])
+        self.assertEqual([w["items"] for w in warnings], [[1, 2]])
+        self.assertGreaterEqual(warnings[0]["similarity"], planner.PROMPT_SIMILARITY)
+        h3 = lambda action: f"subject_definitions:\n{'The same character and setting. ' * 20}\ndetailed_description:\n{action}\noverall_soundscape:\nQuiet."
+        self.assertEqual(planner.similar_clip_prompts([{"prompt": h3(first)}, {"prompt": h3(different)}]), [])
+        numbered = [{"prompt": "[Shot 1] She waves."}, {"prompt": "[Shot 2] SHE WAVES!"}]
+        self.assertEqual(planner.similar_clip_prompts(numbered)[0]["items"], [1, 2])
+        tokens = [f"word{i}" for i in range(100)]
+        base = {"prompt": " ".join(tokens)}
+        at_threshold = {"prompt": " ".join(tokens[:92] + [f"changed{i}" for i in range(8)])}
+        below = {"prompt": " ".join(tokens[:91] + [f"changed{i}" for i in range(9)])}
+        self.assertEqual(planner.similar_clip_prompts([base, at_threshold])[0]["similarity"], .92)
+        self.assertEqual(planner.similar_clip_prompts([base, below]), [])
+
+    def test_duplicate_plan_is_held_before_render_and_approval_survives_reload(self):
+        with tempfile.TemporaryDirectory() as temp, mock.patch.object(paths, "RUNS_DIR", temp):
+            state = run_state.RunState.new("brief", 20, "image", 64, 64, image_count=0)
+            prompt = "A woman opens the wooden door and looks inside the quiet room."
+            state.shots = [{"title": "First", "seconds": 10, "prompt": prompt},
+                           {"title": "Next", "seconds": 10, "prompt": prompt + " Slowly."}]
+            with mock.patch.object(main, "preflight"), mock.patch.object(main, "plan_run", return_value=state), \
+                    mock.patch.object(main, "ComfyClient") as client:
+                self.assertEqual(main.run(main.parse_args(["--no-image", "brief", "--llm", "gemini"])), 0)
+            client.assert_not_called()
+            loaded = run_state.RunState.load(state.id)
+            self.assertTrue(loaded.prompt_warning_pending)
+            loaded.approve_prompts()
+            loaded = run_state.RunState.load(state.id)
+            self.assertFalse(main.hold_prompt_warnings(loaded))
+            loaded.shots[1]["prompt"] = prompt
+            self.assertTrue(main.hold_prompt_warnings(loaded), "approval is for the exact prompts reviewed")
+            loaded.direct = True
+            self.assertFalse(main.hold_prompt_warnings(loaded), "Exact mode intentionally repeats text")
+
     def test_fixed_clip_rounds_to_nearest_compatible_film_length(self):
         self.assertEqual(planner.fixed_film_seconds(30, None, (8, 8)), 32)
         self.assertEqual(planner.fixed_film_seconds(29, None, (8, 8)), 32)
@@ -546,6 +596,17 @@ class PlanTest(unittest.TestCase):
                 guide = planner._instructions("brief", seconds, "chain", 1, model)
                 self.assertIn("different action", guide)
                 self.assertNotIn("too short for a story", guide)
+
+    def test_related_clip_guidance_is_distinct_from_story_progression(self):
+        for model, seconds in ((None, 20), (wan_prompt.MODEL, 10), (h3_prompt.MODEL, 30)):
+            with self.subTest(model=model):
+                guide = planner._instructions("brief", seconds, "image", 1, model,
+                                              clip_relationship="related")
+                self.assertIn("distinct", guide.lower())
+                self.assertIn("same world", guide.lower())
+                self.assertNotIn("a real ending", guide)
+        with self.assertRaisesRegex(ValueError, "Unknown clip relationship"):
+            planner._instructions("brief", 20, "image", clip_relationship="unrelated")
 
     def test_repeated_llm_prompts_are_retried_and_never_accepted(self):
         repeated = self.reply([{"title": f"S{i}", "seconds": 10, "prompt": "Same action" if i == 0 else " same  action "}
@@ -995,6 +1056,11 @@ class ArgsTest(unittest.TestCase):
 
     def test_a_prompt_can_start_with_a_dash(self):
         self.assertEqual(main.parse_args(["--start", "image", "--", "i.png", "-a dash"]).prompt, "-a dash")
+
+    def test_clip_relationship_is_a_planner_option(self):
+        self.assertEqual(main.parse_args(["--clip-relationship", "related", "i.png", "p"]).clip_relationship, "related")
+        with self.assertRaises(SystemExit), mock.patch("sys.stderr"):
+            main.parse_args(["--clip-relationship", "unknown", "i.png", "p"])
 
     def test_plan_only_cant_resume(self):
         with self.assertRaises(SystemExit), mock.patch("sys.stderr"):
