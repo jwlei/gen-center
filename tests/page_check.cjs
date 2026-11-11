@@ -653,7 +653,7 @@ assert(setHtml.includes('data-grid-set="image_20261102_120000"') && /<button typ
   assert(/<\/div>\s*<button type="button" class="view-toggle" id="viewToggle" aria-pressed="false" aria-label="View">/.test(html) && !/id="viewToggle"[^>]*(title|NSFW)/.test(html),
     'the other view: a plain button at its right, saying nothing of what it shows');
   assert(/\.collections:not\(\[hidden\]\) \{[^}]*background: var\(--bg\); border: 1px solid var\(--line\)/.test(html), 'open, a dark bordered box of its own');
-  assert(/\.image-set\.collection \.image-set-heading \.rename-btn svg \{ width: 12px; height: 12px; \}/.test(html) && box.includes('Mine &lt;i&gt;') && box.includes('1 image · 1 video')
+  assert(/\.image-set\.collection \.image-set-heading \.rename-btn svg \{ width: 14px; height: 14px; \}/.test(html) && box.includes('Mine &lt;i&gt;') && box.includes('1 image · 1 video')
     && /class="album-cover" data-grid-collection="c_1"/.test(box) && !/<button[^>]*data-grid-collection/.test(box) && script.includes('return rest.slice(0, 3).join(\'\');')
     && script.includes('if (fold.open) reshuffleCollection(fold);')
     && box.includes('data-rename-collection="c_1"') && box.includes('data-delete-collection="c_1"'),
@@ -680,6 +680,17 @@ assert(setHtml.includes('data-grid-set="image_20261102_120000"') && /<button typ
   assert(els.collections.hidden && !els.collectionsToggle.hidden, 'kept hidden on the next draw, the icon still there');
   context.localStorage.getItem = keptStorage.get;
   context.localStorage.setItem = keptStorage.set;
+  // Up and down in each heading with two or more: the first can't go up, the last can't go down; one moves into its
+  // neighbour's place among those shown, and any not shown (here the NSFW one) stays where it was.
+  run(`collections = ['c_1', 'c_h', 'c_2', 'c_3'].map(id => ({ id, name: id, nsfw: id === 'c_h', items: [{ kind: 'film', name: 'F.mp4' }] })); document.getElementById('collections').dataset.key = ''; renderCollections()`);
+  const arranged = els.collections.innerHTML;
+  assert(/data-move-collection="c_1" data-by="-1"[^>]*disabled/.test(arranged) && !/data-move-collection="c_2" data-by="-1"[^>]*disabled/.test(arranged)
+    && /data-move-collection="c_3" data-by="1"[^>]*disabled/.test(arranged) && !arranged.includes('data-move-collection="c_h"'), 'up and down beside the pen, the ends greyed');
+  run("moveCollection('c_3', -1)");
+  assert.strictEqual(JSON.stringify(run('collections.map(c => c.id)')), '["c_1","c_h","c_3","c_2"]', 'it takes its neighbour\'s place; the one not shown keeps its own');
+  run("moveCollection('c_1', -1)");
+  assert.strictEqual(JSON.stringify(run('collections.map(c => c.id)')), '["c_1","c_h","c_3","c_2"]', 'the first has nowhere up to go');
+  assert(els.collections.innerHTML.indexOf('data-collection="c_3"') < els.collections.innerHTML.indexOf('data-collection="c_2"'), 'drawn at once in the new order');
   run("viewing = null; viewerCollection = null; collections = []; allImageSets = []; renderCollections()");
   assert(els.collections.hidden && els.collectionsToggle.hidden, 'none: no box, no icon');
 }

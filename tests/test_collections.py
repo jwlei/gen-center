@@ -131,6 +131,18 @@ class CollectionsTest(unittest.TestCase):
         self.assertTrue(self.client.post(set_url, json={"files": ["cat_3.png", "cat_1.png", "cat_2.png"]}).get_json()["ok"])
         self.assertEqual([shot["file"] for shot in RunState.load(state.id).shots], ["cat_3.png", "cat_1.png", "cat_2.png"])
 
+    def test_collections_can_be_put_in_a_new_order(self):
+        ids = [self.client.post("/api/collections", json={"name": name}).get_json()["collection"]["id"] for name in ("A", "B", "C", "D")]
+        names = lambda: [c["name"] for c in collections._read()]
+        # B and D are on show; A and C aren't (another view): they keep their places while B and D swap theirs.
+        self.assertTrue(self.client.post("/api/collections/order", json={"ids": [ids[3], ids[1]]}).get_json()["ok"])
+        self.assertEqual(names(), ["A", "D", "C", "B"])
+        self.assertTrue(self.client.post("/api/collections/order", json={"ids": [ids[2], "c_gone", ids[0]]}).get_json()["ok"], "one that is gone is left out")
+        self.assertEqual(names(), ["C", "D", "A", "B"])
+        self.assertEqual(self.client.post("/api/collections/order", json={"ids": [ids[0], ids[0]]}).status_code, 400, "each once")
+        self.assertEqual(self.client.post("/api/collections/order", json={}).status_code, 400)
+        self.assertEqual(names(), ["C", "D", "A", "B"], "a refused order changes nothing")
+
     def test_an_upscale_of_one_in_a_collection_joins_it(self):
         state = self.make_set()
         home = self.move(kind="image", run=state.id, file="cat_1.png", new="Up").get_json()["collection"]["id"]

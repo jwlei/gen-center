@@ -1046,7 +1046,8 @@
   .image-set.collection .image-set-heading .rename-btn { flex: none; width: auto; height: auto; margin: 0; padding: 3px; border: 0; background: none;
     color: var(--muted); opacity: .6; }
   .image-set.collection .image-set-heading .rename-btn:hover, .image-set.collection .image-set-heading .rename-btn:focus-visible { opacity: 1; }
-  .image-set.collection .image-set-heading .rename-btn svg { width: 12px; height: 12px; }
+  .image-set.collection .image-set-heading .rename-btn:disabled { opacity: .2; cursor: default; }
+  .image-set.collection .image-set-heading .rename-btn svg { width: 14px; height: 14px; }
   .move-new { display: flex; gap: 6px; }
   .move-new[hidden] { display: none; }
   .move-new input { flex: 1; min-width: 0; margin: 0; }
@@ -5375,6 +5376,8 @@ const ICONS = {
   move: ICON_SVG('<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><path d="M10 13h6M13.5 10.5 16 13l-2.5 2.5"/>'),
   plus: ICON_SVG('<path d="M12 5v14M5 12h14"/>'),
   arrange: ICON_SVG('<path d="M12 3v18M3 12h18"/><path d="m9 6 3-3 3 3M9 18l3 3 3-3M6 9l-3 3 3 3M18 9l3 3-3 3"/>'),
+  up: ICON_SVG('<path d="m6 15 6-6 6 6"/>'),
+  down: ICON_SVG('<path d="m6 9 6 6 6-6"/>'),
   grid: ICON_SVG('<rect x="4" y="4" width="6.5" height="6.5" rx="1.2"/><rect x="13.5" y="4" width="6.5" height="6.5" rx="1.2"/><rect x="4" y="13.5" width="6.5" height="6.5" rx="1.2"/><rect x="13.5" y="13.5" width="6.5" height="6.5" rx="1.2"/>'),
 };
 $('writeVideoPrompt').innerHTML = $('writeImagePrompt').innerHTML = ICONS.enhanced;
@@ -5902,7 +5905,7 @@ function reshuffleCollection(fold) {
   const strip = fold.querySelector && fold.querySelector('.album-strip');
   if (strip) strip.innerHTML = collectionStrip(fold.dataset.collection);
 }
-function collectionHtml(c) {
+function collectionHtml(c, number = 0, many = 1) {
   const albums = collectionAlbums(c.id), id = esc(c.id);
   const first = albums.images[0], film = albums.films[0];
   const cover = first ? `/image-runs/${encodeURIComponent(first.set)}/thumbnails/${first.position}?v=${first.version}`
@@ -5911,8 +5914,11 @@ function collectionHtml(c) {
     albums.films.length && `${albums.films.length} ${albums.films.length === 1 ? 'video' : 'videos'}`].filter(Boolean).join(' · ');
   const strip = collectionStrip(c.id);
   const total = albums.images.length + albums.films.length;
+  // Up and down, with two or more: it takes the place of its neighbour, the order kept on every device.
+  const moves = many > 1 ? `<button type="button" class="icon-btn rename-btn" data-move-collection="${id}" data-by="-1" data-no-fold="1" title="Move up" aria-label="Move up"${number === 0 ? ' disabled' : ''}>${ICONS.up}</button>`
+    + `<button type="button" class="icon-btn rename-btn" data-move-collection="${id}" data-by="1" data-no-fold="1" title="Move down" aria-label="Move down"${number === many - 1 ? ' disabled' : ''}>${ICONS.down}</button>` : '';
   return `<details class="image-set collection" data-collection="${id}"${collectionFolded(c.id) ? '' : ' open'}>
-    <summary class="image-set-heading"><h3>${esc(c.name)}</h3><button type="button" class="icon-btn rename-btn" data-rename-collection="${id}" data-no-fold="1" title="Rename" aria-label="Rename">${ICONS.prompts}</button></summary>
+    <summary class="image-set-heading"><h3>${esc(c.name)}</h3>${moves}<button type="button" class="icon-btn rename-btn" data-rename-collection="${id}" data-no-fold="1" title="Rename" aria-label="Rename">${ICONS.prompts}</button></summary>
     <div class="meta">${count}</div>
     <div class="image-set-row album">
       ${cover ? `<a href="#" class="album-cover" ${total > 1 ? `data-grid-collection="${id}" title="All of them, small: tap one to open it"` : `data-open-collection="${id}"${first ? ` data-col-set="${esc(first.set)}" data-col-position="${first.position}"` : ` data-col-film="${esc(film.name)}"`}`}><img loading="lazy" alt="" src="${esc(cover)}">${total > 1 ? `<span class="album-count">${total}</span>` : ''}</a>` : ''}
@@ -5929,7 +5935,7 @@ function renderCollections() {
   const key = JSON.stringify([nsfwView, pipeline === 'shorts', shown.map(c => [c.id, c.name, c.items, collectionAlbums(c.id).images.map(p => p.version)])]);
   if (box.dataset.key === key) return;
   box.dataset.key = key;
-  box.innerHTML = shown.map(collectionHtml).join('');
+  box.innerHTML = shown.map((c, number) => collectionHtml(c, number, shown.length)).join('');
   // Each folds as the headings do, and is remembered folded or not.
   if (box.querySelectorAll) for (const fold of box.querySelectorAll('details.collection')) {
     foldDetails(fold);
@@ -5975,10 +5981,14 @@ $('collectionsToggle').addEventListener('click', () => {
   showCollections(open);
 });
 $('collections').addEventListener('click', async e => {
-  const target = e.target.closest ? e.target.closest('[data-open-collection], [data-grid-collection], [data-rename-collection], [data-delete-collection]') : null;
+  const target = e.target.closest ? e.target.closest('[data-open-collection], [data-grid-collection], [data-rename-collection], [data-delete-collection], [data-move-collection]') : null;
   if (!target) return;
   const d = target.dataset;
   e.preventDefault();
+  if (d.moveCollection) {
+    moveCollection(d.moveCollection, +d.by);
+    return;
+  }
   if (d.openCollection) {
     viewerCollection = d.openCollection;
     if (d.colFilm) openFilm(d.colFilm, 'video'); else openViewer(d.colSet, +d.colPosition);
@@ -5998,6 +6008,18 @@ $('collections').addEventListener('click', async e => {
     if (body) poll();
   }
 });
+// A collection one place up or down among those shown, taking its neighbour's: shown at once, then kept on the server
+// (panel/collections.py), whose order every device follows. Those not shown stay in their own places.
+async function moveCollection(id, by) {
+  const shown = shownCollections().map(c => c.id), at = shown.indexOf(id), to = at + by;
+  if (at < 0 || to < 0 || to >= shown.length) return;
+  [shown[at], shown[to]] = [shown[to], shown[at]];
+  const byId = Object.fromEntries(collections.map(c => [c.id, c]));
+  const slots = collections.map((c, number) => (shown.includes(c.id) ? number : -1)).filter(number => number >= 0);
+  slots.forEach((slot, number) => { collections[slot] = byId[shown[number]]; });
+  renderCollections();
+  if (await collectionRequest('/api/collections/order', { ids: shown })) poll();
+}
 async function collectionRequest(url, payload) {
   try {
     const response = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });

@@ -261,6 +261,27 @@ def order_collection(collection_id):
     return {"ok": True}
 
 
+@app.route("/api/collections/order", methods=["POST"])
+@password_required
+def order_collections():
+    """
+    Puts the collections shown in the order given, {"ids": [...]}: they take each other's places, so those not in it
+    (NSFW ones in the other view, empty ones) stay where they were. An id that is gone is left out.
+    """
+    ids = (request.get_json(silent=True) or {}).get("ids")
+    if not isinstance(ids, list) or not all(isinstance(id_, str) for id_ in ids) or len(set(ids)) != len(ids):
+        return {"ok": False, "error": "The order is a list of the collections' ids."}, 400
+    with _lock:
+        collections = _read()
+        known = {c["id"]: c for c in collections}
+        given = [known[id_] for id_ in ids if id_ in known]
+        slots = [number for number, c in enumerate(collections) if c["id"] in {g["id"] for g in given}]
+        for number, collection in zip(slots, given):
+            collections[number] = collection
+        _write(collections)
+    return {"ok": True}
+
+
 @app.route("/api/collections/<collection_id>/delete", methods=["POST"])
 @password_required
 def delete_collection(collection_id):
