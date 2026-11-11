@@ -3645,8 +3645,10 @@ function syncComfyButton(c) {
   const text = comfyOff ? (c.starting ? 'Starting ComfyUI…' : 'Start ComfyUI') : 'Restart ComfyUI';
   if (!armed.restartComfy) label.textContent = text;
   $('restartComfy').disabled = comfyOff && (c.starting || !c.can_start);
-  // Starting: in yellow, as Restart panel is while it restarts.
-  $('restartComfy').classList.toggle('restarting', comfyOff && !!c.starting);
+  // Starting or restarting: in yellow, as Restart panel is while it restarts.
+  $('restartComfy').classList.toggle('restarting', (comfyOff && !!c.starting) || !!c.restarting);
+  $('forceRestartComfy').classList.toggle('restarting', !!c.restarting || (comfyOff && !!c.starting));
+  if (!armed.forceRestartComfy) $('forceRestartComfy').querySelector('span').textContent = c.restarting ? 'Restarting ComfyUI…' : 'Force restart ComfyUI';
   if (comfyOff) $('restartComfy').classList.remove('pulse');
 }
 $('restartComfy').addEventListener('click', async () => {
@@ -3669,7 +3671,7 @@ $('restartComfy').addEventListener('click', async () => {
 // Force: ComfyUI closed and started again at once, even while a run is going or the panel believes one is. That run
 // fails and is tried once more (exit code 1 restarts and retries it).
 $('forceRestartComfy').addEventListener('click', async () => {
-  if (!confirmTap('forceRestartComfy', 'Force restart ComfyUI')) return;
+  if (!confirmTap('forceRestartComfy', 'Force restart ComfyUI', 3)) return;
   $('restartComfy').classList.remove('pulse');
   try {
     const body = await (await fetch('/restart/comfyui', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ force: true }) })).json();
@@ -3677,18 +3679,18 @@ $('forceRestartComfy').addEventListener('click', async () => {
     if (body.ok) poll();
   } catch (error) { settingsNote('Could not reach the panel. Try again.', true); }
 });
-// The three buttons ask for a second tap within a few seconds instead of a box: the first arms it, the second does it.
-function confirmTap(id, label) {
-  const label_ = $(id).querySelector('span');
-  if (armed[id]) {
-    clearTimeout(armed[id]);
-    delete armed[id];
-    label_.textContent = label;
-    $(id).classList.remove('armed');
-    return true;
-  }
+// The buttons ask for more taps within a few seconds instead of a box: the first arms it, the last does it (a force
+// restart takes three, and says how many are left).
+const tapsLeft = {};
+function confirmTap(id, label, taps = 2) {
+  const text = $(id).querySelector('span');
+  const disarm = () => { clearTimeout(armed[id]); delete armed[id]; delete tapsLeft[id]; text.textContent = label; $(id).classList.remove('armed'); };
+  if (tapsLeft[id] <= 1) { disarm(); return true; }
+  tapsLeft[id] = tapsLeft[id] ? tapsLeft[id] - 1 : taps - 1;
+  clearTimeout(armed[id]);
   $(id).classList.add('armed');
-  armed[id] = setTimeout(() => { delete armed[id]; label_.textContent = label; $(id).classList.remove('armed'); }, 4000);
+  if (taps > 2) text.textContent = tapsLeft[id] === 1 ? 'Tap once more' : `Tap ${tapsLeft[id]} more times`;
+  armed[id] = setTimeout(disarm, 4000);
   return false;
 }
 

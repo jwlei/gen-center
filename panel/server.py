@@ -2970,6 +2970,7 @@ def status():
     online = comfyui_online(wait=False)
     payload["comfyui"] = {"online": online, "listening": comfyui_listening(), "can_start": bool(comfyui_launcher()), "ram": ram_stats(),
                           "starting": not online and time.time() - _comfyui_start_requested_at < COMFYUI_STARTUP_WAIT,
+                          "restarting": _comfy_restarting,
                           **(comfy_monitor.snapshot() if comfy_monitor else {})}
     payload["gpu"] = gpu_stats()
     payload["poweroff"] = poweroff_state()

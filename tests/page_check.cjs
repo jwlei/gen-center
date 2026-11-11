@@ -1826,8 +1826,25 @@ assert(run("filmHtml({ name: 'f.mp4', model: 'wan', resolution: '864x480', durat
     && script.includes("saveSettings({ title_source: $('titleSource').value })")
     && script.includes("$('titleSource').value = SETTINGS.title_source || 'off';"), 'Titles: Off, Gemini with the local model behind it, or the local model only, saved like the others');
   assert(/<div class="settings-actions settings-force">\s*<button type="button" id="forceRestartComfy"[^>]*>[\s\S]*?<span>Force restart ComfyUI<\/span><\/button>\s*<\/div>\s*<button type="button" class="panel-close" id="settingsClose">/.test(html)
-    && script.includes("body: JSON.stringify({ force: true })") && script.includes("confirmTap('forceRestartComfy', 'Force restart ComfyUI')"),
-    'Settings has a Force restart ComfyUI, asking for a second tap, that restarts it whatever is running');
+    && script.includes("body: JSON.stringify({ force: true })") && script.includes("confirmTap('forceRestartComfy', 'Force restart ComfyUI', 3)"),
+    'Settings has a Force restart ComfyUI, asking for three taps, that restarts it whatever is running');
+  {
+    const taps = JSON.parse(run(`(() => {
+      const span = { textContent: 'Force restart ComfyUI' }, shut = { textContent: 'Shut down' }, on = new Set();
+      $('forceRestartComfy').querySelector = () => span; $('shutdown').querySelector = () => shut;
+      $('forceRestartComfy').classList = { toggle: (name, force) => (force ? on.add(name) : on.delete(name)), add() {}, remove() {}, contains: name => on.has(name) };
+      const out = [];
+      for (let i = 0; i < 3; i++) { out.push(confirmTap('forceRestartComfy', 'Force restart ComfyUI', 3), span.textContent); }
+      out.push(confirmTap('shutdown', 'Shut down'), confirmTap('shutdown', 'Shut down'));
+      syncComfyButton({ online: true, listening: true, restarting: true });
+      out.push($('forceRestartComfy').classList.contains('restarting'), span.textContent);
+      syncComfyButton({ online: true, listening: true, restarting: false });
+      out.push($('forceRestartComfy').classList.contains('restarting'));
+      return JSON.stringify(out);
+    })()`));
+    assert.deepStrictEqual(taps, [false, 'Tap 2 more times', false, 'Tap once more', true, 'Force restart ComfyUI', false, true, true, 'Restarting ComfyUI…', false],
+      `Force restart takes three taps, and is yellow while ComfyUI restarts: ${JSON.stringify(taps)}`);
+  }
   assert(/\.viewer-meta \{ width: 100%;/.test(html), 'the preview line is 90% of the bar, not of its own content');
 }
 assert(filmRow.includes(run('ICONS.config')), 'film same-again uses the settings slider');
@@ -2023,7 +2040,7 @@ assert(run("imageSetHtml({ id: 'image_20261108_043935', label: 'L', model: 'krea
 assert(/\.pill\.workflow \{ border-color: color-mix\(in srgb, var\(--pill, var\(--neutral\)\)/.test(html) && /\.pills\.video \{ --pill: var\(--c-video\); \}/.test(html), 'the workflow pill by kind');
 assert(/id="jumpResults">Output<\/a>/.test(html), 'Output in the footer; Status and Output in violet');
 assert(/\.image-set-heading \.nsfw-button \{[^}]*height: 24px; padding: 0; margin: 0 0 -8px;/.test(html), 'the details just under the title');
-assert(/classList\.toggle\('restarting', comfyOff && !!c\.starting\)/.test(script) && /button\.classList\.add\('restarting'\);/.test(script), 'Starting ComfyUI in yellow, as Restart panel');
+assert(/classList\.toggle\('restarting', \(comfyOff && !!c\.starting\) \|\| !!c\.restarting\)/.test(script) && /button\.classList\.add\('restarting'\);/.test(script), 'Starting or restarting ComfyUI in yellow, as Restart panel');
 assert(/\.output-filter-line \{ position: relative; display: flex; justify-content: center;/.test(html) && /\.view-toggle \{ position: absolute; right: 0;/.test(html), 'the kinds centred, the other view at the right');
 
 assert(/dialog\.viewer::backdrop \{ background: rgba\(0, 0, 0, \.55\);[^}]*backdrop-filter: blur\(6px\)/.test(html), 'the page behind the preview, as behind Quota');
