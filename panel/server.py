@@ -529,8 +529,9 @@ class JobQueue:
         generating = has_request_context() and request.path.startswith("/generate/")
         if generating and request.form.get("start_later"):
             item["later"] = True
-        # Generate's "Add to top of queue": ahead of everything already waiting.
-        to_top = generating and not item.get("later") and bool(request.form.get("queue_top"))
+        # Generate's "Add to top of queue", or Pending's arrow on a stopped run: ahead of everything already waiting.
+        asked_top = has_request_context() and ((generating and request.form.get("queue_top")) or request.args.get("top"))
+        to_top = not item.get("later") and bool(asked_top)
         # New creations only: an upscale or continuation of something made before keeps that one's tag.
         if self is run_queue and private_mode() and item.get("pipeline") in ("image", "video") and (not item.get("resume") or item.get("new_run")):
             item["private"] = True
@@ -603,12 +604,13 @@ class JobQueue:
                 # Not under the queue's lock: a busy ComfyUI can take seconds to answer, and the page's status waits on it.
                 threading.Thread(target=free_comfyui, daemon=True).start()
         code = self.job.returncode
+        # Noted before _record: its hooks can start the next job, whose progress would replace this run's id.
         if self.job.stopped:
+            note_outcome(self.job, item, STOPPED)
             self._record(item, "stopped")
-            note_outcome(self.job, item, None)
         elif code == 0:
-            self._record(item, "done")
             note_outcome(self.job, item, NOT_RENDERED if item.get("plan_only") else FIRST_ONLY if item.get("first_only") else None)
+            self._record(item, "done")
         else:
             reason = restart_reason(self.job, code) if self is run_queue else None
             if reason:
@@ -620,8 +622,8 @@ class JobQueue:
                 restart_comfyui_in_background()
             # In plain words, with what to do, when it's a failure we know; the run's own lines under it.
             plain, said = explain_failure(self.job, code)
-            self._record(item, "failed", plain or f"exit {code}")
             note_outcome(self.job, item, {"outcome": "failed", "why": f"{plain}\n\nFrom its log:\n{said}" if plain else said})
+            self._record(item, "failed", plain or f"exit {code}")
             if self.items:
                 self.job.log(f"❌ {item['label']} failed (exit {code}).")
 
@@ -749,10 +751,10 @@ class JobQueue:
         with self.lock:
             self._advance()
 
-    def start(self, item_id):
+    def start(self, item_id, top=False):
         """
-        Puts a pending job in the queue, at its end: it starts when the queue gets to it, and waits while the queue is
-        on hold. Starting it right away is run_now's.
+        Puts a pending job in the queue, at its end (the top: ahead of what waits there): it starts when the queue gets
+        to it, and waits while the queue is on hold. Starting it right away is run_now's.
         """
         with self.lock:
             item = next((item for item in self.items if item["id"] == item_id), None)
@@ -763,7 +765,7 @@ class JobQueue:
             item.pop("later", None)
             self.items.remove(item)
             # Ahead of those still pending, which stay at the end.
-            at = next((i for i, waiting in enumerate(self.items) if waiting.get("later")), len(self.items))
+            at = 0 if top else next((i for i, waiting in enumerate(self.items) if waiting.get("later")), len(self.items))
             self.items.insert(at, item)
             self._advance()
             self._save()
@@ -783,11 +785,11 @@ class JobQueue:
             return True
 
     def run_now(self, item_id):
-        """Runs one waiting job from a paused queue, leaving the rest paused."""
+        """Runs one waiting job while nothing is running, ahead of the rest: a paused queue stays paused."""
         with self.lock:
             if self.current and self.job.idle:
                 self._finish_current()
-            if not self.held or not self.job.idle or self.current or self.blocked():
+            if not self.job.idle or self.current or self.blocked():
                 return "not_ready", None
             item = next((item for item in self.items if item["id"] == item_id), None)
             if not item:
@@ -796,7 +798,7 @@ class JobQueue:
                 return "not_ready", None
             self.items.remove(item)
             item.pop("later", None)
-            self.held = bool(self.items)
+            self.held = self.held and bool(self.items)
             self._save()
             self._start(item)
             if self.current is item:
@@ -1784,6 +1786,7 @@ def saved_runs():
 # --- Why a run made nothing: kept in its folder, for Output to show beside what it did make ---
 
 OUTCOME_FILE = "outcome.json"
+STOPPED = {"outcome": "stopped"}  # Cancelled or stopped: it waits in Pending, marked, with nothing to explain
 FIRST_ONLY = {"outcome": "first one made",
               "why": "A preview run: it stopped after the first. Open Prompts to see it and change the rest, "
                      "or continue to make them."}
@@ -2233,7 +2236,7 @@ def queue_requeue_failure(lane, job_id):
 def queue_start(lane, item_id):
     if lane not in QUEUES:
         abort(404)
-    return {"ok": QUEUES[lane].start(item_id)}
+    return {"ok": QUEUES[lane].start(item_id, top=bool(request.args.get("top")))}
 
 
 @app.route("/queue/<lane>/pause/<int:item_id>", methods=["POST"])
@@ -2615,7 +2618,7 @@ def queue_run_now(lane, item_id):
         abort(404)
     result, error = QUEUES[lane].run_now(item_id)
     if result == "not_ready":
-        return {"ok": False, "error": "Run this is available only when the generation queue is paused and idle."}, 409
+        return {"ok": False, "error": "Run this is available only while nothing is running."}, 409
     if result == "not_found":
         return {"ok": False, "error": "That job is no longer in the queue."}, 404
     if result == "failed":

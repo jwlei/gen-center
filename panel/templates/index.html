@@ -109,9 +109,8 @@
   .queue-item .what[role="button"] { cursor: pointer; }
   .queue .results { margin-top: 6px; }
   /* A stopped run in a box of its own: what it is, how far it got, then what you can do with it. */
-  .queue .stopped-actions .continue-item { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 45%, transparent); }
+  .queue .stopped-actions .continue-item, .queue .queue-item-actions .continue-item { color: var(--shared); border-color: color-mix(in srgb, var(--shared) 45%, transparent); }
   .queue .run-item { flex: none; display: inline-flex; align-items: center; justify-content: center; width: 30px; height: 30px; padding: 5px; color: var(--text); }
-  .queue .queue-item-actions .continue-item { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 45%, transparent); }
   .queue .run-item svg { width: 16px; height: 16px; }
   button.queue-request { opacity: .75; cursor: wait; }
   button.queue-request-done { color: var(--accent); }
@@ -1197,6 +1196,7 @@
   .run-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; min-width: 0; }
   .run-head .what { min-width: 0; }
   .run-tag { flex: none; font-size: .72rem; font-weight: 400; color: var(--err); letter-spacing: .02em; }
+  .run-tag.stopped { color: var(--warn); }
   details.why { margin-top: 3px; font-size: .78rem; color: var(--muted); }
   details.why summary { cursor: pointer; width: max-content; }
   .why-text { margin-top: 3px; white-space: pre-line; overflow-wrap: anywhere; }
@@ -3722,19 +3722,34 @@ $('forceRestartComfy').addEventListener('click', async () => {
 });
 // The buttons ask for more taps within a few seconds instead of a box: the first arms it, the last does it (a force
 // restart takes three, and says how many are left).
-const tapsLeft = {};
+const tapsLeft = {}, tapLabels = {};
+function disarmTap(id) {
+  const text = $(id).querySelector('span');
+  clearTimeout(armed[id]); delete armed[id]; delete tapsLeft[id];
+  if (text && tapLabels[id] !== undefined) text.textContent = tapLabels[id];
+  $(id).classList.remove('armed');
+  if ($(id).dataset) delete $(id).dataset.taps;
+}
 function confirmTap(id, label, taps = 2) {
   const text = $(id).querySelector('span');
-  const disarm = () => { clearTimeout(armed[id]); delete armed[id]; delete tapsLeft[id]; text.textContent = label; $(id).classList.remove('armed'); if ($(id).dataset) delete $(id).dataset.taps; };
-  if (tapsLeft[id] <= 1) { disarm(); return true; }
+  tapLabels[id] = label;
+  if (tapsLeft[id] <= 1) { disarmTap(id); return true; }
   tapsLeft[id] = tapsLeft[id] ? tapsLeft[id] - 1 : taps - 1;
   clearTimeout(armed[id]);
   $(id).classList.add('armed');
   // The words are for screen readers; what's seen is the taps left, as a number on the icon.
   if (taps > 2) { text.textContent = tapsLeft[id] === 1 ? 'Tap once more' : `Tap ${tapsLeft[id]} more times`; if ($(id).dataset) $(id).dataset.taps = tapsLeft[id]; }
-  armed[id] = setTimeout(disarm, 4000);
+  armed[id] = setTimeout(() => disarmTap(id), 4000);
   return false;
 }
+// A button waiting for its confirming tap goes back to what it was as soon as a tap lands anywhere else.
+document.addEventListener('click', e => {
+  const tapped = e.target && e.target.closest ? e.target.closest('button') : null;
+  for (const button of document.querySelectorAll('button.armed')) {
+    if (button === tapped) continue;
+    if (button.id && armed[button.id] !== undefined) disarmTap(button.id); else disarm(button);
+  }
+}, true);
 
 function clipCount(n) { return `${n} ${n === 1 ? 'clip' : 'clips'}`; }
 function filmLengthEstimate(seconds, adjusted) {
@@ -5482,6 +5497,10 @@ const ICONS = {
   play: ICON_SVG('<path d="M7 4.5v15l12-7.5z" fill="currentColor"/>'),
   // Into the queue: a list with one more being added.
   queue: ICON_SVG('<path d="M4 6h12M4 12h12M4 18h7"/><path d="M17 15v6M14 18h6"/>'),
+  // To the top of the queue: an arrow up to a bar.
+  top: ICON_SVG('<path d="M5 4h14"/><path d="M12 20V9"/><path d="m7 13 5-5 5 5"/>'),
+  // Waits in Pending until it is started: a clock.
+  later: ICON_SVG('<circle cx="12" cy="12" r="8"/><path d="M12 8v4l3 2"/>'),
   config: ICON_SVG('<path d="M4 7h10M18 7h2M4 17h2M10 17h10"/><circle cx="16" cy="7" r="2"/><circle cx="8" cy="17" r="2"/>'),
   category: ICON_SVG('<circle cx="5" cy="12" r="1" fill="currentColor"/><circle cx="12" cy="12" r="1" fill="currentColor"/><circle cx="19" cy="12" r="1" fill="currentColor"/>'),
   // Clearing text, not deleting a thing: the bin stays for delete.
@@ -8115,13 +8134,15 @@ function renderQueue(el, q, doneIn, moving = false, idle = false) {
     ? `<span class="when">On hold</span>`
     : doneIn ? `<span class="when">All done around ${clockIn(doneIn)}</span>` : '')
     + (el.dataset.lane === 'run' ? `<button type="button" class="icon-btn" data-queue-toggle="1" aria-label="${q.held || q.stopAfter ? 'Resume queue' : 'Pause after current'}" title="${q.held || q.stopAfter ? 'Resume queue' : 'Stop after the current image or video'}">${q.held || q.stopAfter ? ICONS.play : '❚❚'}</button><button type="button" class="queue-fold-toggle queue-fold-arrow" data-fold-queue="1" aria-expanded="${expanded}" aria-label="${expanded ? 'Collapse queue' : 'Expand queue'}"><span class="chev" aria-hidden="true"></span></button>` : '');
-  const canRunNow = el.dataset.lane === 'run' && q.held && idle;
+  const canRunNow = el.dataset.lane === 'run' && idle;
   const items = waiting.map((item, i) => `
     <div class="queue-item${el.dataset.lane === 'run' ? ' run-card' : ''}${String(item.id) === el._selected ? ' selected' : ''}" data-id="${esc(String(item.id))}" data-motion-key="queue-${esc(String(item.id))}">
       ${el.dataset.lane === 'run' ? '<div class="queue-item-top">' : ''}<div class="what"${waiting.length > 1 ? ` role="button" tabindex="0" aria-pressed="${String(item.id) === el._selected}" aria-label="Select ${esc(hideTitle(item) ? PLAIN_TITLE : item.label)} to drag or use arrow keys to reorder"` : ''}>${queueTitle(`queue-${item.id}`, el.dataset.lane === 'run' ? workHeading(item, item.pipeline) : item.label, i + 1)}<div class="hint">${el.dataset.lane === 'run' ? `${SIDE_NAMES[item.pipeline] || 'Shorts'} · ` : ''}${esc(queueDetail(item))}</div></div>${el.dataset.lane === 'run' ? '</div><div class="queue-item-actions">' : ''}
-      ${el.dataset.lane === 'run' ? `<span class="acts-side"><button type="button" class="icon-btn" data-pause="${item.id}" aria-label="Pause: move to Pending" title="Pause: take it out of the queue and make it pending">❚❚</button>`
+      ${el.dataset.lane === 'run' ? `<span class="acts-side"><button type="button" class="icon-btn" data-pause="${item.id}" aria-label="Pause: move to Pending" title="Pause: take it out of the queue and make it pending">${ICONS.later}</button>`
+        // Nothing running: any of them can start first. Running: the first is next already, and the others can go ahead of the rest.
         + (canRunNow ? `<button type="button" class="run-item${item.continuation ? ' continue-item' : ''}" data-run="${item.id}" aria-label="Run this generation now" title="Run this now">
-          <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 2.8a.8.8 0 0 1 1.2-.7l8 5a1 1 0 0 1 0 1.7l-8 5A.8.8 0 0 1 4 13.1z" fill="currentColor"/></svg></button>` : '')
+          <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 2.8a.8.8 0 0 1 1.2-.7l8 5a1 1 0 0 1 0 1.7l-8 5A.8.8 0 0 1 4 13.1z" fill="currentColor"/></svg></button>`
+          : i > 0 ? `<button type="button" class="icon-btn${item.continuation ? ' continue-item' : ''}" data-top="${item.id}" aria-label="Move to the top of the queue" title="Next: put it first in the queue">${ICONS.top}</button>` : '')
         + `</span><span class="when">${item.estimate ? fmtEta(item.estimate) : ''}</span><span class="acts-side acts-end">`
         + (item.resume && item.pipeline !== 'shorts' ? `<button type="button" class="icon-btn" data-shots="${esc(item.resume)}" aria-label="Prompts" title="View prompts">${ICONS.enhanced}</button>` : '')
         + `<button type="button" class="icon-btn" data-edit="${item.id}" aria-label="Go to setup" title="Edit this queued job">${ICONS.config}</button>`
@@ -8566,16 +8587,17 @@ function renderRunSections(draw) {
 function renderStopped(runs, parked = [], results = [], canRunNow = false) {
   const failed = runs.filter(run => run.outcome && run.outcome.outcome === 'failed');
   const idle = runs.filter(run => !failed.includes(run));
-  const tag = run => run.outcome ? `<span class="run-tag">${esc(run.outcome.outcome === 'failed' ? 'Failed' : run.outcome.outcome)}</span>` : '';
+  const tag = run => run.outcome ? `<span class="run-tag${run.outcome.outcome === 'stopped' ? ' stopped' : ''}">${esc(run.outcome.outcome === 'failed' ? 'Failed' : run.outcome.outcome === 'stopped' ? 'Stopped' : run.outcome.outcome)}</span>` : '';
   const runRow = (run, isFailed = false) => `
     <div class="stopped-run" data-run-id="${esc(run.id)}" data-motion-key="run-${esc(run.id)}">
       <div class="run-head"><div class="what">${queueTitle(`run-${run.id}`, hideTitle(run) ? PLAIN_TITLE : run.label)}</div>${tag(run)}</div>
       <div class="hint">${SIDE_NAMES[run.pipeline] || 'Shorts'} · ${esc(run.detail)}${run.size && !String(run.detail).includes(run.size) ? ` · ${esc(run.size)}` : ''}</div>
       ${run.when ? `<div class="hint">${esc(run.when)}</div>` : ''}
-      ${run.outcome ? whyHtml(run.outcome) : ''}
+      ${run.outcome && run.outcome.why ? whyHtml(run.outcome) : ''}
       <div class="stopped-actions">
         <span class="acts-side">${isFailed ? `<button type="button" class="icon-btn" data-continue="${esc(run.id)}" aria-label="Retry" title="Retry from where it got to">${ICONS.again}</button>`
-          : `<button type="button" class="icon-btn start-item continue-item" data-continue="${esc(run.id)}" aria-label="${run.pipeline !== 'shorts' && !run.clips ? 'Render' : 'Continue'}" title="${run.pipeline !== 'shorts' && !run.clips ? 'Render' : 'Continue'}">${ICONS.play}</button>`}</span>
+          : `<button type="button" class="icon-btn start-item continue-item" data-continue="${esc(run.id)}" aria-label="${run.pipeline !== 'shorts' && !run.clips ? 'Render' : 'Continue'}" title="${run.pipeline !== 'shorts' && !run.clips ? 'Render' : 'Continue'}: it starts when the queue gets to it">${ICONS.queue}</button>`
+            + `<button type="button" class="icon-btn start-item continue-item" data-continue-top="${esc(run.id)}" aria-label="Add to the top of the queue" title="Add to the top of the queue: ahead of everything waiting">${ICONS.top}</button>`}</span>
         <span class="when">${fmtEta(run.estimate)}</span>
         <span class="acts-side acts-end">${run.pipeline !== 'shorts' ? `<button type="button" class="icon-btn" data-shots="${esc(run.id)}" aria-label="Prompts" title="View prompts">${ICONS.enhanced}</button>` : ''}<button type="button" class="icon-btn" data-config="${esc(run.id)}" data-pipeline="${esc(run.pipeline)}" aria-label="Change settings" title="Back to Generate with its settings, to change them">${ICONS.config}</button><button type="button" class="icon-btn" data-discard="${esc(run.id)}" data-pipeline="${esc(run.pipeline)}" data-clips="${run.clips}" aria-label="Discard this run" title="Discard what it has still to do: anything it made stays (tap twice)">${ICONS.trash}</button></span>
       </div>
@@ -8587,6 +8609,7 @@ function renderStopped(runs, parked = [], results = [], canRunNow = false) {
       <div class="hint">${SIDE_NAMES[item.pipeline] || 'Shorts'} · ${esc(queueDetail(item))}</div>
       <div class="stopped-actions">
         <span class="acts-side">${item.editing ? '<span class="when">Editing</span>' : `<button type="button" class="icon-btn start-item${item.continuation ? ' continue-item' : ''}" data-start="${item.id}" aria-label="Add to the queue" title="Add to the queue: it starts when the queue gets to it">${ICONS.queue}</button>`
+          + `<button type="button" class="icon-btn start-item${item.continuation ? ' continue-item' : ''}" data-start="${item.id}" data-top="1" aria-label="Add to the top of the queue" title="Add to the top of the queue: ahead of everything waiting">${ICONS.top}</button>`
           + (canRunNow ? `<button type="button" class="icon-btn start-item${item.continuation ? ' continue-item' : ''}" data-run-now="${item.id}" aria-label="Run this now" title="Run this now: the rest of the queue stays on hold">${ICONS.play}</button>` : '')}</span>
         <span class="when">${item.estimate ? fmtEta(item.estimate) : ''}</span>
         <span class="acts-side acts-end">${item.resume && item.pipeline !== 'shorts' ? `<button type="button" class="icon-btn" data-shots="${esc(item.resume)}" aria-label="Prompts" title="View prompts">${ICONS.enhanced}</button>` : ''}<button type="button" class="icon-btn" data-edit="${item.id}" aria-label="Go to setup" title="Edit this pending job">${ICONS.config}</button><button type="button" class="icon-btn" data-remove="${item.id}" aria-label="Remove it" title="Remove it (tap twice)">${ICONS.trash}</button></span>
@@ -8643,8 +8666,9 @@ for (const id of ['stoppedRuns', 'failedRuns']) {
       else if (d.pipeline === 'video') await sameAgainFilm(d.config);
       else await sameAgainShorts(d.config);
       return;
-    } else if (d.continue) {
-      const data = await queueRequest(button, async () => (await fetch(`/runs/${encodeURIComponent(d.continue)}/continue`, { method: 'POST' })).json());
+    } else if (d.continue || d.continueTop) {
+      const run = d.continue || d.continueTop;
+      const data = await queueRequest(button, async () => (await fetch(`/runs/${encodeURIComponent(run)}/continue${d.continueTop ? '?top=1' : ''}`, { method: 'POST' })).json());
       if (data) poll();
       return;
     } else if (d.discard) {
@@ -8679,7 +8703,7 @@ for (const id of ['stoppedRuns', 'failedRuns']) {
     } else if (d.start || d.remove) {
       if (d.remove && !secondTap(button)) return;
       if (d.start) {
-        const data = await queueRequest(button, async () => (await fetch(`/queue/run/start/${d.start}`, { method: 'POST' })).json());
+        const data = await queueRequest(button, async () => (await fetch(`/queue/run/start/${d.start}${d.top ? '?top=1' : ''}`, { method: 'POST' })).json());
         if (data) poll();
       } else {
         await removeQueued('run', d.remove);
@@ -8868,7 +8892,7 @@ for (const id of ['runQueue', 'uploadQueue']) {
       }
       return;
     }
-    const button = e.target.closest && e.target.closest('button[data-run], button[data-pause], button[data-remove], button[data-resume], button[data-queue-toggle], button[data-edit], button[data-shots]');
+    const button = e.target.closest && e.target.closest('button[data-run], button[data-pause], button[data-top], button[data-remove], button[data-resume], button[data-queue-toggle], button[data-edit], button[data-shots]');
     const d = button ? button.dataset : {}, lane = $(id).dataset.lane;
     if (d.edit) {
       await editQueued(d.edit, button);
@@ -8894,6 +8918,13 @@ for (const id of ['runQueue', 'uploadQueue']) {
     else if (d.run || d.pause) {
       const action = d.run ? 'run-now' : 'pause';
       const data = await queueRequest(button, async () => (await fetch(`/queue/${lane}/${action}/${d.run || d.pause}`, { method: 'POST' })).json(), d.pause ? 'Pending' : 'Started', d.pause ? 'Pausing…' : 'Starting…');
+      if (!data) return;
+    }
+    else if (d.top) {
+      // First in line: the queue's order with this one moved to the front.
+      const ids = [Number(d.top), ...queueOrder($(id)).filter(n => n !== Number(d.top))];
+      const data = await queueRequest(button, async () => (await fetch(`/queue/${lane}/order`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ids }) })).json(), 'Next', 'Moving…');
       if (!data) return;
     }
     else if (d.remove) {

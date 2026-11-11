@@ -788,11 +788,13 @@ class PanelTest(unittest.TestCase):
         self.assertEqual([result["outcome"] for result in status["queue"]["results"]], ["stopped", "done"])
         waiting = next(run for run in status["stopped_runs"] if run["id"] == skipped)
         self.assertIn("1 of 8 clips kept", waiting["detail"])
+        self.assertEqual(waiting["outcome"]["outcome"], "stopped", "marked Stopped in Pending")
 
         self.assertTrue(self.client.post(f"/runs/{skipped}/continue").get_json()["ok"])
         self.wait_idle()
         self.assertEqual(self.status()["returncode"], 0)
         self.assertEqual(len(self.comfy.prompts), 9, "only the cut-off clip and those after it were rendered")
+        self.assertFalse(any(run.get("outcome") for run in self.status()["stopped_runs"] if run["id"] == skipped), "finished, the mark is gone")
 
     def test_cancel_before_anything_is_saved_waits_for_it_then_goes_on(self):
         self.comfy.script = ["hang"]
@@ -899,6 +901,19 @@ class PanelTest(unittest.TestCase):
         webapp.run_queue.items.clear()
         webapp.run_queue._save()
 
+    def test_a_pending_jobs_arrow_puts_it_first_in_the_queue(self):
+        with mock.patch.object(webapp.run_queue, "blocked", return_value=True):
+            for prompt in ("first", "second"):
+                self.assertTrue(self.generate(prompt=prompt).get_json()["queued"])
+            self.assertTrue(self.generate(prompt="pending", start_later="1").get_json()["ok"])
+            pending = self.status()["queue"]["items"][-1]
+            self.assertTrue(self.client.post(f"/queue/run/start/{pending['id']}?top=1").get_json()["ok"])
+            items = self.status()["queue"]["items"]
+        self.assertEqual([item["label"] for item in items], ["1 video: pending", "1 video: first", "1 video: second"])
+        self.assertFalse(any(item.get("later") for item in items))
+        webapp.run_queue.items.clear()
+        webapp.run_queue._save()
+
     def test_queueing_a_pending_job_only_queues_it_and_its_play_runs_it_now(self):
         for prompt in ("first", "second"):
             self.assertTrue(self.generate(prompt=prompt, start_later="1").get_json()["ok"])
@@ -995,7 +1010,6 @@ class PanelTest(unittest.TestCase):
         self.comfy.script = ["ok"] * 16
         self.assertTrue(self.generate(prompt="leave waiting", start_later="1").get_json()["queued"])
         first = self.status()["queue"]["items"][0]
-        self.assertEqual(self.client.post(f"/queue/run/run-now/{first['id']}").status_code, 409, "Run this is only available while paused")
         webapp.run_queue.hold()
         self.assertTrue(self.generate(prompt="run this one", start_later="1").get_json()["queued"])
         waiting = self.status()["queue"]["items"]

@@ -1096,8 +1096,15 @@ assert(stoppedBox.indexOf('Wardrobe') < stoppedBox.indexOf('Image · 1 of 2 imag
 assert(stoppedBox.includes('<div class="hint">02 Nov 23:46</div>') && stoppedBox.indexOf('Image · 1 of 2 images') < stoppedBox.indexOf('02 Nov 23:46') && stoppedBox.indexOf('02 Nov 23:46') < stoppedBox.indexOf('class="stopped-actions"'), 'the date on its own line, under the details');
 assert(stoppedBox.indexOf('class="stopped-actions"') < stoppedBox.indexOf('data-continue') && stoppedBox.indexOf('data-continue') < stoppedBox.indexOf('data-shots') && stoppedBox.indexOf('data-shots') < stoppedBox.indexOf('data-config') && stoppedBox.indexOf('data-config') < stoppedBox.indexOf('data-discard'), 'continue is left of the other actions');
 assert(stoppedBox.includes(`data-shots="image_1" aria-label="Prompts" title="View prompts">${run('ICONS.enhanced')}</button>`), 'failed and stopped runs use the star for prompts');
-assert(/class="icon-btn start-item continue-item" data-continue="image_1"/.test(stoppedBox) && stoppedBox.includes('aria-label="Continue"'), 'continuation has an accessible play icon');
-assert(/\.queue \.stopped-actions \.continue-item \{[^}]*color: var\(--ok\)/.test(html) && /\.queue \.stopped-actions \.icon-btn:not\(\.continue-item\) \{ color: var\(--muted\)/.test(html), 'only continuations have a green play icon');
+assert(/class="icon-btn start-item continue-item" data-continue="image_1"/.test(stoppedBox) && stoppedBox.includes('aria-label="Continue"'), 'continuation has an accessible queue icon');
+assert(stoppedBox.includes(`aria-label="Continue" title="Continue: it starts when the queue gets to it">${run('ICONS.queue')}</button>`)
+  && stoppedBox.includes(`data-continue-top="image_1" aria-label="Add to the top of the queue" title="Add to the top of the queue: ahead of everything waiting">${run('ICONS.top')}</button>`)
+  && stoppedBox.indexOf('data-continue="image_1"') < stoppedBox.indexOf('data-continue-top="image_1"'), 'a stopped run: the queue icon, then the arrow to the top of the queue');
+assert(script.includes("`/runs/${encodeURIComponent(run)}/continue${d.continueTop ? '?top=1' : ''}`") && script.includes("`/queue/run/start/${d.start}${d.top ? '?top=1' : ''}`"), 'the arrows ask for the top');
+assert(/\.queue \.stopped-actions \.continue-item, \.queue \.queue-item-actions \.continue-item \{ color: var\(--shared\)/.test(html) && /\.queue \.stopped-actions \.icon-btn:not\(\.continue-item\) \{ color: var\(--muted\)/.test(html), 'only continuations are purple');
+run(`renderStopped([{ id: 'image_2', pipeline: 'image', label: 'Cut', detail: 'd', clips: 1, estimate: 5, outcome: { outcome: 'stopped' } }])`);
+assert(els.stoppedRuns.innerHTML.includes('<span class="run-tag stopped">Stopped</span>') && !els.stoppedRuns.innerHTML.includes('class="why"'), 'a stopped run says Stopped, with nothing to explain');
+assert(/\.run-tag\.stopped \{ color: var\(--warn\); \}/.test(html), 'in yellow');
 assert(/\.stopped-run \{[^}]*border: 1px solid/.test(html));
 run('renderStopped([])');
 
@@ -1163,7 +1170,8 @@ run(`renderStopped([], [{ id: 7, pipeline: 'video', label: 'Continue', detail: '
 assert(box.innerHTML.includes('data-shots="run_1"') && box.innerHTML.includes('data-edit="7"') && box.innerHTML.includes('data-start="7"'), 'a parked continuation exposes prompts and its other controls');
 assert(box.innerHTML.indexOf('data-start="7"') < box.innerHTML.indexOf('data-shots="run_1"'), 'pending start is left of prompts');
 assert(box.innerHTML.includes(`data-shots="run_1" aria-label="Prompts" title="View prompts">${run('ICONS.enhanced')}</button>`), 'pending prompts use the star');
-assert(box.innerHTML.includes('class="icon-btn start-item continue-item" data-start="7"') && box.innerHTML.includes('class="icon-btn start-item" data-start="8"') && box.innerHTML.includes('class="icon-btn start-item" data-start="9"'), 'only the continued job is green');
+assert(box.innerHTML.includes('class="icon-btn start-item continue-item" data-start="7"') && box.innerHTML.includes('class="icon-btn start-item" data-start="8"') && box.innerHTML.includes('class="icon-btn start-item" data-start="9"'), 'only the continued job is purple');
+assert(box.innerHTML.includes(`data-start="8" data-top="1" aria-label="Add to the top of the queue" title="Add to the top of the queue: ahead of everything waiting">${run('ICONS.top')}</button>`), 'pending: an arrow to put it first in the queue');
 assert(box.innerHTML.includes(`data-start="8" aria-label="Add to the queue" title="Add to the queue: it starts when the queue gets to it">${run('ICONS.queue')}</button>`), 'pending: the queue icon, which only queues');
 assert(!box.innerHTML.includes('data-run-now'), 'with the queue running or busy, no play: it would only queue too');
 run(`renderStopped([], [{ id: 8, pipeline: 'image', label: 'new', detail: '', continuation: false }], [], true)`);
@@ -2459,9 +2467,17 @@ assert(queue.innerHTML.includes('class="icon-btn" data-pause="4"') && queue.inne
 assert(queue.innerHTML.includes(`data-remove="4" aria-label="Remove from the queue" title="Remove from the queue (tap twice)">${run('ICONS.trash')}</button>`), 'queue removal uses the shared trash icon');
 run(`renderQueue(queue, { items: [{ id: 1, label: 'new', detail: '', pipeline: 'image', continuation: false },
   { id: 2, label: 'continue', detail: '', pipeline: 'image', resume: 'image_1', continuation: true }], held: true }, 0, false, true)`);
-assert(queue.innerHTML.includes('class="run-item" data-run="1"') && queue.innerHTML.includes('class="run-item continue-item" data-run="2"'), 'only the continued queued job has a green play control');
+assert(queue.innerHTML.includes('class="run-item" data-run="1"') && queue.innerHTML.includes('class="run-item continue-item" data-run="2"'), 'only the continued queued job has a purple play control');
 assert(queue.innerHTML.indexOf('data-run="2"') < queue.innerHTML.indexOf('data-shots="image_1"'), 'queued play precedes prompts');
-assert(/\.queue \.run-item \{[^}]*color: var\(--text\)/.test(html) && /\.queue \.queue-item-actions \.continue-item \{ color: var\(--ok\)/.test(html), 'new jobs use the ordinary button colour and continuations use green');
+assert(/\.queue \.run-item \{[^}]*color: var\(--text\)/.test(html), 'new jobs use the ordinary button colour');
+assert(queue.innerHTML.includes(`data-pause="1" aria-label="Pause: move to Pending" title="Pause: take it out of the queue and make it pending">${run('ICONS.later')}</button>`), 'the queue\'s pause is the footer\'s clock');
+assert(!queue.innerHTML.includes('data-top='), 'idle: every entry has the play, none the arrow');
+run(`renderQueue(queue, { items: [{ id: 1, label: 'new', detail: '', pipeline: 'image' },
+  { id: 2, label: 'continue', detail: '', pipeline: 'image', resume: 'image_1', continuation: true }, { id: 3, label: 'more', detail: '', pipeline: 'image' }], held: false, running: true }, 0, false, false)`);
+assert(!queue.innerHTML.includes('data-run=') && !queue.innerHTML.includes('data-top="1"') && queue.innerHTML.includes('class="icon-btn continue-item" data-top="2"') && queue.innerHTML.includes('class="icon-btn" data-top="3"'),
+  'something running: the first has no play and no arrow, the others an arrow to the front, purple if continued');
+assert(script.includes("[Number(d.top), ...queueOrder($(id)).filter(n => n !== Number(d.top))]"), 'the arrow sends the order with it first');
+assert(script.includes("document.addEventListener('click', e => {\n  const tapped") && script.includes('disarmTap(button.id); else disarm(button);'), 'a tap anywhere else takes back a confirmation waiting for its second tap');
 assert(!/class="queue-item run-card"/.test(written), 'Pending remains separate from the queue');
 assert(!/id="stopAfter"/.test(html), 'pause moved out of the run actions');
 assert(!script.includes('ComfyUI is making each image.'), 'the redundant image stage hint is not shown');
