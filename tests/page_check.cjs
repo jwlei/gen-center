@@ -2105,7 +2105,33 @@ els.videoWorkflow.value = '';
 }
 
 // Names, places and defaults (the second batch of form changes).
-assert(html.includes('<option value="llm">LLM</option>') && html.includes('<option value="direct">Exact prompt</option>') && /id="videoPromptMode" name="prompt_mode"/.test(html));
+assert(/<select id="videoPromptMode" name="prompt_mode" data-segmented>/.test(html) && /<select id="imagePromptMode" name="prompt_mode" data-segmented>/.test(html), 'prompt source is a select shown as the Output switch');
+{
+  // The switch follows the select's value and disabled, set by code or tapped.
+  const store = new WeakMap();
+  context.HTMLSelectElement = class {};
+  for (const name of ['value', 'disabled']) Object.defineProperty(context.HTMLSelectElement.prototype, name, { configurable: true, get() { return (store.get(this) || {})[name]; }, set(v) { store.set(this, { ...(store.get(this) || {}), [name]: v }); } });
+  const painted = { classes: {}, props: {} };
+  const buttons = ['llm', 'direct'].map(value => ({ dataset: { value }, classList: { toggle(name, on) { painted.classes[value + name] = on; } }, setAttribute() {} }));
+  const box = { style: { setProperty(name, v) { painted.props[name] = v; } }, classList: { toggle(name, on) { painted.classes[name] = on; } }, querySelectorAll: () => buttons, addEventListener(name, fn) { box.click = fn; } };
+  context.fake = Object.assign(Object.create(context.HTMLSelectElement.prototype), {
+    options: [{ value: 'llm', textContent: 'LLM' }, { value: 'direct', textContent: 'Exact prompt' }], nextElementSibling: box, insertAdjacentHTML(where, markup) { painted.markup = markup; },
+    addEventListener(name, fn) { this.change = fn; }, dispatchEvent(e) { this.changed = e.type; } });
+  context.fake.value = 'llm';
+  run('segmentSelect(fake)');
+  assert(painted.props['--i'] === 0 && painted.classes.llmactive === true && painted.classes.directactive === false, 'the first choice is lit');
+  assert(painted.markup.includes('style="--n:2"') && painted.markup.includes('>Exact prompt</button>'), 'one button per choice');
+  context.fake.value = 'direct';
+  assert(painted.props['--i'] === 1 && painted.classes.directactive === true, 'code that sets the value moves the switch');
+  context.fake.disabled = true;
+  assert(painted.classes.off === true, 'a disabled select dims the switch');
+  box.click({ target: { closest: () => buttons[0] } });
+  assert(context.fake.value === 'direct', 'a disabled switch ignores taps');
+  context.fake.disabled = false;
+  box.click({ target: { closest: () => buttons[0] } });
+  assert(context.fake.value === 'llm' && context.fake.changed === 'change' && painted.props['--i'] === 0, 'a tap sets the value and tells the form');
+}
+assert(html.includes('<option value="llm">LLM</option>') && html.includes('<option value="direct">Exact prompt</option>'));
 assert((html.match(/>Prompt source</g) || []).length === 2 && (html.match(/>Model</g) || []).length >= 2 && !html.includes('What writes the prompts'));
 assert(!html.includes('Write prompt uses the text only') && !script.includes('call it '), 'writer and reference naming hints removed');
 assert(/<details class="h3-help"><summary>OpenH3-IR<\/summary><div class="hint">Before review/.test(html), 'OpenH3 explanation opens from its heading');
