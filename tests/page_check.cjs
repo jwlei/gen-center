@@ -2325,9 +2325,8 @@ assert(/\.queue-pos \{ color: var\(--muted\);/.test(html), 'the place in the que
 run(`renderQueue(queue, { items: [{ id: 5, label: '1 video: a storm', detail: 'd', pipeline: 'video' }, { id: 6, label: '3 images: cats', detail: 'd', pipeline: 'image', facts: { count: 3 } }], held: true }, 0)`);
 assert(queue.innerHTML.includes('<span class="queue-pos">1.</span> Video: a storm</span>') && queue.innerHTML.includes('<span class="queue-pos">2.</span> Image(3): cats</span>'),
   '"1 video" is just Video:, three images are Image(3):');
-assert(/\.queue-title \{ display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2;/.test(html) && /\.queue-title\.expanded \{ display: block;/.test(html));
-run(`openTitles.add('queue-4'); renderQueue(queue, { items: [{ id: 4, label: 'continue', detail: 'd', pipeline: 'video', resume: 'run_1' }], held: true }, 0); openTitles.clear()`);
-assert(queue.innerHTML.includes('<span class="queue-title expanded" data-title-key="queue-4">'), 'one opened stays open');
+assert(/\.queue-title \{ display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2;/.test(html) && !html.includes('.queue-title.expanded') && !html.includes('openTitles'), 'a title is cut to two lines, with no tap to open it');
+run(`renderQueue(queue, { items: [{ id: 4, label: 'continue', detail: 'd', pipeline: 'video', resume: 'run_1' }], held: true }, 0)`);
 assert(/\.queue \.queue-item-actions button, \.queue \.stopped-actions button \{\s*flex: none; width: 34px; height: 28px; padding: 0;/.test(html), 'queue and pending action buttons use the same remove-button dimensions');
 assert(queue.innerHTML.includes('class="icon-btn" data-pause="4"') && queue.innerHTML.includes('class="icon-btn" data-remove="4"'), 'queue pause feedback and delete confirmation fit the fixed-size buttons');
 assert(queue.innerHTML.includes(`data-remove="4" aria-label="Remove from the queue" title="Remove from the queue (tap twice)">${run('ICONS.trash')}</button>`), 'queue removal uses the shared trash icon');

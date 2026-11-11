@@ -74,7 +74,6 @@
   .queue-item.run-card .hint { margin-top: 2px; font-weight: 400; }
   /* Every title in the queues: two lines at most, "…" where it is cut; a tap opens it in full, another closes it. */
   .queue-title { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; overflow: hidden; overflow-wrap: anywhere; }
-  .queue-title.expanded { display: block; -webkit-line-clamp: unset; line-clamp: none; overflow: visible; }
   /* Its place in the queue, quietly: the title is what matters. */
   .queue-pos { color: var(--muted); font-weight: 500; }
   .queue .queue-item.run-card .queue-item-actions button { background: var(--panel); }
@@ -7774,24 +7773,11 @@ function renderUpload(up) {
 // --- Queues ---
 const RESULT_MARKS = { done: '✔', failed: '✖ failed', stopped: '■ stopped', skipped: '– skipped' };
 const LEAVE_MS = 380;
-// A title in the queues, cut to two lines; the ones opened stay open when the list is drawn again.
-const openTitles = new Set();
-// position: its place in the queue, said quietly before the title.
+// A title in the queues, cut to two lines. position: its place in the queue, said quietly before the title.
 function queueTitle(key, text, position = null) {
-  return `<span class="queue-title${openTitles.has(key) ? ' expanded' : ''}" data-title-key="${esc(key)}">`
+  return `<span class="queue-title" data-title-key="${esc(key)}">`
     + `${position != null ? `<span class="queue-pos">${position}.</span> ` : ''}${esc(text)}</span>`;
 }
-// Tapped, a title that is cut opens in full, and an open one closes. One that fits is left to what a tap on its job
-// does, such as selecting it to move. A job held to move is left alone.
-document.addEventListener('click', e => {
-  const title = e.target.closest && e.target.closest('.queue-title');
-  if (!title || (title.closest('.queue-item') && title.closest('.queue-item').classList.contains('selected'))) return;
-  const open = title.classList.contains('expanded');
-  if (!open && title.scrollHeight <= title.clientHeight + 1) return;
-  e.stopPropagation();
-  title.classList.toggle('expanded', !open);
-  if (open) openTitles.delete(title.dataset.titleKey); else openTitles.add(title.dataset.titleKey);
-}, true);
 function renderQueue(el, q, doneIn, moving = false, idle = false) {
   // What has finished is under Finished: this is what's waiting. The one moving to start has left it already.
   el._last = [q, doneIn, moving, idle];
