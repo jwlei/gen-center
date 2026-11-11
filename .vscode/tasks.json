@@ -1,0 +1,13 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "relevant-panel-tests",
+      "type": "shell",
+      "command": "python -m unittest tests.test_panel -k page_script -k test_skip_starts -k test_stop_kills -k queueing_a_pending -k pending_jobs_arrow",
+      "group": "test",
+      "presentation": { "reveal": "silent", "panel": "shared", "clear": true },
+      "problemMatcher": []
+    }
+  ]
+}
