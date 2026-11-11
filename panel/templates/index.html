@@ -1065,8 +1065,12 @@
   .collections-arrange.on { color: var(--accent); }
   /* Edit: the name, then the picture it is shown by (any of its own). */
   .collection-edit-label { margin: 8px 0 4px; font-size: .78rem; font-weight: 600; color: var(--muted); }
-  .collection-edit .thumb-grid button.auto { display: flex; align-items: center; justify-content: center; background: var(--panel-2); color: var(--muted); font-size: .72rem; text-align: center; }
-  .collection-edit .thumb-grid button.current { outline: 2px solid var(--accent); outline-offset: -2px; }
+  /* The picture choices: small pills, the shape of the Close button, each showing a crop of its picture. */
+  .collection-edit .thumb-grid { grid-template-columns: repeat(auto-fill, minmax(56px, 1fr)); gap: 5px; }
+  .collection-edit .thumb-grid button { aspect-ratio: auto; height: 28px; border: 1px solid var(--line); border-radius: 999px; contain-intrinsic-size: auto 56px 28px; }
+  .collection-edit .thumb-grid button img { object-fit: cover; }
+  .collection-edit .thumb-grid button.auto { display: flex; align-items: center; justify-content: center; background: transparent; color: var(--muted); font-size: .72rem; font-weight: 600; text-align: center; }
+  .collection-edit .thumb-grid button.current { outline: 2px solid var(--accent); outline-offset: -2px; border-color: var(--accent); }
   .collection-edit-foot { display: flex; gap: 8px; align-items: center; justify-content: flex-end; margin-top: 8px; }
   .collection-edit-foot button { width: auto; margin: 0; }
   .collection-edit-foot #collectionEditDelete { margin-right: auto; }
@@ -6124,7 +6128,7 @@ function openCollectionEdit(id) {
   const items = collectionPickerItems(id), chosen = collection.cover ? items.findIndex(item => item.same(collection.cover)) : -1;
   collectionEditing = { id, items, pick: chosen < 0 ? 'auto' : chosen, was: chosen < 0 ? 'auto' : chosen };
   $('collectionEditName').value = collection.name;
-  $('collectionEditPicker').innerHTML = `<button type="button" class="auto" data-pick="auto" title="The first image">Automatic</button>`
+  $('collectionEditPicker').innerHTML = `<button type="button" class="auto" data-pick="auto" title="The first image">Auto</button>`
     + items.map((item, i) => `<button type="button" data-pick="${i}" title="${esc(item.label || '')}" aria-label="${esc(item.label || 'Use as the picture')}"><img loading="lazy" decoding="async" alt="" src="${esc(item.src)}"></button>`).join('');
   showCollectionPick();
   const del = $('collectionEditDelete');
