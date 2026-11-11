@@ -652,8 +652,10 @@ class JobQueue:
             self.job.log(f"===== Next in the queue: {item['label']} =====")
         try:
             error = self.prepare(item)
+            # Made in Private mode: told to the job, whose titling keeps an NSFW prompt from Gemini (core/titles.py).
+            env = {**(item.get("env") or {}), "GEN_CENTER_PRIVATE": "1"} if item.get("private") else item.get("env")
             # A job that waited adds to the log, so the one before it can still be read.
-            if not error and self.job.start(item["argv"], item["env"], keep_log=item.get("waited", False), pipeline=item.get("pipeline", "shorts")):
+            if not error and self.job.start(item["argv"], env, keep_log=item.get("waited", False), pipeline=item.get("pipeline", "shorts")):
                 self.current = item
                 return
             error = error or "Another job took its place."  # A setup check, started in the moment between two jobs

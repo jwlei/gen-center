@@ -90,6 +90,23 @@ class TitlesTest(unittest.TestCase):
             local.return_value = None
             self.assertEqual(titles.titled("Own", "A prompt", "a set of images", "http://comfy", None), "Own", "it fails: its own")
 
+    def test_gemini_for_what_is_not_nsfw_and_the_local_model_for_what_is(self):
+        reply = types.SimpleNamespace(text="Elven Dancer at Dusk")
+        with mock.patch.object(titles.panel_settings, "load", return_value={"title_source": "gemini_sfw"}), \
+                mock.patch.object(titles, "_generate", return_value=reply) as ask, \
+                mock.patch.object(titles, "local_title", return_value="Highborn Portrait") as local:
+            with mock.patch.dict(os.environ, {"GEMINI_API_KEY": "x", titles.PRIVATE_ENV: ""}):
+                self.assertEqual(titles.titled("Own", "A prompt", "a set of images", "http://comfy", None), "Elven Dancer at Dusk")
+                local.assert_not_called()
+            ask.reset_mock()
+            with mock.patch.dict(os.environ, {"GEMINI_API_KEY": "x", titles.PRIVATE_ENV: "1"}):
+                self.assertEqual(titles.titled("Own", "A prompt", "a set of images", "http://comfy", None), "Highborn Portrait")
+                ask.assert_not_called()
+            with mock.patch.dict(os.environ, {"GEMINI_API_KEY": "", titles.PRIVATE_ENV: ""}):
+                self.assertEqual(titles.titled("Own", "A prompt", "a set of images", "http://comfy", None), "Own", "no key: off, as Gemini is")
+        with tempfile.TemporaryDirectory() as folder, mock.patch.object(settings, "PATH", os.path.join(folder, "settings.json")):
+            self.assertEqual(settings.update({"title_source": "gemini_sfw"})["title_source"], "gemini_sfw")
+
 
 if __name__ == "__main__":
     unittest.main()

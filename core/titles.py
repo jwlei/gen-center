@@ -1,11 +1,13 @@
 """
 Titles (Settings, Titles): a short descriptive title for a new film or image set, from its prompt, in place of the one
-it would get otherwise (the LLM's, or an exact prompt's first words). It names the files too. Chosen from three:
-    off      the run keeps its own title
-    gemini   Gemini writes it. When Gemini refuses the prompt (it blocks NSFW ones) or fails, the local model (Settings)
-             titles it instead, unless the local model already wrote its prompts, and with them its title.
-    local    only the local model writes it, and Gemini is never asked.
-Without a Gemini key, "gemini" is off. When every one asked fails, the run keeps its own title and goes on.
+it would get otherwise (the LLM's, or an exact prompt's first words). It names the files too. Chosen from four:
+    off         the run keeps its own title
+    gemini      Gemini writes it. When Gemini refuses the prompt (it blocks NSFW ones) or fails, the local model (Settings)
+                titles it instead, unless the local model already wrote its prompts, and with them its title.
+    gemini_sfw  As gemini, but a run made in Private mode (NSFW, PRIVATE_ENV set by the panel) is titled by the local model
+                alone, so its prompt never goes to Gemini.
+    local       only the local model writes it, and Gemini is never asked.
+Without a Gemini key, "gemini" and "gemini_sfw" are off. When every one asked fails, the run keeps its own title and goes on.
 """
 import json
 import os
@@ -21,18 +23,23 @@ MOST_CHARACTERS = 80
 # A title is a few words: past this the prompt adds nothing, and a long one costs more.
 MOST_PROMPT = 4000
 TIMEOUT = 30
+# Set to "1" by the panel for a job made in Private mode: what is made then is NSFW.
+PRIVATE_ENV = "GEN_CENTER_PRIVATE"
 TITLE_SCHEMA = {"type": "object", "properties": {"title": {"type": "string"}}, "required": ["title"],
                 "additionalProperties": False}
 
 
 def source():
-    """Who titles a new run, as Settings has it: "off", "gemini" (with the local model behind it) or "local"."""
+    """Who titles this run: "off", "gemini" (with the local model behind it) or "local". Settings' Gemini for what isn't NSFW
+    resolves to one of those by whether the run is made in Private mode."""
     try:
         chosen = panel_settings.load().get("title_source")
     except (OSError, ValueError):
         return "off"
-    if chosen == "gemini" and not os.getenv("GEMINI_API_KEY"):
+    if chosen in ("gemini", "gemini_sfw") and not os.getenv("GEMINI_API_KEY"):
         return "off"
+    if chosen == "gemini_sfw":
+        return "local" if os.getenv(PRIVATE_ENV) == "1" else "gemini"
     return chosen if chosen in panel_settings.TITLE_SOURCES else "off"
 
 

@@ -9,8 +9,9 @@ PATH = os.path.join(LOGS_DIR, "settings.json")
 SIDES = ("shorts", "video", "image")
 MAX_RESERVE_GB = 64
 H3_MODELS = ("gemma-4-12b", "qwen3-14b")
-# Who titles a new film or set (core/titles.py): nobody, Gemini with the local model behind it, or the local model alone.
-TITLE_SOURCES = ("off", "gemini", "local")
+# Who titles a new film or set (core/titles.py): nobody, Gemini with the local model behind it, the local model alone,
+# or Gemini for what isn't NSFW (made outside Private mode) and the local model for what is.
+TITLE_SOURCES = ("off", "gemini", "gemini_sfw", "local")
 # local_llm_model writes the prompts when the local model is chosen; h3_model is OpenH3-IR's, which reviews and
 # renders them. Apart, so one can be the vision model and the other the text one.
 # Free RAM ComfyUI keeps, in GB: 3 unless set (0, from before, meant ComfyUI's own, which had no floor).
