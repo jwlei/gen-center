@@ -5547,11 +5547,14 @@ function madeAt(id, mtime) {
   const m = /(\d{4})(\d{2})(\d{2})_(\d{2})(\d{2})(\d{2})/.exec(id || '');
   return m ? new Date(+m[1], m[2] - 1, +m[3], +m[4], +m[5], +m[6]).getTime() / 1000 : mtime || 0;
 }
-// The day it was made, first on its details' line: "8 Nov", with the year when it isn't this one.
+// The time it was made, first on its details' line: "04:39"; from the next day on, with the day before it ("8 Nov 04:39",
+// and the year when it isn't this one).
 function madeOn(seconds) {
   if (!seconds) return '';
-  const day = new Date(seconds * 1000), months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-  return `${day.getDate()} ${months[day.getMonth()]}${day.getFullYear() !== new Date().getFullYear() ? ` ${day.getFullYear()}` : ''}`;
+  const day = new Date(seconds * 1000), now = new Date(), months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  const time = `${String(day.getHours()).padStart(2, '0')}:${String(day.getMinutes()).padStart(2, '0')}`;
+  if (day.toDateString() === now.toDateString()) return time;
+  return `${day.getDate()} ${months[day.getMonth()]}${day.getFullYear() !== now.getFullYear() ? ` ${day.getFullYear()}` : ''} ${time}`;
 }
 function renderImageSets() {
   // Images and films in one list, in the order they were made: Both, or either alone.

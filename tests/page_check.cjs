@@ -2056,9 +2056,10 @@ assert(!html.includes('id="toast"') && !script.includes('announceResults'), 'not
 assert(script.includes('} else if (d.runNow) {') && script.includes('fetch(`/queue/run/run-now/${d.runNow}`'), 'its play runs it now');
 assert(/<button type="button" class="start-later" id="cancelQueueEdit"[^>]*>Cancel editing<\/button>/.test(html) && /#cancelQueueEdit \{ display: block; margin: 6px auto 0; \}/.test(html), 'Cancel editing sits centred under the button');
 
-// A batch's details start with the day it was made; its workflow pill is in its kind's colour; the footer says Output.
-assert.strictEqual(run("madeOn(madeAt('image_20261108_043935'))").split(' ').slice(0, 2).join(' '), '8 Nov');
-assert(run("imageSetHtml({ id: 'image_20261108_043935', label: 'L', model: 'krea', images: [] })").includes('<div class="meta">8 Nov'), 'the date first');
+// A batch's details start with the time it was made (the day too, once it isn't today); its workflow pill is in its kind's colour; the footer says Output.
+assert.strictEqual(run("madeOn(madeAt('image_20261108_043935'))"), '8 Nov 04:39');
+assert.strictEqual(run("madeOn(Date.now() / 1000 - 5).length"), 5, 'today: the time alone, hh:mm');
+assert(run("imageSetHtml({ id: 'image_20261108_043935', label: 'L', model: 'krea', images: [] })").includes('<div class="meta">8 Nov 04:39'), 'the time first');
 assert(/\.pill\.workflow \{ border-color: color-mix\(in srgb, var\(--pill, var\(--neutral\)\)/.test(html) && /\.pills\.video \{ --pill: var\(--c-video\); \}/.test(html), 'the workflow pill by kind');
 assert(/id="jumpResults">Output<\/a>/.test(html), 'Output in the footer; Status and Output in violet');
 assert(/\.image-set-heading \.nsfw-button \{[^}]*height: 24px; padding: 0; margin: 0 0 -8px;/.test(html), 'the details just under the title');
