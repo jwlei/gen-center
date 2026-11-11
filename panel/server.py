@@ -527,7 +527,7 @@ class JobQueue:
         edit_token = request.form.get("queue_edit_token") if edit_id else None
         # Generate's "Add to pending": it waits in the queue until it's started.
         generating = has_request_context() and request.path.startswith("/generate/")
-        if generating and request.form.get("start_later"):
+        if (generating and request.form.get("start_later")) or (has_request_context() and request.args.get("later")):
             item["later"] = True
         # Generate's "Add to top of queue", or Pending's arrow on a stopped run: ahead of everything already waiting.
         asked_top = has_request_context() and ((generating and request.form.get("queue_top")) or request.args.get("top"))

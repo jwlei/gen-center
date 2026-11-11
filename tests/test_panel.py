@@ -790,7 +790,12 @@ class PanelTest(unittest.TestCase):
         self.assertIn("1 of 8 clips kept", waiting["detail"])
         self.assertEqual(waiting["outcome"]["outcome"], "stopped", "marked Stopped in Pending")
 
-        self.assertTrue(self.client.post(f"/runs/{skipped}/continue").get_json()["ok"])
+        parked = self.client.post(f"/runs/{skipped}/continue?later=1").get_json()
+        self.assertTrue(parked["ok"] and parked["queued"])
+        waiting_items = self.status()["queue"]["items"]
+        self.assertEqual([(item["resume"], item.get("later")) for item in waiting_items], [(skipped, True)], "back in Pending, not started")
+        self.assertNotIn(skipped, [run["id"] for run in self.status()["stopped_runs"]])
+        self.assertTrue(self.client.post(f"/queue/run/start/{waiting_items[0]['id']}").get_json()["ok"])
         self.wait_idle()
         self.assertEqual(self.status()["returncode"], 0)
         self.assertEqual(len(self.comfy.prompts), 9, "only the cut-off clip and those after it were rendered")

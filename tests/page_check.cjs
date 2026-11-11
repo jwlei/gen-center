@@ -1100,12 +1100,17 @@ assert(/class="icon-btn start-item continue-item" data-continue="image_1"/.test(
 assert(stoppedBox.includes(`aria-label="Continue" title="Continue: it starts when the queue gets to it">${run('ICONS.queue')}</button>`)
   && stoppedBox.includes(`data-continue-top="image_1" aria-label="Add to the top of the queue" title="Add to the top of the queue: ahead of everything waiting">${run('ICONS.top')}</button>`)
   && stoppedBox.indexOf('data-continue="image_1"') < stoppedBox.indexOf('data-continue-top="image_1"'), 'a stopped run: the queue icon, then the arrow to the top of the queue');
-assert(script.includes("`/runs/${encodeURIComponent(run)}/continue${d.continueTop ? '?top=1' : ''}`") && script.includes("`/queue/run/start/${d.start}${d.top ? '?top=1' : ''}`"), 'the arrows ask for the top');
+assert(script.includes("const query = d.continueTop ? '?top=1' : d.continueLater ? '?later=1' : '';") && script.includes("`/runs/${encodeURIComponent(run)}/continue${query}`") && script.includes("`/queue/run/start/${d.start}${d.top ? '?top=1' : ''}`"), 'the arrows ask for the top');
 assert(/\.queue \.stopped-actions \.continue-item, \.queue \.queue-item-actions \.continue-item \{ color: var\(--shared\)/.test(html) && /\.queue \.stopped-actions \.icon-btn:not\(\.continue-item\) \{ color: var\(--muted\)/.test(html), 'only continuations are purple');
 run(`renderStopped([{ id: 'image_2', pipeline: 'image', label: 'Cut', detail: 'd', clips: 1, estimate: 5, outcome: { outcome: 'stopped' } }])`);
 assert(els.stoppedRuns.innerHTML.includes('<span class="run-tag stopped">Stopped</span>') && !els.stoppedRuns.innerHTML.includes('class="why"'), 'a stopped run says Stopped, with nothing to explain');
 assert(/\.run-tag\.stopped \{ color: var\(--warn\); \}/.test(html), 'in yellow');
 assert(/\.stopped-run \{[^}]*border: 1px solid/.test(html));
+run('renderStopped([])');
+run(`renderStopped([{ id: 'image_3', pipeline: 'image', label: 'Broke', detail: 'd', clips: 1, estimate: 5, outcome: { outcome: 'failed', why: 'x' } }])`);
+assert(els.failedRuns.innerHTML.includes(`data-continue-later="image_3" aria-label="Back to Pending" title="Back to Pending: it waits there until you start it">${run('ICONS.later')}</button>`)
+  && els.failedRuns.innerHTML.indexOf('data-continue="image_3"') < els.failedRuns.innerHTML.indexOf('data-continue-later="image_3"'), 'a failed run: Retry, then back to Pending');
+assert(script.includes("d.continueLater ? '?later=1'"), 'it asks for Pending');
 run('renderStopped([])');
 
 // Each form starts with its preset, above the line its sections start with; the workflow opens Generation. No Check setup.

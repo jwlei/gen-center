@@ -8596,6 +8596,7 @@ function renderStopped(runs, parked = [], results = [], canRunNow = false) {
       ${run.outcome && run.outcome.why ? whyHtml(run.outcome) : ''}
       <div class="stopped-actions">
         <span class="acts-side">${isFailed ? `<button type="button" class="icon-btn" data-continue="${esc(run.id)}" aria-label="Retry" title="Retry from where it got to">${ICONS.again}</button>`
+            + `<button type="button" class="icon-btn" data-continue-later="${esc(run.id)}" aria-label="Back to Pending" title="Back to Pending: it waits there until you start it">${ICONS.later}</button>`
           : `<button type="button" class="icon-btn start-item continue-item" data-continue="${esc(run.id)}" aria-label="${run.pipeline !== 'shorts' && !run.clips ? 'Render' : 'Continue'}" title="${run.pipeline !== 'shorts' && !run.clips ? 'Render' : 'Continue'}: it starts when the queue gets to it">${ICONS.queue}</button>`
             + `<button type="button" class="icon-btn start-item continue-item" data-continue-top="${esc(run.id)}" aria-label="Add to the top of the queue" title="Add to the top of the queue: ahead of everything waiting">${ICONS.top}</button>`}</span>
         <span class="when">${fmtEta(run.estimate)}</span>
@@ -8666,9 +8667,10 @@ for (const id of ['stoppedRuns', 'failedRuns']) {
       else if (d.pipeline === 'video') await sameAgainFilm(d.config);
       else await sameAgainShorts(d.config);
       return;
-    } else if (d.continue || d.continueTop) {
-      const run = d.continue || d.continueTop;
-      const data = await queueRequest(button, async () => (await fetch(`/runs/${encodeURIComponent(run)}/continue${d.continueTop ? '?top=1' : ''}`, { method: 'POST' })).json());
+    } else if (d.continue || d.continueTop || d.continueLater) {
+      const run = d.continue || d.continueTop || d.continueLater;
+      const query = d.continueTop ? '?top=1' : d.continueLater ? '?later=1' : '';
+      const data = await queueRequest(button, async () => (await fetch(`/runs/${encodeURIComponent(run)}/continue${query}`, { method: 'POST' })).json(), d.continueLater ? 'Pending' : undefined, d.continueLater ? 'Moving…' : undefined);
       if (data) poll();
       return;
     } else if (d.discard) {
