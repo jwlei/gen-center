@@ -258,7 +258,7 @@
   .use-default:hover, .use-default:focus-visible { color: var(--text); text-decoration: underline; }
   .use-default[hidden] { display: none; }
   /* About the model, under the workflow: just quiet underlined text that opens the guide. */
-  .guide-link { display: block; width: auto; margin: 5px 0 0; padding: 0; font: inherit; font-size: .75rem; font-weight: 400; line-height: 1.2; text-align: left;
+  .guide-link { display: block; width: fit-content; margin: 5px auto 0; padding: 0; font: inherit; font-size: .75rem; font-weight: 400; line-height: 1.2; text-align: center;
     background: none; border: 0; border-radius: 0; color: var(--muted); text-decoration: underline; text-underline-offset: 2px; cursor: pointer; }
   .guide-link:hover, .guide-link:focus-visible { color: var(--text); }
   .guide-link[hidden] { display: none; }
@@ -2020,6 +2020,7 @@
         <option>Separate moments: clips are generated independently, with a fade between</option>
       </select>
       <div class="hint" id="startHint">Redoing a shot in a continuous take also redoes the ones after it.</div>
+      <button type="button" class="guide-link" id="connectGuideLink" data-guide="clip_connection">About how clips connect</button>
       <div id="multishotOptions" hidden>
         <label class="check"><input type="checkbox" name="h3_first_frame" id="h3FirstFrame"><span>Use image 1 as the first frame as well as a subject reference</span></label>
         <label for="h3MultishotSteps">Multishot sampling steps</label>
@@ -2847,6 +2848,7 @@ for (const side of Object.keys(GUIDE_SELECTS)) {
   $(`${side}GuideLink`).addEventListener('click', e => openModelGuide(e.currentTarget.dataset.guide));
   $(GUIDE_SELECTS[side]).addEventListener('change', () => syncGuideLink(side));
 }
+$('connectGuideLink').addEventListener('click', e => openModelGuide(e.currentTarget.dataset.guide));
 $('modelGuideClose').addEventListener('click', () => $('modelGuide').close());
 // A tap outside it closes it, as the other boxes over the page do.
 $('modelGuide').addEventListener('click', e => {
@@ -5552,7 +5554,7 @@ function madeAt(id, mtime) {
 function madeOn(seconds) {
   if (!seconds) return '';
   const day = new Date(seconds * 1000), now = new Date(), months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-  const time = `${String(day.getHours()).padStart(2, '0')}:${String(day.getMinutes()).padStart(2, '0')}`;
+  const time = clock24(day);
   if (day.toDateString() === now.toDateString()) return time;
   return `${day.getDate()} ${months[day.getMonth()]}${day.getFullYear() !== now.getFullYear() ? ` ${day.getFullYear()}` : ''} ${time}`;
 }
@@ -7562,8 +7564,12 @@ function stepEta(step) {
   if (step.state === 'next') return fmtEta(step.seconds);
   return step.seconds > 0 ? `${fmtEta(step.seconds)} left` : 'any moment';
 }
+// Every time on the page is 24-hour, 00:00 to 23:59, whatever the device's locale says.
+function clock24(date) {
+  return `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`;
+}
 function clockIn(sec) {
-  return new Date(Date.now() + sec * 1000).toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'});
+  return clock24(new Date(Date.now() + sec * 1000));
 }
 // What moved the ETA, with its effect: '+6 min', or nothing for a change that costs no time.
 function etaChange(change) {
@@ -7744,7 +7750,7 @@ function renderQuota(q) {
       `<div class="q-group">${esc(g.title)}</div>${g.rows.map(quotaRow).join('')}`).join('');
     lastQuota = key;
   }
-  const at = new Date(Date.now() + q.resets_in * 1000).toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'});
+  const at = clockIn(q.resets_in);
   $('quotaReset').textContent = `Resets in ${fmtEta(q.resets_in)} (${at}).`;
 }
 

@@ -2058,6 +2058,9 @@ assert(/<button type="button" class="start-later" id="cancelQueueEdit"[^>]*>Canc
 
 // A batch's details start with the time it was made (the day too, once it isn't today); its workflow pill is in its kind's colour; the footer says Output.
 assert.strictEqual(run("madeOn(madeAt('image_20261108_043935'))"), '8 Nov 04:39');
+assert.strictEqual(run("clock24(new Date(2026, 10, 8, 0, 5))"), '00:05', 'a 24-hour clock, whatever the locale');
+assert.strictEqual(run("clock24(new Date(2026, 10, 8, 15, 30))"), '15:30');
+assert(/class="guide-link" id="connectGuideLink" data-guide="clip_connection"/.test(html) && /\.guide-link \{[^}]*margin: 5px auto 0[^}]*text-align: center/.test(html), 'the guide links are centred, and How clips connect has one');
 assert.strictEqual(run("madeOn(Date.now() / 1000 - 5).length"), 5, 'today: the time alone, hh:mm');
 assert(run("imageSetHtml({ id: 'image_20261108_043935', label: 'L', model: 'krea', images: [] })").includes('<div class="meta">8 Nov 04:39'), 'the time first');
 assert(/\.pill\.workflow \{ border-color: color-mix\(in srgb, var\(--pill, var\(--neutral\)\)/.test(html) && /\.pills\.video \{ --pill: var\(--c-video\); \}/.test(html), 'the workflow pill by kind');

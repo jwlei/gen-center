@@ -45,6 +45,14 @@ class ModelGuideTest(unittest.TestCase):
         self.assertIn("1.1 MP", " ".join(model_guide.guide("fibo2")["sections"][0]["items"]))
         self.assertIsNone(model_guide.guide("nothing"))
 
+    def test_how_clips_connect_has_a_guide_that_quotes_the_panels_own_numbers(self):
+        found = model_guide.guide(model_guide.CONNECTION)
+        self.assertEqual(found["title"], "How clips connect")
+        notes = " ".join(found["sections"][0]["items"])
+        self.assertIn("0.3 s fade", notes)
+        self.assertIn("20 steps", notes)
+        self.assertIn("15", notes)
+
     def test_a_file_that_cant_be_read_has_no_guide(self):
         with tempfile.TemporaryDirectory() as folder:
             path = os.path.join(folder, "w.json")
