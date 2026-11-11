@@ -23,7 +23,7 @@ import json
 import os
 import re
 
-from core import lora_check
+from core import lora_check, run_form
 from core import saved_workflows as sw
 
 BYPASSERS = ("Fast Groups Bypasser (rgthree)", "Fast Groups Muter (rgthree)")
@@ -1136,6 +1136,25 @@ def _made_with(workflow_path, chosen=None, pipeline=None):
 def loras_used(workflow_path, chosen=None, pipeline=None):
     """The LoRAs a run used: its workflow with the options it was made with. [] if that can't be told."""
     return loras_in(_made_with(workflow_path, chosen, pipeline))
+
+
+def prompt_writer_used(workflow_path, chosen=None, form=None):
+    """An image workflow's chosen prompt writer, as (id, label), including one stopped after reviewing its prompts."""
+    chosen, form = chosen or {}, run_form.flat(form)
+    if form.get("image_mode") in ("areas", "expand"):
+        return None
+    role = next((role for role in ROLES if chosen.get(role) == ON), None)
+    selected = form.get("llm")
+    if not role and form.get("prompt_mode") == "llm" and selected in ROLES:
+        if selected not in chosen or (selected == "prompt_enhancer" and form.get("review")):
+            role = selected
+    if not role:
+        return None
+    label = "Image to prompt" if role == "image_to_prompt" else "Prompt enhancer"
+    if role == "prompt_enhancer" and any(node.get("class_type", "").startswith(H3_IMAGE)
+                                       for node in _made_with(workflow_path, chosen, "image").values()):
+        label = H3_ENHANCER_LABEL
+    return role, label
 
 
 def _main_targets(api):

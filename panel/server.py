@@ -547,6 +547,8 @@ class JobQueue:
                 item["waited"] = True
                 # A continued run's setup reopened as a new run can go to Pending (the end) or the top; a plain edit keeps its place at the front.
                 self.items.insert(len(self.items) if item.get("later") else 0, item)
+                if generating and to_top and not self.job.running:
+                    self.held = True
                 self._save()
                 self._advance()
                 return item in self.items
@@ -554,8 +556,11 @@ class JobQueue:
                 self._finish_current()
             item["id"] = self.next_id
             self.next_id += 1
+            hold_top = generating and to_top and not self.job.running
+            if hold_top:
+                self.held = True
             # On hold and nothing running: this one starts now, and what was waiting stays on hold.
-            if self.held and self.job.idle and not self.current and not item.get("later") and not self.blocked():
+            if self.held and not hold_top and self.job.idle and not self.current and not item.get("later") and not self.blocked():
                 self.held = bool(self.items)
                 item["waited"] = False
                 self._start(item)

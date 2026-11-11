@@ -46,10 +46,11 @@ def run_facts(state, pipeline, workflow_name):
                      state.h3_mode, state.h3_creativity, workflow_options.loras_used(state.workflow, state.options, "video"),
                      state.llm, state.direct, workflow_options.sampling_used(state.workflow, state.options, "video"),
                      workflow_options.cfg_used(state.workflow, state.options, "video"))
+    writer = workflow_options.prompt_writer_used(state.workflow, state.options, state.form)
     return facts(workflow_name, image_upscale_description(state.options),
                  loras=workflow_options.loras_used(state.workflow, state.options, "image"), llm=state.llm, direct=state.direct,
                  sampling=workflow_options.sampling_used(state.workflow, state.options, "image"),
-                 cfg=workflow_options.cfg_used(state.workflow, state.options, "image"))
+                 cfg=workflow_options.cfg_used(state.workflow, state.options, "image"), prompt_writer=writer[1] if writer else None)
 
 
 def run_stamp(run_id):
@@ -58,7 +59,8 @@ def run_stamp(run_id):
     return f"{match.group(1)}{match.group(2)}" if match else ""
 
 
-def facts(workflow=None, upscaled=None, clips=None, h3_mode=None, h3_creativity=None, loras=(), llm=None, direct=False, sampling=None, cfg=None):
+def facts(workflow=None, upscaled=None, clips=None, h3_mode=None, h3_creativity=None, loras=(), llm=None, direct=False, sampling=None, cfg=None,
+          prompt_writer=None):
     """What it was made with, as (kind, text), in the order they are shown."""
     found = []
     if workflow:
@@ -77,7 +79,7 @@ def facts(workflow=None, upscaled=None, clips=None, h3_mode=None, h3_creativity=
     if cfg:
         found.append(("cfg", f"CFG: {cfg}"))
     # Who wrote the prompts: your own, word for word, or an LLM from your idea; which LLM is its own pill, later.
-    found.append(("prompt", "Exact prompt" if direct else "LLM"))
+    found.append(("prompt", prompt_writer or ("Exact prompt" if direct else "LLM")))
     if llm and not direct:
         found.append(("llm", llm))
     return found

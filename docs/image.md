@@ -36,6 +36,8 @@ Large sets may exceed the local model's context or output limits.
 The panel defaults to Local model. A selected prompt model is remembered in this browser, and a default preset can
 override it. A workflow's own prompt enhancer is offered but never picked by itself. Opening a previous set brings back every setting it was made with, its prompt model included, when
 that model is available for the chosen workflow. The CLI follows `LLM_PROVIDER`, else the local model.
+Sets made with a workflow's prompt writer show **Prompt enhancer** (or **Prompt enhancer H3**) or **Image to prompt**,
+not **Exact prompt**. Reopening a whole set restores that writer; variations of one image still use its exact prompt.
 
 | Choice | What each image gets |
 |---|---|

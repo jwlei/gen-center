@@ -3,6 +3,7 @@ import os
 import sys
 import types
 import unittest
+from unittest import mock
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -54,6 +55,17 @@ class PillsTest(unittest.TestCase):
         self.assertEqual(pills.run_facts(state, "video", "LTX"),
                          [("workflow", "LTX"), ("upscale", "Upscaled: Latent, Clean, 1.1 MP"), ("clips", "Continuous take"),
                           ("openh3", "OpenH3-IR: Bold"), ("prompt", "LLM"), ("llm", "local")])
+
+    def test_image_workflow_prompt_writer_is_not_exact_prompt(self):
+        state = types.SimpleNamespace(workflow=None, options={"prompt_enhancer": "1"}, llm=None, direct=True,
+                                      form={"prompt_mode": ["llm"], "llm": ["prompt_enhancer"]})
+        self.assertIn(("prompt", "Prompt enhancer"), pills.run_facts(state, "image", "Text"))
+        self.assertNotIn(("prompt", "Exact prompt"), pills.run_facts(state, "image", "Text"))
+        with mock.patch.object(pills.workflow_options, "_made_with", return_value={
+                "1": {"class_type": "MiniMaxH3ImageConditioning", "inputs": {}}}):
+            self.assertIn(("prompt", "Prompt enhancer H3"), pills.run_facts(state, "image", "MiniMax"))
+        state.options, state.form = {"image_to_prompt": "1"}, None
+        self.assertIn(("prompt", "Image to prompt"), pills.run_facts(state, "image", "Edit"))
 
 
 if __name__ == "__main__":

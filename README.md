@@ -38,6 +38,9 @@ They share one queue, because there is one GPU, and a job started on either side
 record of API use: when a provider says a model is used up for the day, every run moves to the next model until the
 reset that reply gave (`logs/exhausted_models.json`).
 
+**Add to top of queue** puts the job first without starting it when idle; resume the queue when ready. While a job is
+running, it will run next. **Generate** starts a job directly when idle.
+
 Nothing is paid for twice. **Generate** continues stopped work that matches: on Shorts the video on the topic you typed,
 or the oldest with the topic empty; on Video the same brief, images, audio and length; on Image the same brief, images, count and workflow. The options on the form apply,
 and only what they change is done again.

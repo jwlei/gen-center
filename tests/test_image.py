@@ -361,6 +361,32 @@ class StopAfterTest(unittest.TestCase):
         self.assertEqual([bool(shot.get("file")) for shot in state.shots], [True, False, False])
 
 
+class PromptSourceTest(unittest.TestCase):
+    def test_reopening_restores_workflow_writer_not_internal_direct_flag(self):
+        state = RunState.new("a lighthouse", 2, True, 1024, 1024)
+        state.options = {"prompt_enhancer": "1"}
+        state.form = {"prompt_mode": ["llm"], "llm": ["prompt_enhancer"]}
+        with mock.patch.object(image_panel, "saved_workflows", return_value=[]):
+            settings = image_panel.settings_of(state)
+        self.assertFalse(settings["direct"])
+        self.assertEqual(settings["llm"], "prompt_enhancer")
+        self.assertTrue(state.direct, "the execution flag stays unchanged")
+        state.form = None
+        with mock.patch.object(image_panel, "saved_workflows", return_value=[]):
+            self.assertEqual(image_panel.settings_of(state)["llm"], "prompt_enhancer", "older runs keep their writer too")
+
+    def test_reviewed_enhancer_reopens_with_original_writer_but_exact_stays_exact(self):
+        state = RunState.new("a lighthouse", 2, True, 1024, 1024)
+        state.options = {"prompt_enhancer": "0"}
+        state.form = {"prompt_mode": ["llm"], "llm": ["prompt_enhancer"], "review": ["1"]}
+        with mock.patch.object(image_panel, "saved_workflows", return_value=[]):
+            settings = image_panel.settings_of(state)
+            self.assertFalse(settings["direct"])
+            self.assertEqual(settings["llm"], "prompt_enhancer")
+            state.form = {"prompt_mode": ["direct"], "llm": ["prompt_enhancer"]}
+            self.assertTrue(image_panel.settings_of(state)["direct"], "a hidden, unselected writer isn't used")
+
+
 class PanelTest(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.mkdtemp()
@@ -1092,7 +1118,11 @@ class PanelTest(unittest.TestCase):
         # The same again: what it was made with, for Generate to start from.
         settings = self.client.get(f"/image-runs/{run.id}").get_json()["settings"]
         self.assertEqual((settings["prompt"], settings["direct"], settings["count"], settings["workflow"], settings["options"]),
-                         ("a lighthouse", True, 2, "image_text.json", {"prompt_enhancer": "1"}))
+                         ("a lighthouse", False, 2, "image_text.json", {"prompt_enhancer": "1"}))
+        self.assertEqual(settings["llm"], "prompt_enhancer")
+        listed = image_panel.describe_run(run)
+        self.assertIn(("prompt", "Prompt enhancer"), listed["_facts"])
+        self.assertNotIn(("prompt", "Exact prompt"), listed["_facts"])
         self.assertEqual(self.client.get(f"/image-runs/{run.id}/inputs/1").status_code, 404, "it was given no image")
         self.assertEqual(sorted(os.listdir(run.output_dir))[0][:len("a_lighthouse_text_001")], "a_lighthouse_text_001")
         self.assertIn("TextGenerate", [node["class_type"] for node in self.comfy.prompts[0]["prompt"].values()])

@@ -67,6 +67,80 @@ def without_lora(workflows, test):
     return found
 
 
+class QueueTopTest(unittest.TestCase):
+    def setUp(self):
+        self.job = types.SimpleNamespace(idle=True, running=False, closed=False, batches=False,
+                                         start=mock.Mock(return_value=True), log=mock.Mock())
+        self.queue = webapp.JobQueue(self.job, prepare=lambda item: None)
+        watcher = mock.patch.object(self.queue, "_ensure_watcher")
+        watcher.start()
+        self.addCleanup(watcher.stop)
+
+    def add(self, label, **fields):
+        item = {"label": label, "argv": [label]}
+        with webapp.app.test_request_context("/generate/video", method="POST", data=fields):
+            queued = self.queue.add(item)
+        return item, queued
+
+    def test_idle_top_waits_and_generate_starts_directly(self):
+        pending, _ = self.add("pending", start_later="1")
+        first, queued = self.add("first", queue_top="1")
+        self.assertTrue(queued)
+        self.assertTrue(self.queue.held)
+        self.queue._advance()
+        self.job.start.assert_not_called()
+        self.assertEqual(self.queue.items, [first, pending])
+
+        direct, queued = self.add("direct")
+        self.assertFalse(queued)
+        self.assertIs(self.queue.current, direct)
+        self.assertEqual(self.queue.items, [first, pending])
+        self.assertTrue(self.queue.held)
+
+    def test_idle_top_in_empty_queue_waits_until_resumed(self):
+        top, queued = self.add("top", queue_top="1")
+        self.assertTrue(queued)
+        self.queue._advance()
+        self.job.start.assert_not_called()
+        self.queue.held = False
+        self.queue._advance()
+        self.assertIs(self.queue.current, top)
+
+    def test_top_waits_while_finished_job_is_still_draining(self):
+        self.job.idle = False
+        top, queued = self.add("top", queue_top="1")
+        self.assertTrue(queued)
+        self.assertTrue(self.queue.held)
+        self.job.idle = True
+        self.queue._advance()
+        self.assertEqual(self.queue.items, [top])
+        self.job.start.assert_not_called()
+
+    def test_top_while_running_is_next_without_pausing_queue(self):
+        self.job.idle, self.job.running = False, True
+        first, _ = self.add("first")
+        top, queued = self.add("top", queue_top="1")
+        self.assertTrue(queued)
+        self.assertFalse(self.queue.held)
+        self.assertEqual(self.queue.items, [top, first])
+        self.job.idle, self.job.running = True, False
+        self.queue._advance()
+        self.assertIs(self.queue.current, top)
+
+    def test_idle_top_of_reopened_continuation_stays_queued(self):
+        old, _ = self.add("old", start_later="1")
+        old["pipeline"], old["edit_token"] = "video", "token"
+        item = {"pipeline": "video", "label": "new", "argv": ["new"]}
+        with webapp.app.test_request_context("/generate/video", method="POST",
+                                             data={"queue_top": "1", "queue_edit_id": str(old["id"]),
+                                                   "queue_edit_token": "token"}):
+            self.assertTrue(self.queue.add(item))
+        self.queue._advance()
+        self.assertEqual(self.queue.items, [item])
+        self.assertTrue(self.queue.held)
+        self.job.start.assert_not_called()
+
+
 class VideoMetadataTest(unittest.TestCase):
     def test_probe_is_nonblocking_and_invalidates_changed_files(self):
         started = threading.Event()

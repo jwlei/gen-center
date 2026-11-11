@@ -213,14 +213,16 @@ def describe_run(state):
     resolutions = list(dict.fromkeys(image["resolution"] for image in files if image["resolution"]))
     upscaled = upscaled_in_generation(state) or ", ".join(dict.fromkeys(image["upscaled"] for image in files if image["upscaled"])) or None
     loras = workflow_options.loras_used(state.workflow, state.options, "image")
+    writer = workflow_options.prompt_writer_used(state.workflow, state.options, state.form)
     return {"id": state.id, "pipeline": "image", "label": state.title or state.brief, "detail": " · ".join(parts),
             "model": shorthand(state.workflow, "image"), "outcome": read_outcome(state.folder), "loras": loras,
-            "llm": state.llm, "size_bytes": size_bytes, "resolutions": resolutions,
+            "llm": writer[0] if writer else state.llm, "size_bytes": size_bytes, "resolutions": resolutions,
             "upscaled": upscaled,
             # What Output's pills are made from (core/pills.py): saved_runs turns them into pills.
             "_facts": pills.facts(shorthand(state.workflow, "image"), upscaled, loras=loras, llm=state.llm, direct=state.direct,
                                   sampling=workflow_options.sampling_used(state.workflow, state.options, "image"),
-                                  cfg=workflow_options.cfg_used(state.workflow, state.options, "image")),
+                                  cfg=workflow_options.cfg_used(state.workflow, state.options, "image"),
+                                  prompt_writer=writer[1] if writer else None),
             "_sibling": pills.sibling_key("image", state.brief),
             "when": saved_at(state.path), "mtime": max((image["mtime"] for image in files), default=0), "clips": done, "finished": state.finished, "total": total, "images": files,
             "size": f"{state.width}x{state.height}", "estimate": RunEta(resume_argv(state), env, IMAGE_TIMINGS).plan()["total"]}
@@ -624,7 +626,9 @@ def settings_of(state, setup=None):
     made = setup or state.setup()
     path = made.get("workflow")
     workflow = next((w["name"] for w in saved_workflows() if path and w.get("path") and os.path.abspath(w["path"]) == os.path.abspath(path)), "")
-    return {"prompt": made.get("brief"), "direct": made.get("direct"), "count": len(state.shots or []) or state.count, "llm": made.get("llm"),
+    writer = workflow_options.prompt_writer_used(path, made.get("options"), made.get("form"))
+    return {"prompt": made.get("brief"), "direct": bool(made.get("direct")) and not writer,
+            "count": len(state.shots or []) or state.count, "llm": writer[0] if writer else made.get("llm"),
             "workflow": workflow, "size": f"{made.get('width')}x{made.get('height')}", "options": made.get("options") or {},
             "inputs": sum(1 for path in state.input_paths if os.path.exists(path)),
             # The form as it was sent: anything above that it doesn't hold comes from the set itself.
