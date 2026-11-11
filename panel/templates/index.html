@@ -1107,6 +1107,8 @@
   .guide-facts { display: grid; grid-template-columns: minmax(78px, auto) minmax(0, 1fr); gap: 6px 12px; margin: 0 0 10px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 12px; background: var(--bg); }
   .guide-facts dt { color: var(--muted); }
   .guide-facts dd { margin: 0; }
+  /* On a phone each fact is its name over its value, so the value has the whole width. */
+  @media (max-width: 480px) { .guide-facts { grid-template-columns: minmax(0, 1fr); gap: 0; } .guide-facts dt { font-size: .74rem; margin-top: 8px; } .guide-facts dt:first-child { margin-top: 0; } }
   .model-guide details { border-top: 1px solid var(--line); }
   .model-guide summary { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 9px 0; font-weight: 600; cursor: pointer; list-style: none; }
   .model-guide summary::-webkit-details-marker { display: none; }
