@@ -11,7 +11,7 @@ MAX_EDGE = 8192
 # As in ComfyUI's own Resolution Selector, where 1 megapixel is 1024x1024.
 PIXELS_PER_MEGAPIXEL = 1024 * 1024
 DEFAULT_MEGAPIXELS = 1.0
-MAX_MEGAPIXELS = 16.0
+MAX_MEGAPIXELS = 20.0
 # Means: take this from the source image.
 FROM_IMAGE = "image"
 # What the panel offers, as (value, what it says). Any W:H works from the command line.
@@ -96,8 +96,11 @@ def pick_size(size=None, aspect=FROM_IMAGE, megapixels=DEFAULT_MEGAPIXELS, sourc
     else:
         area = float(megapixels) * PIXELS_PER_MEGAPIXEL
     # Held to the limit, it rounds down: rounding up onto the grid would go over it.
-    snap = (lambda side: max(MIN_EDGE, math.floor(side / SIZE_STEP) * SIZE_STEP)) if area >= most else on_grid
-    return snap(math.sqrt(area * ratio)), snap(math.sqrt(area / ratio))
+    down = lambda side: max(MIN_EDGE, math.floor(side / SIZE_STEP) * SIZE_STEP)
+    sides = tuple(on_grid(side) for side in (math.sqrt(area * ratio), math.sqrt(area / ratio)))
+    if most_megapixels and sides[0] * sides[1] > most:
+        sides = (down(math.sqrt(area * ratio)), down(math.sqrt(area / ratio)))
+    return sides
 
 
 def save_source(image, path):

@@ -78,7 +78,7 @@ Each time you enter Output, the filter starts at **All workflows**.
 | **Aspect ratio or screen** | The same as the image; 1:1, 2:3, 3:2, 3:4, 4:3, 9:16, 16:9 or 21:9; a desktop (1080p, 1440p, 1440p ultrawide, 4K); a phone (OnePlus 15 at 1272x2772, Android Full HD+ and QHD+, iPhone 16 and 16 Pro Max); or an exact size you type |
 | **Megapixels** | The same as the image, or 0.5 to 8. Not asked with a screen or an exact size, which already say. |
 
-Both on "the same as the image" gives you its own resolution, up to 16 megapixels. "Same as the image" with 1 MP keeps
+Both on "the same as the image" gives you its own resolution, up to 20 megapixels (less, on a model with a lower limit). "Same as the image" with 1 MP keeps
 its shape at about 1024x1024's pixel count, which is the default. The hint under them says the size you'll get.
 With no image to match, "the same as the image" means square and 1 MP.
 
@@ -154,7 +154,7 @@ enlarged after, rather than failing.
 the megapixel stepper. The stepper scales whatever resolution is picked, screens too. With Upscale on (**Ultimate SD**,
 **UltraSharp** or **SeedVR2**) the image is made at the resolution and the stepper sets the size it ends at; tap
 Upscale's heading for what the chosen one does. A pixel count that would very likely run out of memory on a 12 GB card
-is held to the nearest below, and a note says so: past what the model makes well, and for an upscale past 2 MP to start
+is held to the nearest below, and for an upscale a note says so: past 2 MP to start
 from (16 MP to end at; SeedVR2 up to 4K on its shorter side). Hires fix was taken out: on these turbo models its partial
 denoise came out noisy. SeedVR2 moved here from Krea 2 SFW/NSFW's own workflow options.
 
@@ -175,14 +175,19 @@ greyed out on a Qwen-Image 2.1 workflow with why, told apart by its layers from 
 ## Each model's limits
 
 What each model makes well, from its makers and ComfyUI's templates. The form greys out the sizes and pixel counts past
-a model's limit, and Generate refuses them before anything is paid for. "Same as the image" stays within it.
+a model's limit, and Generate refuses them before anything is paid for. "Same as the image" stays within it. The limit is
+the size it's made at, before any upscale. A screen past it (a phone's 1272x2772 on Krea-2) can still be chosen: it's made
+at its shape within the limit, and a note says "Rescaled to x.x MP" until the stepper is touched. A preset under a model's
+least (MiniMax H3 Image's 4 MP) is raised to it the same way. On coming to a model the stepper starts at the model's own default,
+where it has one, unless a screen or an exact size is picked.
 
 | Model | Size | Prompts | Steps, as saved |
 |---|---|---|---|
 | **Fibo 2.0** (Bria), edit turbo | Up to 1.1 MP. Trained at about 1 MP, every size within 10% of it: above that the prompt leaks into the top left corner and it stops following it. No desktop or phone screen fits, so those are greyed out. | JSON captions (below). The LLM writes at most 30 a set, as each is a few hundred words. | 4, CFG 1 |
 | **Krea-2** Turbo | Up to 4.2 MP: its 1K and 2K sizes, up to 2048x2048. 1440p and the phones fit; 4K and 1440p ultrawide don't. | A descriptive paragraph | 8 |
-| **MOSS Image** | No model-specific size limit is enforced by the panel; larger sizes may need more memory. | A descriptive prompt | As saved in the workflow |
-| **Qwen-Image-Edit** 2511 | Up to the form's own 16 MP | An edit instruction | 40, or 4 with turbo |
+| **MiniMax H3 Image** (and edit) | 4 to 20 MP, starting at 16 (poor under 4). | A long caption, written by its prompt enhancer | 6, no CFG |
+| **MOSS Image** | Up to 4.2 MP, starting at 2. | A descriptive prompt | As saved in the workflow |
+| **Qwen-Image-Edit** 2511 | Up to 2560x2560 (6.25 MP), starting at 1 MP (1024x1024). | An edit instruction | 40, or 4 with turbo |
 | **Qwen-Image 2.1** Turbo, 12 GB | 3.2 MP from text; 1.6 MP for an edit, which is shown its image at the same size beside it; 2.2 MP from references. Native 2K needs 16 GB. These are Kokon's measurements of what fits on 12 GB. | An instruction or a paragraph. Images are `<image1>`, `<image2>`. | 8 (its own schedule), CFG 1 |
 
 The imported MOSS text-to-image workflow is offered once its saved diffusion model, text encoder and VAE are installed

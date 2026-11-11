@@ -200,9 +200,16 @@ class ModelLimitTest(unittest.TestCase):
         self.assertIsNone(models.size_problem(models.KREA2, 2560, 1440))
         self.assertIn("4.2 megapixels", models.size_problem(models.KREA2, 3840, 2160))
 
-    def test_a_model_with_no_limit_has_none(self):
-        self.assertIsNone(models.size_problem(models.QWEN_IMAGE_EDIT, 3840, 2160))
-        self.assertIsNone(models.size_problem(None, 3840, 2160))
+    def test_every_model_has_a_limit_and_the_defaults_fit_in_it(self):
+        self.assertIn("4.2 megapixels", models.size_problem(models.MOSS_IMAGE, 3840, 2160))
+        self.assertIsNone(models.size_problem(models.QWEN_IMAGE_EDIT, 2560, 2560))
+        self.assertIsNotNone(models.size_problem(models.QWEN_IMAGE_EDIT, 3840, 2160))
+        self.assertIsNone(models.size_problem(models.MINIMAX_H3_IMAGE, 5472, 3648), "20 MP")
+        self.assertIsNotNone(models.size_problem(models.MINIMAX_H3_IMAGE, 6000, 4000))
+        self.assertIsNone(models.size_problem(None, 3840, 2160), "a workflow that isn't known has none")
+        for model, start in models.DEFAULT_MEGAPIXELS.items():
+            self.assertLessEqual(start, models.MOST_MEGAPIXELS[model])
+        self.assertEqual((models.DEFAULT_MEGAPIXELS[models.MOSS_IMAGE], models.DEFAULT_MEGAPIXELS[models.QWEN_IMAGE_EDIT], models.DEFAULT_MEGAPIXELS[models.MINIMAX_H3_IMAGE]), (2, 1, 16))
 
     def test_the_llm_writes_so_many_fibo2_captions(self):
         self.assertIsNone(models.count_problem(models.FIBO2, 30, False))
@@ -564,14 +571,14 @@ class PanelTest(unittest.TestCase):
         self.assertEqual((latent["width"], latent["height"]), (1360, 768))
 
     def test_an_exact_size(self):
-        self.make(aspect="custom", size="512x768", count="1")
+        self.make(aspect="custom", size="512x768", megapixels="image", count="1")
         latent = self.inputs(self.comfy.prompts[0], "EmptyLatentImage")
         self.assertEqual((latent["width"], latent["height"]), (512, 768))
 
     def test_a_screen_comes_out_exactly_that_size(self):
         for preset, latent_size in (("1920x1080", (1920, 1088)), ("1272x2772", (1280, 2784))):
             self.comfy.prompts.clear()
-            self.make(aspect=preset, count="1", prompt=f"a wallpaper for {preset}")
+            self.make(aspect=preset, megapixels="image", count="1", prompt=f"a wallpaper for {preset}")
             latent = self.inputs(self.comfy.prompts[0], "EmptyLatentImage")
             self.assertEqual((latent["width"], latent["height"]), latent_size, "the model gets a size on its grid")
             run = next(run for run in list_runs() if preset in run.brief)
@@ -579,7 +586,7 @@ class PanelTest(unittest.TestCase):
                 self.assertEqual(image.size, tuple(int(side) for side in preset.split("x")), "and what you get is the screen's")
 
     def test_an_edit_for_a_phone_comes_out_exactly_that_size(self):
-        self.make(image=True, aspect="1272x2772", count="1")
+        self.make(image=True, aspect="1272x2772", megapixels="image", count="1")
         self.assertEqual(self.uploaded_size(), media.edit_render_size(1272, 2772))
         self.assertEqual(self.finished_size(), (1272, 2772))
 
@@ -990,7 +997,7 @@ class PanelTest(unittest.TestCase):
         self.assertEqual(sum(name.startswith("images.") for name in encoder), 2, "the boxes left empty came out")
 
     def test_fibo2_refuses_what_it_doesnt_make_well(self):
-        for fields in ({"aspect": "1920x1080"}, {"aspect": "1:1", "megapixels": "2"}, {"aspect": "custom", "size": "1272x2772"}):
+        for fields in ({"aspect": "1920x1080", "megapixels": "image"}, {"aspect": "1:1", "megapixels": "2"}, {"aspect": "custom", "size": "1272x2772", "megapixels": "image"}):
             reply = self.fibo(prompt_mode="direct", llm=None, **fields)
             self.assertEqual(reply.status_code, 400, fields)
             self.assertIn("Fibo 2.0 makes images up to 1.1 megapixels", reply.get_json()["error"])

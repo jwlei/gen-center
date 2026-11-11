@@ -1806,6 +1806,7 @@
           </select>
         </div>
       </div>
+      <div id="shortsNegativeSlot" class="negative-slot"></div>
     </details>
     <details class="section" id="shortsOptions" hidden>
       <summary class="section-title">Workflow options</summary>
@@ -2056,6 +2057,7 @@
         </select>
       </div>
     </div>
+    <div id="videoNegativeSlot" class="negative-slot"></div>
   </details>
 
   <details class="section" id="videoOptions" hidden>
@@ -2211,6 +2213,7 @@
     <button type="button" class="generated-prompts" data-generated-prompts hidden></button>
     <div class="hint" id="imagePromptHint"></div>
     <div class="hint" id="imageHowDirect" hidden>Your prompt goes in as it is, so each image differs only by its seed.</div>
+    <div id="imageNegativeSlot" class="negative-slot"></div>
   </details>
 
 
@@ -4080,7 +4083,7 @@ $('addImage').addEventListener('click', () => {
 const IMAGE_STORE_KEY = 'comfyui-auto-gen.image.v1';
 // An image is made in the shape of image 1 at its own size, within what the model makes well (media.pick_size).
 const IMAGE_DEFAULTS = { llm: {{ default_llm | tojson }}, prompt_mode: 'llm', count: 1, aspect: 'image', megapixels: 'image', review: false };
-const SIZE_STEP = {{ image_size_step }}, MEGAPIXEL = 1024 * 1024, MOST_MEGAPIXELS = 16, LARGE_MEGAPIXELS = 4;
+const SIZE_STEP = {{ image_size_step }}, MEGAPIXEL = 1024 * 1024, MOST_MEGAPIXELS = 20, LARGE_MEGAPIXELS = 4;
 const AUTOMATIC_TAKES = { min_images: 0, max_images: 1, size: true };
 // What each model makes well, from pipelines/image/models.py.
 const IMAGE_MODELS = {{ image_models | tojson }};
@@ -4735,11 +4738,12 @@ function pickedSize(mp = null, cap = null) {
   const model = imageModel();
   const most = (cap || (model && model.most_megapixels) || MOST_MEGAPIXELS) * MEGAPIXEL;
   const area = mp == null ? (sourceSize ? Math.min(width * height, most) : Math.min(MEGAPIXEL, most)) : mp * MEGAPIXEL;
-  return [onGrid(Math.sqrt(area * ratio)), onGrid(Math.sqrt(area / ratio))];
+  return gridSides(Math.sqrt(area * ratio), Math.sqrt(area / ratio), most / MEGAPIXEL);
 }
 // Greys out the sizes and pixel counts a model doesn't make well. Returns what the hint should say about it.
 function syncImageLimits() {
   const model = imageModel(), most = model && model.most_megapixels;
+  startAtLeast(model);
   // Qwen edit works up to 1.6 MP, so there it's only an aspect ratio and a pixel count, not screens or an exact size.
   const plain = imageTakes().model === 'qwen_image_21_edit';
   const tooBig = (width, height) => !!most && width * height > most * MEGAPIXEL;
@@ -4757,19 +4761,26 @@ function syncImageLimits() {
   if (plain && picked($('imageAspect')) && picked($('imageAspect')).disabled) $('imageAspect').value = 'image';
   if (picked($('imageMegapixels')) && picked($('imageMegapixels')).disabled && $('imageMegapixels').value === '1.6') $('imageMegapixels').value = 'image';
   if (most && $('imageMegapixels').value !== 'image' && +$('imageMegapixels').value > most) $('imageMegapixels').value = String(most);
-  startAtLeast(model);
   return most ? ` ${model.label} makes images up to ${most} MP.` : '';
 }
-// On coming to a model that does poorly small (MiniMax H3 Image, under 4 MP), the size starts at its least; it can
-// still be stepped down after. Only on the change, so it never fights the stepper.
+// On coming to a model, the size starts where it does best: its own default (MOSS Image 2 MP, MiniMax H3 Image 16), or, for
+// one that does poorly small (MiniMax H3 Image, under 4 MP), at its least. It can still be stepped after. Only on the
+// change, so it never fights the stepper. A screen or an exact size starts as itself, and is held to the cap as it's drawn.
 let imageLeastModel;
+let imageDefaulted = false;  // The stepper is where a model's default put it, not where it was stepped to
 function startAtLeast(model) {
   const key = imageTakes().model || '';
   if (key === imageLeastModel) return;
   imageLeastModel = key;
-  const least = model && model.least_megapixels;
-  if (!least || imageUpscaleOn() || imageResolution().mp >= least - 1e-9) return;
-  imageStep = least;
+  if (!model || imageUpscaleOn()) return;
+  // The held size is stale once this moves the stepper, and mustn't be taken for one set from outside.
+  const start = mp => { imageStep = mp; $('imageMegapixels').value = $('imageMegapixels').dataset.sent = 'image'; };
+  const aspect = $('imageAspect').value, fixed = aspect === 'custom' || /^\d+x\d+$/.test(aspect);
+  if (model.default_megapixels && !fixed) { start(Math.min(model.default_megapixels, model.most_megapixels || model.default_megapixels)); imageDefaulted = true; return; }
+  if (imageDefaulted && !fixed) { start(null); imageDefaulted = false; }
+  const least = model.least_megapixels;
+  if (!least || imageResolution().mp >= least - 1e-9) return;
+  start(least);
 }
 const MP_STEP = 0.1;
 // Resolution, Upscale and the stepper as one block. The resolution is what the model makes (a screen exactly, an aspect
@@ -4784,7 +4795,13 @@ function imageUpscaleOn() {
   return !$('imageUpscaleBox').hidden && !$('imageUpscale').disabled && !!$('imageUpscale').value && $('imageUpscale').value !== 'Off';
 }
 function imageLimit() { return ($('imageUpscaleBox').limits || {})[$('imageUpscale').value] || {}; }
-function shapedSize(ratio, mp) { return [onGrid(Math.sqrt(mp * MEGAPIXEL * ratio)), onGrid(Math.sqrt(mp * MEGAPIXEL / ratio))]; }
+// On the grid, nearest; if that goes past the cap, rounded down, so it never does. Silently: it varies by a few pixels.
+function gridSides(a, b, cap) {
+  const near = [onGrid(a), onGrid(b)];
+  if (cap && near[0] * near[1] > cap * MEGAPIXEL + 1e-6) return [a, b].map(side => Math.max(256, Math.floor(side / SIZE_STEP) * SIZE_STEP));
+  return near;
+}
+function shapedSize(ratio, mp, cap = null) { return gridSides(Math.sqrt(mp * MEGAPIXEL * ratio), Math.sqrt(mp * MEGAPIXEL / ratio), cap); }
 const tenthBelow = mp => Math.floor(mp * 10 + 1e-6) / 10;
 function imageResolution() {
   const model = imageModel(), modelMost = (model && model.most_megapixels) || MOST_MEGAPIXELS;
@@ -4793,15 +4810,14 @@ function imageResolution() {
   const exact = screen ? aspect.split('x').map(Number) : typed ? ((/^(\d+)x(\d+)$/i.exec($('imageSize').value.trim()) || []).slice(1).map(Number)) : [];
   const isExact = exact.length === 2 && exact.every(n => n > 0);
   if (on) return upscaledResolution(isExact ? exact : null, cap, limit, typed);
-  const capSays = `the ${cap} MP this model makes well`;
-  const step = imageStep;
+  const step = imageStep, least = model && model.least_megapixels;
   let sides = null, send = 'image', note = '';
   if (screen || typed) {
     if (isExact) {
       const mp = exact[0] * exact[1] / MEGAPIXEL;
       if (step != null) {
         const m = Math.min(step, cap);
-        sides = shapedSize(exact[0] / exact[1], m);
+        sides = shapedSize(exact[0] / exact[1], m, cap);
         send = m.toFixed(1);
         // A typed size, stepped: the box holds the new size, and goes as it is (as video's does).
         if (typed && document.activeElement !== $('imageSize')) {
@@ -4810,11 +4826,12 @@ function imageResolution() {
           imageStep = null;
         }
       }
-      else if (mp > cap + 1e-9) {
-        const m = tenthBelow(cap);
-        sides = shapedSize(exact[0] / exact[1], m);
+      else if (mp > cap + 1e-9 || (screen && least && mp < least - 1e-9)) {
+        // Outside the limits: made at its shape within them. A preset says so, until the stepper takes over.
+        const m = mp > cap + 1e-9 ? tenthBelow(cap) : least;
+        sides = shapedSize(exact[0] / exact[1], m, cap);
         send = m.toFixed(1);
-        note = `${exact.join('×')} is ${mp.toFixed(1)} MP, past ${capSays}: made at ${sides.join('×')}, the nearest below.`;
+        if (screen) note = `Rescaled to ${m.toFixed(1)} MP`;
       } else sides = exact;
     }
   } else {
@@ -4846,7 +4863,7 @@ function upscaledResolution(exact, cap, limit, typed = false) {
   const mp = Math.min(top, Math.max(UPSCALE_LEAST, Math.round(wanted * 10) / 10));
   const note = wanted > top + 0.05 ? `Held to ${top.toFixed(1)} MP: past that, ${$('imageUpscale').value} would very likely run out of memory on this card.` : '';
   const base = Math.min(cap, Math.max(MP_STEP, mp / area));
-  const sides = shapedSize(ratio, base);
+  const sides = shapedSize(ratio, base, cap);
   const end = exact && !typed && Math.abs(mp - exactMp) < 0.05 ? exact : shapedSize(ratio, mp);
   // The box shows the size it is made at, as the stepper moves it; not while it's being typed in.
   if (typed && document.activeElement !== $('imageSize')) $('imageSize').value = sides.join('x');
@@ -4882,6 +4899,7 @@ function stepMegapixels(by) {
     $('imageUpscaleMp').value = (Math.round((Number($('imageUpscaleMp').value) + by) * 10) / 10).toFixed(1);
   } else {
     const r = imageResolution(), from = r.sides ? r.sides[0] * r.sides[1] / MEGAPIXEL : (imageStep ?? 1);
+    imageDefaulted = false;
     imageStep = Math.min(r.top, Math.max(MP_STEP, Math.round((from + by) * 10) / 10));
   }
   syncImageSize();
@@ -5026,10 +5044,16 @@ document.addEventListener('click', e => {
 // with the LLM instead (syncImageLlm), so it isn't drawn here.
 function syncOptions(section, box, options, workflow = '') {
   options = options.filter(option => !option.role);
+  // The negative prompt is typed at the bottom of the Prompt section, where there is one; the rest here.
+  const slot = $(box.replace('OptionsBox', 'NegativeSlot'));
+  const negative = options.find(option => option.id === 'negative' && option.kind === 'text');
   const key = JSON.stringify([workflow, options]);
-  $(section).hidden = !options.length;
+  $(section).hidden = !options.some(option => option !== negative);
   if ($(box).dataset.key === key) return;
   $(box).dataset.key = key;
+  $(box).negative = slot;
+  slot.innerHTML = negative ? imageOptionHtml(negative, options) : '';
+  slot.hidden = !negative;
   $(box).dataset.workflow = `${section}|${workflow}`;
   // First, in a dark box of their own: Steps, Sampler, Scheduler and CFG, wherever the workflow has them. Then Use LoRA
   // in its own; then the rest, turbo and the like after what the workflow is about. No Advanced heading.
@@ -5037,7 +5061,7 @@ function syncOptions(section, box, options, workflow = '') {
   const sampling = SAMPLING_OPTIONS.map(id => options.find(option => option.id === id)).filter(Boolean);
   const lora = options.filter(option => option.id === 'lora' || option.parent === 'lora');
   const speed = options.filter(option => option.speed);
-  const rest = options.filter(option => !sampling.includes(option) && !lora.includes(option) && !speed.includes(option));
+  const rest = options.filter(option => !sampling.includes(option) && !lora.includes(option) && !speed.includes(option) && option !== negative);
   // Two kinds of LoRA, each under a word on what it does: a turbo one (lightning, n-step) makes it in fewer steps, and
   // comes first, as it sets the steps; a style one changes the look.
   const heading = (text, what) => `<div class="options-subtitle">${text}<span class="options-subtitle-what"> · ${what}</span></div>`;
@@ -5055,7 +5079,7 @@ function syncOptions(section, box, options, workflow = '') {
 // remembered for it forgotten.
 function useDefaultOptions(box) {
   for (const option of box.optionList || []) {
-    const field = suffix => box.querySelector(`[name="opt_${option.id}${suffix}"]:not([type=hidden])`);
+    const field = suffix => optionField(box, `[name="opt_${option.id}${suffix}"]:not([type=hidden])`);
     if (option.kind === 'switch') { const el = field(''); if (el) el.checked = option.default === '1'; }
     else if (option.kind === 'strength') {
       const on = field('_on'), strength = field('_strength'), active = option.default !== '0';
@@ -5087,7 +5111,9 @@ function savedOptions() {
   try { return JSON.parse(localStorage.getItem(OPTIONS_KEY)) || {}; } catch (e) { return {}; }
 }
 // The inputs you set: a checkbox's hidden "0" beside it is only there for the form.
-const optionInputs = box => [...box.querySelectorAll('input[name], select[name], textarea[name]')].filter(el => el.type !== 'hidden');
+const optionInputs = box => [box, box.negative].filter(Boolean).flatMap(part => [...part.querySelectorAll('input[name], select[name], textarea[name]')]).filter(el => el.type !== 'hidden');
+// A field of the options, in the box or in the negative prompt's place in the Prompt section.
+const optionField = (box, selector) => box.querySelector(selector) || (box.negative && box.negative.querySelector(selector));
 function rememberOptions(box) {
   const all = savedOptions();
   all[box.dataset.workflow] = Object.fromEntries(optionInputs(box).map(el => [el.name, el.type === 'checkbox' ? el.checked : el.value]));
@@ -5106,6 +5132,8 @@ function restoreOptions(box) {
 for (const box of ['shortsOptionsBox', 'videoOptionsBox', 'imageOptionsBox']) {
   $(box).addEventListener('change', e => { followSwitch($(box), e.target); syncBelow($(box)); rememberOptions($(box)); });
   $(box).addEventListener('input', () => rememberOptions($(box)));
+  // The negative prompt, typed in the Prompt section, is remembered with the rest.
+  $(box.replace('OptionsBox', 'NegativeSlot')).addEventListener('input', () => rememberOptions($(box)));
 }
 function syncImageOptions() {
   const options = imageTakes().options || [];
@@ -6546,7 +6574,7 @@ function applyOptions(box, options, chosen) {
   }
   for (const option of options.filter(o => !o.role)) {
     const value = chosen[option.id] ?? option.default;
-    const field = name => box.querySelector(`[name="${name}"]:not([type="hidden"])`);
+    const field = name => optionField(box, `[name="${name}"]:not([type="hidden"])`);
     if (option.kind === 'switch') { const el = field(`opt_${option.id}`); if (el) el.checked = value === '1'; }
     else if (option.kind === 'strength') {
       const on = field(`opt_${option.id}_on`), strength = field(`opt_${option.id}_strength`);

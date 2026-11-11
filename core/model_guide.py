@@ -481,8 +481,11 @@ def panel_notes(key):
            FIBO2: (FIBO2,), KREA2: (KREA2,), MOSS: (MOSS,), QWEN_EDIT: (QWEN_EDIT,)}.get(key, ())
     for model in ids:
         most, least = models.most_megapixels(model), models.LEAST_MEGAPIXELS.get(model)
+        start = models.DEFAULT_MEGAPIXELS.get(model)
         part = [f"up to {most:g} MP" if most else f"up to {media_max():g} MP (the form's own limit)"]
-        if least:
+        if start:
+            part.append(f"starts at {start:g} MP")
+        elif least:
             part.append(f"starts at {least:g} MP")
         if models.MOST_IMAGES.get(model):
             part.append(f"{models.MOST_IMAGES[model]} references")

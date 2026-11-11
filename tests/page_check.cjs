@@ -1017,6 +1017,15 @@ assert(/\.options-sampling \.option-hint \{ grid-column: 1 \/ -1; margin: 0; con
 assert(/<div class="options-lora options-speed"><div class="options-subtitle">Turbo LoRA<span class="options-subtitle-what"> · fewer steps, faster<\/span><\/div><label class="check">[^]*?name="opt_switch_lightning_lora"[^]*?data-below="opt_switch_lightning_lora"[^]*?<select name="opt_switch_lightning_lora_name"[^>]*><option value="t.safetensors" selected>t<\/option>[^]*?<input type="number" class="option-strength" name="opt_switch_lightning_lora_strength"/.test(laidOut)
   && laidOut.indexOf('options-speed') < laidOut.indexOf('data-below="opt_lora"'), 'the turbo LoRA first, with the same switch, file and strength as Use LoRA, and a word on what sets it apart');
 assert(laidOut.includes('<div class="res-hint option-hint" hidden>How many times') && script.includes("const info = e.target.closest && e.target.closest('.option-info');"), 'each name drops its hint');
+// The negative prompt goes to the bottom of the Prompt section, not the options; with only it, there are no options to show.
+run(`syncOptions('testOptions', 'testOptionsBox', [{ id: 'negative', kind: 'text', label: 'Negative prompt', default: 'blurry' }], 'n')`);
+assert(/<textarea id="opt_negative" name="opt_negative"[^>]*>blurry<\/textarea>/.test(els.testNegativeSlot.innerHTML) && !els.testNegativeSlot.hidden, 'the negative prompt is in the Prompt section');
+assert(!els.testOptionsBox.innerHTML.includes('opt_negative') && els.testOptions.hidden, 'not in the options, which have nothing else to show');
+run(`syncOptions('testOptions', 'testOptionsBox', [{ id: 'steps', kind: 'number', label: 'Steps', default: '8', min: 1, max: 150, step: 1 }], 'm')`);
+assert(els.testNegativeSlot.innerHTML === '' && els.testNegativeSlot.hidden && !els.testOptions.hidden, 'a workflow without one leaves the place empty');
+assert(/<div id="imageNegativeSlot" class="negative-slot"><\/div>\s*<\/details>\s*<details class="section" id="imageOptions"/.test(html)
+  && /<div id="videoNegativeSlot" class="negative-slot"><\/div>\s*<\/details>\s*<details class="section" id="videoOptions"/.test(html)
+  && /<div id="shortsNegativeSlot" class="negative-slot"><\/div>\s*<\/details>\s*<details class="section" id="shortsOptions"/.test(html), 'last in each Prompt section');
 assert(script.includes("$(box).addEventListener('change', e => { followSwitch($(box), e.target); syncBelow($(box)); rememberOptions($(box)); });")
   && /\.pipeline-form \.option-below select \{ flex: 1 1 auto;/.test(html), 'switched on, it shows; the file takes the width, the strength at its right');
 assert(/name="opt_group_cc" value="1" disabled/.test(optionsHtml) && optionsHtml.includes("Can't be changed"), "one that can't run is locked, saying why");
@@ -3245,6 +3254,37 @@ for (const fn of ['sameAgain', 'sameAgainFilm', 'sameAgainShorts', 'editQueued',
   run('stepMegapixels(-MP_STEP); stepMegapixels(-MP_STEP)');
   assert.strictEqual(run('imageStep'), 0.9);
   run('imageStep = null');
+}
+
+// A model's own default size on coming to it; a screen above its limit is made at its shape within it.
+{
+  els.imageUpscaleBox.hidden = true;
+  els.imageAspect.value = '1:1';
+  els.imageMegapixels.value = 'image';
+  const steps = JSON.parse(run(`(() => {
+    const was = imageTakes, found = {};
+    sourceSize = null; imageStep = null; imageDefaulted = false; imageLeastModel = null;
+    $('imageMegapixels').value = 'image'; $('imageMegapixels').dataset.sent = 'image';
+    imageTakes = () => ({ model: 'krea2', size: true, options: [] }); syncImageSize();
+    for (const model of ['moss_image', 'qwen_image_edit', 'minimax_h3_image', 'krea2', 'fibo2']) { imageTakes = () => ({ model, size: true, options: [] }); syncImageSize(); found[model] = imageStep; }
+    imageTakes = () => ({ model: 'fibo2', options: [] }); $('imageAspect').value = '1272x2772'; imageStep = null;
+    const r = imageResolution(), mp = r.sides[0] * r.sides[1] / MEGAPIXEL;
+    imageStep = 0.9; const stepped = imageResolution().note; imageStep = null;
+    imageTakes = () => ({ model: 'minimax_h3_image', options: [] }); $('imageAspect').value = '1080x2400';
+    const low = imageResolution(); const lowNote = low.note, lowSend = low.send;
+    $('imageAspect').value = '1:1'; const plain = imageResolution().note;
+    imageTakes = () => ({ model: 'moss_image', options: [] }); $('imageAspect').value = '1272x2772'; imageLeastModel = null; startAtLeast(imageModel()); found.screen = imageStep;
+    imageTakes = was; $('imageAspect').value = '1:1'; imageStep = null; imageDefaulted = false;
+    return JSON.stringify({ ...found, stepped, lowNote, lowSend, plain, send: r.send, mp, note: r.note, ratio: r.sides[0] / r.sides[1] });
+  })()`));
+  assert.deepStrictEqual([steps.moss_image, steps.qwen_image_edit, steps.minimax_h3_image], [2, 1, 16], 'each model starts at its own default');
+  assert.deepStrictEqual([steps.krea2, steps.fibo2], [null, null], 'one with none goes back to the size as picked');
+  assert(steps.mp <= 1.1 && steps.send === '1.1' && steps.note === 'Rescaled to 1.1 MP' && Math.abs(steps.ratio - 1272 / 2772) < 0.02, `a phone past the limit is made at its shape within it, and says so: ${JSON.stringify(steps)}`);
+  assert.strictEqual(steps.stepped, '', 'stepping it clears the note');
+  assert.strictEqual(steps.lowNote, 'Rescaled to 4.0 MP', 'a preset under the least is raised to it');
+  assert.strictEqual(steps.lowSend, '4.0');
+  assert.strictEqual(steps.plain, '', 'an aspect ratio has nothing to say');
+  assert.strictEqual(steps.screen, null, 'a screen is not stepped to the default');
 }
 
 // Typed with Upscale on: the box is the size it is made at, and where it ends follows it (four times the pixels).

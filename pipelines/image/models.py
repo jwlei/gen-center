@@ -7,8 +7,9 @@ write for it in one reply. core/saved_workflows.py says which model a workflow r
         that corner and it stops following it. Its prompts are long JSON captions, written in fibo2_prompt.py.
     Krea-2 Turbo: makes 1K to 2K images, up to 2048x2048, in 8 steps.
     MiniMax H3 Image: one checkpoint that makes and edits images, in 6 steps without CFG. Works from about 4 to
-        20 megapixels, best at about 16 (the most the form offers), and poorly below 4. Its prompt enhancer, a small
+        20 megapixels, best at about 16 (where the form starts), and poorly below 4. Its prompt enhancer, a small
         LLM in the workflow, rewrites the prompt into a long caption first.
+    MOSS Image: 0.25 to 4.2 megapixels here, starting at 2. Qwen-Image-Edit 2511: up to 2560x2560, starting at 1024x1024.
     Qwen-Image 2.1 Turbo: native 2K, but on this 12 GB card less. Kokon measured what fits: about 12,600 of the
         model's tokens (16 x 16 pixels each) on 12 GB, about 3.2 megapixels, which an edit shares between the image
         it makes and the one it's shown at the same size. So 3.2 to make one, half that to edit one.
@@ -24,9 +25,13 @@ QWEN_IMAGE_21, QWEN_IMAGE_21_EDIT = "qwen_image_21", "qwen_image_21_edit"
 MINIMAX_H3_IMAGE, MINIMAX_H3_IMAGE_EDIT = "minimax_h3_image", "minimax_h3_image_edit"
 LABELS = {FIBO2: "Fibo 2.0", KREA2: "Krea-2", MOSS_IMAGE: "MOSS Image", QWEN_IMAGE_EDIT: "Qwen-Image-Edit", QWEN_IMAGE_21: "Qwen-Image 2.1",
           QWEN_IMAGE_21_EDIT: "Qwen-Image 2.1 (edit)", MINIMAX_H3_IMAGE: "MiniMax H3 Image", MINIMAX_H3_IMAGE_EDIT: "MiniMax H3 Image (edit)"}
-# The most megapixels each makes well. A model left out takes what the form offers.
-MOST_MEGAPIXELS = {FIBO2: 1.1, KREA2: 4.2, QWEN_IMAGE_21: 3.2, QWEN_IMAGE_21_EDIT: 1.6}
-# Where the form starts for each, when below it: MiniMax H3 Image does poorly under 4 MP (its template's note).
+# The most megapixels each makes (before any upscale; a preset size above it is made at its shape within it). A model
+# left out takes what the form offers. Qwen-Image-Edit's is 2560x2560, MOSS Image's 4.2 (about 2K x 2K), MiniMax H3 Image's 20.
+MOST_MEGAPIXELS = {FIBO2: 1.1, KREA2: 4.2, MOSS_IMAGE: 4.2, QWEN_IMAGE_EDIT: 2560 * 2560 / PIXELS_PER_MEGAPIXEL, QWEN_IMAGE_21: 3.2,
+                   QWEN_IMAGE_21_EDIT: 1.6, MINIMAX_H3_IMAGE: 20, MINIMAX_H3_IMAGE_EDIT: 20}
+# Where the form starts for each, when it has no size of its own to start from.
+DEFAULT_MEGAPIXELS = {MOSS_IMAGE: 2, QWEN_IMAGE_EDIT: 1, MINIMAX_H3_IMAGE: 16, MINIMAX_H3_IMAGE_EDIT: 16}
+# Below which the form starts at the default instead: MiniMax H3 Image does poorly under 4 MP (its template's note).
 LEAST_MEGAPIXELS = {MINIMAX_H3_IMAGE: 4, MINIMAX_H3_IMAGE_EDIT: 4}
 # One reply can only hold so many of Fibo 2.0's captions, each a few hundred words of JSON.
 MOST_WRITTEN = {FIBO2: 30}
@@ -122,7 +127,7 @@ def reference_sizes(model, made, shown, detail="standard", editing=True):
 def for_the_page():
     """What the form needs to know to grey out what a model can't do, and what it can do besides."""
     return {model: {"label": LABELS[model], "most_megapixels": MOST_MEGAPIXELS.get(model),
-                    "least_megapixels": LEAST_MEGAPIXELS.get(model), "most_written": MOST_WRITTEN.get(model),
+                    "least_megapixels": LEAST_MEGAPIXELS.get(model), "default_megapixels": DEFAULT_MEGAPIXELS.get(model), "most_written": MOST_WRITTEN.get(model),
                     "most_images": MOST_IMAGES.get(model), "image_name": IMAGE_NAMES.get(model, "image {}"),
                     "compose": model in COMPOSE_SWITCH, "most_megapixels_compose": MOST_MEGAPIXELS_COMPOSE.get(model),
                     "regions": model in REGION_EDITS, "transparent": model in TRANSPARENT}
