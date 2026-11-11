@@ -15,6 +15,8 @@ CONNECTIONS = {"chain": "Continuous take", "image": "Separate moments", "directo
                "multishot": "H3 Multishot", "infinite": "H3 Infinite continuation"}
 # The order pills are shown in, after the differing ones.
 KINDS = ("workflow", "prompt", "upscale", "clips", "openh3", "lora", "sampling", "cfg", "llm")
+# The pills that are always first, whether or not they differ: the workflow, who writes the prompts, and which LLM.
+LEADING = ("workflow", "prompt", "llm")
 
 
 def latent_description(options):
@@ -94,15 +96,17 @@ def _differing(own, others):
     return {kind for kind in KINDS if any(of(other, kind) != of(own, kind) for other in others)}
 
 
-def pills(own, others):
+def pills(own, others, lead=LEADING):
     """
-    Its pills: the workflow always first, then those that tell it apart from its siblings, marked, then the rest:
-    [{"text", "kind", "diff"}]. What it lacks and a sibling has isn't a pill of its own: the sibling's is marked.
+    Its pills: the workflow always first, then Exact prompt or LLM and, for an LLM, which one; then those that tell it
+    apart from its siblings, marked, then the rest: [{"text", "kind", "diff"}]. What it lacks and a sibling has isn't
+    a pill of its own: the sibling's is marked. lead: the kinds that come first, in order.
     """
     differing = _differing(own, others) if others else set()
     shown = [{"text": text, "kind": kind, "diff": kind in differing} for kind, text in own]
     order = {kind: number for number, kind in enumerate(KINDS)}
-    return sorted(shown, key=lambda pill: (pill["kind"] != "workflow", not pill["diff"], order.get(pill["kind"], len(KINDS))))
+    first = {kind: number for number, kind in enumerate(lead)}
+    return sorted(shown, key=lambda pill: (first.get(pill["kind"], len(lead)), not pill["diff"], order.get(pill["kind"], len(KINDS))))
 
 
 def with_pills(items):
@@ -134,6 +138,6 @@ def fixed_tag(own, others, stamp):
     """
     if not others:
         return ""
-    differing = [pill["text"] for pill in pills(own, others) if pill["diff"] and pill["kind"] != "workflow"]
+    differing = [pill["text"] for pill in pills(own, others, ("workflow",)) if pill["diff"] and pill["kind"] != "workflow"]
     tag = "_".join(_slug(text) for text in differing[:2]) or stamp
     return tag[:48].strip("_-")

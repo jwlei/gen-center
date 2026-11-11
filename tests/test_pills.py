@@ -21,14 +21,15 @@ class PillsTest(unittest.TestCase):
         alone = item("Jungle flight", workflow="Minimax_H3_R2V", llm="local")
         pills.with_pills([latent, plain, wan, alone])
         shown = lambda one: [(p["text"], p["diff"]) for p in one["pills"]]
-        self.assertEqual(shown(latent), [("Minimax_H3_R2V", True), ("Upscaled: Latent, Clean, 1.1 MP", True),
-                                         ("Separate moments", True), ("LLM", False), ("local", False)])
+        self.assertEqual(shown(latent), [("Minimax_H3_R2V", True), ("LLM", False), ("local", False),
+                                         ("Upscaled: Latent, Clean, 1.1 MP", True), ("Separate moments", True)])
         exact = item("Jungle flight", workflow="Wan 2.2", upscaled="RTX VSR", llm="local", direct=True)
         pills.with_pills([exact, item("Jungle flight", workflow="Minimax_H3_R2V", llm="local")])
         self.assertEqual(shown(exact)[0], ("Wan 2.2", True), "the workflow is always first")
         self.assertIn(("Exact prompt", True), shown(exact), "your own prompt, word for word, instead of the LLM")
         self.assertNotIn("No upscale", [text for text, _ in shown(plain)], "no upscale isn't a pill of its own")
-        self.assertEqual(shown(wan)[:3], [("Wan 2.2", True), ("Continuous take", True), ("LLM", False)])
+        self.assertEqual(shown(wan)[:3], [("Wan 2.2", True), ("LLM", False), ("local", False)])
+        self.assertEqual([text for text, _ in shown(exact)[:2]], ["Wan 2.2", "Exact prompt"], "Exact prompt is second, with no LLM after it")
         self.assertTrue(all(not diff for _, diff in shown(alone)), "no siblings: nothing marked")
         self.assertNotIn("_sibling", latent, "the prompt stays on the server")
         self.assertNotIn("_facts", latent)
