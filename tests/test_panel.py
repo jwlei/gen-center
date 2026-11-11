@@ -724,6 +724,10 @@ class PanelTest(unittest.TestCase):
         self.assertTrue(details[1].startswith("5s film"), details)
 
     def test_a_run_that_fails_can_be_continued(self):
+        # Exit code 1 restarts ComfyUI and tries a run once more by itself; here it is the failure that is looked at.
+        patch = mock.patch.object(webapp, "restart_reason", return_value=None)
+        patch.start()
+        self.addCleanup(patch.stop)
         self.comfy.script = ["ok", "error", "error"]
         self.assertTrue(self.generate().get_json()["ok"])
         self.wait_idle()
@@ -1638,6 +1642,10 @@ class PanelTest(unittest.TestCase):
         self.wait_until(lambda: self.comfy.hanging, "the clip to start")
         self.assertEqual(self.client.post("/restart/panel").status_code, 409)
         self.assertEqual(self.client.post("/restart/comfyui").status_code, 409)
+        with mock.patch.object(webapp, "comfyui_launcher", return_value="launcher"), \
+                mock.patch.object(webapp, "restart_comfyui_in_background") as restart:
+            self.assertTrue(self.client.post("/restart/comfyui", json={"force": True}).get_json()["ok"], "forced, it goes ahead of the run")
+            restart.assert_called_once_with(force=True)
 
     def test_pending_continuation_can_edit_prompts_without_duplicate_jobs(self):
         self.assertTrue(self.generate(review="1").get_json()["ok"])

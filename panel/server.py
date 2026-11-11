@@ -610,11 +610,12 @@ class JobQueue:
             self._record(item, "done")
             note_outcome(self.job, item, NOT_RENDERED if item.get("plan_only") else FIRST_ONLY if item.get("first_only") else None)
         else:
-            if self is run_queue and hit_aimdo(self.job):
+            reason = restart_reason(self.job, code) if self is run_queue else None
+            if reason:
                 if not item.get("aimdo_retried"):
-                    self._retry_after_aimdo(item)
+                    self._retry_after_restart(item, reason)
                     return
-                self.job.log("❌ The aimdo memory compile error came back after a restart: it goes to Failed, and "
+                self.job.log(f"❌ {reason[0].upper()}{reason[1:]} came again after a restart: it goes to Failed, and "
                              "ComfyUI restarts once more for what comes next.")
                 restart_comfyui_in_background()
             # In plain words, with what to do, when it's a failure we know; the run's own lines under it.
@@ -624,10 +625,10 @@ class JobQueue:
             if self.items:
                 self.job.log(f"❌ {item['label']} failed (exit {code}).")
 
-    def _retry_after_aimdo(self, item):
+    def _retry_after_restart(self, item, reason):
         """
-        First aimdo memory compile error for this job: ComfyUI is force-restarted and the job goes first in line, to
-        continue its saved run when it made one (its prompts are kept) or start over when it didn't.
+        First failure of a kind that ComfyUI is restarted for (restart_reason): ComfyUI is force-restarted and the job
+        goes first in line, to continue its saved run when it made one (its prompts are kept) or start over when it didn't.
         """
         retry = {**item, "aimdo_retried": True, "waited": True}
         retry.pop("later", None)
@@ -641,8 +642,8 @@ class JobQueue:
                 retry["argv"] = argv + ["--first-only"] if "--first-only" in (item.get("argv") or []) else argv
                 retry["resume"] = run_id
         restarting = restart_comfyui_in_background()
-        self.job.log("⚠️ ComfyUI hit the aimdo memory compile error: "
-                     + ("restarting it, then trying once more." if restarting else "trying once more."))
+        self.job.log(f"⚠️ The run failed ({reason}): "
+                     + ("restarting ComfyUI, then trying once more." if restarting else "trying once more."))
         self.items.insert(0, retry)
         self._save()
 
@@ -1799,13 +1800,26 @@ def hit_aimdo(job):
     return any(AIMDO_ERROR.search(line["text"]) for line in job.lines if line["n"] > getattr(job, "first_line", 0))
 
 
-def restart_comfyui_in_background():
+def restart_reason(job, code):
+    """
+    Why ComfyUI is restarted, and the run tried once more, after this failure, said as it reads in the log; None for a
+    failure it isn't restarted for. ComfyUI's aimdo error needs a fresh ComfyUI. Exit 1 is the run's own failure code,
+    and one of the ways a ComfyUI that has died or hung shows.
+    """
+    if hit_aimdo(job):
+        return "ComfyUI's aimdo memory compile error"
+    if code == 1:
+        return "exit code 1"
+    return None
+
+
+def restart_comfyui_in_background(force=False):
     """
     Force-restarts ComfyUI on a thread. The run queue waits while it does. Returns False when it can't: already
-    restarting, or no launcher to start it again.
+    restarting (unless force: a restart that hung is started over), or no launcher to start it again.
     """
     global _comfy_restarting
-    if _comfy_restarting or not comfyui_launcher():
+    if (_comfy_restarting and not force) or not comfyui_launcher():
         return False
     _comfy_restarting = True
 
@@ -2859,13 +2873,19 @@ def restart_comfyui_now():
 @app.route("/restart/comfyui", methods=["POST"])
 @password_required
 def restart_comfyui():
-    global _comfy_restarting
+    """
+    Closes ComfyUI and starts it again. Not while a run or prompt writer is going, unless the body says force: then at
+    once, whatever the panel believes is going (that run fails, and is tried once more: restart_reason).
+    """
+    force = bool((request.get_json(silent=True) or {}).get("force"))
     with run_queue.lock:
-        if job.running or _writing_prompt or _comfy_restarting:
+        if not force and (job.running or _writing_prompt or _comfy_restarting):
             return {"ok": False, "error": "A run or prompt writer is going, or ComfyUI is restarting. Wait for it first."}, 409
         if not comfyui_launcher():
             return {"ok": False, "error": "COMFYUI_LAUNCHER isn't set in .env, so the panel can't start ComfyUI again."}, 400
-        restart_comfyui_in_background()
+        if force and job.running:
+            job.log("⚠️ ComfyUI was force-restarted from Settings while this was running.")
+        restart_comfyui_in_background(force=force)
     return {"ok": True}
 
 

@@ -488,6 +488,10 @@
   .settings-check { display: flex; align-items: flex-start; gap: 10px; margin: 0; text-transform: none; letter-spacing: 0; font-size: .9rem; color: var(--text); cursor: pointer; }
   .settings-check input { width: auto; margin: 3px 0 0; }
   .settings-check small { display: block; margin-top: 2px; color: var(--muted); font-size: .78rem; }
+  /* Force restart ComfyUI: a line of its own under the others, in the warning yellow. */
+  .settings-actions.settings-force { margin-top: 6px; padding-top: 0; border-top: 0; }
+  .settings-force button { flex-direction: row; justify-content: center; gap: 8px; font-size: .74rem; color: var(--warn); border-color: color-mix(in srgb, var(--warn) 55%, var(--line)); }
+  .settings-force button.armed { background: color-mix(in srgb, var(--warn) 18%, transparent); }
   .settings-row { display: flex; align-items: center; gap: 10px; }
   .settings-row > label { flex: 0 0 64px; margin: 0; }
   .settings-row select { margin: 0; }
@@ -2337,6 +2341,9 @@
   <div class="paint-title" id="paintDialogTitle">Inpaint</div>
   <div class="paint-error" id="paintError" role="alert" hidden></div>
   <div class="paint-stage" id="paintStage">
+  <div class="settings-actions settings-force">
+    <button type="button" id="forceRestartComfy" title="Closes ComfyUI and starts it again even while a run is going or the panel thinks one is: that run fails, and is tried once more once ComfyUI is back. Use it when ComfyUI is stuck or has died."><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M13 2 4 14h7l-1 8 9-12h-7z"/></svg><span>Force restart ComfyUI</span></button>
+  </div>
     <div class="paint-board" id="paintBoard">
       <img id="paintImage" alt="Image 1" draggable="false">
       <canvas id="paintCanvas"></canvas>
@@ -3612,6 +3619,17 @@ function videoLatentOn() {
 }
 // Resolution, latent upscale and the stepper as one: the resolution is what the clip is made at (a screen exactly, an
 // aspect ratio at 480p's pixel count); the stepper scales it, whatever was picked. With latent upscale on, the stepper
+// Force: ComfyUI closed and started again at once, even while a run is going or the panel believes one is. That run
+// fails and is tried once more (exit code 1 restarts and retries it).
+$('forceRestartComfy').addEventListener('click', async () => {
+  if (!confirmTap('forceRestartComfy', 'Force restart ComfyUI')) return;
+  $('restartComfy').classList.remove('pulse');
+  try {
+    const body = await (await fetch('/restart/comfyui', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ force: true }) })).json();
+    settingsNote(body.ok ? '' : body.error || 'Could not restart it.', !body.ok);
+    if (body.ok) poll();
+  } catch (error) { settingsNote('Could not reach the panel. Try again.', true); }
+});
 // sets the size it ends at instead. Past what the workflow makes well it would very likely run out of memory: held to
 // the nearest below.
 let videoBase = null;

@@ -129,9 +129,27 @@ class AimdoRetryTest(unittest.TestCase):
                 self.assertEqual(queue.items, [], "not retried a second time")
                 self.assertNotIn("aimdo_retried", queue.results[0]["job"], "back in Pending, it gets its retry again")
 
-    def test_other_failures_are_not_retried(self):
+    def test_exit_code_1_restarts_comfyui_and_retries_too(self):
         with tempfile.TemporaryDirectory() as folder:
             job = mock.Mock(closed=False, progress={}, returncode=1, stopped=False, batches=0, first_line=0,
+                            lines=[{"n": 1, "text": "❌ CUDA error: out of memory"}])
+            queue = server.JobQueue(job, lambda item: None, path=os.path.join(folder, "queue_runs.json"))
+            with mock.patch.object(server, "run_queue", queue), \
+                    mock.patch.object(server, "restart_comfyui_in_background", return_value=True) as restart:
+                queue.current = {"id": 4, "label": "B", "pipeline": "video", "argv": []}
+                queue._finish_current()
+                restart.assert_called_once()
+                self.assertEqual(queue.results, [], "not Failed yet")
+                self.assertTrue(queue.items[0]["aimdo_retried"])
+                retry = queue.items.pop(0)
+                queue.current = retry
+                queue._finish_current()
+                self.assertEqual(restart.call_count, 2)
+                self.assertEqual([r["outcome"] for r in queue.results], ["failed"])
+
+    def test_other_failures_are_not_retried(self):
+        with tempfile.TemporaryDirectory() as folder:
+            job = mock.Mock(closed=False, progress={}, returncode=2, stopped=False, batches=0, first_line=0,
                             lines=[{"n": 1, "text": "❌ CUDA error: out of memory"}])
             queue = server.JobQueue(job, lambda item: None, path=os.path.join(folder, "queue_runs.json"))
             with mock.patch.object(server, "run_queue", queue), \
