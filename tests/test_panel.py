@@ -1703,6 +1703,24 @@ class PanelTest(unittest.TestCase):
         self.assertEqual(self.client.post("/queue/run/edit/901/continue", data={"queue_edit_token": edit["token"]}).status_code, 409,
                          "the session is spent")
 
+    def test_a_continued_run_reopened_as_new_makes_a_new_run_in_pending(self):
+        self.assertTrue(self.generate(review="1").get_json()["ok"])
+        self.wait_idle()
+        state = self.only_run()
+        item = {"id": 902, "pipeline": "video", "label": "Continue", "resume": state.id, "later": True,
+                "argv": webapp.PIPELINES["video"].resume_argv(state)}
+        with webapp.run_queue.lock:
+            webapp.run_queue.items.append(item)
+        self.addCleanup(lambda: webapp.run_queue.items.clear())
+        edit = self.client.post("/queue/run/edit/902").get_json()
+        webapp.run_queue.hold()
+        saved = self.generate(prompt="A brand new take", start_later="1", queue_edit_id="902", queue_edit_token=edit["token"])
+        self.assertTrue(saved.get_json()["ok"], saved.get_json())
+        queued = next(entry for entry in webapp.run_queue.items if entry["id"] == 902)
+        self.assertNotIn("resume", queued, "a new run, not the paused one")
+        self.assertTrue(queued["later"], "added to Pending as asked")
+        self.assertEqual(RunState.load(state.id).brief, state.brief, "the paused run is untouched")
+
     def test_pending_jobs_do_not_block_guarded_restart(self):
         with mock.patch.object(webapp.run_queue, "pending", return_value=[{"id": 1, "later": True}]), \
              mock.patch.object(webapp.upload_queue, "pending", return_value=[]), \

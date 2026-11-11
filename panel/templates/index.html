@@ -5597,7 +5597,7 @@ window.addEventListener('resize', () => { for (const id of ['videos', 'imageSets
 async function sameAgain(id, position = null, exact = null) {
   let data;
   try { data = await (await fetch(`/image-runs/${encodeURIComponent(id)}`)).json(); } catch (e) { data = { error: 'Could not reach the panel. Try again.' }; }
-  if (!data.ok) { alert(data.error || 'Could not open that set.'); return; }
+  if (!data.ok) { alert(data.error || 'Could not open that set.'); return false; }
   const shot = position && data.shots[position - 1];
   // One image's own setup where it kept one; else the set's.
   const s = { ...((shot && shot.settings) || data.settings) };
@@ -5645,6 +5645,7 @@ async function sameAgain(id, position = null, exact = null) {
   $('imageGeneration').open = $('imagePromptSection').open = true;
   $('imageOptions').open = !$('imageOptions').hidden;
   if (WIDE.matches) $('optionsCard').scrollIntoView({ behavior: 'smooth' }); else showPage('generate');
+  return true;
 }
 // A file a run was given, back as a file for a form's box.
 async function runFile(url, name) {
@@ -5673,7 +5674,7 @@ function applySavedForm(formEl, form) {
 async function sameAgainFilm(id, exact = null) {
   let data;
   try { data = await (await fetch(`/runs/${encodeURIComponent(id)}`)).json(); } catch (e) { data = { error: 'Could not reach the panel. Try again.' }; }
-  if (!data.ok) { alert(data.error || 'Could not open that film.'); return; }
+  if (!data.ok) { alert(data.error || 'Could not open that film.'); return false; }
   const s = data.settings, base = `/runs/${encodeURIComponent(id)}/inputs`;
   reopening('video');
   if (pipeline !== 'video') setPipeline('video');
@@ -5756,6 +5757,7 @@ async function sameAgainFilm(id, exact = null) {
   saveVideoForm();
   reopened('video');
   if (WIDE.matches) $('optionsCard').scrollIntoView({ behavior: 'smooth' }); else showPage('generate');
+  return true;
 }
 const VARIATIONS = 5;
 // A Shorts run's settings back in Generate. With the same topic, pressing Generate continues that run with what you changed.
@@ -9372,7 +9374,7 @@ async function pollOnce(generation) {
   $('dot').setAttribute('aria-label', running ? 'Running' : nextUp ? 'Starting' : 'Idle');
   safely(() => renderStrips(data));
   $('go').disabled = $('goStick').disabled = submitting;
-  if (!submitting) $('go').textContent = $('goStick').textContent = queueEdit ? 'Save to queue' : goLabel(running);
+  if (!submitting) $('go').textContent = $('goStick').textContent = queueSaves() ? 'Save to queue' : goLabel(running);
   workItem = running ? queue.current : nextUp ? ready[0] : null;
   lastStatus = data;
   const facts = (workItem && workItem.facts) || {};
@@ -9603,11 +9605,13 @@ function syncContinued() {
     else if (field.dataset.continued) { delete field.dataset.continued; field.readOnly = false; }
   }
 }
+// A queued job being changed in place saves back to the queue; a continued run reopened as a new run is added like any other.
+function queueSaves() { return !!queueEdit && !queueEdit.fresh; }
 function queueEditLabel() {
   syncContinued();
   $('cancelQueueEdit').hidden = !queueEdit;
-  $('goLater').hidden = $('goTop').hidden = $('goStickLater').hidden = $('goStickTop').hidden = !!queueEdit;
-  if (!submitting) $('go').textContent = $('goStick').textContent = queueEdit ? 'Save to queue' : goLabel(wasRunning);
+  $('goLater').hidden = $('goTop').hidden = $('goStickLater').hidden = $('goStickTop').hidden = queueSaves();
+  if (!submitting) $('go').textContent = $('goStick').textContent = queueSaves() ? 'Save to queue' : goLabel(wasRunning);
 }
 async function editQueued(id, button) {
   if (queueUpscaleEdit) {
@@ -9628,7 +9632,26 @@ async function editQueued(id, button) {
     poll();
     return;
   }
-  queueEdit = { id: data.id, token: data.token, pipeline: data.pipeline, ready: false, continued: data.continued || null };
+  if (data.continued) {
+    // Its setup opens in full, as a new run: whatever is changed makes a fresh run, and the paused one is left as it was.
+    queueEdit = { id: data.id, token: data.token, pipeline: data.pipeline, ready: false, fresh: true, continued: null };
+    const fresh = queueEdit;
+    queueEditLabel();
+    poll();
+    const opened = data.continued.image ? await sameAgain(data.continued.id) : await sameAgainFilm(data.continued.id);
+    if (queueEdit !== fresh) return;
+    if (!opened) {
+      showFormError('Could not open that run\'s setup. The job remains in Pending.');
+      return;
+    }
+    fresh.ready = true;
+    showFormError('');
+    queueEditLabel();
+    $('formNote').hidden = false;
+    $('formNote').textContent = `Editing ${data.continued.title} as a new run: change anything, then add it to the queue, the top of it or Pending. The paused run stays as it was.`;
+    return;
+  }
+  queueEdit = { id: data.id, token: data.token, pipeline: data.pipeline, ready: false, continued: null };
   reopening(data.pipeline);
   const edit = queueEdit;
   queueEditLabel();
@@ -9699,10 +9722,6 @@ async function editQueued(id, button) {
     showFormError('');
     reopened(pipeline);
     queueEditLabel();
-    if (edit.continued) {
-      $('formNote').hidden = false;
-      $('formNote').textContent = `Editing ${edit.continued.title}: its prompts are written, so resolution, workflow options and Preview run change here. The prompt, images, length and workflow stay as planned.`;
-    }
     if (WIDE.matches) $('optionsCard').scrollIntoView({ behavior: 'smooth' }); else showPage('generate');
   } catch (error) {
     if (queueEdit !== edit) return;
@@ -9786,7 +9805,7 @@ async function startJob(url, later = false, top = false) {
   if (body.ok && queueEdit) queueEdit = null;
   queueEditLabel();
   $('queuePending').hidden = true;
-  $('go').textContent = $('goStick').textContent = queueEdit ? 'Save to queue' : goLabel(wasRunning);
+  $('go').textContent = $('goStick').textContent = queueSaves() ? 'Save to queue' : goLabel(wasRunning);
   $('formNote').hidden = !body.continued;
   if (body.continued) $('formNote').textContent = `Continuing what was already paid for: ${body.continued}`;
   if (!body.ok) {

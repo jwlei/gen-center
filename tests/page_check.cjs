@@ -2306,7 +2306,9 @@ assert(/<dialog id="settingsDialog"[\s\S]*id="lowPriority"[\s\S]*id="localLlmMod
 assert(/\.settings-actions \{ display: flex; gap: 6px; flex: none;/.test(html), 'the buttons stay at the foot, smaller');
 assert(/<div class="go-bar" id="goBar" hidden>[\s\S]*?id="goStickTop" aria-label="Add to top of queue"[\s\S]*?id="goStickLater" aria-label="Add to pending"[\s\S]*?id="goStick">/.test(html)
   && script.includes("$('goStickTop').addEventListener('click', () => $('goTop').click());") && script.includes("$('goStickLater').addEventListener('click', () => $('goLater').click());")
-  && script.includes("$('goLater').hidden = $('goTop').hidden = $('goStickLater').hidden = $('goStickTop').hidden = !!queueEdit;"), 'the footer bar has symbol buttons for top of queue and pending, beside Add to queue');
+  && script.includes("$('goLater').hidden = $('goTop').hidden = $('goStickLater').hidden = $('goStickTop').hidden = queueSaves();")
+  && script.includes("fresh: true, continued: null") && script.includes('data.continued.image ? await sameAgain(data.continued.id) : await sameAgainFilm(data.continued.id)'),
+  'the footer bar has symbol buttons for top of queue and pending, beside Add to queue; a continued run reopens in full as a new run, with them');
 assert(/\.tile-cover::after \{\s*content: ""; position: absolute; inset: 0; z-index: 1; border: 2px dotted var\(--accent\)/.test(html), 'a collection being moved: its outline over the picture');
 assert(/<div class="settings-group" id="reserveTitle">Reserve free RAM<\/div>\s*<div class="reserve-row"[^>]*>\s*<button type="button" id="reserveSet" hidden>Set<\/button>\s*<div class="count-stepper"><button type="button" id="reserveDown"/.test(html),
   'free RAM: its heading, then Set left of a stepper as Generate\'s');

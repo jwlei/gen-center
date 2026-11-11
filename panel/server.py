@@ -544,8 +544,8 @@ class JobQueue:
                 self.items.remove(old)
                 item["id"] = edit_id
                 item["waited"] = True
-                item.pop("later", None)
-                self.items.insert(0, item)
+                # A continued run's setup reopened as a new run can go to Pending (the end) or the top; a plain edit keeps its place at the front.
+                self.items.insert(len(self.items) if item.get("later") else 0, item)
                 self._save()
                 self._advance()
                 return item in self.items
