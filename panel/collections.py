@@ -7,7 +7,9 @@ collection, not where it was. A collection holds both kinds, each as an album of
 
 Kept in logs/collections.json:
     {"collections": [{"id": "c_20261109_181500", "name": "Portraits", "items": [
-        {"kind": "image", "run": "image_20261109_121447", "file": "..._004.png"}, {"kind": "film", "name": "Film.mp4"}]}]}
+        {"kind": "image", "run": "image_20261109_121447", "file": "..._004.png"}, {"kind": "film", "name": "Film.mp4"}],
+        "cover": {"kind": "image", "run": "...", "file": "..."}}]}
+A collection is shown by its cover, one of its own items, or its first image when none is chosen.
 """
 import json
 import os
@@ -96,8 +98,21 @@ def apply(payload):
                 nsfw = nsfw or bool(films[item["name"]].get("nsfw"))
                 items.append({"kind": "film", "name": item["name"]})
         shown.append({"id": collection["id"], "name": collection.get("name") or "Collection", "nsfw": nsfw, "items": items,
-                      "folded": bool(collection.get("folded"))})
+                      "folded": bool(collection.get("folded")), "cover": _cover_of(collection, items)})
     payload["collections"] = shown
+
+
+def _cover_of(collection, items):
+    """The thumbnail chosen for a collection as the page names its items, or None (the first image, then): None too once it's no longer in it."""
+    chosen = collection.get("cover")
+    if not isinstance(chosen, dict):
+        return None
+    for item in items:
+        if item["kind"] == "image" and chosen.get("kind") == "image" and (item["set"], item["file"]) == (chosen.get("run"), chosen.get("file")):
+            return item
+        if item["kind"] == "film" and chosen.get("kind") == "film" and item["name"] == chosen.get("name"):
+            return item
+    return None
 
 
 def _gone(item):
@@ -148,6 +163,30 @@ def rename_collection(collection_id):
         if not collection:
             return {"ok": False, "error": "That collection is gone."}, 404
         collection["name"] = name
+        _write(collections)
+    return {"ok": True}
+
+
+@app.route("/api/collections/<collection_id>/cover", methods=["POST"])
+@password_required
+def cover_collection(collection_id):
+    """Sets the picture a collection is shown by, one of its own items, or none ("item": null) for its first image."""
+    data = request.get_json(silent=True) or {}
+    try:
+        item = _item_from(data["item"]) if data.get("item") else None
+    except ValueError as e:
+        return {"ok": False, "error": str(e)}, 400
+    with _lock:
+        collections = _read()
+        collection = _find(collections, collection_id)
+        if not collection:
+            return {"ok": False, "error": "That collection is gone."}, 404
+        if item and not any(_key(i) == _key(item) for i in collection["items"]):
+            return {"ok": False, "error": "That isn't in this collection."}, 409
+        if item:
+            collection["cover"] = item
+        else:
+            collection.pop("cover", None)
         _write(collections)
     return {"ok": True}
 

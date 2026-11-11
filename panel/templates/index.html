@@ -1040,25 +1040,36 @@
     .page-loader::before { animation: none; left: 0; width: 100%; opacity: .6; }
     .output-loader i, .status-loader i { animation: none; }
   }
-  .collections-fold { margin: 0 0 10px; }
   /* Open, a box of their own where they are: another background and a border, apart from the sets under it. */
-  .collections:not([hidden]) { margin: 0 -11px 12px; padding: 10px 10px 2px; background: var(--bg); border: 1px solid var(--line); border-radius: 12px; }
-  /* A collection folds by its name, with the headings' arrow at the right. */
-  details.image-set.collection > summary.image-set-heading { list-style: none; cursor: pointer; }
-  details.image-set.collection > summary.image-set-heading::-webkit-details-marker { display: none; }
-  details.image-set.collection > summary.image-set-heading::after { content: "\203A"; margin-left: auto; display: inline-block; width: 1em; text-align: center; font-size: 1.2rem; line-height: 1; color: var(--muted);
-    transform: rotate(90deg); transition: transform .15s; }
-  details.image-set.collection:not([open]) > summary.image-set-heading::after { transform: none; }
-  /* Rename: a small pen just after the name, quiet until pointed at. */
-  /* Its name, then at the right the pen beside the chevron, all on one middle line. */
-  .image-set.collection .image-set-heading { justify-content: flex-start; align-items: center; gap: 4px; }
-  .image-set.collection .image-set-heading h3 { flex: 1 1 auto; min-width: 0; margin: 0; line-height: 1.3; }
-  .image-set.collection .image-set-heading .rename-btn { display: inline-flex; align-items: center; justify-content: center; }
-  .image-set.collection .image-set-heading .rename-btn { flex: none; width: auto; height: auto; margin: 0; padding: 3px; border: 0; background: none;
-    color: var(--muted); opacity: .6; }
-  .image-set.collection .image-set-heading .rename-btn:hover, .image-set.collection .image-set-heading .rename-btn:focus-visible { opacity: 1; }
-  .image-set.collection .image-set-heading .rename-btn:disabled { opacity: .2; cursor: default; }
-  .image-set.collection .image-set-heading .rename-btn svg { width: 14px; height: 14px; }
+  .collections:not([hidden]) { margin: 0 -11px 12px; padding: 10px 10px 4px; background: var(--bg); border: 1px solid var(--line); border-radius: 12px; }
+  /* Each a tile: its picture, with its name small beneath. Arranged like the thumbnail grid: tap one, then drag it. */
+  .collection-tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(84px, 1fr)); gap: 10px 8px; }
+  .collection-tile { position: relative; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+  .tile-cover { position: relative; display: block; width: 100%; aspect-ratio: 1; margin: 0; padding: 0; overflow: clip; border: 0; border-radius: 8px;
+    background: #000; cursor: pointer; touch-action: pan-y; }
+  .tile-cover img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; display: block; }
+  .tile-name { font-size: .7rem; line-height: 1.2; color: var(--muted); text-align: center; overflow-wrap: anywhere;
+    overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+  .tile-edit { position: absolute; top: 3px; right: 3px; width: auto; height: auto; margin: 0; padding: 4px; display: inline-flex; align-items: center;
+    border: 0; border-radius: 999px; background: rgba(0, 0, 0, .55); color: #fff; opacity: .85; }
+  .tile-edit svg { width: 13px; height: 13px; }
+  .collections.arranging .tile-edit { display: none; }
+  .collections.arranging .collection-tile.selected .tile-cover { outline: 2px dotted var(--accent); outline-offset: -2px; touch-action: none; }
+  .collections.arranging .collection-tile.dragging .tile-cover { outline: 2px dotted var(--accent); outline-offset: -2px; }
+  .collection-tile.grid-ghost { background: var(--bg); border-radius: 8px; }
+  .collection-tile.grid-ghost .tile-edit { display: none; }
+  /* Arrange, on a thin line of its own above the tiles when there are two or more; lit while arranging. */
+  .collections-head { display: flex; align-items: center; justify-content: space-between; margin: -4px 0 4px; font-size: .72rem; color: var(--muted); }
+  .collections-arrange { width: auto; margin: 0; padding: 3px 6px; display: inline-flex; align-items: center; border: 0; background: none; color: var(--neutral); }
+  .collections-arrange svg { width: 15px; height: 15px; }
+  .collections-arrange.on { color: var(--accent); }
+  /* Edit: the name, then the picture it is shown by (any of its own). */
+  .collection-edit-label { margin: 8px 0 4px; font-size: .78rem; font-weight: 600; color: var(--muted); }
+  .collection-edit .thumb-grid button.auto { display: flex; align-items: center; justify-content: center; background: var(--panel-2); color: var(--muted); font-size: .72rem; text-align: center; }
+  .collection-edit .thumb-grid button.current { outline: 2px solid var(--accent); outline-offset: -2px; }
+  .collection-edit-foot { display: flex; gap: 8px; align-items: center; justify-content: flex-end; margin-top: 8px; }
+  .collection-edit-foot button { width: auto; margin: 0; }
+  .collection-edit-foot #collectionEditDelete { margin-right: auto; }
   .move-new { display: flex; gap: 6px; }
   .move-new[hidden] { display: none; }
   .move-new input { flex: 1; min-width: 0; margin: 0; }
@@ -1220,15 +1231,11 @@
   /* Beside the cover, above the buttons: its pills, up to three lines; the rest behind a tap, as elsewhere. */
   .album-side .pills { margin-top: 0; max-height: 62px; }
   .album-side .pills.open { max-height: none; }
-  .album-strip { display: flex; gap: 4px; overflow-x: auto; scroll-snap-type: x proximity; scrollbar-width: none; overscroll-behavior-x: contain; }
-  .album-strip::-webkit-scrollbar { display: none; }
-  .album-strip a { position: relative; flex: none; scroll-snap-align: start; }
   /* An upscaled picture says so in its bottom-right corner: in the album and in the preview. */
   .upscaled-badge { position: absolute; right: 4px; bottom: 4px; display: flex; width: 18px; height: 18px; padding: 3px; box-sizing: border-box;
     border-radius: 999px; background: rgba(0, 0, 0, .7); color: #fff; pointer-events: none; }
   .upscaled-badge svg { width: 100%; height: 100%; }
   .upscaled-badge[hidden] { display: none; }
-  .album-strip img { width: 56px; height: 56px; object-fit: cover; border-radius: 6px; display: block; background: #000; }
   /* Beside the cover the buttons share what width there is. */
   .image-set-actions button { width: auto; margin: 0; padding: 6px 10px; font-size: .78rem; background: var(--panel-2); border: 1px solid var(--line); color: var(--text); }
   .image-set-actions .del { background: transparent; color: var(--muted); }
@@ -2513,6 +2520,19 @@
   <div class="thumb-grid-foot">
     <button type="button" class="thumb-grid-arrange" id="thumbGridArrange" aria-pressed="false" title="Arrange: tap one, then drag it where it goes" aria-label="Arrange"></button>
     <button type="button" class="panel-close" id="thumbGridClose">Close</button>
+  </div>
+</dialog>
+<dialog id="collectionEdit" class="panel-dialog collection-edit" aria-labelledby="collectionEditTitle">
+  <div class="panel-dialog-title" id="collectionEditTitle">Edit collection</div>
+  <div class="panel-dialog-body">
+    <input id="collectionEditName" maxlength="80" aria-label="Collection's name" placeholder="Name">
+    <div class="collection-edit-label">Picture</div>
+    <div class="thumb-grid" id="collectionEditPicker"></div>
+  </div>
+  <div class="collection-edit-foot">
+    <button type="button" class="del" id="collectionEditDelete" title="Delete it and all in it (tap twice)">Delete</button>
+    <button type="button" class="panel-close" id="collectionEditCancel">Cancel</button>
+    <button type="button" id="collectionEditSave">Save</button>
   </div>
 </dialog>
 <dialog id="viewerUpscaleBar" class="panel-dialog upscale-dialog" aria-label="Upscale">
@@ -5956,70 +5976,59 @@ function shownCollections() {
   if (pipeline === 'shorts') return [];
   return collections.filter(c => c.items.length && nsfwView === !!c.nsfw);
 }
-// Folded or open as it was left, on every device: kept with the collection (panel/collections.py).
-function collectionFolded(id) { const c = collections.find(other => other.id === id); return !!(c && c.folded); }
-function rememberCollectionFold(id, folded) {
-  const c = collections.find(other => other.id === id);
-  if (!c || c.folded === folded) return;
-  c.folded = folded;
-  fetch(`/api/collections/${encodeURIComponent(id)}/fold`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ folded }) })
-    .catch(() => {});
+const imageThumbSrc = p => `/image-runs/${encodeURIComponent(p.set)}/thumbnails/${p.position}?v=${p.version}`;
+const filmPosterSrc = v => (v.run ? `/runs/${encodeURIComponent(v.run)}/image` : `/posters/video/${encodeURIComponent(v.name)}`);
+// What a collection is shown by: the picture chosen for it if it is still among its items, else its first image,
+// else its first film. { image } or { film }.
+function collectionCover(c) {
+  const albums = collectionAlbums(c.id), chosen = c.cover;
+  if (chosen && chosen.kind === 'image') {
+    const image = albums.images.find(p => p.set === chosen.set && p.file === chosen.file);
+    if (image) return { image };
+  } else if (chosen && chosen.kind === 'film') {
+    const film = albums.films.find(v => v.name === chosen.name);
+    if (film) return { film };
+  }
+  return albums.images[0] ? { image: albums.images[0] } : albums.films[0] ? { film: albums.films[0] } : {};
 }
-// Beside the cover, three of the rest at random (no pills here), each opening itself. Drawn again each time the
-// collection or the box of them is opened, so a different few show.
-function collectionStrip(collectionId) {
-  const albums = collectionAlbums(collectionId), id = esc(collectionId), first = albums.images[0];
-  const rest = [...albums.images.slice(first ? 1 : 0).map(p => `<a href="#" data-open-collection="${id}" data-col-set="${esc(p.set)}" data-col-position="${p.position}"><img loading="lazy" alt="" src="/image-runs/${encodeURIComponent(p.set)}/thumbnails/${p.position}?v=${p.version}">${p.upscaled ? upscaledBadge(p.upscaled) : ''}</a>`),
-    ...albums.films.slice(first ? 0 : 1).map(v => `<a href="#" data-open-collection="${id}" data-col-film="${esc(v.name)}"><img loading="lazy" alt="" src="${v.run ? `/runs/${encodeURIComponent(v.run)}/image` : `/posters/video/${encodeURIComponent(v.name)}`}"></a>`)];
-  for (let i = rest.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [rest[i], rest[j]] = [rest[j], rest[i]]; }
-  return rest.slice(0, 3).join('');
+// A tile: its picture (with how many are in it), and its name small beneath. One item opens itself; more open the grid.
+function collectionHtml(c, number = 0) {
+  const albums = collectionAlbums(c.id), id = esc(c.id), total = albums.images.length + albums.films.length;
+  const { image, film } = collectionCover(c), src = image ? imageThumbSrc(image) : film ? filmPosterSrc(film) : '';
+  const only = albums.images[0], onlyFilm = albums.films[0];
+  const opens = total > 1 ? `data-grid-collection="${id}" title="${esc(c.name)}: all of them, small"`
+    : `data-open-collection="${id}" title="${esc(c.name)}"${only ? ` data-col-set="${esc(only.set)}" data-col-position="${only.position}"` : onlyFilm ? ` data-col-film="${esc(onlyFilm.name)}"` : ''}`;
+  return `<div class="collection-tile" data-collection="${id}" data-grid-index="${number}">
+    <button type="button" class="tile-cover" ${opens}>${src ? `<img loading="lazy" alt="" src="${esc(src)}">` : ''}${total > 1 ? `<span class="album-count">${total}</span>` : ''}</button>
+    <button type="button" class="tile-edit" data-edit-collection="${id}" title="Edit" aria-label="Edit ${esc(c.name)}">${ICONS.prompts}</button>
+    <span class="tile-name">${esc(c.name)}</span>
+  </div>`;
 }
-function reshuffleCollection(fold) {
-  const strip = fold.querySelector && fold.querySelector('.album-strip');
-  if (strip) strip.innerHTML = collectionStrip(fold.dataset.collection);
-}
-function collectionHtml(c, number = 0, many = 1) {
-  const albums = collectionAlbums(c.id), id = esc(c.id);
-  const first = albums.images[0], film = albums.films[0];
-  const cover = first ? `/image-runs/${encodeURIComponent(first.set)}/thumbnails/${first.position}?v=${first.version}`
-    : film ? (film.run ? `/runs/${encodeURIComponent(film.run)}/image` : `/posters/video/${encodeURIComponent(film.name)}`) : '';
-  const count = [albums.images.length && `${albums.images.length} ${albums.images.length === 1 ? 'image' : 'images'}`,
-    albums.films.length && `${albums.films.length} ${albums.films.length === 1 ? 'video' : 'videos'}`].filter(Boolean).join(' · ');
-  const strip = collectionStrip(c.id);
-  const total = albums.images.length + albums.films.length;
-  // Up and down, with two or more: it takes the place of its neighbour, the order kept on every device.
-  const moves = many > 1 ? `<button type="button" class="icon-btn rename-btn" data-move-collection="${id}" data-by="-1" data-no-fold="1" title="Move up" aria-label="Move up"${number === 0 ? ' disabled' : ''}>${ICONS.up}</button>`
-    + `<button type="button" class="icon-btn rename-btn" data-move-collection="${id}" data-by="1" data-no-fold="1" title="Move down" aria-label="Move down"${number === many - 1 ? ' disabled' : ''}>${ICONS.down}</button>` : '';
-  return `<details class="image-set collection" data-collection="${id}"${collectionFolded(c.id) ? '' : ' open'}>
-    <summary class="image-set-heading"><h3>${esc(c.name)}</h3>${moves}<button type="button" class="icon-btn rename-btn" data-rename-collection="${id}" data-no-fold="1" title="Rename" aria-label="Rename">${ICONS.prompts}</button></summary>
-    <div class="meta">${count}</div>
-    <div class="image-set-row album">
-      ${cover ? `<a href="#" class="album-cover" ${total > 1 ? `data-grid-collection="${id}" title="All of them, small: tap one to open it"` : `data-open-collection="${id}"${first ? ` data-col-set="${esc(first.set)}" data-col-position="${first.position}"` : ` data-col-film="${esc(film.name)}"`}`}><img loading="lazy" alt="" src="${esc(cover)}">${total > 1 ? `<span class="album-count">${total}</span>` : ''}</a>` : ''}
-      <div class="album-side">
-        ${strip ? `<div class="album-strip">${strip}</div>` : ''}
-        <div class="image-set-actions"><button type="button" class="icon-btn del" data-delete-collection="${id}" title="Delete it and all in it (tap twice)" aria-label="Delete">${ICONS.trash}</button></div>
-      </div>
-    </div>
-  </details>`;
-}
+let collectionsArranging = false, collectionSelected = null;
 function renderCollections() {
   const shown = shownCollections(), box = $('collections');
-  // Folded or not isn't in it: changed here, the page already shows it; changed elsewhere, the next time it is drawn.
-  const key = JSON.stringify([nsfwView, pipeline === 'shorts', shown.map(c => [c.id, c.name, c.items, collectionAlbums(c.id).images.map(p => p.version)])]);
+  const key = JSON.stringify([nsfwView, pipeline === 'shorts', shown.map(c => [c.id, c.name, c.items, c.cover, collectionAlbums(c.id).images.map(p => p.version)])]);
   if (box.dataset.key === key) return;
   box.dataset.key = key;
-  box.innerHTML = shown.map((c, number) => collectionHtml(c, number, shown.length)).join('');
-  // Each folds as the headings do, and is remembered folded or not.
-  if (box.querySelectorAll) for (const fold of box.querySelectorAll('details.collection')) {
-    foldDetails(fold);
-    fold.addEventListener('toggle', () => {
-      if (fold.open) reshuffleCollection(fold);
-      rememberCollectionFold(fold.dataset.collection, !fold.open);
-    });
-  }
+  if (shown.length < 2) { collectionsArranging = false; collectionSelected = null; }
+  if (!shown.some(c => c.id === collectionSelected)) collectionSelected = null;
+  // Arranging is for two or more, so its icon has a thin line of its own then.
+  box.innerHTML = (shown.length > 1 ? `<div class="collections-head"><span>Collections</span><button type="button" class="collections-arrange" data-arrange-collections="1" aria-pressed="false" title="Arrange: tap one, then drag it where it goes" aria-label="Arrange">${ICONS.arrange}</button></div>` : '')
+    + `<div class="collection-tiles">${shown.map(collectionHtml).join('')}</div>`;
   // Shown or hidden as you left them (shown to begin with); the icon only when there are some.
   $('collectionsToggle').hidden = !shown.length;
+  showCollectionArranging();
   showCollections(shown.length > 0 && collectionsOpen(), false);
+}
+function showCollectionArranging() {
+  const box = $('collections');
+  box.classList.toggle('arranging', collectionsArranging);
+  const button = box.querySelector && box.querySelector('[data-arrange-collections]');
+  if (button) {
+    button.classList.toggle('on', collectionsArranging);
+    button.setAttribute('aria-pressed', String(collectionsArranging));
+  }
+  if (box.querySelectorAll) for (const tile of box.querySelectorAll('.collection-tile')) tile.classList.toggle('selected', collectionsArranging && tile.dataset.collection === collectionSelected);
 }
 const COLLECTIONS_OPEN_KEY = 'gen-center.collectionsShown';
 function collectionsOpen() {
@@ -6050,49 +6059,105 @@ function showCollections(open, animate = true) {
 $('collectionsToggle').addEventListener('click', () => {
   const open = $('collections').hidden;
   try { localStorage.setItem(COLLECTIONS_OPEN_KEY, open ? '1' : '0'); } catch (e) {}
-  if (open) for (const fold of $('collections').querySelectorAll('details.collection[open]')) reshuffleCollection(fold);
   showCollections(open);
 });
-$('collections').addEventListener('click', async e => {
-  const target = e.target.closest ? e.target.closest('[data-open-collection], [data-grid-collection], [data-rename-collection], [data-delete-collection], [data-move-collection]') : null;
+$('collections').addEventListener('click', e => {
+  const target = e.target.closest ? e.target.closest('[data-open-collection], [data-grid-collection], [data-edit-collection], [data-arrange-collections], .collection-tile') : null;
   if (!target) return;
   const d = target.dataset;
   e.preventDefault();
-  if (d.moveCollection) {
-    moveCollection(d.moveCollection, +d.by);
+  if (d.arrangeCollections) {
+    collectionsArranging = !collectionsArranging;
+    collectionSelected = null;
+    showCollectionArranging();
     return;
   }
-  if (d.openCollection) {
+  // Arranging: a tap picks the tile to drag (or lets it go); nothing opens.
+  if (collectionsArranging) {
+    const tile = target.closest('.collection-tile');
+    if (tile && !gridDragged) collectionSelected = collectionSelected === tile.dataset.collection ? null : tile.dataset.collection;
+    showCollectionArranging();
+    return;
+  }
+  if (d.editCollection) openCollectionEdit(d.editCollection);
+  else if (d.openCollection) {
     viewerCollection = d.openCollection;
     if (d.colFilm) openFilm(d.colFilm, 'video'); else openViewer(d.colSet, +d.colPosition);
   } else if (d.gridCollection) {
     openThumbGrid({ collection: d.gridCollection });
-  } else if (d.renameCollection) {
-    const collection = collections.find(c => c.id === d.renameCollection);
-    const name = collection && window.prompt('Rename the collection', collection.name);
-    if (!name || !name.trim() || name.trim() === collection.name) return;
-    const body = await collectionRequest(`/api/collections/${encodeURIComponent(collection.id)}/rename`, { name: name.trim() });
-    if (body) poll();
-  } else if (d.deleteCollection) {
-    if (!secondTap(target)) return;
-    target.disabled = true;
-    const body = await collectionRequest(`/api/collections/${encodeURIComponent(d.deleteCollection)}/delete`, {});
-    target.disabled = false;
-    if (body) poll();
   }
 });
-// A collection one place up or down among those shown, taking its neighbour's: shown at once, then kept on the server
-// (panel/collections.py), whose order every device follows. Those not shown stay in their own places.
-async function moveCollection(id, by) {
-  const shown = shownCollections().map(c => c.id), at = shown.indexOf(id), to = at + by;
-  if (at < 0 || to < 0 || to >= shown.length) return;
-  [shown[at], shown[to]] = [shown[to], shown[at]];
+// The shown collections in this order, taking their places among all (those not shown stay in their own): drawn at
+// once, then kept on the server (panel/collections.py), whose order every device follows.
+async function placeCollections(shown) {
   const byId = Object.fromEntries(collections.map(c => [c.id, c]));
   const slots = collections.map((c, number) => (shown.includes(c.id) ? number : -1)).filter(number => number >= 0);
   slots.forEach((slot, number) => { collections[slot] = byId[shown[number]]; });
   renderCollections();
   if (await collectionRequest('/api/collections/order', { ids: shown })) poll();
 }
+const saveCollectionOrder = grid => placeCollections([...grid.children].map(tile => tile.dataset.collection));
+// Dragged as the thumbnail grid's are: the tile picked first (the selected one), then held and moved.
+$('collections').addEventListener('pointerdown', e => {
+  if (!collectionsArranging || e.button > 0) return;
+  const cell = e.target.closest && e.target.closest('.collection-tile');
+  if (!cell || cell.dataset.collection !== collectionSelected) return;
+  e.preventDefault();
+  startGridDrag(e, cell, { host: document.body, owner: $('collections'), save: saveCollectionOrder });
+});
+$('collections').addEventListener('pointermove', moveGridDrag);
+$('collections').addEventListener('pointerup', dropGrid);
+$('collections').addEventListener('pointercancel', dropGrid);
+// --- Editing a collection: its name, the picture it is shown by (one of its own, or the first), or deleting it ---
+let collectionEditing = null;
+function collectionPickerItems(id) {
+  const albums = collectionAlbums(id);
+  return [...albums.images.map(p => ({ ref: { kind: 'image', run: p.set, file: p.file }, same: c => c.kind === 'image' && c.set === p.set && c.file === p.file, src: imageThumbSrc(p), label: p.title })),
+    ...albums.films.map(v => ({ ref: { kind: 'film', name: v.name }, same: c => c.kind === 'film' && c.name === v.name, src: filmPosterSrc(v), label: v.title || v.name }))];
+}
+function showCollectionPick() {
+  for (const button of $('collectionEditPicker').querySelectorAll('button')) button.classList.toggle('current', button.dataset.pick === String(collectionEditing.pick));
+}
+function openCollectionEdit(id) {
+  const collection = collections.find(c => c.id === id);
+  if (!collection) return;
+  const items = collectionPickerItems(id), chosen = collection.cover ? items.findIndex(item => item.same(collection.cover)) : -1;
+  collectionEditing = { id, items, pick: chosen < 0 ? 'auto' : chosen, was: chosen < 0 ? 'auto' : chosen };
+  $('collectionEditName').value = collection.name;
+  $('collectionEditPicker').innerHTML = `<button type="button" class="auto" data-pick="auto" title="The first image">Automatic</button>`
+    + items.map((item, i) => `<button type="button" data-pick="${i}" title="${esc(item.label || '')}" aria-label="${esc(item.label || 'Use as the picture')}"><img loading="lazy" decoding="async" alt="" src="${esc(item.src)}"></button>`).join('');
+  showCollectionPick();
+  const del = $('collectionEditDelete');
+  if (del.classList.contains('armed')) disarm(del);
+  $('collectionEdit').showModal();
+}
+$('collectionEditPicker').addEventListener('click', e => {
+  const button = e.target.closest && e.target.closest('[data-pick]');
+  if (!button || !collectionEditing) return;
+  collectionEditing.pick = button.dataset.pick === 'auto' ? 'auto' : +button.dataset.pick;
+  showCollectionPick();
+});
+$('collectionEditSave').addEventListener('click', async () => {
+  const edit = collectionEditing, collection = edit && collections.find(c => c.id === edit.id);
+  if (!collection) { $('collectionEdit').close(); return; }
+  const name = $('collectionEditName').value.trim(), id = encodeURIComponent(collection.id);
+  if (name && name !== collection.name && !await collectionRequest(`/api/collections/${id}/rename`, { name })) return;
+  if (edit.pick !== edit.was && !await collectionRequest(`/api/collections/${id}/cover`, { item: edit.pick === 'auto' ? null : edit.items[edit.pick].ref })) return;
+  $('collectionEdit').close();
+  poll();
+});
+$('collectionEditDelete').addEventListener('click', async e => {
+  const button = e.currentTarget, edit = collectionEditing;
+  if (!edit || !secondTap(button)) return;
+  button.disabled = true;
+  const body = await collectionRequest(`/api/collections/${encodeURIComponent(edit.id)}/delete`, {});
+  button.disabled = false;
+  if (!body) return;
+  $('collectionEdit').close();
+  poll();
+});
+$('collectionEditCancel').addEventListener('click', () => $('collectionEdit').close());
+$('collectionEdit').addEventListener('click', e => { if (e.target === $('collectionEdit')) $('collectionEdit').close(); });
 async function collectionRequest(url, payload) {
   try {
     const response = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
@@ -6305,7 +6370,9 @@ function gridAutoScroll(now) {
   const drag = gridDrag;
   if (!drag) return;
   drag.frame = 0;
-  const body = $('thumbGridBody'), box = body.getBoundingClientRect(), edge = Math.min(70, box.height / 4);
+  const body = drag.scroller;
+  if (!body) return;
+  const box = body.getBoundingClientRect(), edge = Math.min(70, box.height / 4);
   const strength = drag.y < box.top + edge ? -(box.top + edge - drag.y) / edge : drag.y > box.bottom - edge ? (drag.y - box.bottom + edge) / edge : 0;
   if (!strength) { drag.last = null; return; }
   const elapsed = drag.last == null ? 16 : Math.min(50, now - drag.last);
@@ -6315,39 +6382,45 @@ function gridAutoScroll(now) {
   if (body.scrollTop !== before) gridDragTo(drag.x, drag.y);
   drag.frame = requestAnimationFrame(gridAutoScroll);
 }
-$('thumbGridBody').addEventListener('pointerdown', e => {
-  if (!thumbGridArranging || e.button > 0) return;
-  const cell = e.target.closest && e.target.closest('[data-grid-index]');
-  if (!cell || cell.dataset.gridIndex !== thumbGridSelected) return;
-  e.preventDefault();
+// Picks one up: a copy floats in host, and the grid it is in (where the pointer is captured, owner) saves the order on
+// the drop. A scroller, if it has one, scrolls when the copy is held near its top or bottom.
+function startGridDrag(e, cell, { host, owner, save, scroller = null }) {
   const box = cell.getBoundingClientRect();
   const ghost = cell.cloneNode(true);
   ghost.classList.add('grid-ghost');
   Object.assign(ghost.style, { position: 'fixed', left: '0px', top: '0px', width: `${box.width}px`, height: `${box.height}px`,
     transform: `translate(${box.left}px, ${box.top}px)`, pointerEvents: 'none', zIndex: 10 });
-  $('thumbGrid').appendChild(ghost);
-  gridDrag = { cell, grid: cell.parentElement, ghost, pointer: e.pointerId, dx: e.clientX - box.left, dy: e.clientY - box.top,
+  host.appendChild(ghost);
+  gridDrag = { cell, grid: cell.parentElement, ghost, pointer: e.pointerId, dx: e.clientX - box.left, dy: e.clientY - box.top, save, scroller,
     x: e.clientX, y: e.clientY, frame: 0, last: null, before: [...cell.parentElement.children].map(c => c.dataset.gridIndex).join() };
   cell.classList.add('dragging');
-  try { $('thumbGridBody').setPointerCapture(e.pointerId); } catch (err) {}
+  try { owner.setPointerCapture(e.pointerId); } catch (err) {}
+}
+$('thumbGridBody').addEventListener('pointerdown', e => {
+  if (!thumbGridArranging || e.button > 0) return;
+  const cell = e.target.closest && e.target.closest('[data-grid-index]');
+  if (!cell || cell.dataset.gridIndex !== thumbGridSelected) return;
+  e.preventDefault();
+  startGridDrag(e, cell, { host: $('thumbGrid'), owner: $('thumbGridBody'), save: saveGridOrder, scroller: $('thumbGridBody') });
 });
-$('thumbGridBody').addEventListener('pointermove', e => {
+function moveGridDrag(e) {
   if (!gridDrag || e.pointerId !== gridDrag.pointer) return;
   e.preventDefault();
   gridDragTo(e.clientX, e.clientY);
   if (!gridDrag.frame) gridDrag.frame = requestAnimationFrame(gridAutoScroll);
-});
-const dropGrid = async e => {
+}
+$('thumbGridBody').addEventListener('pointermove', moveGridDrag);
+async function dropGrid(e) {
   if (!gridDrag || e.pointerId !== gridDrag.pointer) return;
-  const { cell, grid, ghost, before, frame } = gridDrag;
+  const { cell, grid, ghost, before, frame, save } = gridDrag;
   gridDrag = null;
   if (frame) cancelAnimationFrame(frame);
   ghost.remove();
   cell.classList.remove('dragging');
   gridDragged = true;
   setTimeout(() => { gridDragged = false; }, 0);
-  if ([...grid.children].map(c => c.dataset.gridIndex).join() !== before) await saveGridOrder(grid);
-};
+  if ([...grid.children].map(c => c.dataset.gridIndex).join() !== before) await save(grid);
+}
 $('thumbGridBody').addEventListener('pointerup', dropGrid);
 $('thumbGridBody').addEventListener('pointercancel', dropGrid);
 // A tap, not a scroll: the finger stayed put, and the grid wasn't moving (a tap that stops a fling only stops it).
@@ -9960,7 +10033,6 @@ function showPage(page) {
   if (page === 'output' && document.body.dataset.page !== 'output') {
     holdOutput();
     resetOutputView();
-    for (const fold of $('collections').querySelectorAll('details.collection[open]')) reshuffleCollection(fold);
   }
   document.body.dataset.page = page;
   if (page === 'output') placeKindsThumb();

@@ -56,7 +56,7 @@ class CollectionsTest(unittest.TestCase):
         images = payload["image_sets"][0]["images"]
         self.assertEqual([image.get("collection") for image in images], [None, reply["collection"]["id"]], "marked, so Output leaves it out")
         self.assertEqual(payload["collections"], [{"id": reply["collection"]["id"], "name": "Favourites", "nsfw": False,
-                                                    "items": [{"kind": "image", "set": state.id, "file": "cat_2.png"}], "folded": False}])
+                                                    "items": [{"kind": "image", "set": state.id, "file": "cat_2.png"}], "folded": False, "cover": None}])
         self.assertEqual(self.move(kind="image", run=state.id, file="cat_2.png").status_code, 404, "into a collection only")
         self.assertEqual(self.move(kind="image", run=state.id, file="gone.png", new="X").status_code, 404)
 
@@ -92,6 +92,25 @@ class CollectionsTest(unittest.TestCase):
         self.assertEqual(self.client.post(url, json={"folded": "yes"}).status_code, 400)
         self.assertTrue(self.client.post(url, json={"folded": True}).get_json()["ok"])
         self.assertTrue(collections._read()[0]["folded"])
+
+    def test_a_collection_can_be_shown_by_one_of_its_own_items(self):
+        state = self.make_set()
+        home = self.move(kind="image", run=state.id, file="cat_1.png", new="Mine").get_json()["collection"]["id"]
+        self.move(kind="image", run=state.id, file="cat_2.png", to=home)
+        url = f"/api/collections/{home}/cover"
+        second = {"kind": "image", "run": state.id, "file": "cat_2.png"}
+        self.assertEqual(self.client.post(url, json={"item": {"kind": "image", "run": state.id, "file": "other.png"}}).status_code, 409, "its own items only")
+        self.assertEqual(self.client.post(url, json={"item": {"kind": "image"}}).status_code, 400)
+        self.assertTrue(self.client.post(url, json={"item": second}).get_json()["ok"])
+        payload = self.payload(state)
+        collections.apply(payload)
+        self.assertEqual(payload["collections"][0]["cover"], {"kind": "image", "set": state.id, "file": "cat_2.png"})
+        self.move(kind="image", run=state.id, file="cat_2.png", new="Elsewhere")
+        payload = self.payload(state)
+        collections.apply(payload)
+        self.assertIsNone(payload["collections"][0]["cover"], "gone from it, so back to the first image")
+        self.assertTrue(self.client.post(url, json={"item": None}).get_json()["ok"])
+        self.assertNotIn("cover", collections._read()[0])
 
     def test_rename_needs_a_name(self):
         made = self.client.post("/api/collections", json={"name": "  Old  "}).get_json()["collection"]

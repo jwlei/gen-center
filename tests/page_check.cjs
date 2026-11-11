@@ -653,14 +653,16 @@ assert(setHtml.includes('data-grid-set="image_20261102_120000"') && /<button typ
   assert(/<\/div>\s*<button type="button" class="view-toggle" id="viewToggle" aria-pressed="false" aria-label="View">/.test(html) && !/id="viewToggle"[^>]*(title|NSFW)/.test(html),
     'the other view: a plain button at its right, saying nothing of what it shows');
   assert(/\.collections:not\(\[hidden\]\) \{[^}]*background: var\(--bg\); border: 1px solid var\(--line\)/.test(html), 'open, a dark bordered box of its own');
-  assert(/\.image-set\.collection \.image-set-heading \.rename-btn svg \{ width: 14px; height: 14px; \}/.test(html) && box.includes('Mine &lt;i&gt;') && box.includes('1 image · 1 video')
-    && /class="album-cover" data-grid-collection="c_1"/.test(box) && !/<button[^>]*data-grid-collection/.test(box) && script.includes('return rest.slice(0, 3).join(\'\');')
-    && script.includes('if (fold.open) reshuffleCollection(fold);')
-    && box.includes('data-rename-collection="c_1"') && box.includes('data-delete-collection="c_1"'),
-    'under a folding header: its name escaped, rename at its right, what it holds, the grid and delete');
+  assert(box.includes('<span class="tile-name">Mine &lt;i&gt;</span>') && /<button type="button" class="tile-cover" data-grid-collection="c_1"[^>]*><img [^>]*src="\/image-runs\/image_1\/thumbnails\/2\?v=1"><span class="album-count">2<\/span><\/button>/.test(box)
+    && box.indexOf('class="tile-cover"') < box.indexOf('class="tile-name"') && box.includes('data-edit-collection="c_1"')
+    && !box.includes('<details') && !box.includes('data-delete-collection') && !box.includes('collections-head'),
+    'a tile: its first image with how many, its name small beneath (escaped), a pen to edit; no arrange for one');
+  assert(/\.tile-name \{[^}]*font-size: \.7rem;/.test(html), 'the name is small text');
   assert(!els.collections.hidden);
-  assert(/<details class="image-set collection" data-collection="c_1" open>\s*<summary class="image-set-heading">/.test(box) && box.includes('data-no-fold="1"'),
-    'each folds by its name; the pen renames without folding it');
+  // The picture chosen for it, if still there; else the first image, else the first film.
+  assert.strictEqual(JSON.stringify(run("collectionCover({ id: 'c_1', cover: { kind: 'film', name: 'F.mp4' } })")), '{"film":{"name":"F.mp4","run":"run_1","collection":"c_1"}}', 'a chosen film');
+  assert(run("collectionCover({ id: 'c_1', cover: { kind: 'image', set: 'image_1', file: 'gone.png' } }).image.file") === 'b.png', 'one that has left it: the first image again');
+  assert(run("collectionHtml({ id: 'c_1', name: 'x', cover: { kind: 'film', name: 'F.mp4' }, items: [{ kind: 'image', set: 'image_1', file: 'b.png' }, { kind: 'film', name: 'F.mp4' }] })").includes('src="/runs/run_1/image"'), 'shown by it');
   // In the preview: up and down go between its albums, and no further.
   run("viewerCollection = 'c_1'; viewing = { id: 'image_1', position: 2 }");
   assert.strictEqual(run('stepSet(-1)'), false, 'nothing above its images');
@@ -680,17 +682,37 @@ assert(setHtml.includes('data-grid-set="image_20261102_120000"') && /<button typ
   assert(els.collections.hidden && !els.collectionsToggle.hidden, 'kept hidden on the next draw, the icon still there');
   context.localStorage.getItem = keptStorage.get;
   context.localStorage.setItem = keptStorage.set;
-  // Up and down in each heading with two or more: the first can't go up, the last can't go down; one moves into its
-  // neighbour's place among those shown, and any not shown (here the NSFW one) stays where it was.
+  // Two or more: an arrange icon above the tiles, each tile dragged where it goes; the one placed takes its place among
+  // those shown, and any not shown (here the NSFW one) stays where it was.
   run(`collections = ['c_1', 'c_h', 'c_2', 'c_3'].map(id => ({ id, name: id, nsfw: id === 'c_h', items: [{ kind: 'film', name: 'F.mp4' }] })); document.getElementById('collections').dataset.key = ''; renderCollections()`);
   const arranged = els.collections.innerHTML;
-  assert(/data-move-collection="c_1" data-by="-1"[^>]*disabled/.test(arranged) && !/data-move-collection="c_2" data-by="-1"[^>]*disabled/.test(arranged)
-    && /data-move-collection="c_3" data-by="1"[^>]*disabled/.test(arranged) && !arranged.includes('data-move-collection="c_h"'), 'up and down beside the pen, the ends greyed');
-  run("moveCollection('c_3', -1)");
+  assert(arranged.includes('class="collections-arrange" data-arrange-collections="1"') && !arranged.includes('data-collection="c_h"')
+    && /data-collection="c_1" data-grid-index="0"/.test(arranged) && /data-collection="c_3" data-grid-index="2"/.test(arranged), 'arrange, and a numbered tile for each shown');
+  run("placeCollections(['c_1', 'c_3', 'c_2'])");
   assert.strictEqual(JSON.stringify(run('collections.map(c => c.id)')), '["c_1","c_h","c_3","c_2"]', 'it takes its neighbour\'s place; the one not shown keeps its own');
-  run("moveCollection('c_1', -1)");
-  assert.strictEqual(JSON.stringify(run('collections.map(c => c.id)')), '["c_1","c_h","c_3","c_2"]', 'the first has nowhere up to go');
   assert(els.collections.innerHTML.indexOf('data-collection="c_3"') < els.collections.innerHTML.indexOf('data-collection="c_2"'), 'drawn at once in the new order');
+  // Arranging: a tap picks a tile (nothing opens), and only the picked one is dragged.
+  const tile = id => ({ dataset: { collection: id }, closest(sel) { return sel.includes('.collection-tile') ? this : null; } });
+  const tapped = [];
+  const press = (target, dataset = {}) => els.collections.listeners.click({ target: { closest(sel) { return sel.includes('data-arrange-collections') && dataset.arrangeCollections ? { dataset, closest: () => null } : { dataset, closest: s => (s === '.collection-tile' ? tile(target) : null) }; } }, preventDefault() {} });
+  press('c_1', { arrangeCollections: '1' });
+  assert(run('collectionsArranging') === true && run('collectionSelected') === null, 'arrange on');
+  press('c_3', { gridCollection: 'c_3' });
+  assert(run('collectionSelected') === 'c_3', 'a tap picks it, nothing opens');
+  press('c_3', { gridCollection: 'c_3' });
+  assert(run('collectionSelected') === null, 'again lets it go');
+  press('c_1', { arrangeCollections: '1' });
+  assert(run('collectionsArranging') === false, 'arrange off');
+  run("viewing = null; viewerCollection = null; collectionsArranging = false; collectionSelected = null");
+  // Edit: name and picture; the picture is any of its own, or Automatic (the first image).
+  for (const id of ['collectionEdit', 'collectionEditName', 'collectionEditPicker', 'collectionEditSave', 'collectionEditDelete', 'collectionEditCancel']) context.document.getElementById(id);
+  run(`allImageSets = [{ id: 'image_1', label: 'S', images: [{ position: 1, file: 'a.png', title: 'a', version: 1 }, { position: 2, file: 'b.png', title: 'b', version: 1 }] }];
+       collections = [{ id: 'c_1', name: 'Mine', items: [{ kind: 'image', set: 'image_1', file: 'a.png' }, { kind: 'image', set: 'image_1', file: 'b.png' }], cover: { kind: 'image', set: 'image_1', file: 'b.png' } }];
+       $('collectionEdit').showModal = () => {}; openCollectionEdit('c_1')`);
+  const picker = els.collectionEditPicker.innerHTML;
+  assert(els.collectionEditName.value === 'Mine' && picker.includes('data-pick="auto"') && picker.includes('data-pick="0"') && picker.includes('data-pick="1"')
+    && run('collectionEditing.pick') === 1, 'name filled in, its own pictures to pick from, its present one picked');
+  assert(/<dialog id="collectionEdit" class="panel-dialog collection-edit"/.test(html) && /id="collectionEditDelete"/.test(html), 'a dialog with delete in it');
   run("viewing = null; viewerCollection = null; collections = []; allImageSets = []; renderCollections()");
   assert(els.collections.hidden && els.collectionsToggle.hidden, 'none: no box, no icon');
 }
@@ -891,8 +913,8 @@ assert(html.includes(`id="paintClear" title="Clear all paint" aria-label="Clear 
   assert(fields.opt_up.checked === true && fields.opt_steps.value === '20' && fields.opt_lora_on.checked === true && fields.opt_lora_strength.value === '0.8');
 }
 assert(/\.image-set-actions \{[^}]*justify-content: flex-end;[^}]*margin-top: auto;/.test(html) && /\.album-cover \{[^}]*width: 92px; height: 92px;/.test(html), 'the icons sit in the same place on every set');
-assert(/\.image-set-row\.album \{ align-items: stretch; \}/.test(html) && /\.album-strip \{ display: flex;/.test(html), "a collection's thumbnails in a row");
-assert(/\.album-cover img \{ position: absolute; inset: 0;/.test(html) && !/\.album-cover \{[^}]*min-height/.test(html), 'the cover is as tall as the strip and buttons, not its picture');
+assert(/\.image-set-row\.album \{ align-items: stretch; \}/.test(html) && /\.collection-tiles \{ display: grid; grid-template-columns: repeat\(auto-fill, minmax\(84px, 1fr\)\);/.test(html), "a collection's tiles in a grid");
+assert(/\.album-cover img \{ position: absolute; inset: 0;/.test(html) && !/\.album-cover \{[^}]*min-height/.test(html), 'the cover is as tall as the buttons, not its picture');
 assert(/input\[type=file\]::file-selector-button/.test(html), 'choosing a file has a real button');
 run('imageSets = sets; renderImageSets()');
 const once = els.imageSets.innerHTML;
@@ -2582,6 +2604,27 @@ assert(els.comfyFacts.innerHTML.includes('Generating the image · 3/8') && els.c
     assert.deepStrictEqual(Array.from(sent[1]), [2, 1, 3], 'keyboard reorder is submitted');
     run('sendOrder = savedSendOrder');
     context.requestAnimationFrame = oldRaf; context.cancelAnimationFrame = oldCancel;
+  }
+  {
+    // Saving a collection's edit: the new name, then its picture (Automatic being none chosen).
+    const savedFetch = context.fetch, savedPoll = run('poll'), asked = [];
+    context.fetch = async (url, init) => { asked.push([url, JSON.parse(init.body)]); return { ok: true, json: async () => ({ ok: true }) }; };
+    run(`allImageSets = [{ id: 'image_1', label: 'S', images: [{ position: 1, file: 'a.png', title: 'a', version: 1 }, { position: 2, file: 'b.png', title: 'b', version: 1 }] }];
+         collections = [{ id: 'c_1', name: 'Mine', items: [{ kind: 'image', set: 'image_1', file: 'a.png' }, { kind: 'image', set: 'image_1', file: 'b.png' }], cover: { kind: 'image', set: 'image_1', file: 'b.png' } }];
+         $('collectionEdit').showModal = () => {}; $('collectionEdit').close = () => {}; poll = () => {}; openCollectionEdit('c_1')`);
+    els.collectionEditPicker.listeners.click({ target: { closest: () => ({ dataset: { pick: 'auto' } }) } });
+    els.collectionEditName.value = ' Renamed ';
+    await els.collectionEditSave.listeners.click();
+    assert.strictEqual(JSON.stringify(asked), '[["/api/collections/c_1/rename",{"name":"Renamed"}],["/api/collections/c_1/cover",{"item":null}]]', 'saved: the name, then no chosen picture');
+    asked.length = 0;
+    run("openCollectionEdit('c_1')");
+    els.collectionEditPicker.listeners.click({ target: { closest: () => ({ dataset: { pick: '0' } }) } });
+    await els.collectionEditSave.listeners.click();
+    assert.strictEqual(JSON.stringify(asked), '[["/api/collections/c_1/cover",{"item":{"kind":"image","run":"image_1","file":"a.png"}}]]', 'a picture of its own chosen: only that is sent');
+    run("collections = []; allImageSets = []");
+    context.savedCollectionPoll = savedPoll;
+    run('poll = savedCollectionPoll');
+    context.fetch = savedFetch;
   }
   {
     const savedFetch = context.fetch, savedAlert = context.alert;
