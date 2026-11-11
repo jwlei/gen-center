@@ -292,7 +292,48 @@ def describe(ui, info=None, pipeline="image"):
         for option in options:
             if option["id"] == "prompt_enhancer":
                 option.update(label=H3_ENHANCER_LABEL, named=True)
+    options += _turbo_lora(ui, options, info or {})
     return options
+
+
+def _speed_loaders(ui):
+    """
+    The Load LoRA nodes of a workflow whose file is a speed LoRA (turbo, lightning, n-step), on the canvas or inside a
+    subgraph: [(id of the subgraph holding it or None, node)].
+    """
+    found = [(None, node) for node in ui["nodes"]]
+    found += [(subgraph["id"], node) for subgraph in ui.get("definitions", {}).get("subgraphs", []) for node in subgraph.get("nodes", [])]
+    return [(scope, node) for scope, node in found if node["type"] in LORA_LOADERS and not node.get("mode")
+            and isinstance(node.get("widgets_values"), list) and len(node["widgets_values"]) > 1
+            and SPEED_LORA.search(str(node["widgets_values"][0]))]
+
+
+def _turbo_lora(ui, options, info):
+    """
+    The turbo LoRA's file and strength, under its switch, as the LoRA setting has them under Use LoRA: the one the
+    workflow has to start from, any speed LoRA installed to choose. For a workflow with one such switch and one such
+    loader: it is the loader's file and strength that are set (lora_widget 0 and 1). Returns the options it adds.
+    """
+    switches = [option for option in options if option.get("speed") and option["kind"] == "switch"]
+    loaders = _speed_loaders(ui)
+    if len(switches) != 1 or len(loaders) != 1:
+        return []
+    switch, (scope, loader) = switches[0], loaders[0]
+    linked = {entry["name"] for entry in loader.get("inputs", []) if entry.get("link") is not None}
+    # A file or strength something else sets (a switch, a primitive) isn't this node's to choose.
+    if "lora_name" in linked:
+        return []
+    name, strength = _installed_lora(info, loader["widgets_values"][0]), loader["widgets_values"][1]
+    # Of the speed LoRAs installed, the ones for this model: a speed LoRA is made for one.
+    choices = sorted({file for file in _lora_files(info) if SPEED_LORA.search(file)} | {name}, key=lambda file: lora_label(file).lower())
+    switch["below"] = True
+    where = {"lora_node": loader["id"], "lora_scope": scope, "advanced": True, "speed": True, "parent": switch["id"]}
+    found = [{"id": f"{switch['id']}_name", "kind": "choice", "label": "LoRA", "choices": choices, "default": name,
+              "labels": {file: lora_label(file) for file in choices}, "lora_widget": 0, **where}]
+    if not linked & {"strength_model", "strength"}:
+        found.append({"id": f"{switch['id']}_strength", "kind": "number", "label": "Strength", "default": f"{float(strength):g}", "min": -2, "max": 2,
+                      "step": 0.05, "lora_widget": 1, **where})
+    return found
 
 
 def _set_mode(ui, node, mode):
@@ -341,6 +382,13 @@ def _before(ui, options, chosen):
             value = value == ON if option["kind"] == "switch" else float(value) if option["kind"] == "number" else value
             if isinstance(values, list) and option["input"] in names and names.index(option["input"]) < len(values):
                 values[names.index(option["input"])] = value
+        # The turbo LoRA's file and strength: on the Load LoRA node, wherever it is.
+        if "lora_widget" in option and picked is not None:
+            holders = ui["nodes"] if option["lora_scope"] is None else next(
+                (subgraph["nodes"] for subgraph in subgraphs.values() if subgraph["id"] == option["lora_scope"]), [])
+            loader = next((node for node in holders if node["id"] == option["lora_node"]), None)
+            if loader:
+                loader["widgets_values"][option["lora_widget"]] = float(picked) if option["kind"] == "number" else picked
     return ui
 
 

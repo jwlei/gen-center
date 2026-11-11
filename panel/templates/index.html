@@ -4994,12 +4994,12 @@ function syncOptions(section, box, options, workflow = '') {
   const lora = options.filter(option => option.id === 'lora' || option.parent === 'lora');
   const speed = options.filter(option => option.speed);
   const rest = options.filter(option => !sampling.includes(option) && !lora.includes(option) && !speed.includes(option));
-  // Two kinds of LoRA, each under a word on what it does: a style one changes the look, a speed one (lightning,
-  // turbo, n-step) makes it in fewer steps.
+  // Two kinds of LoRA, each under a word on what it does: a turbo one (lightning, n-step) makes it in fewer steps, and
+  // comes first, as it sets the steps; a style one changes the look.
   const heading = (text, what) => `<div class="options-subtitle">${text}<span class="options-subtitle-what"> · ${what}</span></div>`;
   $(box).innerHTML = (sampling.length ? `<div class="options-section">${heading('Sampling', 'how each picture is worked')}<div class="options-sampling">${sampling.map(samplingHtml).join('')}</div></div>` : '')
+    + (speed.length ? `<div class="options-lora options-speed">${heading('Turbo LoRA', 'fewer steps, faster')}${draw(speed)}</div>` : '')
     + (lora.length ? `<div class="options-lora">${heading('Style LoRA', 'changes the look')}${draw(lora)}</div>` : '')
-    + (speed.length ? `<div class="options-lora options-speed">${heading('Speed LoRA', 'fewer steps, faster')}${draw(speed)}</div>` : '')
     + draw(rest.filter(option => !option.advanced)) + draw(rest.filter(option => option.advanced));
   $(box).optionList = options;
   restoreOptions($(box));

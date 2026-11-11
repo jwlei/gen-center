@@ -215,7 +215,7 @@ gets them, on Shorts and Video too, where a run keeps them for Continue and redo
 | The Krea2T Enhancer | A tickbox and its prompt-adherence strength, 0 to 2. |
 | A sampler whose steps can be found | Steps, under Advanced. |
 | A KSampler, KSamplerSelect, BasicScheduler, CFGGuider or CFG primitive | Beside Steps, under Advanced: Sampler, Scheduler and CFG, wherever the workflow has just one of each. A distilled graph (ManualSigmas) has its own fixed steps and CFG, so they show greyed out. |
-| A switch such as turbo that changes the steps | Steps, CFG, Sampler and Scheduler follow it as it's ticked: Qwen-Image-Edit's Enable turbo mode, MiniMax's lightning LoRA. |
+| A switch such as turbo that changes the steps | Steps, CFG, Sampler and Scheduler follow it as it's ticked: Qwen-Image-Edit's Enable turbo mode, MiniMax's lightning LoRA. Under **Turbo LoRA**, above Style LoRA, it opens a file picker (the speed LoRAs installed, the workflow's own first) and a strength, as Use LoRA does; a file or strength the workflow sets some other way isn't offered. |
 | One text input that is the negative prompt (CLIPTextEncode into a negative, or a Fibo 2 negative_prompt) | Negative prompt, under Advanced. Not offered on a distilled graph, whose CFG of 1 never reads it, unless it has NAG (LTX). |
 | An LTX graph | Frames per second, Image strength (both passes), NAG scale, and Add a LoRA (any installed LoRA and its strength, into an empty Power Lora Loader), under Advanced. |
 

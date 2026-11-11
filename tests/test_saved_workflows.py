@@ -528,6 +528,33 @@ class TurboTest(unittest.TestCase):
         self.assertEqual(scheduler["inputs"]["steps"], ["24", 0])
         self.assertEqual(scheduler["inputs"]["model"], ["21", 0], "through the LoRA")
 
+    def turbo_picker(self):
+        """turbo_workflow() whose LoRA is a turbo one, with two of them installed beside a style LoRA."""
+        ui = turbo_workflow()
+        next(node for node in ui["nodes"] if node["id"] == 21)["widgets_values"] = ["h3_turbo_4step.safetensors", 1]
+        files = [["h3_turbo_4step.safetensors", "h3_turbo_8step.safetensors", "style.safetensors"]]
+        return ui, {**OBJECT_INFO, "LoraLoaderModelOnly": {"input": {"required": {"model": ["MODEL"], "lora_name": files, "strength_model": ["FLOAT", {}]}}}}
+
+    def test_the_turbo_lora_has_a_file_and_strength_as_the_style_lora_does(self):
+        ui, info = self.turbo_picker()
+        options = {option["id"]: option for option in workflow_options.offered(ui, info, "video")}
+        switch, name, strength = (options[f"switch_lightning_lora{part}"] for part in ("", "_name", "_strength"))
+        self.assertTrue(switch["below"] and name["speed"] and strength["speed"], "under its switch, with the turbo LoRAs")
+        self.assertEqual((name["parent"], strength["parent"]), ("switch_lightning_lora",) * 2)
+        self.assertEqual(name["choices"], ["h3_turbo_4step.safetensors", "h3_turbo_8step.safetensors"], "the speed LoRAs installed, not the style one")
+        self.assertEqual((name["default"], strength["default"]), ("h3_turbo_4step.safetensors", "1"), "the workflow's own to start from")
+        self.assertNotIn("h3_turbo_4step.safetensors", options["lora_name"]["choices"] if "lora_name" in options else [], "the style list has no speed LoRA")
+
+    def test_the_turbo_lora_chosen_is_the_one_that_runs(self):
+        ui, info = self.turbo_picker()
+        chosen = {"switch_lightning_lora": "1", "switch_lightning_lora_name": "h3_turbo_8step.safetensors", "switch_lightning_lora_strength": "0.6"}
+        api = workflow_options.convert(ui, info, chosen, "video")[0]
+        self.assertEqual((api["21"]["inputs"]["lora_name"], api["21"]["inputs"]["strength_model"]), ("h3_turbo_8step.safetensors", 0.6))
+        api = workflow_options.convert(ui, info, {"switch_lightning_lora": "1"}, "video")[0]
+        self.assertEqual((api["21"]["inputs"]["lora_name"], api["21"]["inputs"]["strength_model"]), ("h3_turbo_4step.safetensors", 1), "as saved when not chosen")
+        self.assertIsNone(workflow_options.check(workflow_options.offered(ui, info, "video"), chosen))
+        self.assertIn("is one of", workflow_options.check(workflow_options.offered(ui, info, "video"), {"switch_lightning_lora_name": "x.safetensors"}))
+
     def test_an_unnamed_or_unused_boolean_is_no_option(self):
         ui = turbo_workflow()
         ui["nodes"].append(_ui_node(40, "PrimitiveBoolean", {"value": True}, title="Boolean (Spare)"))
