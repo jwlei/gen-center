@@ -613,6 +613,7 @@ class JobQueue:
         if self.job.stopped:
             note_outcome(self.job, item, STOPPED)
             self._record(item, "stopped")
+            self._keep_unsaved_stop(item)
         elif code == 0:
             if self is run_queue and item.get("pipeline") == "video":
                 run_id = (self.job.progress or {}).get("run_id") or item.get("resume")
@@ -645,6 +646,19 @@ class JobQueue:
             self._record(item, "failed", plain or f"exit {code}")
             if self.items:
                 self.job.log(f"❌ {item['label']} failed (exit {code}).")
+
+    def _keep_unsaved_stop(self, item):
+        """A run stopped before it saved anything has no stopped run to continue: its settings go back to Pending instead."""
+        if self is not run_queue or not self.results or self.results[-1].get("run_id") or self.results[-1].get("job_id") != item.get("id"):
+            return
+        self.results.pop()
+        self._save_results()
+        item_id = self.next_id
+        self.next_id += 1
+        self.items.append({**{key: value for key, value in item.items() if key not in self.TRANSIENT_KEYS},
+                           "id": item_id, "later": True, "waited": True})
+        self._save()
+        _runs_cache["at"] = 0.0
 
     def _retry_after_restart(self, item, reason):
         """

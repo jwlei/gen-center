@@ -684,6 +684,9 @@
     color: var(--text); font-size: inherit; font-variant-numeric: tabular-nums; white-space: nowrap; }
   .count-stepper .mp-field .mp-unit { margin-left: 2px; color: var(--muted); font-size: .8em; }
   span.mp-field { display: inline-flex; align-items: center; justify-content: center; box-sizing: border-box; }
+  .count-stepper .mp-field[role="button"] { cursor: text; }
+  .count-stepper .mp-field input { width: 100%; min-width: 0; margin: 0; padding: 0; border: 0; background: transparent; color: inherit;
+    font: inherit; text-align: center; outline: none; -moz-appearance: textfield; appearance: textfield; }
   /* Resolution, upscale and the megapixel stepper: one block. */
   .res-block { margin: 4px 0 12px; padding: 10px 12px 12px; border: 1px solid var(--line); border-radius: 12px; background: var(--bg); }
   .res-block[hidden], .res-block .hidden { display: none; }
@@ -1303,6 +1306,7 @@
   @media (prefers-reduced-motion: reduce) { .option-reveal { transition: none; } }
   .options-lora { margin: 4px 0 10px; }
   .options-lora > .options-subtitle { margin-bottom: 0; }
+  .options-speed select { max-width: 100%; min-width: 0; text-overflow: ellipsis; }
   .options-lora > .check { margin-top: 6px; }
   .options-subtitle-what { text-transform: none; letter-spacing: 0; font-weight: 400; }
   .pipeline-form .option-below select { flex: 1 1 auto; min-width: 0; }
@@ -1559,6 +1563,7 @@
   .go-eta b { color: var(--text); }
   .go-bar button { width: auto; flex: none; margin: 0; padding: 8px 14px; font-size: .85rem; }
   /* Add to top of queue and Add to pending, as symbols beside the main button; they go as the form's own do. */
+  .go-bar #goStick { width: 9.5em; white-space: nowrap; text-align: center; }
   .go-bar .go-icon { display: inline-flex; align-items: center; justify-content: center; padding: 8px; background: var(--panel-2); border: 1px solid var(--line); color: var(--muted); }
   .go-bar .go-icon[hidden] { display: none; }
   .go-bar .go-icon:hover, .go-bar .go-icon:focus-visible { color: var(--text); }
@@ -2030,7 +2035,7 @@
     </div>
     <div class="count-stepper mp-stepper" id="videoMegapixelsBox">
       <button type="button" id="videoMegapixelsDown" aria-label="0.1 megapixels fewer">−</button>
-      <button type="button" class="mp-field" id="videoMegapixelsValue" aria-label="Megapixels" title="Tap for 480p's pixel count"></button>
+      <span class="mp-field" role="button" tabindex="0" id="videoMegapixelsValue" aria-label="Megapixels"></span>
       <button type="button" id="videoMegapixelsUp" aria-label="0.1 megapixels more">+</button>
     </div>
     <div class="hint res-note" id="videoResNote" hidden></div>
@@ -2245,7 +2250,7 @@
     <div class="count-stepper mp-stepper" id="imageMegapixelsBox">
           <input type="hidden" id="imageMegapixels" name="megapixels" value="image">
           <button type="button" id="imageMegapixelsDown" aria-label="0.1 megapixels fewer">−</button>
-          <button type="button" class="mp-field" id="imageMegapixelsValue" aria-label="Megapixels" title="Tap for the image's own size"></button>
+          <span class="mp-field" role="button" tabindex="0" id="imageMegapixelsValue" aria-label="Megapixels"></span>
           <button type="button" id="imageMegapixelsUp" aria-label="0.1 megapixels more">+</button>
         </div>
     <div class="hint res-note" id="imageResNote" hidden></div>
@@ -3961,8 +3966,8 @@ function showVideoStepper(mp, least, top, sides, end, note, on) {
   $('videoPixelSize').textContent = sides ? sides.join('×') : '';
   showUpscaleEnd($('videoLatentSize'), end, !on && sides);
   drawAspect($('videoAspectBox'), ...(sides || [0, 0]));
-  $('videoMegapixelsValue').innerHTML = `${mp.toFixed(1)}<span class="mp-unit">MP</span>`;
-  $('videoMegapixelsValue').title = on ? 'The size it ends at; the size it is made at follows. Tap for the most this workflow makes well' : 'Tap for the resolution as picked';
+  if (!$('videoMegapixelsValue').querySelector('input')) $('videoMegapixelsValue').innerHTML = `${mp.toFixed(1)}<span class="mp-unit">MP</span>`;
+  $('videoMegapixelsValue').title = on ? 'The size it ends at; the size it is made at follows' : '';
   $('videoMegapixelsValue').setAttribute('aria-label', on ? 'Megapixels it ends at' : 'Megapixels');
   $('videoMegapixelsDown').disabled = mp <= least + 1e-9;
   $('videoMegapixelsUp').disabled = mp + 0.1 > top + 1e-9;
@@ -4126,12 +4131,16 @@ function stepVideoMegapixels(by) {
 }
 $('videoMegapixelsDown').addEventListener('click', () => stepVideoMegapixels(-0.1));
 $('videoMegapixelsUp').addEventListener('click', () => stepVideoMegapixels(0.1));
-// A tap on the number: the resolution as picked; with latent upscale on, the most the workflow makes well.
+// A tap on the number asks for one: past what is allowed it goes to the nearest limit.
 $('videoMegapixelsValue').addEventListener('click', () => {
-  if (videoLatentOn()) { $('videoLatentMp').value = (videoMostPixels() / 1e6).toFixed(1); rememberLatent(); }
-  else videoMegapixels = null;
-  syncSize();
-  $('size').dispatchEvent(new Event('change', { bubbles: true }));
+  editMegapixels($('videoMegapixelsValue'), value => {
+    if (value != null) {
+      if (videoLatentOn()) { $('videoLatentMp').value = value.toFixed(1); rememberLatent(); }
+      else videoMegapixels = Math.min(videoMostPixels() / 1e6, Math.max(0.1, Math.round(value * 10) / 10));
+    }
+    syncSize();
+    $('size').dispatchEvent(new Event('change', { bubbles: true }));
+  });
 });
 $('size').addEventListener('input', syncSize);
 function syncAudio() {
@@ -4230,7 +4239,7 @@ $('addImage').addEventListener('click', () => {
 const IMAGE_STORE_KEY = 'comfyui-auto-gen.image.v1';
 // An image is made in the shape of image 1 at its own size, within what the model makes well (media.pick_size).
 const IMAGE_DEFAULTS = { llm: {{ default_llm | tojson }}, prompt_mode: 'llm', count: 1, aspect: 'image', megapixels: 'image', review: false };
-const SIZE_STEP = {{ image_size_step }}, MEGAPIXEL = 1024 * 1024, MOST_MEGAPIXELS = 20, LARGE_MEGAPIXELS = 4;
+const SIZE_STEP = {{ image_size_step }}, MEGAPIXEL = 1024 * 1024, MOST_MEGAPIXELS = 50, LARGE_MEGAPIXELS = 4;
 const AUTOMATIC_TAKES = { min_images: 0, max_images: 1, size: true };
 // What each model makes well, from pipelines/image/models.py.
 const IMAGE_MODELS = {{ image_models | tojson }};
@@ -5032,8 +5041,8 @@ function syncMegapixels() {
   if (r.on && r.sides) imageMadeAt = r.base;
   if (!r.on && r.sides) imageOffMp = r.sides[0] * r.sides[1] / MEGAPIXEL;
   if (r.sides) imageShown = r.sides;
-  $('imageMegapixelsValue').innerHTML = `${r.mp.toFixed(1)}<span class="mp-unit">MP</span>`;
-  $('imageMegapixelsValue').title = r.on ? 'The size it ends at; the size it is made at follows. Tap for the resolution as picked' : 'Tap for the resolution as picked';
+  if (!$('imageMegapixelsValue').querySelector('input')) $('imageMegapixelsValue').innerHTML = `${r.mp.toFixed(1)}<span class="mp-unit">MP</span>`;
+  $('imageMegapixelsValue').title = r.on ? 'The size it ends at; the size it is made at follows' : '';
   $('imageMegapixelsValue').setAttribute('aria-label', r.on ? 'Megapixels it ends at' : 'Megapixels');
   $('imageMegapixelsDown').disabled = r.mp <= r.least + 1e-9;
   $('imageMegapixelsUp').disabled = r.mp + MP_STEP > r.top + 1e-9;
@@ -5054,11 +5063,44 @@ function stepMegapixels(by) {
 }
 $('imageMegapixelsDown').addEventListener('click', () => stepMegapixels(-MP_STEP));
 $('imageMegapixelsUp').addEventListener('click', () => stepMegapixels(MP_STEP));
+// A tap on the number turns it into a box to type in, as Steps is: Enter or leaving it keeps what was typed (past what
+// is allowed it goes to the nearest limit), Escape leaves it as it was. apply gets the number, or null for none.
+function editMegapixels(field, apply) {
+  if (field.querySelector('input')) return;
+  const input = document.createElement('input');
+  input.type = 'number'; input.step = '0.1'; input.min = '0.1'; input.inputMode = 'decimal';
+  input.value = parseFloat(field.textContent) || '';
+  input.setAttribute('aria-label', 'Megapixels');
+  field.textContent = '';
+  field.append(input);
+  input.focus(); input.select();
+  let done = false;
+  const finish = keep => {
+    if (done) return;
+    done = true;
+    const value = Number(input.value.replace(',', '.'));
+    input.remove();
+    apply(keep && input.value !== '' && Number.isFinite(value) && value > 0 ? value : null);
+  };
+  input.addEventListener('keydown', e => {
+    if (e.key === 'Enter') { e.preventDefault(); finish(true); }
+    else if (e.key === 'Escape') { e.preventDefault(); finish(false); }
+  });
+  input.addEventListener('blur', () => finish(true));
+}
+for (const id of ['imageMegapixelsValue', 'videoMegapixelsValue']) {
+  $(id).addEventListener('keydown', e => { if (e.target === $(id) && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); $(id).click(); } });
+}
 $('imageMegapixelsValue').addEventListener('click', () => {
-  if (imageUpscaleOn()) $('imageUpscaleMp').value = '';
-  else imageStep = null;
-  syncImageSize();
-  $('imageMegapixels').dispatchEvent(new Event('change', { bubbles: true }));
+  editMegapixels($('imageMegapixelsValue'), value => {
+    if (value != null) {
+      const r = imageResolution(), mp = Math.min(r.top, Math.max(r.least, Math.round(value * 10) / 10));
+      if (imageUpscaleOn()) $('imageUpscaleMp').value = mp.toFixed(1);
+      else { imageDefaulted = false; imageStep = mp; }
+    }
+    syncImageSize();
+    $('imageMegapixels').dispatchEvent(new Event('change', { bubbles: true }));
+  });
 });
 // A screen or an exact size starts as itself; an aspect ratio keeps the pixel count stepped to.
 // Typed with Upscale on: the size typed is the size it's made at, so where it ends follows it again.

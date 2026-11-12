@@ -329,7 +329,7 @@ def _turbo_lora(ui, options, info):
     switch["below"] = True
     where = {"lora_node": loader["id"], "lora_scope": scope, "advanced": True, "speed": True, "parent": switch["id"]}
     found = [{"id": f"{switch['id']}_name", "kind": "choice", "label": "LoRA", "choices": choices, "default": name,
-              "labels": {file: lora_label(file) for file in choices}, "lora_widget": 0, **where}]
+              "labels": {file: speed_label(file) for file in choices}, "lora_widget": 0, **where}]
     if not linked & {"strength_model", "strength"}:
         found.append({"id": f"{switch['id']}_strength", "kind": "number", "label": "Strength", "default": f"{float(strength):g}", "min": -2, "max": 2,
                       "step": 0.05, "lora_widget": 1, **where})
@@ -462,6 +462,15 @@ def lora_label(name):
     """A LoRA file as it's said: its folder and name, without .safetensors or a download's "_1"."""
     stem = os.path.splitext(str(name).replace("\\", "/"))[0]
     return DOWNLOAD_COPY.sub("", stem)
+
+
+def speed_label(name, limit=28):
+    """A turbo LoRA as the picker says it: no folder, and cut in the middle to fit one line."""
+    short = lora_label(os.path.basename(str(name).replace("\\", "/")))
+    if len(short) <= limit:
+        return short
+    head = (limit - 1) // 2 + (limit - 1) % 2
+    return f"{short[:head]}…{short[-(limit - 1 - head):]}"
 
 
 def _lora_files(info):
