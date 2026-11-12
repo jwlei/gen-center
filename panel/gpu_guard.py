@@ -8,6 +8,7 @@ import psutil
 RESTART_ABOVE = 78
 REARM_AT = 75
 ELEVATION_REQUIRED = 740
+STARTUP_PROFILE = "-Profile3"
 
 
 def restart_afterburner():
@@ -28,14 +29,15 @@ def restart_afterburner():
     if alive:
         raise RuntimeError("MSI Afterburner did not exit; another instance was not started.")
     try:
-        process = subprocess.Popen([executable], cwd=os.path.dirname(executable),
+        process = subprocess.Popen([executable, STARTUP_PROFILE], cwd=os.path.dirname(executable),
                                    creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
     except OSError as error:
         if getattr(error, "winerror", None) != ELEVATION_REQUIRED:
             raise
         # Afterburner asks for administrator rights and this process has none: ShellExecute can ask for them.
         import ctypes
-        result = ctypes.windll.shell32.ShellExecuteW(None, "runas", executable, None, os.path.dirname(executable), 1)
+        result = ctypes.windll.shell32.ShellExecuteW(None, "runas", executable, STARTUP_PROFILE,
+                                                     os.path.dirname(executable), 1)
         if result <= 32:
             raise RuntimeError(f"MSI Afterburner needs administrator rights and they were not given (code {result}).") from error
         return
