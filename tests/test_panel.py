@@ -1863,7 +1863,7 @@ class PanelTest(unittest.TestCase):
             mine.terminate.assert_called_once()
             other.terminate.assert_not_called()
             wait.assert_called_once_with([mine], timeout=5)
-            self.assertEqual(launch.call_args.args[0], [mine.info["exe"]])
+            self.assertEqual(launch.call_args.args[0], [mine.info["exe"], gpu_guard.STARTUP_PROFILE])
             wait.return_value = ([], [mine])
             with self.assertRaisesRegex(RuntimeError, "did not exit"):
                 gpu_guard.restart_afterburner()
@@ -1885,7 +1885,8 @@ class PanelTest(unittest.TestCase):
             current.return_value.username.return_value = "mine"
             windll.shell32.ShellExecuteW.return_value = 42
             gpu_guard.restart_afterburner()
-            self.assertEqual(windll.shell32.ShellExecuteW.call_args.args[1:3], ("runas", mine.info["exe"]))
+            self.assertEqual(windll.shell32.ShellExecuteW.call_args.args[1:4],
+                             ("runas", mine.info["exe"], gpu_guard.STARTUP_PROFILE))
             windll.shell32.ShellExecuteW.return_value = 5
             with self.assertRaisesRegex(RuntimeError, "administrator"):
                 gpu_guard.restart_afterburner()
