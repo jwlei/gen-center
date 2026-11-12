@@ -1,6 +1,49 @@
 {
   "version": "2.0.0",
+  "inputs": [
+    {
+      "id": "commitMessage",
+      "type": "promptString",
+      "description": "Commit message",
+      "default": "Add silent VS Code tasks for git, GPU check and panel restart`n`nCo-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>"
+    }
+  ],
   "tasks": [
+    {
+      "label": "restart-panel",
+      "type": "shell",
+      "command": "Get-CimInstance Win32_Process -Filter \"Name like 'python%'\" | Where-Object { $_.CommandLine -match 'webapp' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force }; Start-Process pythonw -ArgumentList 'webapp.py','--host','0.0.0.0','--port','8800' -WorkingDirectory '${workspaceFolder}' -WindowStyle Hidden; Start-Sleep 3; (Invoke-WebRequest http://localhost:8800/ -UseBasicParsing -TimeoutSec 10).StatusCode 2>&1 | Tee-Object -FilePath logs\\restart-panel.log",
+      "presentation": { "reveal": "silent", "panel": "shared", "clear": true, "close": true },
+      "problemMatcher": []
+    },
+    {
+      "label": "gpu-check",
+      "type": "shell",
+      "command": "nvidia-smi --query-gpu=utilization.gpu,memory.used --format=csv,noheader 2>&1 | Tee-Object -FilePath logs\\gpu-check.log; nvidia-smi --query-compute-apps=pid,process_name,used_memory --format=csv,noheader 2>&1 | Tee-Object -FilePath logs\\gpu-check.log -Append",
+      "presentation": { "reveal": "silent", "panel": "shared", "clear": true, "close": true },
+      "problemMatcher": []
+    },
+    {
+      "label": "git-sync-main",
+      "type": "shell",
+      "command": "git fetch origin 2>&1 | Tee-Object -FilePath logs\\git.log; git --no-pager merge origin/main --no-edit 2>&1 | Tee-Object -FilePath logs\\git.log -Append; git status -sb 2>&1 | Tee-Object -FilePath logs\\git.log -Append; git --no-pager log --oneline -3 2>&1 | Tee-Object -FilePath logs\\git.log -Append",
+      "presentation": { "reveal": "silent", "panel": "shared", "clear": true, "close": true },
+      "problemMatcher": []
+    },
+    {
+      "label": "git-push",
+      "type": "shell",
+      "command": "git push origin HEAD 2>&1 | Tee-Object -FilePath logs\\git.log; git status -sb 2>&1 | Tee-Object -FilePath logs\\git.log -Append",
+      "presentation": { "reveal": "silent", "panel": "shared", "clear": true, "close": true },
+      "problemMatcher": []
+    },
+    {
+      "label": "git-commit-all",
+      "type": "shell",
+      "command": "git add -A; git commit -m \"${input:commitMessage}\" 2>&1 | Tee-Object -FilePath logs\\git.log; git --no-pager log --oneline -1 2>&1 | Tee-Object -FilePath logs\\git.log -Append",
+      "presentation": { "reveal": "silent", "panel": "shared", "clear": true, "close": true },
+      "problemMatcher": []
+    },
     {
       "label": "all-tests",
       "type": "shell",
