@@ -29,6 +29,16 @@ On a phone, the navigation shows one section at a time: Status, Generate or the 
 for what's running when you're elsewhere. Log and Quota are icons at the top of Settings; Finished is beside the
 run controls in Status.
 
+**Clear** in Finished removes only the displayed batches, leaving hidden results and jobs that finish afterward.
+In the mobile header, Finished sits before Privacy and turns red if its list contains a failure; Privacy highlights purple.
+In Privacy mode, private image/video entries in Running, Queue, Pending and Failed have a small purple privacy pill
+at the top left. Untagged entries offer the same two-tap NSFW tag button as Output, so you can mark a run private
+before it finishes, in either mode. The tag is kept through queue edits and retries and applies to its output;
+the privacy pills are hidden outside Privacy mode.
+In Output, **Arrange batches** lets you tap a batch and drag it (or use the up/down arrow keys).
+The arrangement is saved for all devices; new generations still appear above older batches.
+Deleting in preview opens the next item, or the previous one at the end; the delete icon pulses yellow while waiting.
+
 The log groups its lines by stage; each stage heading shows its outcome (clips done, failures, time) and opens or
 closes with a tap. **Summary** (the default) folds a clip's seed and render lines into one line, sums up the stock
 footage, and cuts long prompts short with a *Show full prompt* button. Warnings and failures stay visible even in a
@@ -40,6 +50,9 @@ reset that reply gave (`logs/exhausted_models.json`).
 
 **Add to top of queue** puts the job first without starting it when idle; resume the queue when ready. While a job is
 running, it will run next. **Generate** starts a job directly when idle.
+
+An aimdo memory-compile error or explicit exit-1 error stops a stuck generation immediately, restarts ComfyUI,
+and retries the saved work once. If it fails again, it goes to Failed and ComfyUI restarts for the next job.
 
 Nothing is paid for twice. **Generate** continues stopped work that matches: on Shorts the video on the topic you typed,
 or the oldest with the topic empty; on Video the same brief, images, audio and length; on Image the same brief, images, count and workflow. The options on the form apply,
@@ -91,6 +104,11 @@ The gear in the header opens Settings:
   shuts down, and unticking it or starting new work cancels it. A held queue counts as work.
 - **Default workflow** for each side, the phone and Tailscale addresses with copy buttons, and the disk space left for output.
 
+On Windows, the panel checks GPU temperature every three seconds, even with no browser open.
+Above **78°C**, it restarts the current user's MSI Afterburner once to recover fan control.
+It re-arms after cooling to **75°C** or below. Afterburner must be running or installed under Program Files;
+restart failures appear in the generation log. This is recovery assistance, not a thermal safety shutdown.
+
 ## Layout
 
 ```
@@ -107,8 +125,12 @@ output/       shorts/ready, shorts/uploaded, shorts/bad, video and image
 
 ## Tests
 
-In VS Code, run **Tasks: Run Test Task** and choose **all-tests**. The tests run in the integrated terminal, which
+VS Code's Testing view discovers the full unittest suite under `tests`. Run individual tests, classes or the full
+suite there; use **Test: Refresh Tests** if the list has not updated.
+Alternatively, run **Tasks: Run Test Task** and choose **all-tests**. The tests run in the integrated terminal, which
 closes when they finish.
+**relevant-panel-tests** covers the panel script, privacy tagging, Finished, batch ordering and crash/heat recovery, and keeps its output
+in `logs/panel-tests.log`.
 
 They use a fake ComfyUI and Claude on localhost, real ffmpeg, and a throwaway folder. Nothing costs anything.
 

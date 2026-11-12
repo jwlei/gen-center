@@ -314,6 +314,99 @@ class OutputH3MetadataTest(unittest.TestCase):
             self.assertIsNone(caption("plain.mp4")["h3_mode"])
 
 
+class WorkPrivacyTest(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.job = types.SimpleNamespace(idle=False, running=False, closed=False, progress={}, log=mock.Mock())
+        self.path = os.path.join(self.temp.name, "queue.json")
+        self.queue = webapp.JobQueue(self.job, prepare=lambda item: None, path=self.path)
+        for patcher in (mock.patch.object(webapp, "run_queue", self.queue),
+                        mock.patch.object(webapp, "job", self.job),
+                        mock.patch.object(webapp, "NSFW_PATH", os.path.join(self.temp.name, "nsfw.json")),
+                        mock.patch.object(webapp, "_panel_closing", False),
+                        mock.patch.object(self.queue, "_ensure_watcher"),
+                        mock.patch.dict(os.environ, {"APP_PASSWORD": ""})):
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        self.client = webapp.app.test_client()
+
+    def mark(self, kind, identifier):
+        return self.client.post("/api/work/nsfw", json={"kind": kind, "id": str(identifier), "nsfw": True})
+
+    def restored(self):
+        return webapp.JobQueue(self.job, prepare=lambda item: None, path=self.path)
+
+    def test_waiting_tag_survives_restart_and_edit(self):
+        self.queue.items = [{"id": 1, "pipeline": "image", "label": "Waiting", "edit_token": "token"}]
+        self.assertTrue(self.mark("job", 1).get_json()["ok"])
+        self.assertTrue(self.restored().items[0]["private"])
+        with webapp.app.test_request_context("/generate/image", method="POST",
+                                             data={"queue_edit_id": "1", "queue_edit_token": "token"}), \
+             mock.patch.object(webapp, "private_mode", return_value=False):
+            replacement = {"pipeline": "image", "label": "Edited"}
+            self.queue.add(replacement)
+        self.assertTrue(replacement["private"], "editing while Privacy mode is off must not remove the tag")
+
+    def test_running_tag_applies_before_and_after_run_id_arrives(self):
+        self.queue.current = {"id": 2, "pipeline": "video", "label": "Running"}
+        self.assertTrue(self.mark("job", 2).get_json()["ok"])
+        self.assertTrue(self.queue.current["private"])
+        self.job.progress = {"run_id": "run_live"}
+        self.queue._advance()
+        self.assertIn("run_live", webapp._read_nsfw()["video"])
+        self.queue.current.pop("private")
+        payload = {"videos": {"video": [{"name": "film.mp4"}]}, "image_sets": [], "made_now": [],
+                   "progress": self.job.progress, "queue": {"current": dict(self.queue.current), "results": []}}
+        with mock.patch.object(webapp, "_video_nsfw_key", return_value=("video", "run_live")):
+            webapp._apply_nsfw(payload, webapp._read_nsfw(), {})
+        self.assertTrue(payload["queue"]["current"]["nsfw"], "active runs use their live run ID, not only resume")
+        self.assertTrue(payload["videos"]["video"][0]["nsfw"], "the resulting film stays out of normal Output")
+        self.assertTrue(self.mark("job", 2).get_json()["ok"])
+        self.assertTrue(self.queue.current["private"], "tagging an already saved active run works too")
+
+    def test_saved_video_can_be_tagged_without_a_final_film(self):
+        self.queue.items = [{"id": 3, "pipeline": "video", "label": "Retry", "resume": "run_pending"}]
+        with mock.patch.object(webapp.PIPELINES["video"], "load_run", return_value=types.SimpleNamespace(final=None)):
+            self.assertTrue(self.mark("video", "run_pending").get_json()["ok"])
+        self.assertIn("run_pending", webapp._read_nsfw()["video"])
+        self.assertTrue(self.restored().items[0]["private"], "queued continuations keep the saved run's tag")
+
+    def test_unsaved_failure_tag_survives_restart_and_retry(self):
+        self.job.progress = {"run_id": "unrelated_previous_run"}
+        self.queue.results = [{"job_id": 4, "pipeline": "image", "label": "Failed", "outcome": "failed",
+                               "run_id": None, "job": {"pipeline": "image", "label": "Failed", "argv": ["generate"]}}]
+        self.assertTrue(self.mark("failed", 4).get_json()["ok"])
+        restored = self.restored()
+        self.assertTrue(restored.results[0]["private"])
+        self.assertTrue(restored.results[0]["job"]["private"])
+        self.assertEqual(webapp._read_nsfw()["image"], [], "no tag is applied to an old job's progress")
+        self.queue.requeue_failure(4)
+        self.assertTrue(self.restored().items[0]["private"])
+
+    def test_tag_follows_job_that_finished_before_request(self):
+        self.queue.results = [{"job_id": 5, "pipeline": "image", "label": "Done", "outcome": "done",
+                               "run_id": "image_done"}]
+        self.assertTrue(self.mark("job", 5).get_json()["ok"])
+        self.assertIn("image_done", webapp._read_nsfw()["image"])
+
+    def test_invalid_missing_and_unsaved_tags_report_errors(self):
+        self.assertEqual(self.mark("job", "bad").status_code, 400)
+        self.assertEqual(self.mark("job", 99).status_code, 404)
+        self.assertEqual(self.client.post("/api/work/nsfw", json={"kind": "job", "id": "1", "nsfw": False}).status_code, 400)
+        self.queue.items = [{"id": 1, "pipeline": "image", "label": "Waiting"}]
+        with mock.patch.object(self.queue, "_save", return_value=False):
+            response = self.mark("job", 1)
+        self.assertEqual(response.status_code, 500)
+        self.assertFalse(response.get_json()["ok"])
+        self.queue.current = {"id": 2, "pipeline": "image", "label": "Rendering"}
+        self.job.progress = {"run_id": "image_live"}
+        with mock.patch.object(webapp, "tag_run_nsfw", return_value=False):
+            response = self.mark("job", 2)
+        self.assertEqual(response.status_code, 500)
+        self.assertNotIn("private", self.queue.current)
+
+
 class PanelTest(unittest.TestCase):
     def setUp(self):
         closing = mock.patch.object(webapp, "_panel_closing", False)
@@ -1715,6 +1808,66 @@ class PanelTest(unittest.TestCase):
             for invalid in ("unknown", [], None):
                 self.assertEqual(self.client.post("/api/settings", json={"theme": invalid}).status_code, 400)
                 self.assertEqual(webapp.settings.load()["theme"], "nord")
+
+    def test_output_order_is_kept_and_hidden_batches_keep_their_slots(self):
+        path = os.path.join(self.temp, "settings.json")
+        with mock.patch.object(webapp.settings, "PATH", path):
+            ids = ["image:a", "film:hidden.mp4", "image:b", "image:c"]
+            self.assertTrue(self.client.post("/api/settings", json={"output_order": ids}).get_json()["ok"])
+            reply = self.client.post("/api/settings", json={"output_order": ["image:new", "image:c", "image:b", "image:a"]})
+            expected = ["image:new", "image:c", "film:hidden.mp4", "image:b", "image:a"]
+            self.assertEqual(reply.get_json()["settings"]["output_order"], expected)
+            self.client.post("/api/settings", json={"theme": "nord"})
+            self.assertEqual(webapp.settings.load()["output_order"], expected)
+            for invalid in (None, ["image:a", "image:a"], ["bogus:a"], ["image:"], [False]):
+                self.assertEqual(self.client.post("/api/settings", json={"output_order": invalid}).status_code, 400)
+                self.assertEqual(webapp.settings.load()["output_order"], expected)
+
+    def test_gpu_heat_guard_restarts_once_above_78_and_rearms_at_75(self):
+        from panel.gpu_guard import GPUHeatGuard
+
+        note = mock.Mock()
+        guard = GPUHeatGuard(note)
+        with mock.patch("panel.gpu_guard.restart_afterburner") as restart:
+            for temperature in (None, 75, 78):
+                guard.check(temperature)
+            restart.assert_not_called()
+            for temperature in (79, 81, 80, 77, 79):
+                guard.check(temperature)
+            self.assertEqual(restart.call_count, 1)
+            guard.check(75)
+            guard.check(79)
+            self.assertEqual(restart.call_count, 2)
+            guard.check(75)
+            restart.side_effect = OSError("Access denied")
+            guard.check(79)
+            self.assertIn("Access denied", note.call_args.args[0])
+            guard.check(80)
+            self.assertEqual(restart.call_count, 3, "a failed restart does not loop while hot")
+
+    def test_afterburner_restart_only_stops_the_current_users_instance(self):
+        from panel import gpu_guard
+        import psutil
+
+        mine = mock.Mock(info={"name": "MSIAfterburner.exe", "username": "mine",
+                               "exe": r"C:\Tools\MSI Afterburner\MSIAfterburner.exe"})
+        other = mock.Mock(info={"name": "MSIAfterburner.exe", "username": "other", "exe": r"C:\Other\MSIAfterburner.exe"})
+        process = mock.Mock()
+        process.wait.side_effect = subprocess.TimeoutExpired("Afterburner", 1)
+        with mock.patch.object(psutil, "Process") as current, \
+                mock.patch.object(psutil, "process_iter", return_value=[mine, other]), \
+                mock.patch.object(psutil, "wait_procs", return_value=([mine], [])) as wait, \
+                mock.patch.object(gpu_guard.subprocess, "Popen", return_value=process) as launch:
+            current.return_value.username.return_value = "mine"
+            gpu_guard.restart_afterburner()
+            mine.terminate.assert_called_once()
+            other.terminate.assert_not_called()
+            wait.assert_called_once_with([mine], timeout=5)
+            self.assertEqual(launch.call_args.args[0], [mine.info["exe"]])
+            wait.return_value = ([], [mine])
+            with self.assertRaisesRegex(RuntimeError, "did not exit"):
+                gpu_guard.restart_afterburner()
+            self.assertEqual(launch.call_count, 1, "no duplicate instance if the old one is still alive")
 
     def test_theme_picker_script(self):
         node = shutil.which("node")

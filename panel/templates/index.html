@@ -72,6 +72,12 @@
   .queue-item.run-card .queue-item-top { display: flex; align-items: center; gap: 10px; }
   .queue-item.run-card .what { font-weight: 600; }
   .queue-item.run-card .hint { margin-top: 2px; font-weight: 400; }
+  .work-privacy { display: flex; justify-content: flex-start; margin-bottom: 4px; }
+  .work-privacy:empty, body:not(.private-mode) .work-privacy.private-only { display: none; }
+  .work-private-pill { display: inline-flex; align-items: center; padding: 2px 6px; border-radius: 999px;
+    color: #9864bd; background: color-mix(in srgb, #9864bd 15%, transparent); border: 1px solid #9864bd; }
+  .work-private-pill svg { width: 12px; height: 12px; }
+  .work-privacy .work-private-tag { width: 24px; height: 20px; margin: 0; padding: 2px; }
   /* Every title in the queues: two lines at most, "…" where it is cut. */
   .queue-title { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; overflow: hidden; overflow-wrap: anywhere; }
   /* Its place in the queue, quietly: the title is what matters. */
@@ -310,6 +316,7 @@
   .status-toggle[aria-expanded="true"]::after { transform: rotate(90deg); }
   #logToggle { grid-column: 1; justify-self: start; }
   #finishedToggle { grid-column: 2; justify-self: center; }
+  #finishedToggle.failed { color: var(--err); }
   #quotaToggle { grid-column: 3; justify-self: end; }
   .status-toggle[aria-haspopup]::after { content: none; }
   #queueToggle { display: none; }
@@ -598,7 +605,7 @@
   .top-icons a { display: flex; opacity: .7; }
   .top-icons a:hover { opacity: 1; color: var(--text); }
   /* Private mode's key: lit in the accent while it is on. */
-  .top-icons a#privateToggle.on { opacity: 1; color: var(--page-accent); }
+  .top-icons a#privateToggle.on { opacity: 1; color: #9864bd; }
   .top .sub { margin-bottom: 6px; }
   details summary { cursor: pointer; font-size: .95rem; font-weight: 600; }
   .hidden { display: none !important; }
@@ -880,7 +887,8 @@
   .prompt-editor-head { display: flex; align-items: baseline; gap: 8px; }
   .prompt-editor-heading { flex: 1 1 auto; min-width: 0; display: flex; align-items: baseline; gap: 8px; }
   .prompt-editor-heading .panel-dialog-title { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .prompt-editor-thinking { flex: 0 1 180px; min-width: 0; display: inline-grid; position: relative; overflow: hidden; color: #9864bd; font-size: .82rem; font-weight: 600; white-space: nowrap; }
+  .prompt-editor-thinking { flex: 1 1 auto; min-width: 0; display: inline-grid; position: relative; overflow: hidden; color: #9864bd; font-size: .82rem; font-weight: 600; white-space: nowrap; }
+  #promptEditorTitle[hidden], #promptEditorReset[hidden] { display: none; }
   .prompt-editor-thinking[hidden] { display: none; }
   .prompt-thinking-line { grid-area: 1 / 1; }
   .prompt-thinking-line.exiting { animation: prompt-phrase-out .32s ease forwards; }
@@ -1006,6 +1014,8 @@
     -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
   /* A button whose request is on its way: it pulses, and can't be pressed again, until the answer is back. */
   .is-busy { animation: busy-pulse .9s ease-in-out infinite; pointer-events: none; }
+  #viewerDelete.deleting { color: var(--warn); opacity: 1; animation: busy-pulse .9s ease-in-out infinite; }
+  @media (prefers-reduced-motion: reduce) { #viewerDelete.deleting { animation: none; } }
   @keyframes busy-pulse { 0%, 100% { opacity: 1; } 50% { opacity: .4; } }
   @media (prefers-reduced-motion: reduce) { .is-busy { animation: none; opacity: .6; } }
   /* Until drawn from a fresh answer (holdOutput), Output's lists keep their place but show nothing: gone at once, and
@@ -1095,6 +1105,11 @@
   .collections-arrange { width: auto; margin: 0; padding: 3px 6px; display: inline-flex; align-items: center; border: 0; background: none; color: var(--neutral); }
   .collections-arrange svg { width: 15px; height: 15px; }
   .collections-arrange.on { color: var(--accent); }
+  .output-arrange-line { display: flex; justify-content: flex-end; }
+  #imageSets.arranging > [data-output-key] { cursor: grab; touch-action: pan-y; }
+  #imageSets.arranging > .selected { outline: 1px dashed var(--accent); outline-offset: -2px; touch-action: none; }
+  #imageSets > .dragging { opacity: .3; }
+  .output-batch.grid-ghost { background: var(--panel); border-radius: 8px; }
   /* Edit: the name, then the picture it is shown by (any of its own). */
   .collection-edit-label { margin: 8px 0 4px; font-size: .78rem; font-weight: 600; color: var(--muted); }
   /* The picture choices: small pills, the shape of the Close button, each showing a crop of its picture. */
@@ -1517,6 +1532,7 @@
     .top-icons .panel-icon svg { width: 18px; height: 18px; }
     .top-icons .panel-icon:hover:not(:disabled), .top-icons .panel-icon:focus-visible { opacity: 1; color: var(--text); background: none; }
     .top-icons #finishedToggle.empty { display: none; }
+    .top-icons #finishedToggle.failed, .top-icons #finishedToggle.failed:hover { color: var(--err); opacity: 1; }
   }
   .run-actions #stop { color: var(--err); border-color: color-mix(in srgb, var(--err) 45%, transparent); }
   .card > .section-title:first-child { margin-top: 0; }
@@ -1728,6 +1744,7 @@
   <div class="status-loader" aria-hidden="true"><i></i><i></i><i class="bar-line"></i><i></i><i></i></div>
   <div class="status-main">
   <div class="hint gpu" id="gpuLine"></div>
+  <div class="work-privacy" id="currentWorkPrivacy"></div>
   <button type="button" class="current-work" id="currentWork" aria-haspopup="dialog" title="What it renders with" hidden></button>
   <div class="current-work-size" id="currentWorkSize" hidden><span id="currentWorkflow"></span><span id="currentResolution"></span></div>
   <div class="nudge" id="nudge" role="button" tabindex="0" title="Make it: on Image, with your starred preset" hidden></div>
@@ -2342,6 +2359,7 @@
     <div><i class="thumb"></i><div class="lines"><i></i><i></i><i></i></div></div>
   </div>
   <div class="collections not-shorts" id="collections" hidden></div>
+  <div class="output-arrange-line not-shorts"><button type="button" class="collections-arrange" id="outputArrange" aria-pressed="false" aria-label="Arrange batches" title="Arrange batches: tap one, then drag or use arrow keys" hidden></button></div>
   <div class="carousel only-shorts" id="videos"></div>
   <div class="not-shorts" id="imageSets"></div>
   <div class="cnav only-shorts" id="cnav" hidden>
@@ -5660,11 +5678,11 @@ function nsfwButton(kind, id, tagged) {
   const label = tagged ? 'Remove NSFW tag' : 'Mark as NSFW';
   return `<button type="button" class="icon-btn nsfw-button" data-nsfw-${kind}="${esc(id)}" aria-label="${label}" title="${label} (tap twice)">${ICONS.category}</button>`;
 }
-async function tagOutput(kind, id, nsfw, button) {
+async function tagOutput(kind, id, nsfw, button, endpoint = '/api/output/nsfw') {
   if (button.disabled || !secondTap(button)) return;
   button.disabled = true;
   try {
-    const response = await fetch('/api/output/nsfw', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+    const response = await fetch(endpoint, { method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ kind, id, nsfw }) });
     const data = await response.json();
     if (!response.ok || !data.ok) { alert(data.error || 'Could not change the NSFW tag.'); return; }
@@ -5675,6 +5693,18 @@ async function tagOutput(kind, id, nsfw, button) {
     button.disabled = false;
   }
 }
+function workPrivacy(item, kind, id) {
+  if (!item || !['image', 'video'].includes(item.pipeline)) return '';
+  if (item.nsfw || item.private) return privateMode ? `<div class="work-privacy private-only"><span class="work-private-pill" role="img" aria-label="Private run" title="Private run">${$('privateToggle').innerHTML}</span></div>` : '';
+  return `<div class="work-privacy"><button type="button" class="icon-btn nsfw-button work-private-tag" data-work-private-kind="${kind}" data-work-private-id="${esc(String(id))}" aria-label="Mark as NSFW" title="Mark as NSFW (tap twice)">${ICONS.category}</button></div>`;
+}
+document.addEventListener('click', async e => {
+  const button = e.target.closest && e.target.closest('[data-work-private-kind]');
+  if (!button || !button.dataset.workPrivateKind) return;
+  e.preventDefault();
+  e.stopPropagation();
+  await tagOutput(button.dataset.workPrivateKind, button.dataset.workPrivateId, true, button, '/api/work/nsfw');
+}, true);
 function upscaledBadge(method) {
   return `<span class="upscaled-badge" role="img" aria-label="${esc(`Upscaled: ${method}`)}">${ICONS.upscale}</span>`;
 }
@@ -5725,20 +5755,23 @@ function madeOn(seconds) {
   return `${day.getDate()} ${months[day.getMonth()]}${day.getFullYear() !== now.getFullYear() ? ` ${day.getFullYear()}` : ''} ${time}`;
 }
 function renderImageSets() {
-  // Images and films in one list, in the order they were made: Both, or either alone.
+  if (gridDrag && gridDrag.grid === $('imageSets')) return;
   const sets = showsImages() ? filtered(imageSets) : [];
   const films = showsFilms() ? visibleFilms() : [];
-  const key = pipeline + outputKind + nsfwView + JSON.stringify(sets.map(set => [set.id, set.label, set.total, set.images, set.model, set.loras, set.resolutions, set.size_bytes, set.generating, set.llm, set.h3_mode, set.h3_creativity, set.nsfw, set.mtime, set.pills]))
+  const key = pipeline + outputKind + nsfwView + JSON.stringify(SETTINGS.output_order || []) + JSON.stringify(sets.map(set => [set.id, set.label, set.total, set.images, set.model, set.loras, set.resolutions, set.size_bytes, set.generating, set.llm, set.h3_mode, set.h3_creativity, set.nsfw, set.mtime, set.pills]))
     + JSON.stringify(films.map(v => [v.name, v.mtime, v.topic, v.title, v.model, v.resolution, v.duration, v.size_mb, v.loras, v.h3_mode, v.h3_creativity, v.run]));
   // Only when it changed, so a poll doesn't reload the pictures.
   if ($('imageSets').dataset.key === key) return;
   $('imageSets').dataset.key = key;
-  const items = [...sets.map(set => [madeAt(set.id, set.mtime), imageSetHtml(set)]), ...films.map(v => [filmMadeAt(v), filmHtml(v, 'video')])];
-  items.sort((a, b) => b[0] - a[0]);
+  const items = outputItems();
+  $('outputArrange').hidden = items.length < 2;
+  if (items.length < 2) { outputArranging = false; outputSelected = null; }
+  if (!items.some(item => outputKey(item) === outputSelected)) outputSelected = null;
   const none = { both: 'Nothing yet. Press Generate to make something.', image: 'No images yet. Press Generate to make some.', video: 'No videos yet. Press Generate to make one.' };
-  $('imageSets').innerHTML = items.length ? items.map(item => item[1]).join('')
+  $('imageSets').innerHTML = items.length ? items.map((item, index) => `<div class="output-batch" data-output-key="${esc(outputKey(item))}" data-grid-index="${index}" tabindex="0" aria-label="${esc(item.set ? item.set.label : item.film.title || item.film.name)}">${item.set ? imageSetHtml(item.set) : filmHtml(item.film, 'video')}</div>`).join('')
     : pipeline === 'shorts' ? '' : `<div class="empty">${nsfwView ? 'Nothing here.' : none[outputKind]}</div>`;
   requestAnimationFrame(() => markPillOverflow($('imageSets')));
+  showOutputArranging();
 }
 // A narrower or wider page fits more or fewer pills on a line.
 window.addEventListener('resize', () => { for (const id of ['videos', 'imageSets', 'viewerMetaDetails']) markPillOverflow($(id)); });
@@ -6538,8 +6571,8 @@ function gridDragTo(x, y) {
   const under = document.elementFromPoint ? document.elementFromPoint(x, y) : null;
   const target = under && under.closest ? under.closest('[data-grid-index]') : null;
   if (!target || target === drag.cell || target.parentElement !== drag.grid) return;
-  const box = target.getBoundingClientRect(), inset = box.width * 0.25;
-  if (x < box.left + inset || x > box.right - inset || y < box.top + inset || y > box.bottom - inset) return;
+  const box = target.getBoundingClientRect(), insetX = box.width * 0.25, insetY = box.height * 0.25;
+  if (x < box.left + insetX || x > box.right - insetX || y < box.top + insetY || y > box.bottom - insetY) return;
   const cells = [...drag.grid.children];
   glideGrid(drag.grid, () => (cells.indexOf(drag.cell) < cells.indexOf(target) ? target.after(drag.cell) : target.before(drag.cell)));
 }
@@ -7169,12 +7202,79 @@ $('imageViewer').addEventListener('touchend', e => {
   if (Math.abs(dx) > 50 && Math.abs(dx) > Math.abs(dy) * 1.5) stepViewer(dx < 0 ? 1 : -1);
   else if (Math.abs(dy) > 60 && Math.abs(dy) > Math.abs(dx) * 1.5) stepSet(dy < 0 ? 1 : -1);
 });
-// Output's list, as it shows: films and image sets, in the order they were made.
+let outputArranging = false, outputSelected = null, outputOrderSaving = false;
+const outputKey = item => item.set ? `image:${item.set.id}` : `film:${item.film.name}`;
+// Known batches trade timestamp slots; an unseen generation keeps its own, newest-first slot.
 function outputItems() {
   const sets = showsImages() ? filtered(imageSets).filter(set => set.images.length).map(set => ({ set, t: madeAt(set.id, set.mtime) })) : [];
   const films = showsFilms() ? visibleFilms().map(film => ({ film, t: filmMadeAt(film) })) : [];
-  return [...sets, ...films].sort((a, b) => b.t - a.t);
+  const items = [...sets, ...films].sort((a, b) => b.t - a.t);
+  const byKey = new Map(items.map(item => [outputKey(item), item]));
+  const ordered = (SETTINGS.output_order || []).filter(key => byKey.has(key));
+  const placed = new Set(ordered), slots = ordered.map(key => byKey.get(key))[Symbol.iterator]();
+  return items.map(item => placed.has(outputKey(item)) ? slots.next().value : item);
 }
+function showOutputArranging() {
+  $('imageSets').classList.toggle('arranging', outputArranging);
+  $('outputArrange').classList.toggle('on', outputArranging);
+  $('outputArrange').setAttribute('aria-pressed', String(outputArranging));
+  for (const cell of $('imageSets').querySelectorAll('[data-output-key]')) {
+    const selected = outputArranging && cell.dataset.outputKey === outputSelected;
+    cell.classList.toggle('selected', selected);
+    if (outputArranging) cell.setAttribute('aria-pressed', String(selected));
+    else cell.removeAttribute('aria-pressed');
+  }
+}
+$('outputArrange').innerHTML = ICONS.arrange;
+$('outputArrange').addEventListener('click', () => {
+  outputArranging = !outputArranging;
+  outputSelected = null;
+  showOutputArranging();
+});
+async function placeOutput(ids) {
+  if (outputOrderSaving) return;
+  outputOrderSaving = true;
+  $('outputArrange').disabled = true;
+  try {
+    await saveSettings({ output_order: ids }, text => { if (text) alert(text); });
+    $('imageSets').dataset.key = '';
+    renderImageSets();
+  } finally {
+    outputOrderSaving = false;
+    $('outputArrange').disabled = false;
+  }
+}
+$('imageSets').addEventListener('pointerdown', e => {
+  if (!outputArranging || outputOrderSaving || e.button > 0) return;
+  const cell = e.target.closest && e.target.closest('[data-output-key]');
+  if (!cell || cell.dataset.outputKey !== outputSelected) return;
+  e.preventDefault();
+  startGridDrag(e, cell, { host: document.body, owner: $('imageSets'),
+    save: grid => placeOutput([...grid.children].map(c => c.dataset.outputKey)),
+    scroller: DESK.matches ? $('imageSets') : document.scrollingElement });
+});
+$('imageSets').addEventListener('pointermove', moveGridDrag);
+$('imageSets').addEventListener('pointerup', dropGrid);
+$('imageSets').addEventListener('pointercancel', dropGrid);
+$('imageSets').addEventListener('keydown', e => {
+  if (!outputArranging || outputOrderSaving) return;
+  const cell = e.target.closest && e.target.closest('[data-output-key]');
+  if (!cell) return;
+  if (e.key === 'Enter' || e.key === ' ') {
+    e.preventDefault();
+    outputSelected = cell.dataset.outputKey === outputSelected ? null : cell.dataset.outputKey;
+    showOutputArranging();
+    return;
+  }
+  if (cell.dataset.outputKey !== outputSelected || !['ArrowUp', 'ArrowDown'].includes(e.key)) return;
+  e.preventDefault();
+  const ids = outputItems().map(outputKey), at = ids.indexOf(outputSelected), to = at + (e.key === 'ArrowUp' ? -1 : 1);
+  if (at < 0 || to < 0 || to >= ids.length) return;
+  [ids[at], ids[to]] = [ids[to], ids[at]];
+  placeOutput(ids).then(() => {
+    [...$('imageSets').querySelectorAll('[data-output-key]')].find(item => item.dataset.outputKey === outputSelected)?.focus();
+  });
+});
 // The film or set after or before this one in Output, as it lists them (a set from its first picture).
 function stepSet(by) {
   if (!viewing) return false;
@@ -7241,7 +7341,7 @@ $('imageViewer').addEventListener('close', () => {
 $('imageViewer').addEventListener('click', e => { if (e.target === $('imageViewer')) closeViewer(); });
 $('viewerClose').addEventListener('click', closeViewer);
 $('viewerDelete').addEventListener('click', async () => {
-  if (!viewing || !secondTap($('viewerDelete'))) return;
+  if (!viewing || $('viewerDelete').disabled || !secondTap($('viewerDelete'))) return;
   const original = viewing;
   const { id, position, film, name } = viewing;
   const set = !film && imageSets.find(s => s.id === id);
@@ -7257,41 +7357,76 @@ $('viewerDelete').addEventListener('click', async () => {
     const at = film ? album.findIndex(v => v.name === name) : album.findIndex(p => p.set === id && p.position === position);
     const other = at < 0 ? null : album[at + 1] || album[at - 1];
     after = other && (film ? { film: other.name } : { set: other.set, file: other.file });
+  } else if (film && pipeline === 'shorts') {
+    const films = visibleFilms(), at = films.findIndex(v => v.name === name);
+    const other = at < 0 ? null : films[at + 1] || films[at - 1];
+    after = other && { film: other.name };
+  } else if (film || !next) {
+    const items = outputItems(), at = items.findIndex(item => film ? item.film && item.film.name === name : item.set && item.set.id === id);
+    const other = at < 0 ? null : items[at + 1] || items[at - 1];
+    if (other) after = other.film ? { film: other.film.name } : { set: other.set.id, file: other.set.images[0]?.file };
   }
   let body;
   $('viewerDelete').disabled = true;
+  $('viewerDelete').classList.add('deleting');
+  $('viewerDelete').setAttribute('aria-busy', 'true');
   try {
     body = await (await fetch(url, { method: 'POST' })).json();
   } catch (e) {
     body = { error: 'Could not reach the panel. Try again.' };
+  }
+  try {
+    if (!body.ok) { alert(body.error || 'Could not delete it.'); return; }
+    if (viewerCollection) {
+      await poll();
+      if (viewing !== original) return;  // Moved on in the meantime
+      if (after && after.film && (lastVideos.video || []).some(v => v.name === after.film)) { openFilm(after.film, 'video'); return; }
+      const set = after && after.set && findSet(after.set), picture = set && set.images.find(p => p.file === after.file);
+      if (picture) openViewer(set.id, picture.position); else closeViewer();
+      return;
+    }
+    if (!film && Array.isArray(body.images)) {
+      const updated = imageSets.find(s => s.id === id), fullSet = allImageSets.find(s => s.id === id);
+      const membership = new Map((fullSet ? fullSet.images : pictures).map(p => [p.file, p.collection]));
+      const images = body.images.map(p => ({ ...p, collection: membership.get(p.file) }));
+      if (fullSet) fullSet.images = images;
+      if (updated) updated.images = images.filter(p => !p.collection);
+      if (viewing && !viewing.film && viewing.id === id) {
+        const current = viewing === original || viewing.position === position ? next && next.position : viewing.position;
+        const nextPosition = current && current - (current > position ? 1 : 0);
+        if (updated && updated.images.some(p => p.position === nextPosition)) openViewer(id, nextPosition);
+        else if (after && after.film) openFilm(after.film, 'video');
+        else if (after && after.set) {
+          const nextSet = findSet(after.set), picture = nextSet && nextSet.images.find(p => p.file === after.file);
+          if (picture) openViewer(nextSet.id, picture.position); else closeViewer();
+        } else closeViewer();
+      }
+      renderImageSets();
+    } else {
+      lastVideos[original.folder] = (lastVideos[original.folder] || []).filter(v => v.name !== name);
+      if (viewing === original) {
+        if (after && after.film) openFilm(after.film, original.folder);
+        else if (after && after.set) {
+          const nextSet = findSet(after.set), picture = nextSet && nextSet.images.find(p => p.file === after.file);
+          if (picture) openViewer(nextSet.id, picture.position); else closeViewer();
+        } else closeViewer();
+      }
+    }
+    poll();
   } finally {
     $('viewerDelete').disabled = false;
+    $('viewerDelete').classList.remove('deleting');
+    $('viewerDelete').setAttribute('aria-busy', 'false');
   }
-  if (!body.ok) { alert(body.error || 'Could not delete it.'); return; }
-  if (viewerCollection) {
-    await poll();
-    if (viewing !== original) return;  // Moved on in the meantime
-    if (after && after.film && (lastVideos.video || []).some(v => v.name === after.film)) { openFilm(after.film, 'video'); return; }
-    const set = after && after.set && findSet(after.set), picture = set && set.images.find(p => p.file === after.file);
-    if (picture) openViewer(set.id, picture.position); else closeViewer();
-    return;
-  }
-  if (!film && Array.isArray(body.images)) {
-    const updated = imageSets.find(s => s.id === id);
-    if (updated) updated.images = body.images;
-    if (viewing && !viewing.film && viewing.id === id) {
-      const current = viewing === original || viewing.position === position ? next && next.position : viewing.position;
-      const nextPosition = current && current - (current > position ? 1 : 0);
-      if (updated && body.images.some(p => p.position === nextPosition)) openViewer(id, nextPosition);
-      else closeViewer();
-    }
-    renderImageSets();
-  } else if (viewing === original) {
-    closeViewer();
-  }
-  poll();
 });
 $('imageSets').addEventListener('click', async e => {
+  if (outputArranging) {
+    e.preventDefault();
+    const cell = e.target.closest && e.target.closest('[data-output-key]');
+    if (cell && !gridDragged && !outputOrderSaving) outputSelected = outputSelected === cell.dataset.outputKey ? null : cell.dataset.outputKey;
+    showOutputArranging();
+    return;
+  }
   if (e.target.closest && e.target.closest('.film')) return onFilmClick(e);
   const view = e.target.closest && e.target.closest('[data-view-set]');
   if (view) {
@@ -7882,6 +8017,10 @@ for (const id of Object.values(SIDE_FORMS)) {
   $(id).addEventListener('submit', e => { e.preventDefault(); $('go').click(); });
 }
 function renderNow(data) {
+  const current = data.queue && data.queue.current;
+  const privacy = data.running && current ? workPrivacy(current, 'job', current.id) : '';
+  const privacySlot = $('currentWorkPrivacy');
+  if (!privacySlot.querySelectorAll('.armed, button:disabled').length && privacySlot.innerHTML !== privacy) privacySlot.innerHTML = privacy;
   const p = data.progress || {};
   const c = data.comfyui || {};
   const show = data.running && p.stage;
@@ -8307,6 +8446,7 @@ function renderQueue(el, q, doneIn, moving = false, idle = false) {
   const canRunNow = el.dataset.lane === 'run' && idle;
   const items = waiting.map((item, i) => `
     <div class="queue-item${el.dataset.lane === 'run' ? ' run-card' : ''}${String(item.id) === el._selected ? ' selected' : ''}" data-id="${esc(String(item.id))}" data-motion-key="queue-${esc(String(item.id))}">
+      ${el.dataset.lane === 'run' ? workPrivacy(item, 'job', item.id) : ''}
       ${el.dataset.lane === 'run' ? '<div class="queue-item-top">' : ''}<div class="what"${waiting.length > 1 ? ` role="button" tabindex="0" aria-pressed="${String(item.id) === el._selected}" aria-label="Select ${esc(hideTitle(item) ? PLAIN_TITLE : item.label)} to drag or use arrow keys to reorder"` : ''}>${queueTitle(`queue-${item.id}`, el.dataset.lane === 'run' ? workHeading(item, item.pipeline) : item.label, i + 1)}<div class="hint">${el.dataset.lane === 'run' ? `${SIDE_NAMES[item.pipeline] || 'Shorts'} · ` : ''}${esc(queueDetail(item))}</div></div>${el.dataset.lane === 'run' ? '</div><div class="queue-item-actions">' : ''}
       ${el.dataset.lane === 'run' ? `<span class="acts-side"><button type="button" class="icon-btn" data-pause="${item.id}" aria-label="Pause: move to Pending" title="Pause: take it out of the queue and make it pending">${ICONS.later}</button>`
         // Nothing running: any of them can start first. Running: the first is next already, and the others can go ahead of the rest.
@@ -8430,6 +8570,7 @@ function renderFinished(runs, uploads, madeNow = []) {
   $('finishedToggle').disabled = !all.length;
   $('finishedToggle').classList.toggle('empty', !all.length);
   const failed = all.filter(r => r.outcome === 'failed').length;
+  $('finishedToggle').classList.toggle('failed', failed > 0);
   const title = all.length ? `Finished (${all.length})${failed ? ` · ${failed} failed` : ''}` : 'Finished';
   $('finishedToggle').setAttribute('aria-label', title);
   $('finishedToggle').title = title;
@@ -8488,8 +8629,8 @@ function placePanelControls() {
   if (DESK.matches) {
     for (const id of ['logToggle', 'finishedToggle', 'quotaToggle']) $('statusToggles').appendChild($(id));
   } else {
-    // The header: the key, Finished beside it, the log, then the gear.
-    $('topIcons').insertBefore($('finishedToggle'), $('privateToggle').nextSibling);
+    // The header: Finished, privacy, the log, then the gear.
+    $('topIcons').insertBefore($('finishedToggle'), $('privateToggle'));
     $('topIcons').insertBefore($('logToggle'), $('settingsBtn'));
     $('settingsHead').appendChild($('quotaToggle'));
   }
@@ -8587,6 +8728,10 @@ $('finishedClear').addEventListener('click', async () => {
   finishedSwiping = true;
   let cleared = false;
   const rows = [...$('finishedList').querySelectorAll('.result')];
+  const selected = { run: [], upload: [] };
+  for (const row of rows) {
+    if (row.dataset.jobId != null) selected[row.dataset.lane].push(Number(row.dataset.jobId));
+  }
   const reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
   const delays = reduced ? rows.map(() => 0) : clearDelays(rows.length);
   rows.forEach((row, i) => setTimeout(() => {
@@ -8595,8 +8740,11 @@ $('finishedClear').addEventListener('click', async () => {
   }, delays[i]));
   await new Promise(resolve => setTimeout(resolve, reduced ? 0 : (delays[delays.length - 1] || 0) + CLEAR_SLIDE));
   try {
-    const response = await fetch('/queue/finished/clear', { method: 'POST' });
-    if (!response.ok) throw new Error();
+    const response = await fetch('/queue/finished/clear', { method: 'POST',
+      headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(selected) });
+    const body = await response.json();
+    if (!response.ok || !body.ok) throw new Error(body.error || 'Could not clear Finished.');
+    for (const row of rows) forgottenResults.add(row.dataset.key);
     $('finishedList').innerHTML = '';
     cleared = true;
   } catch (error) {
@@ -8764,6 +8912,7 @@ function renderStopped(runs, parked = [], results = [], canRunNow = false) {
   const tag = run => run.outcome ? `<span class="run-tag${run.outcome.outcome === 'stopped' ? ' stopped' : ''}">${esc(run.outcome.outcome === 'failed' ? 'Failed' : run.outcome.outcome === 'stopped' ? 'Stopped' : run.outcome.outcome)}</span>` : '';
   const runRow = (run, isFailed = false) => `
     <div class="stopped-run" data-run-id="${esc(run.id)}" data-motion-key="run-${esc(run.id)}">
+      ${workPrivacy(run, run.pipeline, run.id)}
       <div class="run-head"><div class="what">${queueTitle(`run-${run.id}`, hideTitle(run) ? PLAIN_TITLE : run.label)}</div>${tag(run)}</div>
       <div class="hint">${SIDE_NAMES[run.pipeline] || 'Shorts'} · ${esc(run.detail)}${run.size && !String(run.detail).includes(run.size) ? ` · ${esc(run.size)}` : ''}</div>
       ${warningText(run)}
@@ -8781,6 +8930,7 @@ function renderStopped(runs, parked = [], results = [], canRunNow = false) {
   // Waiting to be started: put there by Add to pending or Pause, and not in the queue until you start it.
   const parkedRow = item => `
     <div class="stopped-run" data-motion-key="queue-${esc(String(item.id))}">
+      ${workPrivacy(item, 'job', item.id)}
       <div class="run-head"><div class="what">${queueTitle(`queue-${item.id}`, workHeading(item, item.pipeline))}</div></div>
       <div class="hint">${SIDE_NAMES[item.pipeline] || 'Shorts'} · ${esc(queueDetail(item))}</div>
       ${warningText(item)}
@@ -8795,7 +8945,8 @@ function renderStopped(runs, parked = [], results = [], canRunNow = false) {
   const unsavedFailures = results.filter(result => result.outcome === 'failed' && !result.run_id && result.job_id != null);
   const unsavedRow = result => `
     <div class="stopped-run" data-job-id="${esc(String(result.job_id))}">
-      <div class="run-head"><div class="what">${queueTitle(`failed-${result.job_id}`, result.label)}</div><span class="run-tag">Failed</span></div>
+      ${workPrivacy(result, 'failed', result.job_id)}
+      <div class="run-head"><div class="what">${queueTitle(`failed-${result.job_id}`, hideTitle(result) ? PLAIN_TITLE : result.label)}</div><span class="run-tag">Failed</span></div>
       <div class="hint">${SIDE_NAMES[result.pipeline] || 'Shorts'} · ${result.recoverable ? 'Failed before a run was saved; its settings are kept' : 'No saved run to retry'}</div>
       ${result.note ? whyHtml({ why: result.note }) : ''}
       ${result.recoverable ? `<div class="stopped-actions">
@@ -9636,6 +9787,7 @@ async function pollOnce(generation) {
   allImageSets = data.image_sets || [];
   imageSets = allImageSets.map(set => ({ ...set, images: set.images.filter(p => !p.collection) })).filter(set => set.images.length || set.generating);
   collections = data.collections || [];
+  if (!outputOrderSaving && !gridDrag) SETTINGS.output_order = data.output_order || [];
   if (viewing && viewing.film) {
     const film = (lastVideos[viewing.folder] || []).find(item => item.name === viewing.name);
     if (film) { $('viewerRes').textContent = sizeText(film.resolution); viewerMetadata(film); }
@@ -10269,6 +10421,7 @@ function renderPrivate(on) {
   if (typeof on !== 'boolean') return;
   const was = privateMode;
   privateMode = on;
+  document.body.classList.toggle('private-mode', on);
   $('privateMode').checked = on;
   $('privateToggle').classList.toggle('on', on);
   $('privateToggle').setAttribute('aria-pressed', String(on));
@@ -10638,6 +10791,10 @@ $('promptEditorEnhance').addEventListener('click', () => {
   if (!$('promptEditorWriterMenu').hidden) { closePromptWriterMenu(); return; }
   openPromptWriterMenu();
 });
+// Do not move focus off the textarea until a writer is chosen: the mobile keyboard stays put.
+for (const id of ['promptEditorEnhance', 'promptEditorWriterMenu']) $(id).addEventListener('pointerdown', e => {
+  if (document.activeElement === $('promptEditorText')) e.preventDefault();
+});
 $('promptEditorWriterMenu').addEventListener('click', e => {
   const button = e.target.closest && e.target.closest('[data-writer]');
   if (!button) return;
@@ -10646,6 +10803,7 @@ $('promptEditorWriterMenu').addEventListener('click', e => {
   if (side) promptEditorWriterSelected[side] = promptWriterKey(writer);
   syncPromptWriterHighlight(side);
   closePromptWriterMenu();
+  $('promptEditorText').blur();
   enhanceInEditor(writer);
 });
 document.addEventListener('click', e => {
@@ -10685,6 +10843,8 @@ $('promptEditorClear').addEventListener('click', () => {
 function setPromptEditorBusy(busy) {
   $('promptEditorText').readOnly = busy || !!(promptField && promptField.readOnly);
   for (const id of ['promptEditorEnhance', 'promptEditorReset', 'promptEditorClear', 'promptEditorSave']) $(id).disabled = busy;
+  $('promptEditorTitle').hidden = busy;
+  $('promptEditorReset').hidden = busy || promptEditorOriginal === null;
   if (busy) closePromptWriterMenu();
   $('promptEditorEnhance').classList.toggle('working', busy);
   $('promptEditorEnhance').setAttribute('aria-busy', String(busy));
@@ -10734,7 +10894,6 @@ async function enhanceInEditor(writer) {
   if (!idea.trim()) { $('promptEditorCount').textContent = 'Enter an idea first.'; return; }
   const originalBeforeRun = promptEditorOriginal;
   if (promptEditorOriginal === null) promptEditorOriginal = idea;
-  $('promptEditorReset').hidden = false;
   const writing = promptWriting = {};
   setPromptEditorBusy(true);
   $('promptEditorCount').textContent = 'Estimating…';

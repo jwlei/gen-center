@@ -359,7 +359,7 @@ class Job:
                 p["upload"] = [int(m.group(1)), int(m.group(2)), m.group(3).strip()]
             return
 
-    def stop(self):
+    def stop(self, failed=False):
         """
         Kills the process and everything it started, and waits for it to go.
         False if nothing was running, or if it survived: then `running` stays True.
@@ -367,7 +367,7 @@ class Job:
         with self.lock:
             if not self.running:
                 return False
-            self.stopped = True
+            self.stopped = not failed
             pid = self.process.pid
             kill_tree(pid)
             try:
@@ -376,7 +376,7 @@ class Job:
                 self.stopped = False
                 self.log(f"⚠️ Could not stop process {pid}.")
                 return False
-            self.log("🛑 Stopped by user.")
+            self.log("Generation stopped after a fatal ComfyUI error." if failed else "🛑 Stopped by user.")
         return True
 
     def close(self):
@@ -469,14 +469,16 @@ class JobQueue:
 
     def _save_results(self):
         if not self.results_path:
-            return
+            return True
         try:
             os.makedirs(os.path.dirname(self.results_path), exist_ok=True)
             with open(self.results_path + ".tmp", "w", encoding="utf-8") as f:
                 json.dump(self.results, f, ensure_ascii=False)
             os.replace(self.results_path + ".tmp", self.results_path)
+            return True
         except OSError as e:
             self.job.log(f"⚠️ Could not save Finished, it won't survive a restart: {e}")
+            return False
 
     def forget(self, run_id=None, film=None):
         """Takes out of Finished what was deleted from Output: the lines for that run or that film."""
@@ -487,10 +489,10 @@ class JobQueue:
                 self.results = kept
                 self._save_results()
 
-    def clear_results(self):
-        """Empties Finished. Saved runs and their files stay: only the list goes."""
+    def clear_results(self, job_ids=None):
+        """Clears the selected results, or all when no selection is given. Their files stay."""
         with self.lock:
-            self.results = []
+            self.results = [] if job_ids is None else [r for r in self.results if r.get("job_id") not in job_ids]
             self._save_results()
 
     def forget_result(self, job_id):
@@ -506,14 +508,16 @@ class JobQueue:
     def _save(self):
         # Once closed, the file keeps what was queued at Shut down.
         if not self.path or self.job.closed:
-            return
+            return not self.job.closed
         try:
             os.makedirs(os.path.dirname(self.path), exist_ok=True)
             with open(self.path + ".tmp", "w", encoding="utf-8") as f:
                 json.dump(self.items, f, ensure_ascii=False)
             os.replace(self.path + ".tmp", self.path)
+            return True
         except OSError as e:
             self.job.log(f"⚠️ Could not save the queue, it won't survive a restart: {e}")
+            return False
 
     def _ensure_watcher(self):
         # Here and not at import: gunicorn forks after importing, and threads don't survive that.
@@ -543,6 +547,8 @@ class JobQueue:
                     item["error"] = "That queued job changed or is no longer being edited. Open its setup again."
                     return True
                 self.items.remove(old)
+                if old.get("private"):
+                    item["private"] = True
                 item["id"] = edit_id
                 item["waited"] = True
                 # A continued run's setup reopened as a new run can go to Pending (the end) or the top; a plain edit keeps its place at the front.
@@ -582,6 +588,10 @@ class JobQueue:
                 self._advance()
 
     def _advance(self):
+        if self is run_queue and self.current and self.job.running and live_crash_reason(self.job):
+            # A crashed sampler can leave the pipeline waiting forever instead of exiting.
+            if not self.job.stop(failed=True):
+                return
         # Made in private mode: its run is tagged NSFW as soon as it has one, so it never shows outside the NSFW filter.
         if self.current and self.current.get("private") and not self.current.get("private_tagged"):
             run_id = (self.job.progress or {}).get("run_id") or self.current.get("resume")
@@ -716,6 +726,8 @@ class JobQueue:
         result = {"label": item["label"], "outcome": outcome, "note": note, "pipeline": item.get("pipeline"),
                   "run_id": run_id, "film": film, "position": position, "job_id": item.get("id"),
                   "at": datetime.now().strftime("%H:%M"), "t": time.time()}
+        if not run_id and item.get("private"):
+            result["private"] = True
         # Failed before a run was saved (a planning error, ComfyUI gone): the job itself is kept, so its settings can
         # go back to Pending instead of being lost with it.
         if outcome == "failed" and not run_id and self is run_queue:
@@ -1156,6 +1168,8 @@ def _apply_nsfw(payload, tags, film_runs, private=False):
         image_set["nsfw"] = image_set["id"] in image_tags
 
     def tagged(result):
+        if result.get("private"):
+            return True
         if result.get("pipeline") == "image":
             return result.get("run_id") in image_tags
         if result.get("pipeline") == "video":
@@ -1169,10 +1183,63 @@ def _apply_nsfw(payload, tags, film_runs, private=False):
     # What waits, what runs and what is pending: out of Private mode the page shows a plain title for these instead.
     queue = payload["queue"]
     for item in [*queue.get("items", []), *([queue["current"]] if queue.get("current") else [])]:
-        item["nsfw"] = bool(item.get("private")) or tagged({"pipeline": item.get("pipeline"), "run_id": item.get("resume"),
+        run_id = (payload.get("progress") or {}).get("run_id") if item is queue.get("current") else None
+        item["nsfw"] = bool(item.get("private")) or tagged({"pipeline": item.get("pipeline"), "run_id": run_id or item.get("resume"),
                                                             "film": item.get("film")})
     for run in payload.get("stopped_runs", []):
         run["nsfw"] = tagged({"pipeline": run.get("pipeline"), "run_id": run.get("id")})
+
+
+@app.route("/api/work/nsfw", methods=["POST"])
+@password_required
+def tag_work_nsfw():
+    """Marks waiting, running or failed work private before it has output to tag."""
+    body = request.get_json(silent=True)
+    if (not isinstance(body, dict) or body.get("kind") not in ("job", "failed", "image", "video")
+            or not isinstance(body.get("id"), str) or body.get("nsfw") is not True):
+        return {"ok": False, "error": "Choose a run to mark private."}, 400
+    kind, identifier = body["kind"], body["id"]
+    with run_queue.lock:
+        item = result = None
+        if kind in ("job", "failed"):
+            if not identifier.isascii() or not identifier.isdecimal():
+                return {"ok": False, "error": "Choose a job by its number."}, 400
+            job_id = int(identifier)
+            if kind == "job":
+                item = next((entry for entry in [run_queue.current, *run_queue.items]
+                             if entry and entry["id"] == job_id), None)
+            if item is None:
+                # It may have finished between the tap and this request.
+                result = next((entry for entry in run_queue.results if entry.get("job_id") == job_id), None)
+                item = result and result.get("job")
+            target = item if item is not None else result
+            if target is None:
+                return {"ok": False, "error": "That job is no longer in the list."}, 404
+            side = target.get("pipeline")
+            run_id = ((job.progress or {}).get("run_id") if item is not None and item is run_queue.current else None) \
+                or target.get("resume") or (result or {}).get("run_id")
+        else:
+            side, run_id = kind, identifier
+            if not PIPELINES[side].load_run(run_id):
+                return {"ok": False, "error": "That run is no longer saved."}, 404
+        if side not in ("image", "video"):
+            return {"ok": False, "error": "Only image and video runs support private tags."}, 400
+        if run_id and not tag_run_nsfw(side, run_id):
+            return {"ok": False, "error": "Could not save the private tag. Check the panel log."}, 500
+        if item is not None:
+            item["private"] = True
+            item.pop("private_tagged", None)
+        if result is not None and not result.get("run_id"):
+            result["private"] = True
+        for entry in [run_queue.current, *run_queue.items]:
+            if entry and run_id and entry.get("pipeline") == side and entry.get("resume") == run_id:
+                entry["private"] = True
+                entry.pop("private_tagged", None)
+        queue_saved = run_queue._save()
+        results_saved = run_queue._save_results()
+        if not queue_saved or not results_saved:
+            return {"ok": False, "error": "Marked private in memory, but could not save it. Retry before restarting the panel."}, 500
+    return {"ok": True}
 
 
 @app.route("/api/output/nsfw", methods=["POST"])
@@ -1484,6 +1551,16 @@ def _read_gpu():
     except Exception:
         _gpu_cache["value"] = None
     return _gpu_cache["value"]
+
+
+def monitor_gpu_heat():
+    from panel.gpu_guard import GPUHeatGuard
+
+    guard = GPUHeatGuard(job.log)
+    while not job.closed:
+        reading = gpu_stats()
+        guard.check(reading["temp"] if reading else None)
+        time.sleep(3)
 
 
 def comfyui_launcher():
@@ -1840,11 +1917,20 @@ TROUBLE = re.compile(r"❌|⚠️|Error|Exception|Traceback|failed|refused|can't
 MOST_WHY_LINES = 4
 # ComfyUI's memory compiler (comfy-aimdo) failing: a fresh ComfyUI clears it, so it is restarted and tried once more.
 AIMDO_ERROR = re.compile(r"aimdo memory compile error", re.I)
+EXIT_ONE_ERROR = re.compile(r"\b(?:exit(?:ed)? (?:with )?(?:(?:exit )?code |status )?1|returned non-zero exit status 1)\b", re.I)
 
 
 def hit_aimdo(job):
     """Whether the job that just ended stopped on ComfyUI's aimdo memory compile error."""
     return any(AIMDO_ERROR.search(line["text"]) for line in job.lines if line["n"] > getattr(job, "first_line", 0))
+
+
+def live_crash_reason(job):
+    if hit_aimdo(job):
+        return "ComfyUI's aimdo memory compile error"
+    if any(EXIT_ONE_ERROR.search(line["text"]) for line in job.lines if line["n"] > getattr(job, "first_line", 0)):
+        return "exit code 1"
+    return None
 
 
 def restart_reason(job, code):
@@ -1853,8 +1939,9 @@ def restart_reason(job, code):
     failure it isn't restarted for. ComfyUI's aimdo error needs a fresh ComfyUI. Exit 1 is the run's own failure code,
     and one of the ways a ComfyUI that has died or hung shows.
     """
-    if hit_aimdo(job):
-        return "ComfyUI's aimdo memory compile error"
+    reason = live_crash_reason(job)
+    if reason:
+        return reason
     if code == 1:
         return "exit code 1"
     return None
@@ -2240,9 +2327,15 @@ def queue_remove(lane, item_id):
 @app.route("/queue/finished/clear", methods=["POST"])
 @password_required
 def clear_finished():
-    """Empties Finished, runs and uploads alike. What they made stays where it is."""
-    for queue in QUEUES.values():
-        queue.clear_results()
+    """Clears only the jobs the page showed; hidden or newly finished jobs stay."""
+    selected = request.get_json(silent=True)
+    if not isinstance(selected, dict) or set(selected) != set(QUEUES):
+        return {"ok": False, "error": "Say which run and upload results to clear."}, 400
+    if any(not isinstance(ids, list) or any(type(job_id) is not int for job_id in ids)
+           for ids in selected.values()):
+        return {"ok": False, "error": "Finished results are lists of job ids."}, 400
+    for lane, queue in QUEUES.items():
+        queue.clear_results(set(selected[lane]))
     return {"ok": True}
 
 
@@ -3080,6 +3173,7 @@ def status():
     with _nsfw_lock:
         tags = _read_nsfw()
     payload["private"] = private_mode()
+    payload["output_order"] = settings.load()["output_order"]
     film_runs = films_of_runs()
     _current_films(payload["queue"]["results"], film_runs)
     _apply_nsfw(payload, tags, film_runs, payload["private"])
@@ -3401,6 +3495,8 @@ def main():
 
     global comfy_monitor
     comfy_monitor = ComfyMonitor()
+    if os.name == "nt" and (not args.debug or os.environ.get("WERKZEUG_RUN_MAIN") == "true"):
+        threading.Thread(target=monitor_gpu_heat, daemon=True).start()
 
     print(f"🌐 This PC:    http://127.0.0.1:{args.port}")
     if args.host == "0.0.0.0":

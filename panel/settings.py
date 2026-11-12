@@ -83,6 +83,7 @@ def load():
             "title_source": saved["title_source"] if saved.get("title_source") in TITLE_SOURCES else "gemini" if saved.get("gemini_titles") else "off",
             # Pin the progress bar: scrolled away from the top, the header's progress bar stays, along the top of the screen.
             "pin_progress": bool(saved.get("pin_progress")),
+            "output_order": saved.get("output_order", []),
             "theme": theme if isinstance(theme, str) and theme in THEMES else DEFAULTS["theme"]}
 
 
@@ -110,6 +111,19 @@ def update(changes):
             current["title_source"] = changes["title_source"]
         if "pin_progress" in changes:
             current["pin_progress"] = bool(changes["pin_progress"])
+        if "output_order" in changes:
+            ids = changes["output_order"]
+            if (not isinstance(ids, list) or any(not isinstance(key, str) or not key.startswith(("image:", "film:"))
+                                                or not key.split(":", 1)[1] for key in ids)
+                    or len(ids) != len(set(ids))):
+                raise ValueError("Output order must list each image batch or film once.")
+            # Only shown items trade places; a hidden filter's items keep their slots.
+            order = current["output_order"]
+            known = set(order)
+            order = [key for key in ids if key not in known] + order
+            selected = set(ids)
+            slots = iter(ids)
+            current["output_order"] = [next(slots) if key in selected else key for key in order]
         if "theme" in changes:
             if not isinstance(changes["theme"], str) or changes["theme"] not in THEMES:
                 raise ValueError("Unknown theme.")
