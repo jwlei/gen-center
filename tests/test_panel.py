@@ -1869,6 +1869,27 @@ class PanelTest(unittest.TestCase):
                 gpu_guard.restart_afterburner()
             self.assertEqual(launch.call_count, 1, "no duplicate instance if the old one is still alive")
 
+    def test_afterburner_restart_asks_for_elevation_when_it_requires_it(self):
+        from panel import gpu_guard
+        import psutil
+
+        mine = mock.Mock(info={"name": "MSIAfterburner.exe", "username": "mine",
+                               "exe": r"C:\Tools\MSI Afterburner\MSIAfterburner.exe"})
+        needs_admin = OSError(740, "The requested operation requires elevation")
+        needs_admin.winerror = 740
+        with mock.patch.object(psutil, "Process") as current, \
+                mock.patch.object(psutil, "process_iter", return_value=[mine]), \
+                mock.patch.object(psutil, "wait_procs", return_value=([mine], [])), \
+                mock.patch.object(gpu_guard.subprocess, "Popen", side_effect=needs_admin), \
+                mock.patch("ctypes.windll", create=True) as windll:
+            current.return_value.username.return_value = "mine"
+            windll.shell32.ShellExecuteW.return_value = 42
+            gpu_guard.restart_afterburner()
+            self.assertEqual(windll.shell32.ShellExecuteW.call_args.args[1:3], ("runas", mine.info["exe"]))
+            windll.shell32.ShellExecuteW.return_value = 5
+            with self.assertRaisesRegex(RuntimeError, "administrator"):
+                gpu_guard.restart_afterburner()
+
     def test_theme_picker_script(self):
         node = shutil.which("node")
         if not node:

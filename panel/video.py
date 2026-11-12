@@ -13,6 +13,7 @@ from core.upscale_eta import UpscaleEta
 from panel.server import (OUTCOME_FILE, read_outcome, form_options, PIPELINES, VIDEO_TIMINGS, _runs_cache, active_runs, app, busy_runs, item_images, job,
                           password_required, safe_video_path, saved_at, run_queue, saved_runs, saved_workflows, queue_form_snapshot)
 from panel.shorts import VOICES
+from pipelines.image import media as image_media
 from pipelines.video import h3_infinite, h3_multishot, h3_prompt, media, output_metadata, paths, planner, roles
 from pipelines.video.comfy import workflow_model
 from pipelines.video.main import BUILT_IN
@@ -549,7 +550,12 @@ def run_image(run_id):
     state = RunState.load(run_id)
     if not state or not os.path.exists(state.image_path):
         abort(404)
-    return send_file(state.image_path, mimetype="image/png", conditional=True)
+    # Only ever a film's small cover; the full start image is never needed by the lists.
+    small = os.path.join(state.folder, "thumbnails", "input.jpg")
+    try:
+        return send_file(image_media.thumbnail(state.image_path, small), mimetype="image/jpeg", max_age=3600)
+    except OSError:
+        abort(404)
 
 
 @app.route("/runs/<run_id>/clips/<int:shot>")
