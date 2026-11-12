@@ -336,8 +336,8 @@ to open on your phone. When a generation uses ComfyUI avatar clips, it starts
 ComfyUI automatically if `COMFYUI_LAUNCHER` (e.g.
 `C:\ComfyUI\run_nvidia_gpu.bat`) is set in `.env`, and the avatar stage waits up
 to 3 minutes for it to finish loading. It runs the script's `main.py` command
-with `--disable-auto-launch`, so no ComfyUI browser tab opens, in a minimised
-console window you can close to stop it. **Stop all** (in Status while a
+with `--disable-auto-launch`, so no ComfyUI browser tab or console window opens.
+**Stop all** (in Status while a
 run is going) kills the run and its ffmpeg renders, cancels its ComfyUI clips and
 removes a half-stitched video; the panel and ComfyUI keep running, and renders you
 started in ComfyUI yourself carry on. Without a launcher, start ComfyUI

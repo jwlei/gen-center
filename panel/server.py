@@ -1674,10 +1674,8 @@ def comfyui_command(launcher):
 
 def launch_comfyui(launcher):
     """
-    Starts ComfyUI in its own minimised console window, so it can be watched
-    (or closed to stop it) and outlives a server restarting for new code; Shut
-    down closes it. (Not 'start': it only takes a quoted first argument as the
-    window title and would open a folder named ComfyUI.)
+    Starts ComfyUI without a visible console window. It outlives a server
+    restarting for new code; Shut down closes it.
     """
     global _comfyui_process
     command = comfyui_command(launcher)
@@ -1685,14 +1683,10 @@ def launch_comfyui(launcher):
         _comfyui_process = subprocess.Popen(command or [launcher], shell=bool(command),
                                             cwd=os.path.dirname(launcher), start_new_session=True)
         return
-    startup = subprocess.STARTUPINFO()
-    startup.dwFlags |= subprocess.STARTF_USESHOWWINDOW
-    startup.wShowWindow = 7  # SW_SHOWMINNOACTIVE: minimised, without stealing focus
     _comfyui_process = subprocess.Popen(
         f"cmd /c {command}" if command else ["cmd", "/c", launcher],
         cwd=os.path.dirname(launcher),
-        creationflags=subprocess.CREATE_NEW_CONSOLE | subprocess.CREATE_NEW_PROCESS_GROUP | priority_flags(),
-        startupinfo=startup,
+        creationflags=NO_WINDOW | subprocess.CREATE_NEW_PROCESS_GROUP | priority_flags(),
     )
 
 

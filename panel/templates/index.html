@@ -473,17 +473,25 @@
   .result-type { flex: none; padding: 0 6px; border: 1px solid var(--line); border-radius: 6px; font-size: .7rem; color: var(--text); }
   .result-label { flex: 1 1 0; min-width: 0; overflow-wrap: anywhere; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; overflow: hidden; text-align: left; }
   .finished .failed { color: var(--err); }
-  /* Restart, Log out and Shut down: at the foot, always in view however far the settings scroll, and small. */
+  /* The short action labels fit the fixed row; Power's menu grows above it. */
   .settings-actions { display: flex; gap: 6px; flex: none; margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--line); }
   .settings-actions svg { width: 16px; height: 16px; }
-  .settings-actions a.button { flex: 1 1 0; display: flex; flex-direction: column; align-items: center; gap: 4px; margin: 0; padding: 7px 4px; font-size: .68rem;
-    font-weight: 600; text-decoration: none; text-align: center; border-radius: 10px; background: var(--panel-2); border: 1px solid var(--line); color: var(--text); }
   .settings-actions button { flex: 1 1 0; display: flex; flex-direction: column; align-items: center; gap: 4px; margin: 0; padding: 7px 4px; font-size: .68rem;
     background: var(--panel-2); border: 1px solid var(--line); color: var(--text); }
   .settings-actions button:disabled { opacity: .5; }
   /* Armed, it keeps its own shape here: icon over a label that wraps, not button.armed's one unwrapped line. */
   .settings-actions button.armed { border-color: var(--accent); color: var(--accent); flex: 1 1 0; display: flex; padding: 7px 4px; white-space: normal; overflow: visible; }
   .settings-actions button.restarting, .settings-actions button.restarting:disabled { opacity: 1; color: var(--warn); border-color: var(--warn); background: color-mix(in srgb, var(--warn) 12%, transparent); }
+  .settings-power { position: relative; flex: 1 1 0; min-width: 0; }
+  .settings-power > button { width: 100%; height: 100%; }
+  .settings-menu { position: absolute; z-index: 12; right: 0; bottom: calc(100% + 6px); display: flex; flex-direction: column; gap: 4px; min-width: 100%;
+    padding: 5px; background: var(--panel); border: 1px solid var(--line); border-radius: 12px; box-shadow: 0 8px 24px rgba(0, 0, 0, .45);
+    transform-origin: bottom center; animation: menu-in .2s ease; }
+  .settings-menu[hidden] { display: none; }
+  .settings-menu.closing { animation: menu-out .15s ease forwards; pointer-events: none; }
+  .settings-menu a { display: block; padding: 8px 12px; border: 1px solid var(--line); border-radius: 9px; background: var(--panel-2);
+    color: var(--text); font-size: .78rem; font-weight: 600; text-align: center; text-decoration: none; white-space: nowrap; }
+  .settings-menu a:hover, .settings-menu a:focus-visible { color: var(--text); border-color: var(--accent); }
   .settings-body { display: flex; flex-direction: column; gap: 10px; }
   /* Free RAM: the stepper centred, as Generate's; Set to its left, there only while a change waits to be set. */
   .reserve-row { position: relative; display: flex; justify-content: center; }
@@ -498,11 +506,10 @@
   .settings-actions #shutdown.armed { background: var(--err); color: #fff; }
   .settings-actions button { position: relative; }
   .settings-actions button[data-taps]::after { content: attr(data-taps); position: absolute; top: 2px; right: 5px; font-size: .68rem; font-weight: 700; }
-  /* Icons only: the words stay for screen readers. */
+  /* The action labels stay visible below their icons. */
   .settings-actions button { justify-content: center; }
-  .settings-actions a.button { justify-content: center; }
   .settings-actions svg { width: 20px; height: 20px; }
-  .settings-actions button > span, .settings-actions a.button > span { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+  .settings-actions button > span { font-size: .62rem; line-height: 1; white-space: nowrap; }
   .settings-note { margin: 0; }
   .settings-group { margin-top: 6px; padding-top: 10px; border-top: 1px solid var(--line); font-size: .78rem; text-transform: uppercase; letter-spacing: .04em; color: var(--neutral); font-weight: 600; }
   .settings-check { display: flex; align-items: flex-start; gap: 10px; margin: 0; text-transform: none; letter-spacing: 0; font-size: .9rem; color: var(--text); cursor: pointer; }
@@ -2446,11 +2453,15 @@
   <div class="disk" id="diskBox"><div class="hint">Checking…</div></div>
   </div>
   <div class="settings-actions">
-    <button type="button" id="restartPanel" title="Start the panel again, to load new code. Not while a run or upload is going."><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 11a8 8 0 1 0-2.3 5.7"/><path d="M20 4v7h-7"/></svg><span>Restart panel</span></button>
-    <button type="button" id="restartComfy" title="Start fresh: closes local ComfyUI processes, including work started outside the panel. Not while a panel run is going."><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="2"/><rect x="9.5" y="9.5" width="5" height="5" rx=".5"/><path d="M9 2.5v3M15 2.5v3M9 18.5v3M15 18.5v3M2.5 9h3M2.5 15h3M18.5 9h3M18.5 15h3"/></svg><span>Restart ComfyUI</span></button>
-    <a class="button" href="/logout" id="logout" title="Log out on this device: the panel keeps running."><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 4h3a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-3"/><path d="M10 17l5-5-5-5"/><path d="M15 12H4"/></svg><span>Log out</span></a>
-    <button type="button" id="forceRestartComfy" title="Force restart ComfyUI (three taps): closes ComfyUI and starts it again even while a run is going or the panel thinks one is: that run fails, and is tried once more once ComfyUI is back. Use it when ComfyUI is stuck or has died."><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M13 2 4 14h7l-1 8 9-12h-7z"/></svg><span>Force restart ComfyUI</span></button>
-    <button type="button" id="shutdown" title="Shut down: force-stops everything, then the panel's server. Start it again with start_webapp.pyw or the gen-center shortcut."><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M12 3v9"/><path d="M6.3 7.3a8 8 0 1 0 11.4 0"/></svg><span>Shut down</span></button>
+    <button type="button" id="restartPanel" aria-label="Restart panel" title="Start the panel again, to load new code. Not while a run or upload is going."><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 11a8 8 0 1 0-2.3 5.7"/><path d="M20 4v7h-7"/></svg><span>Restart</span></button>
+    <button type="button" id="restartComfy" aria-label="Restart ComfyUI" title="Start fresh: closes local ComfyUI processes, including work started outside the panel. Not while a panel run is going."><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="2"/><rect x="9.5" y="9.5" width="5" height="5" rx=".5"/><path d="M9 2.5v3M15 2.5v3M9 18.5v3M15 18.5v3M2.5 9h3M2.5 15h3M18.5 9h3M18.5 15h3"/></svg><span>Comfy</span></button>
+    <button type="button" id="forceRestartComfy" data-short-label="Force" aria-label="Force restart ComfyUI" title="Force restart ComfyUI (three taps): closes ComfyUI and starts it again even while a run is going or the panel thinks one is: that run fails, and is tried once more once ComfyUI is back. Use it when ComfyUI is stuck or has died."><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M13 2 4 14h7l-1 8 9-12h-7z"/></svg><span>Force</span></button>
+    <div class="settings-power">
+      <button type="button" id="shutdown" aria-label="Shut down" aria-haspopup="menu" aria-expanded="false" title="First click opens Log out; click again to confirm shut down."><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M12 3v9"/><path d="M6.3 7.3a8 8 0 1 0 11.4 0"/></svg><span>Power</span></button>
+      <div class="settings-menu" id="shutdownMenu" role="menu" aria-label="Power options" hidden>
+        <a href="/logout" id="logout" role="menuitem" title="Log out on this device; the panel keeps running.">Log out</a>
+      </div>
+    </div>
   </div>
   <button type="button" class="panel-close" id="settingsClose">Close</button>
 </dialog>
@@ -3768,6 +3779,7 @@ async function reloadWhenBack() {
   button.classList.add('restarting');
   button.disabled = true;
   button.querySelector('span').textContent = 'Restarting';
+  button.setAttribute('aria-label', 'Restarting panel');
   settingsNote('');
   await new Promise(r => setTimeout(r, 3000));
   for (let i = 0; i < 60; i++) {
@@ -3776,7 +3788,8 @@ async function reloadWhenBack() {
   }
   button.classList.remove('restarting');
   button.disabled = false;
-  button.querySelector('span').textContent = 'Restart panel';
+  button.querySelector('span').textContent = 'Restart';
+  button.setAttribute('aria-label', 'Restart panel');
   settingsNote('The panel did not come back. Start it with start_webapp.pyw.', true);
 }
 $('restartPanel').addEventListener('click', async () => {
@@ -3794,13 +3807,17 @@ const armed = {};
 function syncComfyButton(c) {
   comfyOff = !c.online && !c.listening;
   const label = $('restartComfy').querySelector('span');
-  const text = comfyOff ? (c.starting ? 'Starting ComfyUI…' : 'Start ComfyUI') : 'Restart ComfyUI';
+  const text = comfyOff ? (c.starting ? 'Wait' : 'Start') : 'Comfy';
   if (!armed.restartComfy) label.textContent = text;
+  $('restartComfy').setAttribute('aria-label', c.starting ? 'Starting ComfyUI' : comfyOff ? 'Start ComfyUI' : 'Restart ComfyUI');
   $('restartComfy').disabled = comfyOff && (c.starting || !c.can_start);
   // Starting or restarting: in yellow, as Restart panel is while it restarts.
   $('restartComfy').classList.toggle('restarting', (comfyOff && !!c.starting) || !!c.restarting);
   $('forceRestartComfy').classList.toggle('restarting', !!c.restarting || (comfyOff && !!c.starting));
-  if (!armed.forceRestartComfy) $('forceRestartComfy').querySelector('span').textContent = c.restarting ? 'Restarting ComfyUI…' : 'Force restart ComfyUI';
+  if (!armed.forceRestartComfy) {
+    $('forceRestartComfy').querySelector('span').textContent = c.restarting ? 'Wait' : 'Force';
+    $('forceRestartComfy').setAttribute('aria-label', c.restarting ? 'Restarting ComfyUI' : 'Force restart ComfyUI');
+  }
   if (comfyOff) $('restartComfy').classList.remove('pulse');
 }
 $('restartComfy').addEventListener('click', async () => {
@@ -3835,21 +3852,26 @@ $('forceRestartComfy').addEventListener('click', async () => {
 // restart takes three, and says how many are left).
 const tapsLeft = {}, tapLabels = {};
 function disarmTap(id) {
-  const text = $(id).querySelector('span');
+  const button = $(id), text = button.querySelector('span');
   clearTimeout(armed[id]); delete armed[id]; delete tapsLeft[id];
-  if (text && tapLabels[id] !== undefined) text.textContent = tapLabels[id];
-  $(id).classList.remove('armed');
-  if ($(id).dataset) delete $(id).dataset.taps;
+  if (text && tapLabels[id] !== undefined) text.textContent = button.dataset.shortLabel || tapLabels[id];
+  if (tapLabels[id] !== undefined) button.setAttribute('aria-label', tapLabels[id]);
+  button.classList.remove('armed');
+  if (button.dataset) delete button.dataset.taps;
 }
 function confirmTap(id, label, taps = 2) {
-  const text = $(id).querySelector('span');
+  const button = $(id), text = button.querySelector('span');
   tapLabels[id] = label;
   if (tapsLeft[id] <= 1) { disarmTap(id); return true; }
   tapsLeft[id] = tapsLeft[id] ? tapsLeft[id] - 1 : taps - 1;
   clearTimeout(armed[id]);
-  $(id).classList.add('armed');
-  // The words are for screen readers; what's seen is the taps left, as a number on the icon.
-  if (taps > 2) { text.textContent = tapsLeft[id] === 1 ? 'Tap once more' : `Tap ${tapsLeft[id]} more times`; if ($(id).dataset) $(id).dataset.taps = tapsLeft[id]; }
+  button.classList.add('armed');
+  // For longer confirmations, keep the visible label short and announce the tap count accessibly.
+  if (taps > 2) {
+    if (button.dataset && button.dataset.shortLabel) button.setAttribute('aria-label', `${label}: ${tapsLeft[id]} more taps`);
+    else text.textContent = tapsLeft[id] === 1 ? 'Tap once more' : `Tap ${tapsLeft[id]} more times`;
+    if (button.dataset) button.dataset.taps = tapsLeft[id];
+  }
   armed[id] = setTimeout(() => disarmTap(id), 4000);
   return false;
 }
@@ -10403,9 +10425,38 @@ $('stopUpload').addEventListener('click', async () => {
   await stopJob('/publish/stop');
 });
 
+function openShutdownMenu() {
+  const menu = $('shutdownMenu');
+  menu.classList.remove('closing');
+  menu.hidden = false;
+  $('shutdown').setAttribute('aria-expanded', 'true');
+}
+function closeShutdownMenu() {
+  const menu = $('shutdownMenu');
+  if (menu.hidden || menu.classList.contains('closing')) return;
+  menu.classList.add('closing');
+  $('shutdown').setAttribute('aria-expanded', 'false');
+  setTimeout(() => {
+    if (menu.classList.contains('closing')) { menu.hidden = true; menu.classList.remove('closing'); }
+  }, 150);
+}
+settingsDialog.addEventListener('close', () => {
+  closeShutdownMenu();
+  if (armed.shutdown) disarmTap('shutdown');
+});
+document.addEventListener('click', e => {
+  if (!$('shutdownMenu').hidden && !(e.target.closest && e.target.closest('#shutdownMenu, #shutdown'))) closeShutdownMenu();
+});
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape') {
+    closeShutdownMenu();
+    if (armed.shutdown) disarmTap('shutdown');
+  }
+});
 $('shutdown').addEventListener('click', async e => {
   e.preventDefault();
-  if (!confirmTap('shutdown', 'Shut down')) return;
+  if (!confirmTap('shutdown', 'Shut down')) { openShutdownMenu(); return; }
+  closeShutdownMenu();
   const body = await (await fetch('/shutdown', { method: 'POST' })).json();
   if (!body.ok) { alert(body.error || 'Could not shut down.'); return; }
   document.body.innerHTML = '<div class="wrap"><h1>gen-center</h1><p class="sub">The control panel has shut down. Start it again with <b>start_webapp.pyw</b> or the <b>gen-center</b> shortcut.</p></div>';

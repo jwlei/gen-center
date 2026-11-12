@@ -94,9 +94,10 @@ Each pipeline also runs alone: `python -m pipelines.shorts.main --help`, `python
 The gear in the header opens Settings:
 
 - **Theme**: choose the standard appearance or one of 15 other dark palettes, with color previews. The choice is saved for all devices.
-- **Restart panel**, **Restart ComfyUI** and **Shut down**, each confirmed with a second tap. When ComfyUI is off, the
-  restart button reads **Start ComfyUI**. Starting it manually stops local ComfyUI processes first, including renders
-  started outside the panel, then launches a fresh instance. It refuses while panel work is active or about to start.
+- **Restart**, **Comfy**, **Force** and **Power** stay at the bottom of Settings. Restart and Comfy need a second tap;
+  Comfy starts it when off. Force takes three taps and can interrupt a run. Power opens **Log out**; tap Power again to
+  confirm shutting down the panel. Starting ComfyUI manually stops local processes first, including renders started
+  outside the panel, then launches a fresh instance. It refuses while panel work is active or about to start.
 - **Reserve free RAM** (3 to 12 GB): start ComfyUI with `--cache-ram`, so the PC stays responsive. Press **Set**, then
   restart ComfyUI. It only applies to a ComfyUI the panel starts. 3 is ComfyUI's own default, so nothing is added.
 - **Run generation at lower priority**, so the PC stays usable while it renders.

@@ -1914,13 +1914,14 @@ assert(run("filmHtml({ name: 'f.mp4', model: 'wan', resolution: '864x480', durat
   assert(/<select id="titleSource" aria-labelledby="titlesTitle"><option value="off">[^<]*<\/option><option value="gemini">[^<]*<\/option><option value="gemini_sfw">[^<]*<\/option><option value="local">/.test(html)
     && script.includes("saveSettings({ title_source: $('titleSource').value })")
     && script.includes("$('titleSource').value = SETTINGS.title_source || 'off';"), 'Titles: Off, Gemini with the local model behind it, or the local model only, saved like the others');
-  assert(/id="restartComfy"[\s\S]*?<a class="button" href="\/logout" id="logout"[\s\S]*?<button type="button" id="forceRestartComfy"[^>]*>[\s\S]*?<span>Force restart ComfyUI<\/span><\/button>/.test(html) && !html.includes('settings-force')
-    && /\.settings-actions button > span, \.settings-actions a\.button > span \{ position: absolute; width: 1px;/.test(html)
+  assert(/id="restartPanel"[^>]*>[\s\S]*?<span>Restart<\/span>[\s\S]*?id="restartComfy"[^>]*>[\s\S]*?<span>Comfy<\/span>[\s\S]*?id="forceRestartComfy"[^>]*>[\s\S]*?<span>Force<\/span>[\s\S]*?<div class="settings-power">[\s\S]*?id="shutdown"[^>]*>[\s\S]*?<span>Power<\/span>[\s\S]*?<div class="settings-menu" id="shutdownMenu"[^>]*>[\s\S]*?<a href="\/logout" id="logout" role="menuitem"/.test(html) && !html.includes('settings-force')
+    && /\.settings-actions button > span \{ font-size: \.62rem;/.test(html)
     && script.includes("body: JSON.stringify({ force: true })") && script.includes("confirmTap('forceRestartComfy', 'Force restart ComfyUI', 3)"),
-    'Force restart ComfyUI sits left of Log out, in the row of icon-only buttons, asking for three taps, and restarts it whatever is running');
+    'the action row has short labels; Power grows a Log out menu and Force still needs three taps');
   {
     const taps = JSON.parse(run(`(() => {
-      const span = { textContent: 'Force restart ComfyUI' }, shut = { textContent: 'Shut down' }, on = new Set();
+      const span = { textContent: 'Force' }, shut = { textContent: 'Shut down' }, on = new Set();
+      $('forceRestartComfy').dataset.shortLabel = 'Force';
       $('forceRestartComfy').querySelector = () => span; $('shutdown').querySelector = () => shut;
       $('forceRestartComfy').classList = { toggle: (name, force) => (force ? on.add(name) : on.delete(name)), add() {}, remove() {}, contains: name => on.has(name) };
       const out = [];
@@ -1932,8 +1933,21 @@ assert(run("filmHtml({ name: 'f.mp4', model: 'wan', resolution: '864x480', durat
       out.push($('forceRestartComfy').classList.contains('restarting'));
       return JSON.stringify(out);
     })()`));
-    assert.deepStrictEqual(taps, [false, 'Tap 2 more times', false, 'Tap once more', true, 'Force restart ComfyUI', false, true, true, 'Restarting ComfyUI…', false],
-      `Force restart takes three taps, and is yellow while ComfyUI restarts: ${JSON.stringify(taps)}`);
+    assert.deepStrictEqual(taps, [false, 'Force', false, 'Force', true, 'Force', false, true, true, 'Wait', false],
+      `Force stays short while its tap count and restart state update: ${JSON.stringify(taps)}`);
+  }
+  {
+    const calls = [], oldFetch = context.fetch, attributes = {};
+    const menu = context.document.getElementById('shutdownMenu');
+    menu.hidden = true;
+    els.shutdown.setAttribute = (name, value) => { attributes[name] = value; };
+    context.fetch = async path => { calls.push(path); return { json: async () => ({ ok: true }) }; };
+    const click = els.shutdown.listeners.click, event = { preventDefault() {} };
+    click(event);
+    assert(!menu.hidden && attributes['aria-expanded'] === 'true', 'the first Power click opens its menu');
+    click(event);
+    assert.deepStrictEqual(calls, ['/shutdown'], 'the second Power click confirms shutdown');
+    context.fetch = oldFetch;
   }
   assert(/\.viewer-meta \{ width: 100%;/.test(html), 'the preview line is 90% of the bar, not of its own content');
 }
@@ -2379,8 +2393,8 @@ assert(/\.switch button\.active \{[^}]*color: var\(--accent\)/.test(html) && /bo
 // The side switch is Generate's, at its top; the header has no title, only the progress bars and the gear; shut down is in the settings box.
 assert(html.indexOf('id="switchShorts"') > html.indexOf('id="optionsCard"') && !/<h1>/.test(html.slice(0, html.indexOf('<script>'))));
 assert(/id="settingsBtn"[^>]*aria-label="Settings"/.test(html) && !/Sign out/.test(html));
-assert(/<dialog id="settingsDialog"[\s\S]*id="lowPriority"[\s\S]*id="localLlmModel"[\s\S]*id="h3Model"[\s\S]*id="defaultShorts"[\s\S]*id="diskBox"[\s\S]*<div class="settings-actions">[\s\S]*id="restartPanel"[\s\S]*id="restartComfy"[\s\S]*href="\/logout" id="logout"[\s\S]*id="forceRestartComfy"[\s\S]*id="shutdown"[\s\S]*id="settingsClose"/.test(html),
-  'settings, then at the foot Restart, Log out left of Shut down; the local LLM above OpenH3-IR');
+assert(/<dialog id="settingsDialog"[\s\S]*id="lowPriority"[\s\S]*id="localLlmModel"[\s\S]*id="h3Model"[\s\S]*id="defaultShorts"[\s\S]*id="diskBox"[\s\S]*<div class="settings-actions">[\s\S]*id="restartPanel"[\s\S]*id="restartComfy"[\s\S]*id="forceRestartComfy"[\s\S]*class="settings-power"[\s\S]*id="shutdown"[\s\S]*id="shutdownMenu"[\s\S]*href="\/logout" id="logout"[\s\S]*id="settingsClose"/.test(html),
+  'settings, then at the foot short restart controls and Power with Log out; the local LLM above OpenH3-IR');
 assert(/\.settings-actions \{ display: flex; gap: 6px; flex: none;/.test(html), 'the buttons stay at the foot, smaller');
 assert(/<div class="go-bar" id="goBar" hidden>[\s\S]*?id="goStickTop" aria-label="Add to top of queue"[\s\S]*?id="goStickLater" aria-label="Add to pending"[\s\S]*?id="goStick">/.test(html)
   && script.includes("$('goStickTop').addEventListener('click', () => $('goTop').click());") && script.includes("$('goStickLater').addEventListener('click', () => $('goLater').click());")

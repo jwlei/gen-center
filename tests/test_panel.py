@@ -2193,6 +2193,18 @@ class PanelTest(unittest.TestCase):
 
 
 class ComfyFreshStartTest(unittest.TestCase):
+    @unittest.skipUnless(os.name == "nt", "Windows process flags")
+    def test_launches_comfyui_without_a_console_window(self):
+        with mock.patch.object(webapp, "comfyui_command", return_value="python main.py --disable-auto-launch"), \
+                mock.patch.object(webapp, "priority_flags", return_value=0), \
+                mock.patch.object(webapp.subprocess, "Popen") as process:
+            webapp.launch_comfyui(r"C:\ComfyUI\run_nvidia_gpu.bat")
+        flags = process.call_args[1]["creationflags"]
+        self.assertTrue(flags & webapp.NO_WINDOW)
+        self.assertTrue(flags & subprocess.CREATE_NEW_PROCESS_GROUP)
+        self.assertFalse(flags & subprocess.CREATE_NEW_CONSOLE)
+        self.assertNotIn("startupinfo", process.call_args[1])
+
     def test_detects_only_comfyui_python_entry_points(self):
         import psutil
         def process(pid, name, args, cwd=""):
