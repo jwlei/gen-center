@@ -11,7 +11,7 @@ MAX_EDGE = 8192
 # As in ComfyUI's own Resolution Selector, where 1 megapixel is 1024x1024.
 PIXELS_PER_MEGAPIXEL = 1024 * 1024
 DEFAULT_MEGAPIXELS = 1.0
-MAX_MEGAPIXELS = 20.0
+MAX_MEGAPIXELS = 50.0
 # Means: take this from the source image.
 FROM_IMAGE = "image"
 # What the panel offers, as (value, what it says). Any W:H works from the command line.
