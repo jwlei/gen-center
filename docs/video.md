@@ -64,6 +64,8 @@ instructions describe shot composition, motion, sound and user-supplied dialogue
 The prompt editor's writer menu offers Gemini and both local models (Gemma and Qwen), independently of the
 local model selected in Settings. A workflow Prompt Enhancer appears when the setup supports it.
 The selected writer stays highlighted; the reset button restores the text from before enhancement.
+On mobile, the keyboard stays open while choosing a writer and closes after selection, keeping the buttons in place.
+While enhancing, animated status text replaces the heading and the reset icon stays hidden until writing finishes.
 Enhancing a video brief does not replace planning: in LLM mode the planner still turns that brief into per-clip prompts.
 
 ### One story or related scenes

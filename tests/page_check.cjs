@@ -373,9 +373,9 @@ assert(script.includes("document.body.dataset.viewing = filmFolder === 'video' ?
 assert(/body \{ --accent: var\(--shared\); --page-accent: var\(--shared\); \}/.test(html)
   && /body\.in-generate \{ --page-accent: var\(--side\); \}/.test(html) && /#optionsCard, #goBar, \.jump a\[data-page="generate"\] \{ --accent: var\(--side\); \}/.test(html),
   'violet, but Generate in its side colour');
-assert(/a#privateToggle\.on \{ opacity: 1; color: var\(--page-accent\); \}/.test(html)
+assert(/a#privateToggle\.on \{ opacity: 1; color: #9864bd; \}/.test(html)
   && /\.page-loader::before \{[^}]*var\(--page-accent\)/.test(html) && /\.disk \.bar > div \{ background: var\(--shared\); \}/.test(html),
-  'the key and the loading bar by where you are; the disk bar violet');
+  'privacy stays purple; only the loading bar follows the current page');
 assert(/\.switch\.output-kinds button\.active \{[^}]*color: var\(--kind\); \}/.test(html) && /\.output-kinds \{ position: relative; --kind: var\(--shared\); \}/.test(html), "Output's Both in violet, not the side's colour");
 assert(/\.pills\.video \{ --pill: var\(--c-video\); \}/.test(html) && /\.pills\.image \{ --pill: var\(--c-image\); \}/.test(html), 'pills keep their kind\'s colour');
 assert(/id="privateToggle"[^>]*><svg[^>]*><circle cx="12" cy="12" r="8"\/><circle cx="12" cy="12" r="2" fill="currentColor"\/><\/svg>/.test(html), 'the key: the same plain ring as the other view');
@@ -736,6 +736,34 @@ assert(setHtml.includes('data-grid-set="image_20261102_120000"') && /<button typ
   run(`renderFinished([{ label: 'Hot', outcome: 'done', at: '17:06', pipeline: 'image', run_id: 'image_9', job_id: 9, nsfw: true }], [], [])`);
   assert(!els.finishedList.innerHTML.includes('Hot'), 'and Finished shows nothing NSFW');
   run('renderFinished([], [], [])');
+}
+// Run privacy: pills stay private, and missed tags can be fixed before output exists.
+{
+  run('renderPrivate(false)');
+  assert.strictEqual(run("workPrivacy({ pipeline: 'image', nsfw: true }, 'job', 1)"), '', 'private pills stay hidden outside Privacy mode');
+  assert(run("workPrivacy({ pipeline: 'image' }, 'job', 1)").includes('data-work-private-kind="job"'), 'untagged work can be marked private in either mode');
+  run('renderPrivate(true)');
+  assert(run("workPrivacy({ pipeline: 'image', nsfw: true }, 'job', 1)").includes('work-private-pill'), 'private work has a privacy pill');
+  const action = run("workPrivacy({ pipeline: 'video' }, 'job', 7)");
+  assert(action.includes('data-work-private-kind="job"') && action.includes('data-work-private-id="7"') && action.includes('tap twice'), 'untagged work uses a two-tap NSFW button');
+  run(`renderStopped([{ id: 'private_run', pipeline: 'video', label: 'Saved', detail: '', nsfw: true }],
+    [{ id: 8, pipeline: 'image', label: 'Pending', detail: '', private: true }],
+    [{ job_id: 9, pipeline: 'image', label: 'Failed', outcome: 'failed', recoverable: true }])`);
+  assert(els.stoppedRuns.innerHTML.includes('work-private-pill'), 'saved and parked pending work show privacy pills');
+  assert(els.failedRuns.innerHTML.includes('data-work-private-kind="failed"'), 'unsaved failures can be tagged too');
+  run(`renderNow({ running: true, queue: { current: { id: 7, pipeline: 'video' } } })`);
+  assert(els.currentWorkPrivacy.innerHTML.includes('data-work-private-id="7"'), 'the active run can be tagged before its first output');
+  const keptPrivacyQuery = els.currentWorkPrivacy.querySelectorAll;
+  els.currentWorkPrivacy.querySelectorAll = () => [{}];
+  els.currentWorkPrivacy.innerHTML = 'Awaiting confirmation';
+  run(`renderNow({ running: true, queue: { current: { id: 7, pipeline: 'video', nsfw: true } } })`);
+  assert.strictEqual(els.currentWorkPrivacy.innerHTML, 'Awaiting confirmation', 'polling preserves an armed or submitting privacy button');
+  els.currentWorkPrivacy.querySelectorAll = keptPrivacyQuery;
+  run(`renderPrivate(false); renderStopped([], [], [
+    { job_id: 9, pipeline: 'image', label: 'Private failure title', outcome: 'failed', nsfw: true, private: true }
+  ])`);
+  assert(!els.failedRuns.innerHTML.includes('Private failure title') && !els.failedRuns.innerHTML.includes('work-private-pill'), 'private failures keep their plain title and no pill outside Privacy mode');
+  run('renderStopped([])');
 }
 // Arranging in the grid: the button left of Close, lit while on; a tap picks one rather than opening it.
 {
@@ -1205,6 +1233,7 @@ assert.strictEqual(finishedClasses.empty, false, 'phone icon appears when result
 assert(els.finishedLabel.innerHTML.startsWith('Finished (3)') && els.finishedLabel.innerHTML.includes('1 failed'));
 assert.strictEqual(els.finishedCount.textContent, '3');
 assert.strictEqual(els.finishedToggle.title, 'Finished (3) · 1 failed');
+assert.strictEqual(finishedClasses.failed, true, 'Finished itself highlights red when its list has a failure');
 const order = ['>C<', '>B (exit 1)<', '>A &lt;b&gt;run<'].map(text => els.finishedList.innerHTML.indexOf(text));
 assert(order.every(i => i >= 0) && order[0] < order[1] && order[1] < order[2], 'newest first, escaped');
 assert(/data-goto="video"/.test(els.finishedList.innerHTML) && /<span class="result-mark">✔<\/span><span class="result-type">Video<\/span><span class="result-label">A &lt;b&gt;run[^<]*<\/span><span class="when">17:05<\/span>/.test(els.finishedList.innerHTML), 'its type before its title, the time last');
@@ -1217,7 +1246,7 @@ assert(/data-goto="shorts" data-tab="uploaded"[^>]*>[\s\S]*?<span class="result-
 assert(!els.finishedList.innerHTML.includes('finished-clear') && els.finishedFoot.hidden === false, 'Clear is outside the list, shown while it has something');
 assert(/<div class="finished-foot" id="finishedFoot" hidden><button type="button" class="finished-clear" id="finishedClear"[^>]*>Clear<\/button><\/div>/.test(html), 'a discreet Clear under the list');
 assert(/if \(cleared\) \{\s*if \(panelShown && panelShown\.which === 'finished'\) closePanel\(\);\s*else if \(DESK\.matches && document\.body\.dataset\.runtab === 'finished'\) setRunTab\('queue'\);/.test(script), 'cleared, Finished closes');
-assert(/\$\('finishedClear'\)\.addEventListener\('click'[\s\S]{0,160}secondTap\(button\)[\s\S]{0,900}fetch\('\/queue\/finished\/clear', \{ method: 'POST' \}\)/.test(html), 'Clear asks first, swipes them out, then empties it');
+assert(/\$\('finishedClear'\)\.addEventListener\('click'[\s\S]{0,160}secondTap\(button\)[\s\S]{0,1500}fetch\('\/queue\/finished\/clear', \{ method: 'POST',/.test(html), 'Clear asks first, swipes them out, then clears the selected results');
 { const d = run('clearDelays(6)'); assert(d[0] === 0 && d.every((v, i) => i < 2 || v - d[i - 1] < d[i - 1] - (d[i - 2] ?? 0)), 'from the top, each sooner after the last than the one before'); }
 assert(/#finishedList \{ overflow-x: clip; \}/.test(html) && !/#finishedList \{ overflow-x: hidden/.test(html), 'the list scrolls with the box, not on its own');
 // A small picture of what it made on the left, and a swipe to the right takes it off the list.
@@ -1263,8 +1292,8 @@ for (const id of ['logToggle', 'finishedToggle', 'quotaToggle']) {
   context.document.getElementById('privateToggle').nextSibling = { id: 'settingsBtn' };
   wide.matches = false;
   run('placePanelControls()');
-  assert.deepStrictEqual(moved.splice(0), ['topIcons:finishedToggle:before:settingsBtn', 'topIcons:logToggle:before:settingsBtn', 'settingsHead:quotaToggle'],
-    'in the header: Finished right of the key, then the log, then the gear');
+  assert.deepStrictEqual(moved.splice(0), ['topIcons:finishedToggle:before:privateToggle', 'topIcons:logToggle:before:settingsBtn', 'settingsHead:quotaToggle'],
+    'in the header: Finished, privacy, then the log, then the gear');
   assert(!els.runActions.hidden && els.skip.hidden && els.stop.hidden, 'idle: no run controls');
   assert(/\.top-icons \.panel-icon \{ width: auto; height: auto; padding: 0; gap: 3px; color: var\(--muted\); opacity: \.7;/.test(html)
     && /\.top-icons #finishedToggle\.empty \{ display: none; \}/.test(html), "the header's icons all one quiet grey; Finished only with something in it");
@@ -1523,6 +1552,22 @@ assert(context.iconTapped.innerHTML.includes('m5 12 5 5 9-10') && context.iconTa
 run('disarm(iconTapped)');
 assert.strictEqual(context.iconTapped.innerHTML, '<svg>bin</svg>');
 assert.strictEqual(context.tapped.style.width, '', 'and its own size again');
+{
+  const keptFetch = context.fetch, sent = [];
+  context.workTagButton = { innerHTML: '<svg>tag</svg>', dataset: { workPrivateKind: 'job', workPrivateId: '7' }, classList: classes(), style: {}, getBoundingClientRect: () => ({ width: 24 }) };
+  context.workTagButton.classList.add('icon-btn');
+  context.fetch = (url, options) => { sent.push({ url, body: JSON.parse(options.body) }); return new Promise(() => {}); };
+  const handler = documentListeners.click.find(fn => String(fn).includes('[data-work-private-kind]'));
+  const event = { target: { closest: () => context.workTagButton }, preventDefault() {}, stopPropagation() {} };
+  handler(event);
+  assert.strictEqual(sent.length, 0, 'first tap only confirms');
+  handler(event);
+  assert(sent.length === 1 && sent[0].url === '/api/work/nsfw' && sent[0].body.id === '7'
+    && sent[0].body.nsfw === true && context.workTagButton.disabled, 'second tap tags the job and prevents duplicate submissions');
+  handler(event);
+  assert.strictEqual(sent.length, 1, 'a submitting tag cannot send another request');
+  context.fetch = keptFetch;
+}
 
 // The generation queue redraws together with Pending and Failed; upload departures keep their own animation.
 const queueEl = { dataset: { title: 'Queue', lane: 'run' }, hidden: false, innerHTML: '', nodes: [],
@@ -1534,6 +1579,9 @@ context.setTimeout = (fn, ms) => { queueTimers.push([fn, ms]); return 1; };
 context.twoQueued = { items: [{ id: 1, label: 'First', pipeline: 'video', detail: 'd' }, { id: 2, label: 'Second', pipeline: 'image', detail: 'd' }], held: false };
 run('renderQueue(queueEl, twoQueued, 0)');
 assert(queueEl.innerHTML.includes('data-id="1"') && queueEl.innerHTML.includes('data-id="2"'));
+run('renderPrivate(true); twoQueued.items[0].nsfw = true; renderQueue(queueEl, twoQueued, 0)');
+assert(queueEl.innerHTML.includes('work-private-pill') && queueEl.innerHTML.includes('data-work-private-id="2"'), 'queued private work has a pill and untagged work has its action');
+run('renderPrivate(false); delete twoQueued.items[0].nsfw; renderQueue(queueEl, twoQueued, 0)');
 const first = { dataset: { id: '1' }, style: {}, offsetHeight: 40, classList: classes() };
 queueEl.nodes = [first, { dataset: { id: '2' }, style: {}, offsetHeight: 40, classList: classes() }];
 run('renderQueue(queueEl, twoQueued, 0, true)');
@@ -2012,7 +2060,7 @@ assert(!els.imageSets.innerHTML.includes('image_plain'), 'the other view: only w
 run(`imageSets = [imageSets[0]]; lastVideos.video.push({ name: 'older.mp4', model: 'wan', mtime: 1, nsfw: true }); imageSets[0].mtime = 2; renderImageSets()`);
 const nsfwOrder = ['data-nsfw-video="private.mp4"', 'data-nsfw-image="image_private"', 'data-nsfw-video="older.mp4"'].map(s => els.imageSets.innerHTML.indexOf(s));
 assert(nsfwOrder.every(i => i >= 0) && nsfwOrder[0] < nsfwOrder[1] && nsfwOrder[1] < nsfwOrder[2], 'in the order things were made, not grouped by kind');
-assert(/\$\('imageSets'\)\.addEventListener\('click', async e => \{\n  if \(e\.target\.closest && e\.target\.closest\('\.film'\)\) return onFilmClick\(e\);/.test(html), "a film's buttons work among the image sets");
+assert(script.includes("if (e.target.closest && e.target.closest('.film')) return onFilmClick(e);"), "a film's buttons work among the image sets");
 run(`lastVideos.video = lastVideos.video.filter(v => v.name !== 'older.mp4')`);
 // In the order they were made, by their run, even when a film's file is newer (stitched again later).
 run(`lastVideos.video.push({ name: 'restitched.mp4', model: 'wan', mtime: 9e9, run: 'run_20261108_020000', nsfw: true });
@@ -2030,6 +2078,23 @@ run(`lastVideos.video = lastVideos.video.filter(v => v.name !== 'restitched.mp4'
 run(`renderFinished([], [], []);`);
 assert.strictEqual(els.finishedList.innerHTML, '', 'an open Finished list is cleared when nothing remains');
 run('imageSets = []');
+{
+  run(`pipeline = 'image'; outputKind = 'both'; nsfwView = false;
+    lastVideos.video = [];
+    imageSets = [...'abcdefg'].map((id, i) => ({ id, label: id, total: 1, mtime: 7 - i, images: [{ position: 1, title: id, version: 1 }] }));
+    SETTINGS.output_order = ['image:a', 'image:b', 'image:c', 'image:d', 'image:g', 'image:f', 'image:e'];`);
+  assert.strictEqual(run("outputItems().map(item => item.set.id).join('')"), 'abcdgfe', 'only the old batches are rearranged');
+  run("imageSets.push({ id: 'new', label: 'New', total: 1, mtime: 8, images: [{ position: 1, title: 'New', version: 1 }] }); renderImageSets()");
+  assert.strictEqual(run("outputItems().map(item => item.set.id).join(',')"), 'new,a,b,c,d,g,f,e', 'a new generation stays on top of the saved arrangement');
+  const order = ['new', 'a', 'b', 'c', 'd', 'g', 'f', 'e'].map(id => els.imageSets.innerHTML.indexOf(`data-output-key="image:${id}"`));
+  assert(order.every((at, i) => at >= 0 && (!i || at > order[i - 1])), 'rendered cards use the saved arrangement');
+  els.outputArrange.listeners.click();
+  assert(run('outputArranging'), 'the arrange button enables batch selection');
+  els.imageSets.listeners.click({ preventDefault() {}, target: { closest: () => ({ dataset: { outputKey: 'image:g' } }) } });
+  assert.strictEqual(run('outputSelected'), 'image:g', 'a tap selects the batch instead of opening it');
+  els.outputArrange.listeners.click();
+  run("SETTINGS.output_order = []; imageSets = []; lastVideos.video = []");
+}
 run(`nsfwView = false; folder = 'output'; pipeline = 'shorts'`);
 // The footer's bar says how many more are waiting.
 assert(/right: left \+ \(runsQueued \? ` · \+\$\{runsQueued\} queued` : ''\)/.test(script));
@@ -2547,6 +2612,39 @@ assert(els.comfyFacts.innerHTML.includes('Generating the image · 3/8') && els.c
 // The status recovers by itself.
 (async () => {
   {
+    const savedFetch = context.fetch, savedTimeout = context.setTimeout;
+    const savedPoll = run('poll'), savedRows = els.finishedList.querySelectorAll;
+    const savedClasses = els.finishedClear.classList;
+    els.finishedClear.classList = classes();
+    const clearTimers = [];
+    context.setTimeout = fn => { clearTimers.push(fn); return clearTimers.length; };
+    run('poll = () => {}; panelShown = null; finishedSwiping = false');
+    const rows = [
+      { dataset: { lane: 'run', jobId: '4', key: 'run:4' }, style: {}, classList: classes() },
+      { dataset: { lane: 'upload', jobId: '7', key: 'upload:7' }, style: {}, classList: classes() },
+      { dataset: { lane: 'run', key: 'made:active:2' }, style: {}, classList: classes() },
+    ];
+    els.finishedList.querySelectorAll = () => rows;
+    let sent;
+    context.fetch = async (url, options) => {
+      assert.strictEqual(url, '/queue/finished/clear');
+      sent = JSON.parse(options.body);
+      return { ok: true, json: async () => ({ ok: true }) };
+    };
+    await els.finishedClear.listeners.click();
+    const clearing = els.finishedClear.listeners.click();
+    clearTimers.splice(0).forEach(fn => fn());
+    await clearing;
+    assert.deepStrictEqual(sent, { run: [4], upload: [7] }, 'Clear sends only the rendered results, never hidden or newly finished jobs');
+    assert(run("forgottenResults.has('made:active:2')"), 'visible results of an active run stay hidden after clearing');
+    context.fetch = savedFetch;
+    context.setTimeout = savedTimeout;
+    els.finishedList.querySelectorAll = savedRows;
+    els.finishedClear.classList = savedClasses;
+    context.savedClearPoll = savedPoll;
+    run('poll = savedClearPoll; forgottenResults.clear()');
+  }
+  {
     const section = element('drag-test'), order = [], sent = [], frames = [];
     section.dataset.lane = 'run';
     section._selected = '1';
@@ -2844,6 +2942,7 @@ assert(els.comfyFacts.innerHTML.includes('Generating the image · 3/8') && els.c
       context.deleteSet = { id: 'image_delete', label: 'Batch', total: 3, size: '1x1', when: '', images: [
         image(1, 'First'), image(2, 'Second'), image(3, 'Third')] };
       run("imageSets = [deleteSet]; nsfwView = false; pipeline = 'image'");
+      run("allImageSets = [{ ...deleteSet, images: [...deleteSet.images] }]");
     };
     const remove = async (position, remaining) => {
       context.fetch = async url => {
@@ -2868,10 +2967,11 @@ assert(els.comfyFacts.innerHTML.includes('Generating the image · 3/8') && els.c
     context.fetch = () => new Promise(resolve => { finishDelete = resolve; });
     await els.viewerDelete.listeners.click();
     const pendingDelete = els.viewerDelete.listeners.click();
-    assert(els.viewerDelete.disabled, 'deletion cannot be submitted twice while in flight');
+    assert(els.viewerDelete.disabled && els.viewerDelete.classList.contains('deleting'), 'deletion pulses yellow and cannot be submitted twice while in flight');
     run('stepViewer(1)');
     finishDelete({ json: async () => ({ ok: true, images: [image(1, 'Second'), image(2, 'Third')] }) });
     await pendingDelete;
+    assert(!els.viewerDelete.disabled && !els.viewerDelete.classList.contains('deleting'), 'the pending indicator clears after the response');
     assert(els.imageViewer.open && els.viewerTitle.textContent === 'Second' && els.viewerCount.textContent === '1 of 2', 'navigation during deletion keeps the selected image after renumbering');
     let error = '';
     const savedAlert = context.alert;
@@ -2880,10 +2980,20 @@ assert(els.comfyFacts.innerHTML.includes('Generating the image · 3/8') && els.c
     await els.viewerDelete.listeners.click();
     await els.viewerDelete.listeners.click();
     assert(els.imageViewer.open && els.viewerTitle.textContent === 'Second' && els.viewerCount.textContent === '1 of 2' && error === 'Run is busy', 'a failed deletion leaves the preview intact and reports the error');
+    run(`imageSets = []; allImageSets = []; pipeline = 'video'; outputKind = 'both'; folder = 'video';
+      lastVideos.video = [{ name: 'first.mp4', title: 'First film', mtime: 2 }, { name: 'next.mp4', title: 'Next film', mtime: 1 }];
+      openFilm('first.mp4', 'video')`);
+    context.fetch = async url => {
+      assert.strictEqual(url, '/delete/video/first.mp4');
+      return { json: async () => ({ ok: true }) };
+    };
+    await els.viewerDelete.listeners.click();
+    await els.viewerDelete.listeners.click();
+    assert(els.imageViewer.open && els.viewerTitle.textContent === 'Next film', 'deleting a film opens the next output instead of closing');
     context.alert = savedAlert;
     context.fetch = savedFetch;
     context.savedPoll = savedPoll;
-    run('poll = savedPoll; closeViewer(); imageSets = []');
+    run('poll = savedPoll; closeViewer(); imageSets = []; allImageSets = []; lastVideos.video = []');
     els.viewerDelete.classList = savedClasses;
   }
   const feedback = context.feedback = { innerHTML: 'Add to queue', textContent: '', disabled: false,
@@ -3274,18 +3384,25 @@ assert(els.comfyFacts.innerHTML.includes('Generating the image · 3/8') && els.c
       assert(els.promptEditorWriterMenu.innerHTML.includes('data-model="qwen3-14b"') && els.promptEditorWriterMenu.innerHTML.includes('class="selected"'),
         'the selected Qwen writer is highlighted when the menu opens again');
       assert(/has-selection #promptEditorEnhance/.test(html), 'the writer icon has a persistent selected colour');
+      context.document.activeElement = els.promptEditorText;
+      let heldFocus = 0;
+      for (const id of ['promptEditorEnhance', 'promptEditorWriterMenu']) {
+        els[id].listeners.pointerdown({ preventDefault() { heldFocus++; } });
+      }
+      assert.strictEqual(heldFocus, 2, 'opening the writer menu and choosing a model preserve textarea focus');
+      context.document.activeElement = null;
       let releaseEstimate;
       context.fetch = (url, options) => options
         ? Promise.resolve({ ok: true, json: async () => ({ ok: true, prompt: 'A full prompt' }) })
         : new Promise(resolve => { releaseEstimate = resolve; });
       const writing = run("enhanceInEditor({ id: 'local', model: 'qwen3-14b' })");
-      assert(!els.promptEditorThinking.hidden && !els.promptEditorReset.hidden, 'the animated header and reset control show while the writer is loading');
+      assert(!els.promptEditorThinking.hidden && els.promptEditorTitle.hidden && els.promptEditorReset.hidden, 'thinking replaces the title, and reset stays hidden while writing');
       const openingPhrase = els.promptEditorThinkingCurrent.innerHTML.replace(/<[^>]*>/g, '').replace(/&nbsp;/g, ' ');
       assert(openingPhrase.startsWith('Prompting'), 'the header starts with a prompting phrase');
       releaseEstimate({ ok: true, json: async () => ({ ok: true, seconds: 30, model: 'qwen3-14b' }) });
       await writing;
       assert.strictEqual(els.promptEditorText.value, 'A full prompt', 'what it writes goes in the editor');
-      assert(els.promptEditorThinking.hidden, 'the thinking header stops after writing');
+      assert(els.promptEditorThinking.hidden && !els.promptEditorTitle.hidden, 'the original header returns after writing');
       assert(!els.promptEditorReset.hidden, 'enhancement exposes a restore-original button');
       els.promptEditorReset.listeners.click();
       assert.strictEqual(els.promptEditorText.value, 'a shot idea', 'restore brings back the exact pre-enhancement prompt');

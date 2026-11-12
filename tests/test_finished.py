@@ -87,15 +87,21 @@ class FinishedTest(unittest.TestCase):
         uploads.assert_called_once_with(5)
         self.assertEqual(client.post("/queue/nope/finished/5/forget").status_code, 404)
 
-    def test_clear_route_empties_runs_and_uploads(self):
+    def test_clear_route_only_removes_the_results_the_page_saw(self):
         client = server.app.test_client()
         with client.session_transaction() as session:
             session["authed"] = True
-        with mock.patch.object(server.run_queue, "clear_results") as runs, \
-                mock.patch.object(server.upload_queue, "clear_results") as uploads:
-            self.assertEqual(client.post("/queue/finished/clear").get_json(), {"ok": True})
-        runs.assert_called_once()
-        uploads.assert_called_once()
+        with tempfile.TemporaryDirectory() as folder:
+            runs = self.queue(folder)
+            runs.results = [{"label": "Shown", "job_id": 1}, {"label": "Hidden NSFW", "job_id": 2},
+                            {"label": "Just finished", "job_id": 3}]
+            with mock.patch.dict(server.QUEUES, {"run": runs, "upload": mock.Mock()}):
+                reply = client.post("/queue/finished/clear", json={"run": [1], "upload": []})
+                self.assertEqual(reply.get_json(), {"ok": True})
+                server.QUEUES["upload"].clear_results.assert_called_once_with(set())
+            self.assertEqual([r["job_id"] for r in self.queue(folder).results], [2, 3])
+        for invalid in (None, {}, {"run": [], "upload": [True]}, {"run": "all", "upload": []}):
+            self.assertEqual(client.post("/queue/finished/clear", json=invalid).status_code, 400)
 
 
 if __name__ == "__main__":
@@ -104,6 +110,42 @@ if __name__ == "__main__":
 
 class AimdoRetryTest(unittest.TestCase):
     """ComfyUI's aimdo memory compile error: restart ComfyUI and try once more, then Failed and restart again."""
+
+    def test_fatal_log_stops_a_still_running_generation_before_retrying(self):
+        for error in ("ComfyUI failed in SamplerCustomAdvanced: aimdo memory compile error",
+                      "ComfyUI exited with code 1", "Command returned non-zero exit status 1."):
+            with self.subTest(error=error), tempfile.TemporaryDirectory() as folder:
+                job = mock.Mock(closed=False, running=True, idle=False, stopped=False, progress={}, returncode=1,
+                                batches=0, first_line=8, lines=[{"n": 9, "text": error}])
+                queue = server.JobQueue(job, lambda item: None, path=os.path.join(folder, "queue_runs.json"))
+                queue.current = {"id": 3, "label": "Clip", "pipeline": "video", "argv": []}
+
+                def stop(failed=False):
+                    self.assertTrue(failed, "a fatal crash is not a user cancellation")
+                    job.running = False
+                    job.idle = True
+                    return True
+
+                job.stop.side_effect = stop
+                with mock.patch.object(server, "run_queue", queue), \
+                        mock.patch.object(server, "restart_comfyui_in_background", return_value=True) as restart:
+                    queue.held = True
+                    queue._advance()
+                    job.stop.assert_called_once_with(failed=True)
+                    restart.assert_called_once()
+                    self.assertTrue(queue.items[0]["aimdo_retried"])
+
+    def test_old_fatal_lines_do_not_stop_the_next_generation(self):
+        with tempfile.TemporaryDirectory() as folder:
+            job = mock.Mock(closed=False, running=True, idle=False, first_line=9,
+                            lines=[{"n": 9, "text": "aimdo memory compile error"}])
+            queue = server.JobQueue(job, lambda item: None, path=os.path.join(folder, "queue_runs.json"))
+            queue.current = {"id": 3}
+            with mock.patch.object(server, "run_queue", queue):
+                queue._advance()
+            job.stop.assert_not_called()
+        for text in ("exited with code 10", "exit 12", "Rendering clip 1"):
+            self.assertIsNone(server.live_crash_reason(mock.Mock(first_line=0, lines=[{"n": 1, "text": text}])))
 
     def test_retried_once_after_a_restart_then_failed(self):
         with tempfile.TemporaryDirectory() as folder:
