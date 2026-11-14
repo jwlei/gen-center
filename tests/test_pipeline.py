@@ -5,6 +5,8 @@ ffmpeg on tiny synthetic clips, with no GPU and no Gemini. Run from the project 
     python -m unittest discover tests
 """
 import json
+import base64
+import hashlib
 import os
 import shutil
 import sys
@@ -60,6 +62,138 @@ class PipelineTest(unittest.TestCase):
         runs = run_state.list_runs()
         self.assertEqual(len(runs), 1)
         return runs[0]
+
+    def test_checkpoints_migrate_and_fail_explicitly_for_all_pipelines(self):
+        from core import run_checkpoint
+        from pipelines.image import paths as image_paths, run_state as image_state
+        from pipelines.shorts import run_state as shorts_state
+
+        workflow = os.path.join(self.temp, "workflow.json")
+        with open(workflow, "wb") as file:
+            file.write(b'{"model":"example"}')
+        states = [
+            image_state.RunState.new("brief", 1, True, 64, 64, workflow=workflow),
+            run_state.RunState.new("brief", 10, "image", 64, 64, workflow=workflow),
+            shorts_state.RunState.new([], 1, 0),
+        ]
+        states[2].topic, states[2].env = "topic", {"COMFYUI_WORKFLOW": workflow}
+        with mock.patch.object(image_paths, "RUNS_DIR", os.path.join(self.temp, "image-runs")), \
+                mock.patch.object(shorts_state, "RUNS_DIR", os.path.join(self.temp, "shorts-runs")):
+            for state in states:
+                with self.subTest(pipeline=state.__class__.__module__):
+                    state.save()
+                    with open(state.path, encoding="utf-8") as file:
+                        data = json.load(file)
+                    self.assertEqual(data.pop("schema_version"), 1)
+                    snapshot = data["provenance"]["workflow_snapshots"][0]
+                    content = base64.b64decode(snapshot["base64"])
+                    self.assertEqual(snapshot["sha256"], hashlib.sha256(content).hexdigest())
+                    data.pop("provenance")
+                    with open(state.path, "w", encoding="utf-8") as file:
+                        json.dump(data, file)
+                    loaded = type(state).load(state.id)
+                    self.assertEqual(loaded.id, state.id)
+                    loaded.save()
+                    if state is states[2]:
+                        loaded.save_manifest()
+                        manifest = os.path.join(shorts_state.RUNS_DIR, "manifests", state.id + ".json")
+                        with open(manifest, encoding="utf-8") as file:
+                            self.assertEqual(json.load(file)["id"], state.id)
+                    with open(state.path, "rb") as file:
+                        original = file.read()
+                    with mock.patch.object(run_checkpoint.os, "replace", side_effect=PermissionError("locked")), \
+                            mock.patch.object(run_checkpoint.time, "sleep"):
+                        with self.assertRaisesRegex(run_checkpoint.CheckpointError, "Could not save checkpoint"):
+                            loaded.save()
+                    with open(state.path, "rb") as file:
+                        self.assertEqual(file.read(), original)
+                    self.assertFalse(any(name.endswith(".tmp") for name in os.listdir(state.folder)))
+                    corrupt = dict(data, schema_version=1, **({"argv": "bad"} if state is states[2] else {"shots": "bad"}))
+                    for bad in ('{"schema_version": 999}', "{broken", "[]", json.dumps(corrupt)):
+                        with open(state.path, "w", encoding="utf-8") as file:
+                            file.write(bad)
+                        with self.assertRaises(run_checkpoint.CheckpointError):
+                            type(state).load(state.id)
+
+    def test_stitch_failures_preserve_published_film_and_checkpoint(self):
+        from core import run_checkpoint
+        os.makedirs(paths.OUTPUT_DIR)
+        state = run_state.RunState.new("brief", 5, "multishot", 64, 64)
+        state.film_name, state.take_file = "existing", "take.mp4"
+        state.shots = [{"seconds": 5, "prompt": "one"}]
+        state.final = os.path.join(paths.OUTPUT_DIR, "existing.mp4")
+        os.makedirs(state.parts_dir)
+        with open(os.path.join(state.parts_dir, state.take_file), "wb") as file:
+            file.write(b"new")
+        with open(state.final, "wb") as file:
+            file.write(b"old")
+        state.save()
+        with open(state.path, "rb") as file:
+            checkpoint = file.read()
+        for failure in ("audio", "probe", "checkpoint"):
+            with self.subTest(failure=failure):
+                state.has_audio = failure == "audio"
+                with mock.patch.object(main, "claimed_films", return_value=set()), \
+                        mock.patch.object(media, "with_audio", side_effect=RuntimeError("audio failure")), \
+                        mock.patch.object(media, "_probe", return_value=(0 if failure == "probe" else 5, {"video"})), \
+                        mock.patch.object(state, "save", side_effect=run_checkpoint.CheckpointError("save failure") if failure == "checkpoint" else None):
+                    with self.assertRaises(RuntimeError):
+                        main.stitch_film(state)
+                with open(state.final, "rb") as file:
+                    self.assertEqual(file.read(), b"old")
+                with open(state.path, "rb") as file:
+                    self.assertEqual(file.read(), checkpoint)
+                self.assertEqual(os.listdir(paths.OUTPUT_DIR), ["existing.mp4"])
+
+    def test_shorts_checkpoint_failure_stops_batch(self):
+        import asyncio
+        from types import SimpleNamespace
+        from core.run_checkpoint import CheckpointError
+        from pipelines.shorts import main as shorts_main
+        state = mock.Mock(id="run_20261101_000000_1")
+        state.save.side_effect = CheckpointError("checkpoint failed")
+        args = SimpleNamespace(check=False, resume=None, runs=1, options=[])
+        with mock.patch.object(shorts_main, "preflight", return_value=[]), \
+                mock.patch.object(shorts_main.RunState, "new", return_value=state), \
+                mock.patch.object(shorts_main, "generate_one") as generate:
+            self.assertEqual(asyncio.run(shorts_main.main_async(args)), 1)
+            generate.assert_not_called()
+            state.release_batch.assert_not_called()
+
+    def test_bad_checkpoint_siblings_are_reported_without_blocking_catalogues(self):
+        from core import run_checkpoint
+        from pipelines.image import paths as image_paths, run_state as image_state
+        from pipelines.shorts import run_state as shorts_state
+        states = [
+            (image_state, image_state.RunState.new("brief", 1, True, 64, 64)),
+            (run_state, run_state.RunState.new("brief", 10, "image", 64, 64)),
+            (shorts_state, shorts_state.RunState.new([], 1, 0)),
+        ]
+        states[2][1].topic = "topic"
+        with mock.patch.object(image_paths, "RUNS_DIR", os.path.join(self.temp, "image-runs")), \
+                mock.patch.object(shorts_state, "RUNS_DIR", os.path.join(self.temp, "shorts-runs")):
+            for module, state in states:
+                with self.subTest(pipeline=module.__name__):
+                    state.save()
+                    suffix = "_1" if module is shorts_state else ""
+                    prefix = "image" if module is image_state else "run"
+                    bad_id = f"{prefix}_20990101_000000{suffix}"
+                    bad = os.path.join(os.path.dirname(state.folder), bad_id, "state.json")
+                    os.makedirs(os.path.dirname(bad))
+                    for content in (b"\x00" * 17, b'{"schema_version":999}'):
+                        with open(bad, "wb") as file:
+                            file.write(content)
+                        with self.assertLogs("core.run_checkpoint", level="WARNING") as logged:
+                            self.assertEqual([run.id for run in module.list_runs()], [state.id])
+                        self.assertIn(bad, logged.output[0])
+                        self.assertIn(bad, [error["path"] for error in run_checkpoint.catalogue_errors()])
+                        with self.assertRaises(run_checkpoint.CheckpointError):
+                            type(state).load(bad_id)
+                        with open(bad, "rb") as file:
+                            self.assertEqual(file.read(), content, "catalogue must not change corrupt files")
+                    os.remove(bad)
+                    module.list_runs()
+                    self.assertNotIn(bad, [error["path"] for error in run_checkpoint.catalogue_errors()])
 
     def fake_voice(self, seconds=20):
         def voice_text(text, path):
@@ -191,7 +325,7 @@ class PipelineTest(unittest.TestCase):
         real_wait = comfy.ComfyClient._wait_for
         calls = []
 
-        def stop_on_second(client, prompt_id):
+        def stop_on_second(client, prompt_id, queued_at=None):
             calls.append(prompt_id)
             if len(calls) == 2:
                 self.server.queue = {
@@ -200,7 +334,7 @@ class PipelineTest(unittest.TestCase):
                     "queue_pending": [[2, "mine", {}, {"client_id": client.client_id}],
                                       [3, "their_next", {}, {"client_id": "someone_else"}]]}
                 raise KeyboardInterrupt
-            return real_wait(client, prompt_id)
+            return real_wait(client, prompt_id, queued_at)
 
         with mock.patch.object(comfy.ComfyClient, "_wait_for", stop_on_second):
             self.assertEqual(self.film(), 130)
@@ -271,7 +405,18 @@ class PipelineTest(unittest.TestCase):
         state = self.only_run()
         with mock.patch.dict(os.environ, {"COMFYUI_URL": "http://127.0.0.1:9"}):
             self.assertEqual(main.main(["--resume", state.id, "--redo", "1"]), 1)
-        self.assertEqual(sorted(self.only_run().clips), [0, 1, 2])
+        state = self.only_run()
+        self.assertEqual(sorted(state.clips), [0, 1, 2])
+        # A cached warning is normally approved by an explicit resume. If preflight fails,
+        # keep both that approval and the redo in memory only.
+        state.prompt_warnings = [{"items": [1, 2], "similarity": 1.0}]
+        state.approved_prompt_key = None
+        state.save()
+        with mock.patch.dict(os.environ, {"COMFYUI_URL": "http://127.0.0.1:9"}):
+            self.assertEqual(main.main(["--resume", state.id, "--redo", "1"]), 1)
+        state = self.only_run()
+        self.assertEqual(sorted(state.clips), [0, 1, 2])
+        self.assertTrue(state.prompt_warning_pending)
 
     def test_finished_run_renders_nothing_more(self):
         self.assertEqual(self.film(), 0)
@@ -290,6 +435,17 @@ class PipelineTest(unittest.TestCase):
         self.assertEqual(main.main(["--resume", state.id]), 0)
         self.assertEqual(self.server.prompts[0]["prompt"]["121"]["inputs"]["text"], "My own prompt")
 
+    def test_selected_local_model_writes_the_plan_and_its_title(self):
+        chosen = "gemma-4-12b:selected"
+        with mock.patch.object(main.h3_refiner, "Refiner") as refiner, \
+                mock.patch.object(main.titles, "titled", return_value="Selected Title") as title:
+            self.assertEqual(self.film("--plan-only", "--llm", "local", "--local-model", chosen), 0)
+        refiner.assert_called_once_with(self.server.url, require_compiler=False, model_id=chosen)
+        self.assertEqual(title.call_args.kwargs["model_id"], chosen)
+        state = self.only_run()
+        self.assertEqual(state.local_model, chosen)
+        self.assertEqual(state.title, "Selected Title")
+
     def test_comfyui_down_spends_nothing(self):
         with mock.patch.dict(os.environ, {"COMFYUI_URL": "http://127.0.0.1:9"}):
             self.assertEqual(self.film(), 1)
@@ -302,6 +458,18 @@ class PipelineTest(unittest.TestCase):
         main.planner.plan_film.assert_not_called()
 
 class SeedTest(unittest.TestCase):
+    def test_lora_comparison_video_retry_keeps_the_shared_seed(self):
+        from types import SimpleNamespace
+        shot = {"prompt": "same prompt", "seconds": 5, "seed": 7,
+                "lora_test": {"lora": "1", "lora_name": "krea_a.safetensors", "lora_strength": "0.5"}}
+        state = SimpleNamespace(shots=[shot], clips_dir="clips", h3_mode="off", start="fresh", width=512, height=512)
+        renderer = mock.Mock(enhanced=None)
+        renderer.render.return_value = "rendered.mp4"
+        with mock.patch.object(main.media, "clip_problem", side_effect=["retry", None]):
+            self.assertEqual(main.render_shot(state, renderer, 0, []), "rendered.mp4")
+        self.assertEqual([call.kwargs["seed"] for call in renderer.render.call_args_list], [7, 7])
+        self.assertEqual(shot["used_seed"], 7)
+
     def test_seeds(self):
         from core import seeds
         self.assertIsNone(seeds.parse(""))
@@ -1070,9 +1238,35 @@ class ArgsTest(unittest.TestCase):
 class BusyComfyTest(unittest.TestCase):
     """ComfyUI too busy to answer for a while is waited out; silent for too long, it's given up."""
 
+    def test_queue_and_render_timeouts_are_configurable_and_validated(self):
+        patches = (
+            mock.patch.object(comfy.ComfyClient, "_load_workflow", return_value=({}, {}, {})),
+            mock.patch.object(comfy.ComfyClient, "_offered", return_value=[]),
+            mock.patch.object(comfy.workflow_options, "chosen_in_env", return_value={}),
+        )
+        with mock.patch.dict(os.environ, {"COMFYUI_QUEUE_TIMEOUT": "", "COMFYUI_TIMEOUT": ""}), \
+                patches[0], patches[1], patches[2]:
+            client = comfy.ComfyClient(options={})
+        self.assertEqual(client.queue_timeout, 3600)
+        self.assertEqual(client.timeout, 7200)
+
+        with mock.patch.dict(os.environ, {"COMFYUI_QUEUE_TIMEOUT": "75.5", "COMFYUI_TIMEOUT": "12.5"}), \
+                patches[0], patches[1], patches[2]:
+            client = comfy.ComfyClient(options={})
+        self.assertEqual((client.queue_timeout, client.timeout), (75.5, 12.5))
+
+        for setting in ("COMFYUI_TIMEOUT", "COMFYUI_QUEUE_TIMEOUT"):
+            for configured in ("0", "-1", "nan", "inf", "not-a-number"):
+                with self.subTest(setting=setting, configured=configured), \
+                        mock.patch.dict(os.environ, {setting: configured}), \
+                        patches[0], patches[1], patches[2]:
+                    with self.assertRaisesRegex(ValueError, f"{setting} must be a finite positive"):
+                        comfy.ComfyClient(options={})
+
     def client(self):
         client = object.__new__(comfy.ComfyClient)
         client.url, client.timeout = "http://comfy", comfy.DEFAULT_TIMEOUT
+        client.queue_timeout = comfy.DEFAULT_QUEUE_TIMEOUT
         return client
 
     def test_a_slow_reply_is_waited_out(self):
@@ -1083,16 +1277,89 @@ class BusyComfyTest(unittest.TestCase):
         self.assertEqual(entry["status"], {"completed": True}, "the image it was making is still collected")
         self.assertEqual(get.call_count, 3)
 
+    def test_subclasses_without_a_queue_timeout_keep_working(self):
+        client = self.client()
+        del client.queue_timeout
+        done = mock.Mock(json=lambda: {"p1": {"status": {"completed": True}, "outputs": {}}})
+        with mock.patch.object(comfy.requests, "get", return_value=done):
+            entry = client._wait_for("p1")
+        self.assertTrue(entry["status"]["completed"])
+
     def test_silent_for_too_long_gives_up(self):
         now = [0.0]
-        with mock.patch.object(comfy.requests, "get", side_effect=comfy.requests.ConnectionError("refused")),                 mock.patch.object(comfy.time, "time", lambda: now[0]),                 mock.patch.object(comfy.time, "sleep", lambda seconds: now.__setitem__(0, now[0] + seconds)):
+        client = self.client()
+        with mock.patch.object(comfy.requests, "get", side_effect=comfy.requests.ConnectionError("refused")), \
+                mock.patch.object(client, "cancel") as cancel, \
+                mock.patch.object(comfy.time, "monotonic", lambda: now[0]), \
+                mock.patch.object(comfy.time, "sleep", lambda seconds: now.__setitem__(0, now[0] + seconds)):
             with self.assertRaisesRegex(RuntimeError, "has not answered for 30 minutes"):
-                self.client()._wait_for("p1")
+                client._wait_for("p1")
+        cancel.assert_called_once_with("p1")
+
+    def test_a_queued_clip_has_its_own_deadline_and_cancels_only_that_prompt(self):
+        now = [0.0]
+        client = self.client()
+        client.queue_timeout = 10
+        client.timeout = 20
+        empty = mock.Mock(json=lambda: {})
+        with mock.patch.object(comfy.requests, "get", return_value=empty), \
+                mock.patch.object(client, "cancel") as cancel, \
+                mock.patch.object(comfy.time, "monotonic", lambda: now[0]), \
+                mock.patch.object(comfy.time, "sleep",
+                                  lambda seconds: now.__setitem__(0, now[0] + seconds)):
+            with self.assertRaisesRegex(RuntimeError, "10s waiting for ComfyUI to start.*queue wait"):
+                client._wait_for("mine")
+        self.assertEqual(now[0], 10)
+        cancel.assert_called_once_with("mine")
+
+    def test_running_transition_starts_render_budget_once_and_history_keeps_it(self):
+        now = [0.0]
+        client = self.client()
+        client.queue_timeout, client.timeout = 30, 10
+        empty = mock.Mock(json=lambda: {})
+        running = mock.Mock(json=lambda: {"queue_running": [[0, "p1", {}, {}]]})
+        incomplete = mock.Mock(json=lambda: {"p1": {"status": {"completed": False, "status_str": "running"}}})
+        history = [empty, empty, incomplete, incomplete]
+        queue = [mock.Mock(json=lambda: {}), running]
+
+        def get(url, **kwargs):
+            return history.pop(0) if "/history/" in url else queue.pop(0)
+
+        with mock.patch.object(comfy.requests, "get", side_effect=get), \
+                mock.patch.object(client, "cancel") as cancel, \
+                mock.patch.object(comfy.time, "monotonic", lambda: now[0]), \
+                mock.patch.object(comfy.time, "sleep",
+                                  lambda seconds: now.__setitem__(0, now[0] + seconds)):
+            with self.assertRaisesRegex(RuntimeError, "Timed out after 10s rendering"):
+                client._wait_for("p1")
+        self.assertEqual(now[0], 15, "later history polls must not restart render timing")
+        self.assertEqual(len(history), 1, "the deadline prevents another history poll")
+        cancel.assert_called_once_with("p1")
+
+    def test_deadline_cancellation_does_not_touch_other_prompts_or_clients(self):
+        client = self.client()
+        client.client_id = "ours"
+        queue = {
+            "queue_pending": [[0, "mine", {}, {"client_id": "ours"}],
+                              [1, "mine_later", {}, {"client_id": "ours"}],
+                              [2, "theirs", {}, {"client_id": "someone_else"}]],
+            "queue_running": [[0, "ours_running", {}, {"client_id": "ours"}],
+                              [1, "their_running", {}, {"client_id": "someone_else"}]],
+        }
+        with mock.patch.object(comfy.requests, "get", return_value=mock.Mock(json=lambda: queue)), \
+                mock.patch.object(comfy.requests, "post") as post:
+            client.cancel("mine")
+        self.assertEqual(post.call_args_list, [
+            mock.call("http://comfy/queue", json={"delete": ["mine"]}, timeout=5),
+        ])
+
     def test_the_limit_counts_from_when_it_starts_running(self):
         now = [0.0]
         waiting = mock.Mock(json=lambda: {"queue_running": [[0, "other", {}, {}]]})
         running = mock.Mock(json=lambda: {"queue_running": [[0, "p1", {}, {}]]})
         empty = mock.Mock(json=lambda: {})
+        client = self.client()
+        client.timeout, client.queue_timeout = 7200, 7205
 
         def get(url, **kwargs):
             if "/history/" in url:
@@ -1100,12 +1367,12 @@ class BusyComfyTest(unittest.TestCase):
             return waiting if now[0] < 7200 else running
 
         with mock.patch.object(comfy.requests, "get", get), mock.patch.object(comfy.ComfyClient, "cancel") as cancel, \
-                mock.patch.object(comfy.time, "time", lambda: now[0]), \
+                mock.patch.object(comfy.time, "monotonic", lambda: now[0]), \
                 mock.patch.object(comfy.time, "sleep", lambda seconds: now.__setitem__(0, now[0] + seconds)):
             with self.assertRaisesRegex(RuntimeError, "Timed out after 7200s"):
-                self.client()._wait_for("p1")
+                client._wait_for("p1")
         self.assertGreaterEqual(now[0], 7200 + 7200, "two hours queued behind another did not count")
-        cancel.assert_called_once()
+        cancel.assert_called_once_with("p1")
 
 
 if __name__ == "__main__":

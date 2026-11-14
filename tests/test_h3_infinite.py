@@ -146,6 +146,7 @@ class RunTest(unittest.TestCase):
                 mock.patch.object(paths, "RUNS_DIR", os.path.join(temp, "runs")), \
                 mock.patch.object(paths, "OUTPUT_DIR", os.path.join(temp, "output")), \
                 mock.patch.object(main.media, "clip_problem", return_value=None), \
+                mock.patch.object(main.media, "_probe", return_value=(10.0, {"video"})), \
                 mock.patch.object(main, "ComfyClient") as client:
             os.makedirs(paths.OUTPUT_DIR)
             state = RunState.new("brief", 10, "infinite", 864, 480, image_count=0)

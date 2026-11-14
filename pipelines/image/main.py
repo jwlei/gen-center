@@ -11,8 +11,9 @@ import time
 
 from dotenv import load_dotenv
 
-from core import batch_stop, h3_refiner, pills, run_form, seeds, titles
+from core import batch_stop, h3_refiner, lora_tests, pills, run_form, seeds, titles
 from core.saved_workflows import shorthand, title_words, unique_name
+from panel import settings as panel_settings
 from pipelines.image import media, models, paths, regions
 from pipelines.image import planner as image_planner
 from pipelines.image.comfy import ImageClient
@@ -66,6 +67,7 @@ def parse_args(argv=None):
     parser.add_argument("--count", type=parse_count, default=1, help=f"How many images, 1-{image_planner.MAX_IMAGES} (default 1).")
     parser.add_argument("--direct", action="store_true", help="Use the prompt word for word. No LLM: each image only gets a new seed.")
     parser.add_argument("--llm", choices=[name for name, _ in planner.LLMS], default=None, help="Who writes the prompts (default: LLM_PROVIDER in .env, else local).")
+    parser.add_argument("--local-model", help="Local model for this run (default: Settings).")
     parser.add_argument("--aspect", type=parse_aspect, default=media.FROM_IMAGE, help=f"Aspect ratio such as 16:9, or '{media.FROM_IMAGE}' for the source image's (the default, square without one).")
     parser.add_argument("--megapixels", type=parse_megapixels, default=media.FROM_IMAGE, help=f"Pixel count, such as 1.5, or '{media.FROM_IMAGE}' (the default) for the source image's, within what the model makes well. With no image, {media.DEFAULT_MEGAPIXELS:g}.")
     parser.add_argument("--size", type=parse_size, help="An exact size such as 1920x1080, in place of --aspect and --megapixels.")
@@ -135,7 +137,7 @@ def check_setup(args):
     problems = []
     if llm == "local":
         try:
-            h3_refiner._paths(h3_refiner.local_llm_model(), require_compiler=False)
+            h3_refiner._paths(getattr(args, "local_model", None) or h3_refiner.local_llm_model(), require_compiler=False)
             print("✅ Local model and llama.cpp found.")
         except (RuntimeError, ValueError) as e:
             problems.append(str(e))
@@ -185,8 +187,9 @@ def plan_run(args, stages):
         raise RuntimeError(f"This workflow takes {takes['min_images']}-{takes['max_images']} images, not {len(images)}.")
     direct = args.direct or region_edit
     llm = None if direct else args.llm or planner.default_llm()
-    if llm == "local" and images and h3_refiner.local_llm_model() == "qwen3-14b":
-        raise RuntimeError("Qwen3 14B is text-only and cannot analyze attached images. Choose Gemma 4 in Settings.")
+    local_model = getattr(args, "local_model", None) or (h3_refiner.local_llm_model() if llm == "local" else None)
+    if llm == "local" and local_model and images and panel_settings.model_family(local_model) == "qwen3-14b":
+        raise RuntimeError("Qwen3 14B is text-only and cannot analyze attached images. Choose a Gemma 4 model.")
     if llm and not planner.llm_configured(llm):
         raise RuntimeError(f"{llm} has no credentials: see .env.example.")
     width, height = media.pick_size(args.size, args.aspect, args.megapixels, images[0].size if images else None,
@@ -199,6 +202,7 @@ def plan_run(args, stages):
 
     brief = args.prompt or ""
     state = RunState.new(brief, args.count, direct, width, height, llm, os.getenv("COMFYUI_WORKFLOW") or None, len(images))
+    state.local_model = local_model
     state.inputs = inputs
     state.options = options or None
     state.compose, state.transparent, state.detail = args.compose, args.transparent, args.reference_detail
@@ -220,15 +224,23 @@ def plan_run(args, stages):
         print(f"🧠 {llm} is writing {args.count} {'prompt' if args.count == 1 else 'prompts'}...")
         plan_args = ([video_media.preview_jpeg(image) for image in images], args.prompt, args.count, llm, model)
         if llm == "local":
-            with h3_refiner.Refiner(comfy.url, require_compiler=False, model_id=h3_refiner.local_llm_model()) as refiner:
+            with h3_refiner.Refiner(comfy.url, require_compiler=False, model_id=local_model) as refiner:
                 title, versions = image_planner.write_prompts(*plan_args, compose=args.compose,
                                                               transparent=args.transparent, refiner=refiner)
         else:
             title, versions = image_planner.write_prompts(*plan_args, compose=args.compose, transparent=args.transparent)
     shots = [{"number": number, "file": None, "seed": seeds.nth(args.seed, number - 1), **version}
              for number, version in enumerate(versions, 1)]
+    try:
+        tests = lora_tests.in_env()
+    except ValueError as error:
+        raise RuntimeError(str(error)) from error
+    if tests:
+        shots = lora_tests.shots(shots[0], tests, seeds.avoid(seeds.pick(args.seed), taken))
+        state.count = len(shots)
     # Before the name: the set's folder and files take it too.
-    title = titles.titled(title, args.prompt, "a set of images", comfy.url, None if args.direct else llm)
+    title = titles.titled(title, args.prompt, "a set of images", comfy.url, None if args.direct else llm,
+                          model_id=local_model)
     # At once: the prompts are what was paid for.
     workflow = shorthand(state.workflow, "image")
     name = f"{title_words(title, 'images')}_{workflow}"
@@ -347,8 +359,10 @@ def render_image(state, comfy, shot, images):
     save_as = os.path.join(state.output_dir, state.file_stem(shot))
     rendered = tuple(state.region["work"]) if state.region else comfy.render_size(state.width, state.height)
     taken = set(state.source_seeds or ())
+    if shot.get("lora_test"):
+        comfy.set_options({**(state.options or {}), **shot["lora_test"]})
     for attempt in range(1, IMAGE_ATTEMPTS + 1):
-        seed = seeds.pick(shot.get("seed"), attempt)
+        seed = seeds.pick(shot.get("seed"), 1 if shot.get("lora_test") else attempt)
         if seed in taken:
             avoided = seeds.avoid(seed, taken)
             print(f"      🌱 Seed {seed} made the image this starts from, and would come out over-sharpened: using {avoided} instead.")

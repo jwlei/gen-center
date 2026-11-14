@@ -18,6 +18,7 @@ FIBO2, KREA2, MOSS, QWEN_EDIT = "fibo2", "krea2", "moss_image", "qwen_image_edit
 QWEN21, H3_IMAGE, H3_VIDEO, LTX23 = "qwen_image_21", "minimax_h3_image", "minimax_h3_video", "ltx23"
 # Not a model: how a film's clips are joined (the "How clips connect" choice), with a guide of its own.
 CONNECTION = "clip_connection"
+STYLE_LORA = "style_lora"
 # What a workflow's model is called by pipelines/image/models.py, where its guide is another one's: the edit side of a
 # model that makes and edits is the same model.
 SAME_GUIDE = {"qwen_image_21_edit": QWEN21, "minimax_h3_image_edit": H3_IMAGE}
@@ -25,6 +26,35 @@ SAME_GUIDE = {"qwen_image_21_edit": QWEN21, "minimax_h3_image_edit": H3_IMAGE}
 BUILT_IN = {"video": LTX23, "shorts": LTX23}
 
 GUIDES = {
+    STYLE_LORA: {
+        "title": "Style LoRA",
+        "lead": "A LoRA adds learned changes to a workflow's model, such as a visual style or subject, without replacing the model.",
+        "facts": [
+            ("Choose", "Use a LoRA made for the workflow's model and version."),
+            ("Strength", "Controls its influence. Start with the creator's recommended value."),
+            ("Prompt", "Some LoRAs need a trigger word or phrase in the prompt; check the creator's instructions."),
+            ("Install", "Place LoRA files in ComfyUI's models/loras folder, or a configured model folder."),
+        ],
+        "sections": [
+            {"title": "Choosing and using one", "items": [
+                "Enable Use LoRA, choose a file and set its strength. Turn it off to use the workflow without that style LoRA.",
+                "The picker matches model-family keywords in filenames and folders. A matching name is not proof of compatibility: check the LoRA's model and version.",
+                "Files without a recognized family are hidden unless the workflow already uses them. Family words are removed from picker labels, not filenames.",
+                "Check the creator's instructions for a trigger phrase, recommended strength, example prompts and licence.",
+            ]},
+            {"title": "Adjusting the look", "items": [
+                "Higher strength generally makes the LoRA's influence stronger; compare a few values with the same prompt and seed.",
+                "If the effect is weak, check the model version, trigger phrase and recommended strength before increasing it.",
+                "Turbo LoRAs are separate: they change how a model generates in fewer steps, rather than simply adding a style.",
+            ]},
+        ],
+        "faq": [
+            ("Why is my LoRA missing?", "Check its filename or folder for the workflow's family keyword and confirm ComfyUI can see it. A file already used by the workflow can appear without a recognized keyword."),
+            ("Why does it have little effect?", "Check compatibility, any trigger phrase and the creator's recommended strength. Matching a filename alone cannot guarantee compatibility."),
+        ],
+        "sources": [("ComfyUI LoRA guide", "https://docs.comfy.org/tutorials/basic/lora"),
+                    ("Hugging Face adapter guide", "https://huggingface.co/docs/diffusers/main/en/using-diffusers/loading_adapters")],
+    },
     FIBO2: {
         "title": "Fibo 2.0 Edit Turbo",
         "lead": "Bria's 8B editing model. Edits one picture precisely and leaves the rest as it was. Edit only: it does not make a picture from text.",
@@ -559,6 +589,8 @@ def panel_notes(key):
     from pipelines.image import models
     from pipelines.video import h3_infinite, h3_prompt, media, planner, run_eta
     notes = []
+    if key == STYLE_LORA:
+        return ["Style LoRA controls appear when the selected workflow exposes them. The file picker uses model-family keywords, not a full compatibility check."]
     if key == CONNECTION:
         low, high, usual = planner.CLIP_SECONDS[h3_prompt.MODEL]
         return [f"Clips are joined with a {media.FADE:g} s fade in Separate, and a {media.SEAM:g} s audio seam in Chain.",

@@ -41,6 +41,45 @@ class SizeTest(unittest.TestCase):
         self.assertEqual(media.pick_size("1280x736", "1:1", "1"), (1280, 736))
         self.assertEqual(media.pick_size("1920x1080"), (1920, 1080), "what you asked for, on the model's grid or not")
 
+    def test_listing_images_survives_a_file_deleted_during_the_scan(self):
+        state = mock.Mock()
+        state.shots = [{"file": "gone.png", "number": 1, "title": "Gone"},
+                       {"file": "kept.png", "number": 2, "title": "Kept"}]
+        with tempfile.TemporaryDirectory() as folder:
+            kept = os.path.join(folder, "kept.png")
+            Image.new("RGB", (10, 20)).save(kept)
+            state.image_path.side_effect = lambda shot: os.path.join(folder, shot["file"])
+            with self.assertLogs(image_panel.app.logger, level="WARNING") as logs:
+                files = image_panel.image_files(state)
+            self.assertEqual([(file["position"], file["file"]) for file in files], [(2, "kept.png")])
+            self.assertIn("gone.png", logs.output[0])
+
+    def test_output_tracks_prompt_models_per_image(self):
+        state = RunState("image_20261114_120000", "A view", 3, False, 10, 20,
+                         llm="local", local_model="gemma-4-12b:gemma-4-12B-it-uncensored-heretic-Q4_K_M")
+        state.shots = [
+            {"file": "a.png", "number": 1, "title": "a"},
+            {"file": "b.png", "number": 2, "title": "b",
+             "setup": {"llm": "local", "local_model": "qwen3-14b", "direct": False}},
+            {"file": "c.png", "number": 3, "title": "c",
+             "setup": {"llm": "local", "local_model": "gemma-4-12b", "direct": True}},
+        ]
+        with tempfile.TemporaryDirectory() as folder:
+            for shot in state.shots:
+                Image.new("RGB", (10, 20)).save(os.path.join(folder, shot["file"]))
+            with mock.patch.object(state, "image_path", side_effect=lambda shot: os.path.join(folder, shot["file"])), \
+                 mock.patch.object(image_panel, "shorthand", return_value="Workflow"), \
+                 mock.patch.object(image_panel, "read_outcome", return_value=None), \
+                 mock.patch.object(image_panel, "RunEta") as eta:
+                eta.return_value.plan.return_value = {"total": 0}
+                listed = image_panel.describe_run(state)
+            self.assertEqual([image["prompt_llm"] for image in listed["images"]],
+                             ["Gemma 4 Q4_K_M-v", "Qwen3 14B", None])
+            self.assertEqual([value for kind, value in listed["_facts"] if kind == "llm"],
+                             ["Gemma 4 Q4_K_M-v", "Qwen3 14B"])
+        self.assertEqual(image_panel.prompt_llm_pill({"llm": "local"}), "local")
+        self.assertEqual(image_panel.prompt_llm_pill({"llm": "gemini", "local_model": "gemma-4-12b"}), "gemini")
+
     def test_a_size_off_the_grid_renders_just_larger(self):
         self.assertEqual(media.render_size(1920, 1080), (1920, 1088))
         self.assertEqual(media.render_size(2560, 1440), (2560, 1440), "already on it")
@@ -362,6 +401,42 @@ class StopAfterTest(unittest.TestCase):
 
 
 class PromptSourceTest(unittest.TestCase):
+    def test_comparison_plan_has_one_prompt_shared_seed_and_fixed_added_loras(self):
+        from core import lora_tests
+        from pipelines.image import main
+        values = [{"lora": "1", "lora_name": name, "lora_strength": strength}
+                  for name in ["krea_a.safetensors", "krea_b.safetensors"] for strength in ["1", "2"]]
+        stack = json.dumps([{"on": True, "name": "krea_fixed.safetensors", "strength": "0.5"}])
+        args = main.parse_args(["same prompt", "--direct", "--seed", "7", "--option", "additional_loras=" + stack])
+        comfy = mock.Mock()
+        comfy.model.return_value = None
+        comfy.takes.return_value = {"min_images": 0, "max_images": 0}
+        with tempfile.TemporaryDirectory() as folder, \
+             mock.patch.object(paths, "RUNS_DIR", folder), mock.patch.object(paths, "OUTPUT_DIR", folder), \
+             mock.patch.dict(os.environ, {lora_tests.ENV: json.dumps(values), "COMFYUI_WORKFLOW": ""}), \
+             mock.patch.object(main, "ImageClient", return_value=comfy), \
+             mock.patch.object(main.titles, "titled", return_value="Comparison"):
+            state = main.plan_run(args, main.STAGES)
+        self.assertEqual(state.count, 4)
+        self.assertEqual({shot["prompt"] for shot in state.shots}, {"same prompt"})
+        self.assertEqual({shot["seed"] for shot in state.shots}, {7})
+        self.assertEqual(state.options["additional_loras"], stack)
+
+    def test_comparison_retry_keeps_its_seed_and_applies_only_first_lora_override(self):
+        from pipelines.image import main
+        variation = {"lora": "1", "lora_name": "krea_test.safetensors", "lora_strength": "0.5"}
+        shot = {"title": "Test", "prompt": "unchanged", "seed": 7, "lora_test": variation}
+        state = mock.Mock(region=None, width=512, height=512, source_seeds=[], options={"additional_loras": "[]"},
+                          output_dir="unused", transparent=False)
+        state.file_stem.return_value = "test"
+        comfy = mock.Mock(enhanced=None)
+        comfy.render_size.return_value = (512, 512)
+        comfy.render_image.return_value = "test.png"
+        with mock.patch.object(media, "image_problem", side_effect=["retry", None]), mock.patch.object(media, "trim"):
+            self.assertEqual(main.render_image(state, comfy, shot, []), "test.png")
+        self.assertEqual([call.args[-1] for call in comfy.render_image.call_args_list], [7, 7])
+        comfy.set_options.assert_called_once_with({"additional_loras": "[]", **variation})
+
     def test_reopening_restores_workflow_writer_not_internal_direct_flag(self):
         state = RunState.new("a lighthouse", 2, True, 1024, 1024)
         state.options = {"prompt_enhancer": "1"}
@@ -413,11 +488,20 @@ class PanelTest(unittest.TestCase):
     def clear_everything(self):
         webapp.stop_run()
         self.wait_idle()
+        errors = {lane: queue.persistence_error for lane, queue in webapp.QUEUES.items() if queue.persistence_error}
         for queue in webapp.QUEUES.values():
-            queue.items, queue.held, queue.results = [], False, []
+            # Reported below, but reset so one test's broken queue doesn't fail every later one.
+            queue.items, queue.held, queue.results, queue.persistence_error = [], False, [], None
             queue._save()
         for folder in (paths.RUNS_DIR, paths.OUTPUT_DIR, video_paths.INPUTS_DIR):
             shutil.rmtree(folder, ignore_errors=True)
+        self.assertEqual(errors, {}, "the test left a queue unable to save")
+
+    def queue_id(self):
+        """A job number from the queue itself: a made-up one could match a real job already in Finished."""
+        with webapp.run_queue.lock:
+            webapp.run_queue.next_id += 1
+            return webapp.run_queue.next_id - 1
 
     def wait_idle(self):
         deadline = time.time() + 90
@@ -569,7 +653,7 @@ class PanelTest(unittest.TestCase):
     def test_pending_continuation_can_edit_prompts_without_duplicate_jobs(self):
         self.make(review="1")
         run = self.only_run()
-        item = {"id": 900, "pipeline": "image", "resume": run.id, "later": True}
+        item = {"id": self.queue_id(), "pipeline": "image", "label": "Continue", "resume": run.id, "argv": ["x"], "later": True}
         with webapp.run_queue.lock:
             webapp.run_queue.items.append(item)
         detail = self.client.get(f"/image-runs/{run.id}").get_json()
@@ -665,20 +749,24 @@ class PanelTest(unittest.TestCase):
             self.assertIsNone(image_panel.run_to_continue("idea", ["--count", "1", "--llm", "claude"], {}, []))
 
     def test_generate_continues_a_stopped_set_without_new_prompts(self):
-        self.comfy.script = ["fail", "fail"]
+        self.comfy.script = ["fail", "fail", "ok", "ok", "fail", "fail"]
         self.make()
         run = self.only_run()
-        self.assertEqual(self.status()["returncode"], 1)
+        status = self.status()
+        log = "\n".join(line["text"] for line in webapp.job.lines[-30:])
+        self.assertEqual(status["returncode"], 1,
+                         f"queue_error={webapp.run_queue.persistence_error!r}\n"
+                         f"returncode={status['returncode']!r}\n{log}")
         self.assertEqual(len(run.done), 2, "one that won't come out doesn't cost the rest")
         self.assertFalse(run.finished)
-        self.assertEqual(len(self.comfy.prompts), 4)
+        self.assertEqual(len(self.comfy.prompts), 6, "the failed image also exhausts the panel's one automatic retry")
 
         reply = self.make()
         self.assertEqual(reply["continued"], "Three Looks")
         run = self.only_run()
         self.assertTrue(run.finished)
         self.assertEqual(len(self.claude.requests), 1, "the prompts weren't paid for again")
-        self.assertEqual(len(self.comfy.prompts), 5, "and only the missing one was made")
+        self.assertEqual(len(self.comfy.prompts), 7, "and only the missing one was made")
 
     def test_a_different_set_gets_its_own_prompts(self):
         self.make(review="1")
@@ -882,8 +970,9 @@ class PanelTest(unittest.TestCase):
             state = image_panel.RunState.load(run.id)
             state.shots.insert(1, {**state.shots[0], "file": "made.png", "upscaled_from": 1})
             self.assertEqual(image_panel.upscale_position(state, queued[1]["argv"]), "3")
-            webapp.run_queue.items.append({"id": 990, "pipeline": "image", "resume": run.id, "argv": ["x"], "later": True})
-            self.addCleanup(lambda: webapp.run_queue.items[:] and [webapp.run_queue.items.remove(i) for i in list(webapp.run_queue.items) if i.get("id") == 990])
+            making = {"id": self.queue_id(), "pipeline": "image", "label": "Set", "resume": run.id, "argv": ["x"], "later": True}
+            webapp.run_queue.items.append(making)
+            self.addCleanup(lambda: making in webapp.run_queue.items and webapp.run_queue.items.remove(making))
             self.assertEqual(self.client.post(f"/image-runs/{run.id}/upscale/1?method=ultrasharp").status_code, 409,
                              "not while the set itself is queued to be made")
 

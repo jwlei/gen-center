@@ -64,12 +64,12 @@ workflow and prompt model where known. Its tools use icons; Download, Close and 
 Tap the workflow and prompt-model line in the preview to expand any LoRAs.
 **More like this** opens the selected image's prompt and settings in Generate, with five variations on new seeds.
 
-In Output, tap the three-dot button twice at the top of an image batch or Video card to mark it NSFW. It disappears
-from normal output and Finished. Choose **NSFW**, just below **All workflows**, to see tagged Image
-and Video output together and tap the button twice again to restore it. Image batches remain selectable
+In Output, tap the three-dot button twice at the top of an image batch or Video card to mark it private. It disappears
+from normal output and Finished. Enable the private filter using the eye icon beside the Image/Both/Video selector
+to see tagged Image and Video output, and tap the tag button twice again to restore an item. Image batches remain selectable
 as inputs through that filter. Videos from the same saved run, including upscaled copies, share a tag.
 Shorts are unaffected. This is a display filter, not access control: the media stays on disk.
-Each time you enter Output, the filter starts at **All workflows**.
+Private mode opens Output on private items; outside Private mode, Output normally starts on non-private items.
 
 **How many images:** 1 to 100, or 30 when the LLM writes Fibo 2.0's prompts (see below).
 
@@ -171,8 +171,13 @@ a new image in the set. The button is only there while the image's shorter side 
 Select runs on the CPU, so the GPU stays with ComfyUI. Its model (MobileSAM, 44 MB) is in `models/`:
 `python scripts/get_models.py` downloads it, checked against its SHA-256.
 
-**LoRAs:** one made for an earlier Qwen-Image (1.x, 2512 or Edit) loads on 2.1 without an error and does nothing. It's
-greyed out on a Qwen-Image 2.1 workflow with why, told apart by its layers from the file's header (`core/lora_check.py`).
+**LoRAs:** a LoRA is offered only for a matching model family, whether it is a style choice, a face LoRA, or a speed
+LoRA. Family keywords in its name or folder match the diffusion model actually loaded by the workflow: Krea, MOSS, Qwen,
+MiniMax/H3, LTX or Fibo. A file tagged for more than one family can match either (for example, `krea_moss_ultra real`
+is offered on Krea or MOSS and shown as `ultra_real`). A file with no family tag is hidden unless the workflow already
+includes it. The saved filename itself is never changed. An earlier Qwen-Image (1.x, 2512 or Edit) LoRA still loads on
+2.1 without an error and does nothing; its tensor layers are checked separately (`core/lora_check.py`).
+The **About style LoRA** link explains installation, strength, trigger phrases and the limits of filename matching.
 
 ## Each model's limits
 

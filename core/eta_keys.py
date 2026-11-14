@@ -6,15 +6,17 @@ any options; and under the model in any workflow. An estimate takes the most par
 workflow, model or setting needs nothing set up: it starts from its nearest relative and learns its own time from its
 first render.
 
-Times are kept in `logs/stage_timings_<side>.json` as {"steps": {...}, "renders": {key: seconds}}.
+Times and their latest 100 samples are kept in `logs/stage_timings_<side>.json`.
 """
 import hashlib
 import json
+import logging
+import math
 import os
 import re
 
-# The first real measurement replaces any guess; after that each one moves the stored value this much.
-LEARNING_RATE = 0.3
+HISTORY_LIMIT = 100
+TRIM_FRACTION = 0.05
 # The inputs that name the model a workflow runs. An upscaler's model_name isn't one.
 MODEL_INPUTS = ("unet_name", "ckpt_name", "model_name", "model")
 MODEL_FILE = re.compile(r"\.(safetensors|gguf|ckpt|pt|pth|bin|sft)$", re.I)
@@ -85,6 +87,7 @@ class Timings:
         self.steps = dict(default_steps)
         self.renders = {}
         self.timed_steps = set()
+        self.samples = {"steps": {}, "renders": {}}
         try:
             with open(path, "r", encoding="utf-8") as f:
                 saved = json.load(f)
@@ -93,6 +96,14 @@ class Timings:
             self.steps.update(steps)
             self.timed_steps = set(steps)
             self.renders = {key: value for key, value in (saved.get("renders") or {}).items() if number(value)}
+            for kind in self.samples:
+                for key, values in ((saved.get("samples") or {}).get(kind) or {}).items():
+                    if key not in (self.timed_steps if kind == "steps" else self.renders):
+                        continue
+                    if not isinstance(values, list) or not values or not all(self._valid_sample(value) for value in values):
+                        logging.getLogger(__name__).warning("Discarding invalid timing history for %s: %s", kind, key)
+                        continue
+                    self.samples[kind][key] = values[-HISTORY_LIMIT:]
         except (OSError, ValueError, AttributeError):
             pass  # A broken or old file only costs accuracy
 
@@ -110,7 +121,7 @@ class Timings:
 
     def learn_step(self, keys, value):
         for key in [keys] if isinstance(keys, str) else keys:
-            self.steps[key] = self._moved(self.steps.get(key) if key in self.timed_steps else None, value)
+            self.steps[key] = self._learn("steps", key, value)
             self.timed_steps.add(key)
 
     def render(self, keys, default):
@@ -122,18 +133,32 @@ class Timings:
 
     def learn_render(self, keys, value):
         for key in keys:
-            self.renders[key] = self._moved(self.renders.get(key), value)
+            self.renders[key] = self._learn("renders", key, value)
 
     @staticmethod
-    def _moved(old, value):
-        return value if old is None else old + LEARNING_RATE * (value - old)
+    def _valid_sample(value):
+        return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value) and value >= 0
+
+    def _learn(self, kind, key, value):
+        if not self._valid_sample(value):
+            raise ValueError("A timing measurement must be a finite, nonnegative number.")
+        samples = self.samples[kind].setdefault(key, [])
+        samples.append(value)
+        del samples[:-HISTORY_LIMIT]
+        ordered = sorted(samples)
+        trim = int(len(ordered) * TRIM_FRACTION)
+        kept = ordered[trim:len(ordered) - trim]
+        return sum(kept) / len(kept)
+
+    def as_dict(self):
+        return {"steps": {key: self.steps[key] for key in sorted(self.timed_steps)}, "renders": self.renders,
+                "samples": self.samples}
 
     def save(self):
         try:
             os.makedirs(os.path.dirname(self.path), exist_ok=True)
             with open(self.path, "w", encoding="utf-8") as f:
-                json.dump({"steps": {key: self.steps[key] for key in sorted(self.timed_steps)}, "renders": self.renders},
-                          f, indent=2)
+                json.dump(self.as_dict(), f, indent=2)
         except OSError:
             pass  # Next run just starts from older numbers
 

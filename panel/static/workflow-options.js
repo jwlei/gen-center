@@ -1,0 +1,318 @@
+// A choice's options, each said as its label where it has one (a LoRA without .safetensors), sent as its value.
+function choiceOptions(option) {
+  const labels = option.labels || {};
+  return option.choices.map(value => `<option value="${esc(value)}"${value === option.default ? ' selected' : ''}>${esc(labels[value] ?? value)}</option>`).join('');
+}
+function visibleLoraOptions(options) {
+  if (privateMode) return options;
+  const privateName = name => /nsfw|uncensor/i.test(String(name));
+  const blocked = new Set();
+  const visible = options.map(option => {
+    if (option.kind === 'strength' && option.id.startsWith('lora_')
+      && (option.private_only || privateName(option.id + ' ' + option.label))) {
+      return { ...option, private_only: true, default: '0' };
+    }
+    if (option.kind !== 'lora_stack' && (option.kind !== 'choice' || !option.id.includes('lora'))) return option;
+    const choices = option.choices.filter(value => !privateName(value));
+    if (choices.length === option.choices.length) return option;
+    if (!choices.length && option.parent) blocked.add(option.parent);
+    return { ...option, choices, default: option.kind === 'lora_stack' ? option.default : choices.includes(option.default) ? option.default : choices[0] || '',
+      ...(!choices.length ? { problem: 'These LoRAs require Private mode.' } : {}) };
+  });
+  return visible.map(option => blocked.has(option.id)
+    ? { ...option, default: '0', problem: 'These LoRAs require Private mode.' } : option);
+}
+function loraStackRows(box) {
+  const input = box.querySelector('[name=opt_additional_loras]');
+  const rows = JSON.parse(input.value || '[]');
+  if (!Array.isArray(rows) || rows.some(row => !row || typeof row.on !== 'boolean' || typeof row.name !== 'string')) {
+    throw new Error('The saved additional LoRAs are invalid. Reset workflow options to clear them.');
+  }
+  return rows;
+}
+function renderLoraStack(box) {
+  const option = (box.optionList || []).find(option => option.kind === 'lora_stack');
+  if (!option) return;
+  const stack = box.querySelector('[data-lora-stack]');
+  if (!stack) return;
+  try {
+    const rows = loraStackRows(box);
+    for (const row of rows) if (!option.choices.includes(row.name)) row.on = false;
+    stack.querySelector('[name=opt_additional_loras]').value = JSON.stringify(rows);
+    stack.querySelector('[data-lora-rows]').innerHTML = rows.map((row, index) => {
+      const available = option.choices.includes(row.name);
+      return `<div class="lora-line lora-extra" data-lora-index="${index}"><label class="check"><input type="checkbox" data-lora-on${row.on && available ? ' checked' : ''}${available ? '' : ' disabled'} aria-label="Enable additional LoRA"></label>`
+        + `<select data-lora-name aria-label="Additional LoRA">${available ? '' : '<option value="">Unavailable in this mode</option>'}${choiceOptions({...option, default: row.name})}</select>`
+        + `<input type="number" class="option-strength" data-lora-strength min="${option.min}" max="${option.max}" step="${option.step}" value="${esc(row.strength)}" aria-label="Additional LoRA strength">`
+        + `<button type="button" class="icon-btn" data-remove-lora="${index}" aria-label="Remove additional LoRA">${ICONS.trash}</button></div>`;
+    }).join('');
+    if (rows.some(row => !option.choices.includes(row.name))) {
+      stack.querySelector('[data-lora-rows]').insertAdjacentHTML('beforeend', '<div class="hint">A saved LoRA is unavailable in this mode. Choose another or remove it.</div>');
+    }
+  } catch (error) { showFormError(error.message); }
+}
+function rememberLoraStack(box) {
+  const stack = box.querySelector('[data-lora-stack]');
+  if (!stack) return;
+  stack.querySelector('[name=opt_additional_loras]').value = JSON.stringify([...stack.querySelectorAll('[data-lora-index]')].map(row => ({
+    on: row.querySelector('[data-lora-on]').checked, name: row.querySelector('[data-lora-name]').value,
+    strength: row.querySelector('[data-lora-strength]').value,
+  })));
+}
+function syncLoraTests(boxId, options) {
+  const side = boxId === 'imageOptionsBox' ? 'image' : boxId === 'videoOptionsBox' ? 'video' : null;
+  if (!side) return;
+  const box = $(side + 'LoraTests'), strength = $(side + 'LoraStrengthTest'), style = $(side + 'LoraStyleTest');
+  const names = options.find(option => option.id === 'lora_name');
+  const limit = options.find(option => option.id === 'lora_strength');
+  const available = !!names?.choices.length;
+  strength.disabled = style.disabled = !available || (side === 'video' && !!queueEdit);
+  const enabled = available && (strength.checked || style.checked);
+  const step = $(side + 'LoraTestStep');
+  step.min = step.step = String(limit?.step || 0.05);
+  step.max = String(Math.min(2, limit?.max || 2));
+  step.disabled = !available || !strength.checked;
+  for (const button of box.querySelectorAll('[data-lora-step]')) button.disabled = step.disabled;
+  $(side === 'image' ? 'imageReview' : 'review').disabled = enabled;
+  if (side === 'image') $('imageCount').disabled = enabled;
+  const increment = Number(step.value), units = increment / Number(step.step);
+  const valid = Number.isFinite(increment) && increment > 0 && increment <= Number(step.max)
+    && Math.abs(units - Math.round(units)) < 1e-8;
+  const count = (style.checked ? names?.choices.length || 0 : 1) * (strength.checked && valid ? Math.floor(Number(step.max) / increment + 1e-9) : 1);
+  box.querySelector('[data-lora-test-hint]').textContent = !available ? 'No style LoRAs are available for this workflow in this mode.'
+    : enabled && strength.checked && !valid ? `Choose a strength increment in multiples of ${step.step}, up to ${step.max}.`
+    : enabled ? `${count} ${side === 'image' ? 'images in one set' : 'separate complete videos'}. Same seed and current prompt as written; added LoRAs stay fixed. Strength tests start at the increment and stop at 2.0.`
+    : 'Compare the first style LoRA using the same seed and prompt. Added LoRAs stay fixed.';
+}
+// What a switch has under it shows while it's on.
+function syncBelow(box) {
+  for (const under of box.querySelectorAll ? box.querySelectorAll('[data-below]') : []) {
+    const toggle = box.querySelector(`input[type=checkbox][name="${under.dataset.below}"]`);
+    if (toggle) under.classList.toggle('open', toggle.checked);
+  }
+}
+// The chosen workflow's own options (core/workflow_options.py). A checkbox sends a hidden 0 before its own 1, so leaving
+// it unticked still says so. Drawn again only for another workflow, so what you set stays while you fill in the rest.
+function imageOptionHtml(option, all) {
+  const name = `opt_${option.id}`, locked = option.problem ? ' disabled' : '';
+  if (option.kind === 'strength' && option.private_only && !privateMode) {
+    return `<input type="hidden" name="${esc(name)}_on" value="0">`;
+  }
+  if (option.kind === 'lora_stack') {
+    return `<div data-lora-stack><input type="hidden" name="opt_additional_loras" value="${esc(option.default)}"><div data-lora-rows></div>`
+      + `<button type="button" class="ghost" data-add-lora aria-label="Add another style LoRA" title="Add another style LoRA"${option.choices.length ? '' : ' disabled'}>+</button></div>`;
+  }
+  const problem = option.problem ? `<div class="hint">Can't be changed: ${esc(option.problem)}</div>` : '';
+  // A setting that goes with another follows it, each on a line of its own, as Sampler, Scheduler and CFG do Steps.
+  const beside = child => {
+    const off = child.problem ? ' disabled' : '';
+    const label = `<span class="option-sub">${esc(child.label)}</span>`;
+    return `<span class="option-line">${child.kind === 'choice'
+      ? `${label}<select name="opt_${esc(child.id)}" aria-label="${esc(child.label)}" title="${esc(child.label)}" class="option-choice"${off}>${choiceOptions(child)}</select>`
+      : `${label}<input type="number" class="option-strength" name="opt_${esc(child.id)}" aria-label="${esc(child.label)}" title="${esc(child.label)}" min="${child.min}" max="${child.max}" step="${child.step}" value="${esc(child.default)}"${off}>`}</span>`;
+  };
+  const group = all.filter(other => other.parent === option.id);
+  if (option.parent && all.some(other => other.id === option.parent)) return '';
+  if (option.kind === 'group') {
+    return `<div class="option-row"><label>${esc(option.label)}</label>${group.map(beside).join('')}${group.find(child => child.problem) ? `<div class="hint">Can't be changed: ${esc(group.find(child => child.problem).problem)}</div>` : ''}</div>`;
+  }
+  if (option.kind === 'text') {
+    return `<label for="opt_${esc(option.id)}">${esc(option.label)}</label>
+      <textarea id="opt_${esc(option.id)}" name="${esc(name)}" rows="3" maxlength="4000" data-prompt inputmode="none"${locked}>${esc(option.default)}</textarea>`;
+  }
+  if (option.kind === 'choice') {
+    return `<div class="option-row"><label for="opt_${esc(option.id)}">${esc(option.label)}</label>
+      <select id="opt_${esc(option.id)}" name="${esc(name)}" class="option-choice"${locked}>${choiceOptions(option)}</select>${group.map(beside).join('')}</div>`;
+  }
+  if (option.kind === 'number') {
+    return `<div class="option-row"><label for="opt_${esc(option.id)}">${esc(option.label)}</label>
+      <input type="number" id="opt_${esc(option.id)}" name="${esc(name)}" min="${option.min}" max="${option.max}" step="${option.step}" value="${esc(option.default)}"${locked}>${group.map(beside).join('')}</div>`;
+  }
+  if (option.kind === 'switch' && option.below) {
+    const under = all.filter(other => other.parent === option.id).map(child => child.kind === 'choice'
+      ? `<select name="opt_${esc(child.id)}" aria-label="${esc(child.label)}" title="${esc(child.label)}" class="option-choice"${locked}>${choiceOptions(child)}</select>`
+      : `<input type="number" class="option-strength" name="opt_${esc(child.id)}" aria-label="${esc(child.label)}" title="${esc(child.label)}" min="${child.min}" max="${child.max}" step="${child.step}" value="${esc(child.default)}"${locked}>`).join('');
+    return `<div class="lora-line"><label class="check"><input type="hidden" name="${esc(name)}" value="0"><input type="checkbox" name="${esc(name)}" aria-label="${esc(option.label)}" value="1"${option.default === '1' ? ' checked' : ''}${locked}></label>${under}</div>${problem}`;
+  }
+  if (option.kind === 'switch') {
+    // What goes with it, such as a LoRA's file and strength with Enable LoRA, beside it.
+    const choices = all.filter(other => other.parent === option.id).map(child => child.kind === 'choice'
+      ? ` <select name="opt_${esc(child.id)}" aria-label="${esc(child.label)}" title="${esc(child.label)}" class="option-choice">${choiceOptions(child)}</select>`
+      : ` <input type="number" class="option-strength" name="opt_${esc(child.id)}" aria-label="${esc(child.label)}" title="${esc(child.label)}" min="${child.min}" max="${child.max}" step="${child.step}" value="${esc(child.default)}">`).join('');
+    return `<label class="check"><input type="hidden" name="${esc(name)}" value="0"><input type="checkbox" name="${esc(name)}" value="1"${option.default === '1' ? ' checked' : ''}${locked}>
+      <span>${esc(option.label)}${choices}${problem}</span></label>`;
+  }
+  if (option.kind === 'strength') {
+    const on = option.default !== '0';
+    return `<label class="check"><input type="hidden" name="${esc(name)}_on" value="0"><input type="checkbox" name="${esc(name)}_on" value="1"${on ? ' checked' : ''}${locked}>
+      <span>${esc(option.label)} <input type="number" class="option-strength" name="${esc(name)}_strength" aria-label="Strength" min="${option.min}" max="${option.max}" step="${option.step}" value="${esc(on ? option.default : option.usual || '1')}"${locked}>${problem}</span></label>`;
+  }
+  return '';
+}
+// Steps, Sampler, Scheduler and CFG: each on its line, its name a button that drops a short hint under it.
+const SAMPLING_OPTIONS = ['steps', 'sampler', 'scheduler', 'cfg'];
+const SAMPLING_HINTS = {
+  steps: 'How many times the model works over the picture. More takes longer and can add detail, up to a point. A turbo or distilled model is made for few (4 to 8).',
+  sampler: 'How each step is taken. euler is the safe choice; others (res_multistep, dpmpp_2m, er_sde) can come out sharper or need more steps.',
+  scheduler: 'How the noise is spread over the steps. simple suits most models; karras and beta spend more of them on fine detail.',
+  cfg: 'How hard it follows the prompt rather than its own idea. Turbo and distilled models are made for 1; higher follows harder, but can burn the colours.',
+};
+function samplingHtml(option) {
+  const name = `opt_${option.id}`, locked = option.problem ? ' disabled' : '';
+  const control = option.kind === 'choice'
+    ? `<select id="${esc(name)}" name="${esc(name)}" class="option-choice"${locked}>${choiceOptions(option)}</select>`
+    : `<input type="number" id="${esc(name)}" name="${esc(name)}" class="option-strength" min="${option.min}" max="${option.max}" step="${option.step}" value="${esc(option.default)}"${locked}>`;
+  const hint = [SAMPLING_HINTS[option.id], option.problem && `Can't be changed: ${option.problem}`].filter(Boolean).join(' ');
+  return `<div class="option-row sampling-line"><button type="button" class="res-info option-info" aria-expanded="false" title="What it does"><span>${esc(option.label)}</span><span class="res-info-mark" aria-hidden="true">i</span></button>${control}</div>`
+    + `<div class="res-hint option-hint" hidden>${esc(hint)}</div>`;
+}
+// A tap on its name drops its hint down; the next folds it away.
+document.addEventListener('click', e => {
+  const stepper = e.target.closest && e.target.closest('[data-lora-step]');
+  if (stepper) {
+    const input = $(stepper.dataset.loraStep);
+    if (Number(stepper.dataset.step) > 0) input.stepUp(); else input.stepDown();
+    input.dispatchEvent(new Event('change', {bubbles: true}));
+    return;
+  }
+  const stackButton = e.target.closest && e.target.closest('[data-add-lora], [data-remove-lora]');
+  if (stackButton) {
+    const box = stackButton.closest('[id$=OptionsBox]');
+    try {
+      const rows = loraStackRows(box), option = box.optionList.find(option => option.kind === 'lora_stack');
+      if (stackButton.hasAttribute('data-add-lora')) {
+        const used = new Set([box.querySelector('[name=opt_lora_name]')?.value, ...rows.map(row => row.name)]);
+        rows.push({on: true, name: option.choices.find(name => !used.has(name)) || option.choices[0], strength: '1'});
+      } else rows.splice(Number(stackButton.dataset.removeLora), 1);
+      box.querySelector('[name=opt_additional_loras]').value = JSON.stringify(rows);
+      renderLoraStack(box);
+      rememberOptions(box);
+      queuePlan();
+    } catch (error) { showFormError(error.message); }
+    return;
+  }
+  const guideLink = e.target.closest && e.target.closest('[data-style-lora-guide]');
+  if (guideLink) {
+    openModelGuide('style_lora');
+    return;
+  }
+  const toggle = e.target.closest && e.target.closest('[data-hint-target]');
+  if (toggle) {
+    if (toggle.dataset.guide) return;
+    const hint = $(toggle.dataset.hintTarget);
+    hint.hidden = !hint.hidden;
+    toggle.setAttribute('aria-expanded', String(!hint.hidden));
+    return;
+  }
+  const info = e.target.closest && e.target.closest('.option-info');
+  if (!info) return;
+  const hint = info.closest('.option-row').nextElementSibling;
+  const open = info.getAttribute('aria-expanded') !== 'true';
+  info.setAttribute('aria-expanded', String(open));
+  if (hint) hint.hidden = !open;
+});
+// Any form's: its section shows when the workflow has any. A way for the workflow to write its own prompt is chosen
+// with the LLM instead (syncImageLlm), so it isn't drawn here.
+function syncOptions(section, box, options, workflow = '') {
+  options = visibleLoraOptions(options.filter(option => !option.role));
+  syncLoraTests(box, options);
+  // The negative prompt is typed at the bottom of the Prompt section, where there is one; the rest here.
+  const slot = $(box.replace('OptionsBox', 'NegativeSlot'));
+  const negative = options.find(option => option.id === 'negative' && option.kind === 'text');
+  const key = JSON.stringify([workflow, privateMode, options]);
+  $(section).hidden = !options.some(option => option !== negative);
+  if ($(box).dataset.key === key) return;
+  $(box).dataset.key = key;
+  $(box).negative = slot;
+  slot.innerHTML = negative ? imageOptionHtml(negative, options) : '';
+  slot.hidden = !negative;
+  $(box).dataset.workflow = `${section}|${workflow}`;
+  // First, in a dark box of their own: Steps, Sampler, Scheduler and CFG, wherever the workflow has them. Then Use LoRA
+  // in its own; then the rest, turbo and the like after what the workflow is about. No Advanced heading.
+  const draw = list => list.map(option => imageOptionHtml(option, options)).join('');
+  const sampling = SAMPLING_OPTIONS.map(id => options.find(option => option.id === id)).filter(Boolean);
+  const lora = options.filter(option => option.id === 'lora' || option.parent === 'lora' || option.kind === 'lora_stack');
+  const speed = options.filter(option => option.speed);
+  const rest = options.filter(option => !sampling.includes(option) && !lora.includes(option) && !speed.includes(option) && option !== negative);
+  // Two kinds of LoRA, each under a word on what it does: a turbo one (lightning, n-step) makes it in fewer steps, and
+  // comes first, as it sets the steps; a style one changes the look.
+  const heading = (text, what, hint = '') => `<div class="options-subtitle">${text}${hint}<span class="options-subtitle-what"> · ${what}</span></div>`;
+  const loraHint = '<button type="button" class="hint-toggle" data-style-lora-guide aria-label="About style LoRA" aria-haspopup="dialog" aria-controls="modelGuide"><span class="res-info-mark" aria-hidden="true">i</span></button>';
+  $(box).innerHTML = (sampling.length ? `<div class="options-section">${heading('Sampling', 'how each picture is worked')}<div class="options-sampling">${sampling.map(samplingHtml).join('')}</div></div>` : '')
+    + (speed.length ? `<div class="options-lora options-speed">${heading('Turbo LoRA', 'fewer steps, faster')}${draw(speed)}</div>` : '')
+    + (lora.length ? `<div class="options-lora">${heading('Style LoRA', 'changes the look', loraHint)}${draw(lora)}</div>` : '')
+    + draw(rest.filter(option => !option.advanced)) + draw(rest.filter(option => option.advanced));
+  $(box).optionList = options;
+  restoreOptions($(box));
+  renderLoraStack($(box));
+  syncBelow($(box));
+  const reset = document.querySelector && document.querySelector(`[data-defaults="${box}"]`);
+  if (reset) reset.hidden = !options.length;
+}
+// Use default, beside the workflow: its settings back to how the workflow is saved in ComfyUI, and what was
+// remembered for it forgotten.
+function useDefaultOptions(box) {
+  for (const option of box.optionList || []) {
+    const field = suffix => optionField(box, `[name="opt_${option.id}${suffix}"]:not([type=hidden])`);
+    if (option.kind === 'lora_stack') box.querySelector('[name=opt_additional_loras]').value = option.default;
+    else if (option.kind === 'switch') { const el = field(''); if (el) el.checked = option.default === '1'; }
+    else if (option.kind === 'strength') {
+      const on = field('_on'), strength = field('_strength'), active = option.default !== '0';
+      if (on) on.checked = active;
+      if (strength) strength.value = active ? option.default : option.usual || '1';
+    } else { const el = field(''); if (el) el.value = option.default; }
+  }
+  syncBelow(box);
+  renderLoraStack(box);
+  const all = savedOptions();
+  delete all[box.dataset.workflow];
+  try { draftWrite(OPTIONS_KEY, JSON.stringify(all)); } catch (e) {}
+}
+document.addEventListener('click', e => {
+  const button = e.target.closest && e.target.closest('[data-defaults]');
+  if (button) useDefaultOptions($(button.dataset.defaults));
+});
+// A turbo switch has its own step count, so Steps shows the one that goes with it once it's switched.
+function followSwitch(box, changed) {
+  if (!changed || changed.type !== 'checkbox') return;
+  for (const option of (box.optionList || []).filter(option => option.follows && changed.name === `opt_${option.follows.switch}`)) {
+    const field = box.querySelector(`[name="opt_${option.id}"]`);
+    const steps = option.follows[changed.checked ? '1' : '0'];
+    if (field && steps !== undefined) field.value = steps;
+  }
+}
+// --- Each workflow's options as you last set them (per browser) ---
+const OPTIONS_KEY = 'comfyui-auto-gen.workflow-options';
+function savedOptions() {
+  try { return JSON.parse(draftRead(OPTIONS_KEY)) || {}; } catch (e) { return {}; }
+}
+// The inputs you set: a checkbox's hidden "0" beside it is only there for the form.
+const optionInputs = box => [box, box.negative].filter(Boolean).flatMap(part => [...part.querySelectorAll('input[name], select[name], textarea[name]')]).filter(el => el.type !== 'hidden' || el.name === 'opt_additional_loras');
+// A field of the options, in the box or in the negative prompt's place in the Prompt section.
+const optionField = (box, selector) => box.querySelector(selector) || (box.negative && box.negative.querySelector(selector));
+function rememberOptions(box) {
+  const all = savedOptions();
+  all[box.dataset.workflow] = Object.fromEntries(optionInputs(box).map(el => [el.name, el.type === 'checkbox' ? el.checked : el.value]));
+  try { draftWrite(OPTIONS_KEY, JSON.stringify(all)); } catch (e) {}
+}
+function restoreOptions(box) {
+  const mine = savedOptions()[box.dataset.workflow];
+  if (!mine) return;
+  for (const el of optionInputs(box)) {
+    if (!(el.name in mine) || el.disabled) continue;
+    if (el.type === 'checkbox') el.checked = !!mine[el.name];
+    // A choice the workflow no longer has stays as it was saved in ComfyUI.
+    else if (!el.options || [...el.options].some(o => o.value === String(mine[el.name]))) el.value = mine[el.name];
+  }
+}
+for (const box of ['shortsOptionsBox', 'videoOptionsBox', 'imageOptionsBox']) {
+  $(box).addEventListener('change', e => { if (e.target.closest('[data-lora-stack]')) rememberLoraStack($(box)); followSwitch($(box), e.target); syncBelow($(box)); rememberOptions($(box)); });
+  $(box).addEventListener('input', e => { if (e.target.closest('[data-lora-stack]')) rememberLoraStack($(box)); rememberOptions($(box)); });
+  // The negative prompt, typed in the Prompt section, is remembered with the rest.
+  $(box.replace('OptionsBox', 'NegativeSlot')).addEventListener('input', () => rememberOptions($(box)));
+}
+function syncImageOptions() {
+  const options = imageTakes().options || [];
+  syncOptions('imageOptions', 'imageOptionsBox', options.filter(option => !IMAGE_UPSCALE_OPTIONS.includes(option.id) && !option.moved), baseImageTakes().name);
+  syncImageUpscale(options);
+}

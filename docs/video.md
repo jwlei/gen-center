@@ -29,9 +29,12 @@ In `.env`, set at least one LLM key:
 | Setting | What it's for |
 |---|---|
 | `GEMINI_API_KEY` | Writing the prompts with Gemini, on its free tier. |
+| `GEMINI_TIMEOUT` | Finite positive seconds for each Gemini text request (`90` by default); this is an SDK transport deadline, with SDK-internal retries disabled. |
 | `ANTHROPIC_API_KEY` | Writing the prompts with Claude Opus 5.5, paid per use. Keys come from platform.claude.com. |
 | `LLM_PROVIDER` | Which one to use when you don't choose: `local` (default), `gemini` or `claude`. |
 | `COMFYUI_LAUNCHER` | Lets the panel start ComfyUI when a render needs it. |
+| `COMFYUI_QUEUE_TIMEOUT` | Finite positive seconds a video prompt may wait in ComfyUI's queue before it must start (`3600`, one hour, by default). |
+| `COMFYUI_TIMEOUT` | Finite positive maximum render time per video clip after ComfyUI starts it (`7200` seconds by default). Together, the two budgets bound the clip's queue-and-render lifecycle to three hours; a timeout cancels only that prompt from this client. |
 | `APP_PASSWORD` | Needed to reach the panel from your phone. Without it, it only answers this PC. |
 | `YOUTUBE_*` | Uploading. Run `scripts/authorize_youtube.py` once and paste what it prints. |
 
@@ -66,6 +69,7 @@ local model selected in Settings. A workflow Prompt Enhancer appears when the se
 The selected writer stays highlighted; the reset button restores the text from before enhancement.
 On mobile, the keyboard stays open while choosing a writer and closes after selection, keeping the buttons in place.
 While enhancing, animated status text replaces the heading and the reset icon stays hidden until writing finishes.
+For local writers, live output tok/s appears immediately before the remaining-time counter once generation is sampled.
 Enhancing a video brief does not replace planning: in LLM mode the planner still turns that brief into per-clip prompts.
 
 ### One story or related scenes
@@ -96,6 +100,11 @@ Select **LLM** under **Prompt source** and **Local model** under **Model** to pl
 the existing workflow-specific planner. Gemma can analyze attached images; Qwen rejects them because it is text-only.
 The local model unloads before rendering and needs an idle, reachable ComfyUI. Large plans can take substantial
 time and may exceed the local model's context or output limits.
+While the local model generates, Status and the panel log show sampled output tokens per second and total generated
+tokens (including reasoning, not input tokens), refreshed every five seconds. The first sample has no speed baseline yet
+and shows 0.0 tok/s. Each model server keeps its diagnostics in `logs/local-llm-*.log`;
+`logs/local_llm_tokens.jsonl` records token samples, template mode, launch settings and final response usage/finish reason
+for comparing slow or truncated runs. These files stay on this PC and do not record prompts or generated reasoning text.
 The panel defaults to Local model. A selected prompt model is remembered in this browser, and a default preset can
 override it. A workflow's own prompt enhancer is offered but never picked by itself. Opening a previous film brings back every setting it was made with, its prompt model included: the
 whole Generate form is kept with each run. The CLI follows `LLM_PROVIDER`, else the local model.
@@ -136,12 +145,18 @@ rendering to release GPU memory; it refuses to unload ComfyUI's models if anothe
 Compiling can take several minutes per clip and uses substantial RAM. The original renderer, model, and settings stay
 in place; H3 director workflows use H3's 24-fps frame grid for enhanced clips. Reference bindings are checked before
 rendering, and duplicate reference files are refused rather than ambiguously assigned.
+Existing `[Shot N]` markers in an incoming planner prompt are passed to the compiler as plain `Shot N`
+references, preserving the text while preventing nested headers in its deterministic draft.
 Motion Director is supported when the panel has adapted its inputs; manually wired Director timelines are not.
 
 Choose the OpenH3-IR model in Settings: **Gemma 4 12B** is the default and supports images and reference videos;
 **Qwen3 14B** is text-only and rejects visual references. This selection applies to subsequent compilations.
 The GGUF models live in the project's ignored `models/gemma-4-12b-heretic` and `models/qwen3-14b-abliterated`
-directories. Gemma also requires its `mmproj.gguf`.
+directories. Additional folders directly under `models` are discovered when their names contain `gemma-4-12b`
+or `qwen3-14b` and contain a model GGUF. They appear separately in Settings and the prompt writer.
+Keep one model GGUF in each directory; Gemma also requires one projector GGUF whose filename
+contains `mmproj`. Original download filenames and the older `model.gguf` and `mmproj.gguf` names both work.
+If there are multiple candidates, remove the extras or select the desired files with the overrides below.
 For Gemma, the compiler uses guided JSON decoding by default to avoid malformed structured replies;
 set `H3IR_GUIDED_DECODING=0` in `.env` to use the compiler's unguided mode instead.
 
@@ -149,7 +164,20 @@ For the portable Windows ComfyUI layout, the defaults locate `python_embeded/pyt
 `ComfyUI/custom_nodes/ComfyUI-OpenH3-IR` beside `COMFYUI_LAUNCHER`, and expect the Vulkan llama.cpp
 at `1_Misc/llama.cpp/b12177-vulkan/llama-server.exe` beside the ComfyUI directory. Other layouts can set
 `H3IR_COMFY_ROOT`, `H3IR_PYTHON`, `H3IR_LLAMA_SERVER`, `H3IR_MODEL_FILE`, and `H3IR_PROJECTOR_FILE`
-in `.env`; `H3IR_GPU_LAYERS` defaults to 16. Model-file overrides apply to the currently selected model.
+in `.env`. Local LLM uses share the per-model GPU layer setting measured by the
+`benchmark-local-models` VS Code task, falling back to full offload when there is no matching benchmark.
+The benchmark compares full, half and zero model-layer offload with the same text workload and preserves
+the old token log while excluding its earlier samples from displayed speeds. Results apply only to the same
+model and runner files. The former `H3IR_GPU_LAYERS` override is not used. Model-file overrides apply to the
+currently selected model.
+The same runner powers local prompt writing and OpenH3-IR, but prompt writing uses the separately selected local LLM.
+On Generate, the local model can also be chosen for each image run. Model lists show the average output tokens per
+second from completed local requests for the current model file; `—` means it has not been measured yet. A `-v` suffix
+marks a vision-capable model family; using images also requires a compatible vision projector in the model folder.
+For image sets, Output shows a pill for each recorded prompt model, and the preview shows the selected image's model.
+Older runs without a saved local-model choice show `local` rather than guessing which model was used.
+ComfyUI need not be started first: a refused connection skips unloading with a diagnostic message. An online ComfyUI
+must have an empty queue and successfully release its models; timeouts and other uncertain failures still stop startup.
 From the command line use `--h3-enhance review` or `--h3-enhance render`, and optionally
 `--h3-creativity restrained|balanced|bold|extreme`.
 
@@ -360,6 +388,13 @@ Its tools use icons; Download, Close and Delete have text labels.
 Rendering takes about 30 minutes per minute of film on the GPU this was built on, so a 10-minute film takes around
 5 hours. The ETA learns from each run, per model, workflow, workflow options and size. ComfyUI's queue is shared, so other work there takes its turn between
 clips.
+
+The total combines separately learned planning, local-model startup, prompt enhancement, rendering, upscaling and
+stitching costs; relearning LLM timings does not reset render timings. Each timing key keeps its latest 100
+measurements. Estimates average those samples after trimming the fastest and slowest 5% (rounded down to whole
+samples, so trimming starts at 20 measurements). With fewer samples, all are averaged. Existing saved estimates stay
+usable until remeasured; historical averages are not treated as individual samples. This applies to video, image,
+Shorts, standalone upscales and the prompt editor.
 
 A film's prompts take one LLM request, however long the film is, and an upload's title and description take one
 more. Claude's cost depends on the film's length and is shown on your account at platform.claude.com.

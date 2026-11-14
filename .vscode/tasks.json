@@ -2,9 +2,34 @@
   "version": "2.0.0",
   "tasks": [
     {
+      "label": "benchmark-local-models",
+      "type": "shell",
+      "command": "python -u scripts\\benchmark_local_models.py 2>&1 | Tee-Object -FilePath logs\\local-model-benchmark.log; exit $LASTEXITCODE",
+      "options": { "env": { "PYTHONIOENCODING": "utf-8" } },
+      "presentation": { "reveal": "silent", "panel": "shared", "clear": false, "close": true },
+      "problemMatcher": []
+    },
+    {
+      "label": "prepare-browser-tests",
+      "type": "shell",
+      "command": "New-Item -ItemType Directory -Force logs | Out-Null; python -m pip install -r requirements-dev.txt -c constraints-windows-py313.txt 2>&1 | Tee-Object -FilePath logs\\browser-setup.log; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }; python -m playwright install chromium 2>&1 | Tee-Object -FilePath logs\\browser-setup.log -Append; exit $LASTEXITCODE",
+      "presentation": { "reveal": "silent", "panel": "shared", "clear": false, "close": true },
+      "problemMatcher": []
+    },
+    {
+      "label": "browser-tests",
+      "type": "shell",
+      "command": "python -m unittest tests.test_browser -v 2>&1 | Tee-Object -FilePath logs\\browser-tests.log; exit $LASTEXITCODE",
+      "options": { "env": { "GEN_CENTER_BROWSER_TESTS": "1" } },
+      "dependsOn": "prepare-browser-tests",
+      "group": "test",
+      "presentation": { "reveal": "silent", "panel": "shared", "clear": false, "close": true },
+      "problemMatcher": []
+    },
+    {
       "label": "all-tests",
       "type": "shell",
-      "command": "python -m unittest discover tests",
+      "command": "New-Item -ItemType Directory -Force logs | Out-Null; python -m unittest discover -s tests -t . -v 2>&1 | Tee-Object -FilePath logs\\all-tests.log; exit $LASTEXITCODE",
       "group": { "kind": "test", "isDefault": true },
       "presentation": { "reveal": "silent", "panel": "shared", "clear": true, "close": true },
       "problemMatcher": []
@@ -12,7 +37,7 @@
     {
       "label": "relevant-panel-tests",
       "type": "shell",
-      "command": "python -m unittest tests.test_panel tests.test_finished -k page_script -k test_skip_starts -k test_stop_kills -k queueing_a_pending -k pending_jobs_arrow -k output_order -k gpu_heat_guard -k afterburner -k FinishedTest -k AimdoRetryTest -k WorkPrivacyTest -k nsfw_tags -k private_mode_tags 2>&1 | Tee-Object -FilePath logs\\panel-tests.log; exit $LASTEXITCODE",
+      "command": "python -m unittest tests.test_panel tests.test_finished tests.test_saved_workflows -k page_script -k generation_header -k test_skip_starts -k test_stop_kills -k queueing_a_pending -k pending_jobs_arrow -k output_order -k gpu_heat_guard -k afterburner -k FinishedTest -k AimdoRetryTest -k WorkPrivacyTest -k nsfw_tags -k private_mode_tags -k LorasTest",
       "group": "test",
       "presentation": { "reveal": "silent", "panel": "shared", "clear": true, "close": true },
       "problemMatcher": []
@@ -20,7 +45,7 @@
     {
       "label": "prompt-feature-tests",
       "type": "shell",
-      "command": "python -m unittest tests.test_panel.PanelTest.test_page_script tests.test_panel.PanelTest.test_prompt_warning_parks_the_run_and_start_approves_the_saved_plan tests.test_panel.PanelTest.test_clip_history_survives_edits_and_multishot_clips_can_be_previewed tests.test_panel.PanelTest.test_review_change_a_prompt_render_watch_download_delete tests.test_panel.PanelTest.test_prompt_writer_can_use_gemini_or_the_selected_image_workflow_enhancer tests.test_panel.PanelTest.test_prompt_writer_estimates_learn_per_model_and_pipeline tests.test_panel.PanelTest.test_prompt_writer_can_select_qwen_when_gemma_is_configured tests.test_panel.PanelTest.test_video_clip_relationship_is_validated_and_passed_to_the_planner tests.test_pipeline.PlanTest.test_related_clip_guidance_is_distinct_from_story_progression tests.test_pipeline.PlanTest.test_near_duplicate_warning_threshold_and_h3_shared_identity tests.test_pipeline.PlanTest.test_duplicate_plan_is_held_before_render_and_approval_survives_reload tests.test_pipeline.PipelineTest.test_chained_film tests.test_pipeline.ArgsTest.test_clip_relationship_is_a_planner_option tests.test_h3_refiner tests.test_h3_multishot tests.test_h3_infinite",
+      "command": "python -m unittest tests.test_panel.PanelTest.test_page_script tests.test_panel.PanelTest.test_generation_header_keeps_compact_presets_outside_the_forms tests.test_panel.PanelTest.test_prompt_warning_parks_the_run_and_start_approves_the_saved_plan tests.test_panel.PanelTest.test_clip_history_survives_edits_and_multishot_clips_can_be_previewed tests.test_panel.PanelTest.test_review_change_a_prompt_render_watch_download_delete tests.test_panel.PanelTest.test_prompt_writer_can_use_gemini_or_the_selected_image_workflow_enhancer tests.test_panel.PanelTest.test_prompt_writer_estimates_learn_per_model_and_pipeline tests.test_panel.PanelTest.test_prompt_writer_can_select_qwen_when_gemma_is_configured tests.test_panel.PanelTest.test_video_clip_relationship_is_validated_and_passed_to_the_planner tests.test_pipeline.PlanTest.test_related_clip_guidance_is_distinct_from_story_progression tests.test_pipeline.PlanTest.test_near_duplicate_warning_threshold_and_h3_shared_identity tests.test_pipeline.PlanTest.test_duplicate_plan_is_held_before_render_and_approval_survives_reload tests.test_pipeline.PipelineTest.test_chained_film tests.test_pipeline.ArgsTest.test_clip_relationship_is_a_planner_option tests.test_h3_refiner tests.test_h3_multishot tests.test_h3_infinite",
       "group": "test",
       "presentation": { "reveal": "silent", "panel": "shared", "clear": true, "close": true },
       "problemMatcher": []

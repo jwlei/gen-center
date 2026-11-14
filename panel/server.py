@@ -13,6 +13,9 @@ Set APP_PASSWORD to expose it beyond localhost. Without it the server refuses
 any host but 127.0.0.1: an open instance lets anyone spend your API quota and GPU.
 """
 import argparse
+import copy
+import hashlib
+import atexit
 import json
 import logging
 import math
@@ -22,6 +25,7 @@ import shutil
 import secrets
 import signal
 import socket
+import stat
 import subprocess
 import sys
 import threading
@@ -40,11 +44,13 @@ from werkzeug.exceptions import NotFound
 from werkzeug.datastructures import MultiDict
 
 from core import batch_stop, eta_keys, model_guide, pills, run_form, workflow_options
+from core.run_checkpoint import CheckpointError, catalogue_errors
 from core.upscale_eta import UpscaleEta, is_upscale
 from core.paths import LOGS_DIR, PROJECT_ROOT, SAVED_WORKFLOWS_DIR, comfyui_client_id
 from core.quota import quota_summary
 from core.saved_workflows import display_label, list_saved, pipeline_of
 from panel import settings, tailscale
+from panel.catalogue import CatalogueCache
 from pipelines.image.paths import OUTPUT_DIR as IMAGE_OUTPUT
 from pipelines.image.run_eta import RunEta as ImageEta
 from pipelines.shorts.paths import OUTPUT_DIR as SHORTS_READY, UPLOADED_DIR as SHORTS_UPLOADED
@@ -121,6 +127,81 @@ LINE_KINDS = (("stage", re.compile(r"^(▶ Stage|=====)")), ("err", re.compile(r
 def line_kind(text):
     text = text.strip()
     return next((kind for kind, pattern in LINE_KINDS if pattern.search(text)), "")
+
+
+class PanelOwnerLock:
+    """A process-wide owner for panel state and GPU work, released by the OS on exit."""
+
+    def __init__(self, path):
+        self.path = path
+        self._file = None
+        self._pid = None
+        self._guard = threading.Lock()
+        self.error = None
+
+    def acquire(self):
+        with self._guard:
+            pid = os.getpid()
+            if self._file is not None and self._pid == pid:
+                return True
+            if self._file is not None:
+                # A child must not mistake an inherited descriptor for ownership.
+                self._file.close()
+                self._file = None
+                self._pid = None
+            try:
+                os.makedirs(os.path.dirname(self.path) or ".", exist_ok=True)
+                lock_file = open(self.path, "a+b")
+                lock_file.seek(0, os.SEEK_END)
+                if lock_file.tell() == 0:
+                    lock_file.write(b"\0")
+                    lock_file.flush()
+                lock_file.seek(0)
+                if os.name == "nt":
+                    import msvcrt
+                    msvcrt.locking(lock_file.fileno(), msvcrt.LK_NBLCK, 1)
+                else:
+                    import fcntl
+                    fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except (OSError, ImportError) as error:
+                try:
+                    lock_file.close()
+                except (UnboundLocalError, OSError):
+                    pass
+                self.error = (
+                    f"Could not acquire the gen-center owner lock {self.path}: {error}. "
+                    "Another panel or worker may own it; stop that process and verify file permissions."
+                )
+                return False
+            self._file = lock_file
+            self._pid = pid
+            self.error = None
+            return True
+
+    def release(self):
+        with self._guard:
+            if self._file is None:
+                return
+            lock_file, owner_pid = self._file, self._pid
+            self._file = None
+            self._pid = None
+            if owner_pid == os.getpid():
+                try:
+                    lock_file.seek(0)
+                    if os.name == "nt":
+                        import msvcrt
+                        msvcrt.locking(lock_file.fileno(), msvcrt.LK_UNLCK, 1)
+                    else:
+                        import fcntl
+                        fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+                except (OSError, ImportError):
+                    pass
+            lock_file.close()
+
+
+PANEL_OWNER_PATH = os.path.join(LOGS_DIR, "panel_owner.lock")
+PANEL_OWNER = PanelOwnerLock(PANEL_OWNER_PATH)
+atexit.register(PANEL_OWNER.release)
 
 
 class Job:
@@ -304,12 +385,20 @@ class Job:
 
     def _track_line(self, line):
         p = self.progress
+        tokens = re.fullmatch(r"Local LLM: (\d+(?:\.\d+)?) tok/s \| (\d+) total tok", line)
+        if tokens:
+            p["tokens"] = {"per_second": float(tokens.group(1)), "total": int(tokens.group(2))}
+            return
+        if line.startswith(("Local LLM: idle", "Local LLM: telemetry unavailable", "Local LLM complete:")):
+            p.pop("tokens", None)
+            return
         if self.eta is not None and hasattr(self.eta, "event"):
             self.eta.event(next((kind for kind, pattern in self.EVENTS if pattern.search(line)), "line"))
         action = next((label for pattern, label in self.ACTIONS if pattern.search(line)), None)
         if action == self.MODEL_STARTING and p.get("action") != self.MODEL_STARTING:
             p["action_before_model"] = p.get("action")
         if action:
+            p.pop("tokens", None)
             p["action"] = action
         elif self.MODEL_READY.search(line) and p.get("action") == self.MODEL_STARTING:
             # Started: it is now doing what it was started for (writing the prompts, say), not starting any more.
@@ -326,6 +415,7 @@ class Job:
             elif kind == "run_id":
                 p["run_id"] = m.group(1)
             elif kind == "stage":
+                p.pop("tokens", None)
                 p["stage"] = [int(m.group(1)), int(m.group(2)), m.group(3).strip()]
                 p["stage_started"] = time.time()
                 p.pop("detail", None)
@@ -426,12 +516,12 @@ class JobQueue:
     The jobs waiting for a Job, oldest first, each keeping the options it was
     queued with. A failed job doesn't stop the ones after it, as in a batch.
     Stop does: pressing it means nothing should start by itself, so what is
-    queued waits for Resume. Saved to `path`, so what was waiting comes back after
-    a Shut down or crash, on hold for the same reason.
+    queued waits for Resume. Pending jobs stay until the user starts or removes
+    them. A versioned `<queue>_state.json` ledger beside the legacy queue path
+    brings waiting work back after a Shut down or crash, on hold for the same reason.
     """
 
     KEPT_RESULTS = 20  # Finished keeps the last twenty, saved beside the queue so they outlast a restart
-
     def __init__(self, job, prepare, blocked=lambda: False, path=None):
         self.job = job
         self.prepare = prepare  # Last step before a job starts; returns why it can't run, or None.
@@ -443,42 +533,151 @@ class JobQueue:
         self.results = []
         self.held = False
         self.next_id = 1
+        self.persistence_error = None
+        self._needs_migration = False
         self.watcher = None
         self._restore()
 
     @property
     def results_path(self):
+        """The legacy Finished file path retained for migration and compatibility."""
         return os.path.splitext(self.path)[0] + "_finished.json" if self.path else None
 
+    @property
+    def ledger_path(self):
+        """The `<queue>_state.json` atomic versioned snapshot for all persisted state."""
+        return os.path.splitext(self.path)[0] + "_state.json" if self.path else None
+
+    @staticmethod
+    def _validate_item(item, require_id=True):
+        if not isinstance(item, dict) or not isinstance(item.get("label"), str):
+            raise ValueError("each queued item must be an object with a label")
+        if require_id and (not isinstance(item.get("id"), int) or isinstance(item.get("id"), bool) or item["id"] < 1):
+            raise ValueError("each queued item must have a positive integer id")
+        argv = item.get("argv")
+        if not isinstance(argv, list) or not argv or not all(isinstance(arg, str) for arg in argv):
+            raise ValueError("each queued item must have a non-empty argv list of strings")
+
+    @classmethod
+    def _validate_results(cls, results):
+        if not isinstance(results, list):
+            raise ValueError("results must be a list")
+        for result in results:
+            if not isinstance(result, dict) or not isinstance(result.get("label"), str):
+                raise ValueError("each result must be an object with a label")
+            job_id = result.get("job_id")
+            if job_id is not None and (not isinstance(job_id, int) or isinstance(job_id, bool) or job_id < 1):
+                raise ValueError("result job ids must be positive integers")
+            if result.get("job") is not None:
+                cls._validate_item(result["job"], require_id=False)
+
+    @classmethod
+    def _validate_ledger(cls, ledger):
+        if (not isinstance(ledger, dict) or not isinstance(ledger.get("version"), int)
+                or isinstance(ledger.get("version"), bool) or ledger["version"] != 1):
+            raise ValueError("the ledger must be a version 1 object")
+        items = ledger.get("items")
+        current = ledger.get("current")
+        results = ledger.get("results")
+        next_id = ledger.get("next_id")
+        held = ledger.get("held")
+        if not isinstance(items, list):
+            raise ValueError("items must be a list")
+        for item in items:
+            cls._validate_item(item)
+        if current is not None:
+            cls._validate_item(current)
+        cls._validate_results(results)
+        if not isinstance(next_id, int) or isinstance(next_id, bool) or next_id < 1:
+            raise ValueError("next_id must be a positive integer")
+        if not isinstance(held, bool):
+            raise ValueError("held must be a boolean")
+        identifiers = [item["id"] for item in items]
+        if current:
+            identifiers.append(current["id"])
+        if len(identifiers) != len(set(identifiers)):
+            raise ValueError("queued item ids must be unique")
+        saved_ids = identifiers + [r["job_id"] for r in results if r.get("job_id") is not None]
+        if len(saved_ids) != len(set(saved_ids)):
+            places = {}
+            for where, ids in (("queue", [item["id"] for item in items]), ("current", [current["id"]] if current else []),
+                               ("Finished", [r["job_id"] for r in results if r.get("job_id") is not None])):
+                for job_id in ids:
+                    places.setdefault(job_id, []).append(where)
+            repeated = {job_id: where for job_id, where in places.items() if len(where) > 1}
+            raise ValueError(f"job ids must be unique across the queue and Finished (repeated: {repeated})")
+        if saved_ids and next_id <= max(saved_ids):
+            raise ValueError("next_id must be greater than every saved job id")
+
+    def _persistence_failed(self, message):
+        if self.persistence_error is None:
+            self.persistence_error = message
+            self.held = True
+            self.job.log(
+                f"⚠️ Queue persistence is blocked: {message} "
+                "The saved files were left untouched; queued work will not run. "
+                "Restore or repair the named file, then restart the panel."
+            )
+
     def _restore(self):
+        if not self.path:
+            return
+        if os.path.exists(self.ledger_path):
+            try:
+                with open(self.ledger_path, "r", encoding="utf-8") as f:
+                    ledger = json.load(f)
+                self._validate_ledger(ledger)
+                self.items = ledger["items"]
+                self.current = ledger["current"]
+                self.results = ledger["results"][-self.KEPT_RESULTS:]
+                self.next_id = ledger["next_id"]
+                self.held = bool(ledger["held"] or self.items or self.current)
+            except (OSError, ValueError, TypeError, KeyError) as error:
+                self._persistence_failed(f"could not read {self.ledger_path}: {error}")
+                return
+            if self.current is not None:
+                interrupted = {**self.current, "waited": True, "interrupted": True}
+                self.current = None
+                self.items.insert(0, interrupted)
+                self.held = True
+                self._needs_migration = True
+            return
+
+        # Legacy queue and Finished files remain in place as a recovery copy.
+        source = self.path
         try:
-            with open(self.results_path, "r", encoding="utf-8") as f:
-                self.results = [result for result in json.load(f) if isinstance(result, dict) and "label" in result][-self.KEPT_RESULTS:]
-        except (OSError, ValueError, TypeError):
-            self.results = []  # Nothing saved yet, or a broken file: Finished starts empty
-        # A job's number stays its own: a saved result's failure is dismissed by it.
-        self.next_id = max((result.get("job_id") or 0 for result in self.results if isinstance(result.get("job_id"), int)), default=0) + 1
-        try:
-            with open(self.path, "r", encoding="utf-8") as f:
-                items = [{**item, "waited": True} for item in json.load(f)]
-            self.next_id = max([self.next_id - 1] + [item["id"] for item in items]) + 1
-        except (OSError, ValueError, TypeError, KeyError):
-            return  # Nothing saved, or a broken file: an empty queue
-        self.items = items
-        self.held = bool(items)
+            queue_exists = os.path.exists(self.path)
+            results_exists = os.path.exists(self.results_path)
+            if queue_exists:
+                source = self.path
+                with open(self.path, "r", encoding="utf-8") as f:
+                    items = json.load(f)
+                if not isinstance(items, list):
+                    raise ValueError("the legacy queue must be a list")
+                for item in items:
+                    self._validate_item(item)
+                items = [{**item, "waited": True} for item in items]
+            else:
+                items = []
+            if results_exists:
+                source = self.results_path
+                with open(self.results_path, "r", encoding="utf-8") as f:
+                    results = json.load(f)
+                self._validate_results(results)
+            else:
+                results = []
+            identifiers = [item["id"] for item in items]
+            result_ids = [r["job_id"] for r in results if r.get("job_id") is not None]
+            self.items = items
+            self.results = results[-self.KEPT_RESULTS:]
+            self.next_id = max(identifiers + result_ids, default=0) + 1
+            self.held = bool(items)
+            self._needs_migration = queue_exists or results_exists
+        except (OSError, ValueError, TypeError, KeyError) as error:
+            self._persistence_failed(f"could not migrate {source}: {error}")
 
     def _save_results(self):
-        if not self.results_path:
-            return True
-        try:
-            os.makedirs(os.path.dirname(self.results_path), exist_ok=True)
-            with open(self.results_path + ".tmp", "w", encoding="utf-8") as f:
-                json.dump(self.results, f, ensure_ascii=False)
-            os.replace(self.results_path + ".tmp", self.results_path)
-            return True
-        except OSError as e:
-            self.job.log(f"⚠️ Could not save Finished, it won't survive a restart: {e}")
-            return False
+        return self._save_snapshot(allow_closed=True)
 
     def forget(self, run_id=None, film=None):
         """Takes out of Finished what was deleted from Output: the lines for that run or that film."""
@@ -506,18 +705,80 @@ class JobQueue:
             return forgotten
 
     def _save(self):
-        # Once closed, the file keeps what was queued at Shut down.
+        # Once closed, the ledger keeps what was queued at Shut down.
         if not self.path or self.job.closed:
             return not self.job.closed
-        try:
-            os.makedirs(os.path.dirname(self.path), exist_ok=True)
-            with open(self.path + ".tmp", "w", encoding="utf-8") as f:
-                json.dump(self.items, f, ensure_ascii=False)
-            os.replace(self.path + ".tmp", self.path)
-            return True
-        except OSError as e:
-            self.job.log(f"⚠️ Could not save the queue, it won't survive a restart: {e}")
+        return self._save_snapshot()
+
+    def _activate(self):
+        if self.persistence_error:
             return False
+        if not PANEL_OWNER.acquire():
+            self._persistence_failed(PANEL_OWNER.error or f"could not acquire ownership of {PANEL_OWNER.path}")
+            return False
+        if self._needs_migration:
+            return self._write_ledger()
+        return True
+
+    def _write_ledger(self):
+        saved_ids = [item["id"] for item in self.items]
+        if self.current:
+            saved_ids.append(self.current["id"])
+        saved_ids.extend(result["job_id"] for result in self.results if result.get("job_id") is not None)
+        if saved_ids:
+            self.next_id = max(self.next_id, max(saved_ids) + 1)
+        ledger = {"version": 1, "items": self.items, "current": self.current,
+                  "results": self.results, "next_id": self.next_id, "held": self.held}
+        temporary = None
+        try:
+            self._validate_ledger(ledger)
+            directory = os.path.dirname(self.ledger_path) or "."
+            os.makedirs(directory, exist_ok=True)
+            for _ in range(10):
+                temporary = f"{self.ledger_path}.{os.getpid()}.{threading.get_ident()}.{secrets.token_hex(4)}.tmp"
+                try:
+                    descriptor = os.open(temporary, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+                    break
+                except FileExistsError:
+                    continue
+            else:
+                raise OSError("could not create a unique ledger staging file")
+            with os.fdopen(descriptor, "w", encoding="utf-8") as f:
+                json.dump(ledger, f, ensure_ascii=False, allow_nan=False)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(temporary, self.ledger_path)
+            temporary = None
+            if os.name != "nt":
+                try:
+                    folder_fd = os.open(directory, os.O_RDONLY)
+                    try:
+                        os.fsync(folder_fd)
+                    finally:
+                        os.close(folder_fd)
+                except OSError:
+                    pass
+            self._needs_migration = False
+            return True
+        except (OSError, TypeError, ValueError) as error:
+            self._persistence_failed(f"could not write {self.ledger_path}: {error}")
+            return False
+        finally:
+            if temporary and os.path.exists(temporary):
+                try:
+                    os.remove(temporary)
+                except OSError:
+                    pass
+
+    def _save_snapshot(self, allow_closed=False):
+        if not self.path:
+            return True
+        if not allow_closed and self.job.closed:
+            return False
+        with self.lock:
+            if not self._activate():
+                return False
+            return self._write_ledger()
 
     def _ensure_watcher(self):
         # Here and not at import: gunicorn forks after importing, and threads don't survive that.
@@ -588,6 +849,8 @@ class JobQueue:
                 self._advance()
 
     def _advance(self):
+        if self.persistence_error:
+            return
         if self is run_queue and self.current and self.job.running and live_crash_reason(self.job):
             # A crashed sampler can leave the pipeline waiting forever instead of exiting.
             if not self.job.stop(failed=True):
@@ -607,23 +870,25 @@ class JobQueue:
             if ready is None:
                 return
             item = self.items.pop(ready)
-            self._save()
             self._start(item)
 
     def _finish_current(self):
+        global _comfy_freeing
         item, self.current = self.current, None
         # Before the next job can start: what this one loaded would otherwise stay in memory under it.
         if self.job.batches:
             ahead = None if self.held else next((waiting for waiting in self.items if not waiting.get("later")), None)
             if frees_comfyui(item, ahead):
                 # Not under the queue's lock: a busy ComfyUI can take seconds to answer, and the page's status waits on it.
+                _comfy_freeing = True
                 threading.Thread(target=free_comfyui, daemon=True).start()
         code = self.job.returncode
         # Noted before _record: its hooks can start the next job, whose progress would replace this run's id.
         if self.job.stopped:
             note_outcome(self.job, item, STOPPED)
-            self._record(item, "stopped")
-            self._keep_unsaved_stop(item)
+            self._record(item, "stopped", save=False)
+            self._keep_unsaved_stop(item, save=False)
+            self._save()
         elif code == 0:
             if self is run_queue and item.get("pipeline") == "video":
                 run_id = (self.job.progress or {}).get("run_id") or item.get("resume")
@@ -657,17 +922,17 @@ class JobQueue:
             if self.items:
                 self.job.log(f"❌ {item['label']} failed (exit {code}).")
 
-    def _keep_unsaved_stop(self, item):
+    def _keep_unsaved_stop(self, item, save=True):
         """A run stopped before it saved anything has no stopped run to continue: its settings go back to Pending instead."""
         if self is not run_queue or not self.results or self.results[-1].get("run_id") or self.results[-1].get("job_id") != item.get("id"):
             return
         self.results.pop()
-        self._save_results()
         item_id = self.next_id
         self.next_id += 1
         self.items.append({**{key: value for key, value in item.items() if key not in self.TRANSIENT_KEYS},
                            "id": item_id, "later": True, "waited": True})
-        self._save()
+        if save:
+            self._save()
         _runs_cache["at"] = 0.0
 
     def _retry_after_restart(self, item, reason):
@@ -693,24 +958,51 @@ class JobQueue:
         self._save()
 
     def _start(self, item):
+        if self.persistence_error:
+            if item not in self.items and self.current is not item:
+                self.items.insert(0, item)
+            self.held = True
+            return False
+        self.current = item
+        if not self._activate():
+            self.current = None
+            if item not in self.items:
+                self.items.insert(0, item)
+            self.held = True
+            return False
         if item.get("waited"):
             self.job.log(f"===== Next in the queue: {item['label']} =====")
+        # Record ownership before preflight or process creation. A crash at any
+        # point after this snapshot restores the job on hold instead of losing it.
+        if not self._save():
+            self.current = None
+            if item not in self.items:
+                self.items.insert(0, item)
+            self.held = True
+            return False
         try:
             error = self.prepare(item)
+            if not error and not self._save():
+                self.current = None
+                if item not in self.items:
+                    self.items.insert(0, item)
+                self.held = True
+                return False
             # Made in Private mode: told to the job, whose titling keeps an NSFW prompt from Gemini (core/titles.py).
             env = {**(item.get("env") or {}), "GEN_CENTER_PRIVATE": "1"} if item.get("private") else item.get("env")
             # A job that waited adds to the log, so the one before it can still be read.
             if not error and self.job.start(item["argv"], env, keep_log=item.get("waited", False), pipeline=item.get("pipeline", "shorts")):
-                self.current = item
                 return
             error = error or "Another job took its place."  # A setup check, started in the moment between two jobs
         except Exception as e:  # One bad job must not take the watcher thread, and the queue, down with it
             error = str(e)
+        self.current = None
         item["error"] = error
         self.job.log(f"⚠️ Skipped {item['label']}: {error}")
         self._record(item, "skipped", error)
+        return False
 
-    def _record(self, item, outcome, note=None):
+    def _record(self, item, outcome, note=None, save=True):
         notify_ended(item, outcome, note)
         run_id = ((self.job.progress or {}).get("run_id") or item.get("resume")) if outcome != "skipped" and self is run_queue else None
         state = PIPELINES[item["pipeline"]].load_run(run_id) if run_id and item.get("pipeline") in PIPELINES else None
@@ -739,10 +1031,12 @@ class JobQueue:
                 app.logger.error("A job's end could not be followed up: %s", e)
         self.results.append(result)
         del self.results[:-self.KEPT_RESULTS]
-        self._save_results()
+        if save:
+            self._save_results()
 
     # What a job picks up while it waits or runs, and that a recovered copy must start without.
-    TRANSIENT_KEYS = ("id", "waited", "error", "later", "edit_token", "edit_from_queue", "aimdo_retried", "private_tagged")
+    TRANSIENT_KEYS = ("id", "waited", "queued_at", "error", "later", "edit_token", "edit_from_queue",
+                      "aimdo_retried", "private_tagged")
 
     def recoverable(self):
         """The failed jobs that can still go back to Pending: their inputs must outlast the cleanup of old uploads."""
@@ -784,11 +1078,18 @@ class JobQueue:
     def hold(self):
         with self.lock:
             self.held = bool(self.items)
+            self._save()
 
     def resume(self):
         with self.lock:
             self._ensure_watcher()
+            if not self._activate():
+                self.held = True
+                return
             self.held = False
+            if not self._save():
+                self.held = True
+                return
         # Starting the next job can take seconds (ComfyUI checks): not while the page's request waits on it.
         threading.Thread(target=self._advance_locked, daemon=True).start()
 
@@ -846,7 +1147,6 @@ class JobQueue:
             self.items.remove(item)
             item.pop("later", None)
             self.held = self.held and bool(self.items)
-            self._save()
             self._start(item)
             if self.current is item:
                 return "started", None
@@ -1090,10 +1390,10 @@ def _read_nsfw():
     if not isinstance(data, dict) or any(not isinstance(data.get(key), list) or
                                          not all(isinstance(value, str) for value in data[key])
                                          for key in ("image", "video", "video_file")):
-        raise ValueError("Invalid NSFW tags file.")
+        raise ValueError("Invalid private tags file.")
     sources = data.setdefault("video_sources", {})
     if not isinstance(sources, dict) or not all(isinstance(k, str) and isinstance(v, str) for k, v in sources.items()):
-        raise ValueError("Invalid NSFW video sources.")
+        raise ValueError("Invalid private video sources.")
     return data
 
 
@@ -1122,7 +1422,7 @@ def tag_run_nsfw(pipeline, run_id):
                 os.replace(temp, NSFW_PATH)
         return True
     except (OSError, ValueError) as e:
-        app.logger.error("Could not tag a private run NSFW: %s", e)
+        app.logger.error("Could not tag a run as private: %s", e)
         return False
 
 
@@ -1283,8 +1583,8 @@ def tag_nsfw():
                 json.dump(tags, f, ensure_ascii=False, indent=2)
             os.replace(temp, NSFW_PATH)
     except (OSError, ValueError) as e:
-        app.logger.error("Could not save NSFW tags: %s", e)
-        return {"ok": False, "error": "Could not save NSFW tags. Check the panel log."}, 500
+        app.logger.error("Could not save private tags: %s", e)
+        return {"ok": False, "error": "Could not save private tags. Check the panel log."}, 500
     return {"ok": True}
 
 
@@ -1621,11 +1921,20 @@ def free_comfyui():
     paged so hard it stopped answering mid-render. Idle, it does this at once; it cancels nothing.
     """
     url = (os.getenv("COMFYUI_URL") or "http://127.0.0.1:8188").rstrip("/")
+    from core import comfy_memory
+    global _comfy_freeing
     try:
-        requests.post(f"{url}/free", json={"unload_models": True, "free_memory": True}, timeout=5)
-        job.log("🧹 ComfyUI let go of its models, so the next job starts with the memory free.")
-    except requests.RequestException:
-        pass  # Not running, or too busy to answer: nothing more to do about it here
+        job.log("🧹 Waiting for ComfyUI to finish clearing its models and caches...")
+        comfy_memory.release(url)
+        job.log("🧹 ComfyUI cleanup confirmed: models and caches released.")
+    except RuntimeError as error:
+        job.log(f"⚠️ ComfyUI cleanup failed; the generation queue is on hold: {error}")
+        with run_queue.lock:
+            run_queue.held = True
+            run_queue._save()
+    finally:
+        with run_queue.lock:
+            _comfy_freeing = False
 
 
 def remove_partial_videos():
@@ -1838,10 +2147,12 @@ def prepare_upload(item):
 
 
 _writing_prompt = False
+_prompt_refiner = None
 _panel_closing = False
 _comfy_restarting = False
+_comfy_freeing = False
 # A ComfyUI restart going (after an aimdo error) holds the next run back until it is done.
-run_queue = JobQueue(job, prepare_run, blocked=lambda: _writing_prompt or _panel_closing or _comfy_restarting, path=os.path.join(LOGS_DIR, "queue_runs.json"))
+run_queue = JobQueue(job, prepare_run, blocked=lambda: _writing_prompt or _panel_closing or _comfy_restarting or _comfy_freeing, path=os.path.join(LOGS_DIR, "queue_runs.json"))
 # A run's own upload step is waited out, when its video sits in Ready with no topic recorded yet.
 upload_queue = JobQueue(uploads, prepare_upload, blocked=lambda: job.uploading,
                         path=os.path.join(LOGS_DIR, "queue_uploads.json"))
@@ -1857,7 +2168,7 @@ def restart_blocked():
     Something a restart would cut short: a run or upload going, or a queue about to start one. A queue on hold
     isn't: it's saved, and comes back on hold.
     """
-    return _writing_prompt or job.running or uploads.running or any(
+    return _writing_prompt or _comfy_freeing or job.running or uploads.running or any(
         not queue.held and any(not item.get("later") for item in queue.pending())
         for queue in (run_queue, upload_queue)
     )
@@ -2087,6 +2398,27 @@ def run_pipeline(run_id):
     return PIPELINES["shorts" if re.fullmatch(r"run_\d{8}_\d{6}_\d+", run_id) else "video"]
 
 
+def checkpoint_target(error):
+    """Resolve a reported checkpoint to its configured run folder, never a client-supplied path."""
+    from pipelines.image import paths as image_paths, run_state as image_state
+    from pipelines.shorts import run_state as shorts_state
+    from pipelines.video import paths as video_paths, run_state as video_state
+
+    path = os.path.abspath(error["path"])
+    folder, filename = os.path.split(path)
+    root, run_id = os.path.split(folder)
+    if filename != "state.json":
+        return None
+    for side, expected_root, pattern in (
+        ("image", image_paths.RUNS_DIR, image_state.RUN_ID),
+        ("video", video_paths.RUNS_DIR, video_state.RUN_ID),
+        ("shorts", shorts_state.RUNS_DIR, shorts_state.RUN_ID),
+    ):
+        if os.path.normcase(root) == os.path.normcase(os.path.abspath(expected_root)) and pattern.fullmatch(run_id):
+            return side, run_id, folder
+    return None
+
+
 def stop_run(start_next=False):
     """Kills the run with its ffmpeg renders and ComfyUI clips. What is queued waits for Resume, unless start_next."""
     # Before the kill, or the next job could start as soon as this one dies.
@@ -2191,6 +2523,7 @@ def index():
         tailscale_url=tailscale_url,
         tailscale_problem=tailscale_problem,
         settings=settings.load(),
+        local_models=settings.local_models(),
         themes=settings.THEMES,
         can_open_folders=can_open_folders(),
         nudges=nudges(),
@@ -2211,6 +2544,37 @@ def continue_run(run_id):
 @password_required
 def discard_run(run_id):
     return run_pipeline(run_id).discard_run(run_id)
+
+
+@app.route("/runs/<run_id>/discard-unreadable", methods=["POST"])
+@password_required
+def discard_unreadable_run(run_id):
+    """Delete only an identified, still-unreadable and idle run folder."""
+    with run_queue.lock:
+        target = next((target for error in catalogue_errors()
+                       if (target := checkpoint_target(error)) and target[1] == run_id), None)
+        if not target:
+            return {"ok": False, "error": "That unreadable run is no longer listed. Refresh and try again."}, 404
+        side, _, folder = target
+        if run_id in busy_runs():
+            return {"ok": False, "error": "That run is going or queued. Stop it or remove it from the queue first."}, 409
+        try:
+            info = os.lstat(folder)
+            if (os.path.islink(folder) or getattr(info, "st_file_attributes", 0) & stat.FILE_ATTRIBUTE_REPARSE_POINT
+                    or os.path.normcase(os.path.dirname(os.path.realpath(folder))) != os.path.normcase(os.path.realpath(os.path.dirname(folder)))):
+                return {"ok": False, "error": "The run folder is a link or has moved; delete it manually after checking its location."}, 409
+            try:
+                PIPELINES[side].load_run(run_id)
+            except CheckpointError:
+                pass
+            else:
+                return {"ok": False, "error": "The checkpoint is no longer unreadable. Refresh before deleting."}, 409
+            shutil.rmtree(folder)
+        except OSError as error:
+            app.logger.error("Could not delete unreadable run %s: %s", folder, error)
+            return {"ok": False, "error": f"Could not delete the run folder: {error}"}, 500
+        _runs_cache["at"] = 0.0
+    return {"ok": True}
 
 
 @app.route("/stop", methods=["POST"])
@@ -2804,7 +3168,13 @@ def api_settings():
         if "low_priority" in changes:
             threading.Thread(target=apply_comfyui_priority, daemon=True).start()
         return {"ok": True, "settings": saved}
-    return {"ok": True, "settings": settings.load(), "disk": disk_usage()}
+    return {"ok": True, "settings": settings.load(), "local_models": settings.local_models(), "disk": disk_usage()}
+
+
+@app.route("/api/local-models")
+@password_required
+def api_local_models():
+    return {"ok": True, "models": settings.local_models()}
 
 
 @app.route("/api/write-prompt", methods=["GET", "POST"])
@@ -2826,14 +3196,14 @@ def write_prompt():
             model = (request.args.get("model") or h3_refiner.local_llm_model()) if writer == "local" else writer.replace("_", "-")
         except ValueError as e:
             return {"ok": False, "error": str(e)}, 500
-        if writer == "local" and model not in settings.H3_MODELS:
+        if writer == "local" and model not in {item["id"] for item in settings.local_models()}:
             return {"ok": False, "error": "Choose a local prompt model available in Settings."}, 400
         timings = eta_keys.Timings(PROMPT_WRITER_TIMINGS, {})
         estimate = timings.step(f"{model} | {side}")
         if estimate is not None and (not math.isfinite(estimate) or estimate <= 0):
             app.logger.warning("Invalid prompt writer timing for %s / %s: %s", model, side, estimate)
             estimate = None
-        default = (300 if model == "qwen3-14b" else 180) if writer == "local" else (180 if writer == "prompt-enhancer" else 45)
+        default = (300 if settings.model_family(model) == "qwen3-14b" else 180) if writer == "local" else (180 if writer == "prompt-enhancer" else 45)
         return {"ok": True, "writer": writer, "model": model, "seconds": estimate if estimate is not None else default}
     data = request.get_json(silent=True) if request.is_json else request.form
     if not isinstance(data, dict) or data.get("pipeline") not in ("image", "video"):
@@ -2852,13 +3222,13 @@ def write_prompt():
             model = data.get("model") or h3_refiner.local_llm_model()
         except ValueError as e:
             return {"ok": False, "error": str(e)}, 500
-        if model not in settings.H3_MODELS:
+        if model not in {item["id"] for item in settings.local_models()}:
             return {"ok": False, "error": "Choose a local prompt model available in Settings."}, 400
     else:
         model = writer.replace("_", "-")
-    global _writing_prompt
+    global _writing_prompt, _prompt_refiner
     with run_queue.lock:
-        if _writing_prompt or _panel_closing or _comfy_restarting or job.running or (run_queue.pending() and not run_queue.held):
+        if _writing_prompt or _panel_closing or _comfy_restarting or _comfy_freeing or job.running or (run_queue.pending() and not run_queue.held):
             return {"ok": False, "error": "Wait for the current generation or prompt writer to finish."}, 409
         _writing_prompt = True
     try:
@@ -2868,6 +3238,8 @@ def write_prompt():
             refiner = h3_refiner.Refiner(url, require_compiler=False, model_id=model)
             if refiner.model_id != model:
                 return {"ok": False, "error": "The selected model changed. Try writing the prompt again."}, 409
+            with run_queue.lock:
+                _prompt_refiner = refiner
             with refiner:
                 prompt = refiner.write_prompt(text.strip(), side)
         elif writer == "gemini":
@@ -2928,7 +3300,7 @@ def write_prompt():
             os.makedirs(os.path.dirname(PROMPT_WRITER_TIMINGS), exist_ok=True)
             temporary = PROMPT_WRITER_TIMINGS + ".tmp"
             with open(temporary, "w", encoding="utf-8") as file:
-                json.dump({"steps": {key: timings.steps[key] for key in sorted(timings.timed_steps)}, "renders": timings.renders}, file, indent=2)
+                json.dump(timings.as_dict(), file, indent=2)
             os.replace(temporary, PROMPT_WRITER_TIMINGS)
         except OSError as e:
             app.logger.warning("Could not save local prompt writer timings: %s", e)
@@ -2938,6 +3310,7 @@ def write_prompt():
     finally:
         with run_queue.lock:
             _writing_prompt = False
+            _prompt_refiner = None
         run_queue._advance_locked()
 
 
@@ -3087,7 +3460,7 @@ def restart_comfyui():
     """
     force = bool((request.get_json(silent=True) or {}).get("force"))
     with run_queue.lock:
-        if not force and (job.running or _writing_prompt or _comfy_restarting):
+        if not force and (job.running or _writing_prompt or _comfy_restarting or _comfy_freeing):
             return {"ok": False, "error": "A run or prompt writer is going, or ComfyUI is restarting. Wait for it first."}, 409
         if not comfyui_launcher():
             return {"ok": False, "error": "COMFYUI_LAUNCHER isn't set in .env, so the panel can't start ComfyUI again."}, 400
@@ -3143,10 +3516,30 @@ def launcher_refresh():
     return {"restarting": True}
 
 
+_catalogue_cache = CatalogueCache()
+
+
+@app.after_request
+def invalidate_output_catalogue(response):
+    if request.method not in ("GET", "HEAD", "OPTIONS") and response.status_code < 400:
+        _catalogue_cache.invalidate()
+    return response
+
+
+def _scan_output_catalogue():
+    return {
+        "videos": {folder: list_videos(folder) for folder in FOLDERS},
+        "image_sets": [run for run in saved_runs() if run["pipeline"] == "image" and run["images"]],
+    }, films_of_runs()
+
+
 @app.route("/api/status")
 @password_required
 def status():
     payload, queue = run_queue.snapshot_with_job()
+    with run_queue.lock:
+        payload["prompt_writer"] = {"running": _writing_prompt,
+                                    "tokens": _prompt_refiner.tokens if _prompt_refiner is not None else None}
     run_id = (payload.get("progress") or {}).get("run_id")
     if queue.get("current") and run_id and payload.get("pipeline") in ("image", "video"):
         state = PIPELINES[payload["pipeline"]].load_run(run_id)
@@ -3160,15 +3553,22 @@ def status():
     payload["made_now"] = made_in_this_run()
     payload["upload"] = uploads.snapshot()
     payload["upload"]["queue"] = upload_queue.snapshot()
-    payload["videos"] = {folder: list_videos(folder) for folder in FOLDERS}
-    payload["image_sets"] = [{**run, "generating": bool(payload["running"] and payload.get("pipeline") == "image"
-                                                        and run["id"] == run_id)}
-                             for run in saved_runs() if run["pipeline"] == "image" and run["images"]]
+    compact = "catalogue_revision" in request.args
+    if compact:
+        catalogue, film_runs, catalogue_revision = _catalogue_cache.get(_scan_output_catalogue, active=payload["running"])
+        payload.update(copy.deepcopy(catalogue))
+        for run in payload["image_sets"]:
+            run["generating"] = bool(payload["running"] and payload.get("pipeline") == "image" and run["id"] == run_id)
+    else:
+        payload["videos"] = {folder: list_videos(folder) for folder in FOLDERS}
+        payload["image_sets"] = [{**run, "generating": bool(payload["running"] and payload.get("pipeline") == "image"
+                                                            and run["id"] == run_id)}
+                                 for run in saved_runs() if run["pipeline"] == "image" and run["images"]]
+        film_runs = films_of_runs()
     with _nsfw_lock:
         tags = _read_nsfw()
     payload["private"] = private_mode()
     payload["output_order"] = settings.load()["output_order"]
-    film_runs = films_of_runs()
     _current_films(payload["queue"]["results"], film_runs)
     _apply_nsfw(payload, tags, film_runs, payload["private"])
     for hook in STATUS_HOOKS:
@@ -3184,6 +3584,19 @@ def status():
     payload["gpu"] = gpu_stats()
     payload["poweroff"] = poweroff_state()
     payload["quota"] = cached_quota()
+    payload["checkpoint_errors"] = [
+        {**error, **({"run_id": target[1]} if (target := checkpoint_target(error)) else {})}
+        for error in catalogue_errors()
+    ]
+    if compact:
+        revision = hashlib.sha256(json.dumps(
+            [catalogue_revision, tags, payload["private"], payload["output_order"], payload.get("collections", [])],
+            sort_keys=True,
+        ).encode()).hexdigest()
+        payload["catalogue_revision"] = revision
+        if request.args["catalogue_revision"] == revision:
+            for key in ("videos", "image_sets", "collections", "output_order"):
+                payload.pop(key, None)
     return payload
 
 
@@ -3471,11 +3884,6 @@ def main():
     parser.add_argument("--port", type=int, default=8800, help="Port (default: 8800).")
     parser.add_argument("--debug", action="store_true")
     args = parser.parse_args()
-    for hook in STARTUP_HOOKS:
-        try:
-            hook()
-        except Exception as e:  # Tidying up must never keep the panel from starting
-            app.logger.error("A start-up task failed: %s", e)
 
     if args.host != "127.0.0.1" and not os.getenv("APP_PASSWORD"):
         parser.error(
@@ -3486,6 +3894,19 @@ def main():
 
     if not os.getenv("FLASK_SECRET_KEY"):
         print("⚠️ FLASK_SECRET_KEY not set — using a random key, so logins drop on restart.")
+
+    # The Werkzeug reloader parent only supervises its child; the child owns the panel.
+    owns_panel = not args.debug or os.environ.get("WERKZEUG_RUN_MAIN") == "true"
+    if owns_panel:
+        if not PANEL_OWNER.acquire():
+            parser.error(PANEL_OWNER.error)
+        for queue in QUEUES.values():
+            queue._activate()
+        for hook in STARTUP_HOOKS:
+            try:
+                hook()
+            except Exception as e:  # Tidying up must never keep the panel from starting
+                app.logger.error("A start-up task failed: %s", e)
 
     global comfy_monitor
     comfy_monitor = ComfyMonitor()
@@ -3498,4 +3919,8 @@ def main():
         # In the background: it can take a while, and the panel shouldn't wait for it.
         threading.Thread(target=connect_tailscale, args=(args.port,), daemon=True).start()
     print("   Stop it with 'Shut down' in the panel (or close this window if it has one).")
-    app.run(host=args.host, port=args.port, debug=args.debug, threaded=True)
+    try:
+        app.run(host=args.host, port=args.port, debug=args.debug, threaded=True)
+    finally:
+        if owns_panel:
+            PANEL_OWNER.release()

@@ -1,14 +1,180 @@
 """The few settings the gear in the header holds, kept in logs/settings.json so every device sees the same."""
 import json
+import logging
+import math
 import os
+import re
 import threading
 
-from core.paths import LOGS_DIR
+from core.paths import LOGS_DIR, PROJECT_ROOT
 
 PATH = os.path.join(LOGS_DIR, "settings.json")
 SIDES = ("shorts", "video", "image")
 MAX_RESERVE_GB = 64
 H3_MODELS = ("gemma-4-12b", "qwen3-14b")
+MODEL_FOLDERS = {"gemma-4-12b": "gemma-4-12b-heretic", "qwen3-14b": "qwen3-14b-abliterated"}
+_logger = logging.getLogger(__name__)
+
+
+def local_model_benchmarks():
+    try:
+        with open(os.path.join(LOGS_DIR, "local_model_benchmarks.json"), encoding="utf-8") as source:
+            data = json.load(source)
+        if not isinstance(data, dict) or not isinstance(data.get("models"), dict):
+            raise ValueError("Invalid benchmark data.")
+        return data
+    except FileNotFoundError:
+        return {"models": {}}
+    except (OSError, ValueError) as error:
+        _logger.warning("Could not read local model benchmarks: %s", error)
+        return {"models": {}}
+
+
+def benchmark_for_model(benchmarks, model_id, model_path, server_path=None):
+    result = benchmarks["models"].get(model_id)
+    if not isinstance(result, dict):
+        return None
+    try:
+        if (os.path.normcase(os.path.abspath(model_path)) != result["model_path"]
+                or os.path.getmtime(model_path) != result["model_mtime"]):
+            return None
+        if server_path is not None and (
+                os.path.normcase(os.path.abspath(server_path)) != result["server_path"]
+                or os.path.getmtime(server_path) != result["server_mtime"]):
+            return None
+        layers = result["gpu_layers"]
+        if layers != "all" and (not isinstance(layers, int) or isinstance(layers, bool) or layers < 0):
+            raise ValueError("Invalid benchmark GPU layer count.")
+        return result
+    except (KeyError, OSError, TypeError, ValueError) as error:
+        _logger.warning("Could not use local model benchmark for %s: %s", model_id, error)
+        return None
+
+
+def model_family(model_id):
+    if not isinstance(model_id, str):
+        raise ValueError("Unknown local model.")
+    family, separator, folder = model_id.partition(":")
+    if family not in H3_MODELS or (separator and (not folder or os.path.basename(folder) != folder
+                                                    or "/" in folder or "\\" in folder or ":" in folder
+                                                    or folder in (".", ".."))):
+        raise ValueError(f"Unknown local model: {model_id!r}")
+    return family
+
+
+def local_models():
+    models = [{"id": "gemma-4-12b", "label": "Gemma 4 12B (vision)"},
+              {"id": "qwen3-14b", "label": "Qwen3 14B (text only)"}]
+    root = os.path.join(PROJECT_ROOT, "models")
+    if os.path.isdir(root):
+        with os.scandir(root) as entries:
+            folders = sorted((entry for entry in entries if entry.is_dir(follow_symlinks=False)),
+                             key=lambda entry: entry.name.casefold())
+        for folder in folders:
+            if folder.name.casefold() in {name.casefold() for name in MODEL_FOLDERS.values()}:
+                continue
+            if re.search(r"gemma[-_]?4[-_]?12b", folder.name, re.I):
+                family = "gemma-4-12b"
+            elif re.search(r"qwen3[-_]?14b", folder.name, re.I):
+                family = "qwen3-14b"
+            else:
+                continue
+            with os.scandir(folder.path) as entries:
+                if not any(entry.is_file() and entry.name.lower().endswith(".gguf")
+                           and "mmproj" not in entry.name.lower() for entry in entries):
+                    continue
+            models.append({"id": f"{family}:{folder.name}", "label": folder.name})
+    rates = local_model_rates(models)
+    for model in models:
+        model["tokens_per_second"] = rates.get(model["id"])
+        model["vision"] = model_family(model["id"]) == "gemma-4-12b"
+    return models
+
+
+def local_model_rates(models):
+    mtimes, paths = {}, {}
+    for model in models:
+        model_id = model["id"]
+        folder = model_id.split(":", 1)[1] if ":" in model_id else MODEL_FOLDERS[model_id]
+        directory = os.path.join(PROJECT_ROOT, "models", folder)
+        override = os.getenv("H3IR_MODEL_FILE")
+        try:
+            if override:
+                path = override
+            else:
+                with os.scandir(directory) as entries:
+                    candidates = [entry.path for entry in entries if entry.is_file()
+                                  and entry.name.lower().endswith(".gguf") and "mmproj" not in entry.name.lower()]
+                if len(candidates) != 1:
+                    continue
+                path = candidates[0]
+            mtimes[model_id] = os.path.getmtime(path)
+            paths[model_id] = path
+        except FileNotFoundError:
+            continue
+        except OSError as error:
+            _logger.warning("Could not inspect local model for token statistics: %s", error)
+    benchmarks = local_model_benchmarks()
+    baseline = benchmarks.get("at", 0)
+    if not isinstance(baseline, (int, float)) or isinstance(baseline, bool) or not math.isfinite(baseline):
+        _logger.warning("Invalid local model benchmark timestamp.")
+        baseline = 0
+    active, totals = {}, {}
+    for model_id, model_path in paths.items():
+        result = benchmark_for_model(benchmarks, model_id, model_path)
+        if result:
+            tokens, milliseconds = result.get("tokens"), result.get("milliseconds")
+            if (isinstance(tokens, (int, float)) and not isinstance(tokens, bool) and math.isfinite(tokens)
+                    and isinstance(milliseconds, (int, float)) and not isinstance(milliseconds, bool)
+                    and math.isfinite(milliseconds) and tokens > 0 and milliseconds > 0):
+                totals[model_id] = (tokens, milliseconds)
+    path = os.path.join(LOGS_DIR, "local_llm_tokens.jsonl")
+    try:
+        with open(path, encoding="utf-8") as source:
+            for number, line in enumerate(source, 1):
+                try:
+                    event = json.loads(line)
+                except ValueError:
+                    _logger.warning("Could not read local token statistics at line %s", number)
+                    continue
+                if not isinstance(event, dict):
+                    continue
+                pid, model_id = event.get("pid"), event.get("model")
+                if not isinstance(pid, int) or not isinstance(model_id, str):
+                    continue
+                if event.get("event") == "start":
+                    active[pid] = (model_id, event.get("model_mtime"))
+                elif (event.get("event") == "completion" and model_id in mtimes
+                      and active.get(pid) == (model_id, mtimes[model_id])
+                      and isinstance(event.get("at", 0), (int, float))
+                      and event.get("at", 0) >= baseline):
+                    timing = event.get("timings")
+                    if not isinstance(timing, dict):
+                        continue
+                    tokens, milliseconds = timing.get("predicted_n"), timing.get("predicted_ms")
+                    if (not isinstance(tokens, (int, float)) or isinstance(tokens, bool)
+                            or not isinstance(milliseconds, (int, float)) or isinstance(milliseconds, bool)
+                            or not math.isfinite(tokens) or not math.isfinite(milliseconds)
+                            or tokens <= 0 or milliseconds <= 0):
+                        continue
+                    old_tokens, old_ms = totals.get(model_id, (0, 0))
+                    totals[model_id] = (old_tokens + tokens, old_ms + milliseconds)
+    except FileNotFoundError:
+        pass
+    except OSError as error:
+        _logger.warning("Could not read local token statistics: %s", error)
+        return {}
+    return {model_id: round(tokens * 1000 / milliseconds, 1)
+            for model_id, (tokens, milliseconds) in totals.items()}
+
+
+def model_folder(model_id):
+    family = model_family(model_id)
+    if ":" not in model_id:
+        return MODEL_FOLDERS[family]
+    if model_id not in {model["id"] for model in local_models()}:
+        raise ValueError(f"The local model folder for {model_id!r} is missing or unsupported.")
+    return model_id.split(":", 1)[1]
 # Who titles a new film or set (core/titles.py): nobody, Gemini with the local model behind it, the local model alone,
 # or Gemini for what isn't NSFW (made outside Private mode) and the local model for what is.
 TITLE_SOURCES = ("off", "gemini", "gemini_sfw", "local")
@@ -63,14 +229,17 @@ def load():
     workflows = saved.get("default_workflow") if isinstance(saved.get("default_workflow"), dict) else {}
     theme = saved.get("theme")
     model = saved.get("h3_model", DEFAULTS["h3_model"])
-    if model not in H3_MODELS:
-        raise ValueError(f"Unknown OpenH3-IR model: {model!r}")
+    model_family(model)
     # Before it had a setting of its own, the local model was OpenH3-IR's: kept so until it is chosen.
     local = saved.get("local_llm_model") or model
+    try:
+        model_family(local)
+    except ValueError:
+        local = DEFAULTS["local_llm_model"]
     return {"low_priority": bool(saved.get("low_priority")),
             "reserve_ram_gb": _gigabytes(saved.get("reserve_ram_gb")) or DEFAULT_RESERVE_GB,
             "h3_model": model,
-            "local_llm_model": local if local in H3_MODELS else DEFAULTS["local_llm_model"],
+            "local_llm_model": local,
             "default_workflow": {side: str(workflows.get(side) or "") for side in SIDES},
             # The image preset the viewer's Edit (pen) opens Generate with; empty: the Qwen-Image 2.1 edit workflow.
             "edit_preset": str(saved.get("edit_preset") or "")[:200],
@@ -96,11 +265,11 @@ def update(changes):
         if "reserve_ram_gb" in changes:
             current["reserve_ram_gb"] = _gigabytes(changes["reserve_ram_gb"])
         if "h3_model" in changes:
-            if changes["h3_model"] not in H3_MODELS:
+            if changes["h3_model"] not in {model["id"] for model in local_models()}:
                 raise ValueError("Unknown OpenH3-IR model.")
             current["h3_model"] = changes["h3_model"]
         if "local_llm_model" in changes:
-            if changes["local_llm_model"] not in H3_MODELS:
+            if changes["local_llm_model"] not in {model["id"] for model in local_models()}:
                 raise ValueError("Unknown local LLM model.")
             current["local_llm_model"] = changes["local_llm_model"]
         if "private_mode" in changes:

@@ -9,7 +9,7 @@ from dotenv import load_dotenv
 
 from pipelines.shorts.brain import ContentBrain
 from pipelines.shorts.asset_manager import AssetManager, PROVIDER_KEYS, get_provider
-from core import batch_stop
+from core import batch_stop, run_checkpoint
 from core.audio import AudioEngine, get_tts_provider
 from pipelines.shorts.avatar_generator import (AVATAR_LAYOUTS, AvatarGenerator, default_avatar_layout,
                                       get_avatar_source, pick_on_screen, plan_avatar_scenes)
@@ -220,6 +220,8 @@ async def generate_one(args, state):
                 return None
             state.update(topic=topic)
             script = brain.generate_script(topic, lang=lang)
+        except run_checkpoint.CheckpointError:
+            raise
         except Exception as e:
             print(f"❌ Topic/script Error: {e}")
             return None
@@ -269,6 +271,8 @@ async def generate_one(args, state):
     if source == "comfyui" and layout != "0":
         try:
             generator = AvatarGenerator(clips_dir=state.clips_dir, seed=args.seed)
+        except run_checkpoint.CheckpointError:
+            raise
         except Exception as e:
             print(f"❌ Avatar Error: {e}")
 
@@ -321,6 +325,8 @@ async def generate_one(args, state):
         final_path = composer.concatenate_with_transitions(final_scene_paths, output_name)
         state.update(final=final_path)
 
+    if final_path:
+        state.save_manifest()
     narration = " ".join(scene['text'] for scene in script)
 
     # The clips are gone by the time a video waiting in output/shorts/ready gets uploaded.
@@ -394,10 +400,12 @@ async def main_async(args):
 
         state = state or RunState.new(args.options, run_index + 1, total - run_index - 1)
         print(f"🗂️ Run folder: {state.id}")
-        state.save()
-
         try:
+            state.save()
             final_path = await generate_one(args, state)
+        except run_checkpoint.CheckpointError as e:
+            print(f"❌ {e}")
+            return 1
         except Exception as e:
             print(f"❌ Unexpected failure: {e}")
             final_path = None

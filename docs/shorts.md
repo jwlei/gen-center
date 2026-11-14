@@ -117,7 +117,7 @@ Optional:
 
 - `GEMINI_MODEL` to override the text model chain `gemini-3.8-flash,gemini-3.5-flash,gemini-3-flash-preview,gemini-3.5-flash-lite` (one model, or a comma-separated list tried in order when a model hits its daily quota or stops answering)
 - `GEMINI_FAST_MODEL` to override the fast model chain used for small yes/no checks such as "was this topic already made?" (default `gemini-3.5-flash-lite,gemini-3.5-flash`)
-- `GEMINI_TIMEOUT` seconds to wait for a text reply before moving on to the next model (default `90`); a model that times out is skipped for the rest of the run, and one the server says has used its daily quota is skipped by every run until the reset it gives (`logs/exhausted_models.json`)
+- `GEMINI_TIMEOUT` seconds to wait for a text reply before moving on to the next model (default `90`; must be finite and positive). This is an SDK HTTP-request deadline; SDK-internal retries are disabled so a timed-out request finishes before fallback begins. A model that times out is cooled down for later calls, and one the server says has used its daily quota is skipped by every run until the reset it gives (`logs/exhausted_models.json`).
 - `VIDEO_PROVIDER` to pick the stock video source: `pixabay` (default) or `pexels`
 - `TTS_PROVIDER` to pick the voice engine: `gemini` (default, natural) or `edge` (free, more robotic)
 - `GEMINI_TTS_VOICE` to always use a specific Gemini voice (browse the voice library with `client.voices.list(language_code=["en-GB"])`)

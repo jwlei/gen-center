@@ -20,6 +20,8 @@ Each option is {id, kind, label, default, ...}, and a run's choice is a string:
 """
 import copy
 import json
+import math
+import logging
 import os
 import re
 
@@ -278,7 +280,8 @@ def describe(ui, info=None, pipeline="image"):
                 name = os.path.splitext(os.path.basename(str(lora["lora"]).replace("\\", "/")))[0]
                 options.append({"id": f"lora_{_slug(name)}", "kind": "strength", "label": f"LoRA: {name}", "node": node["id"], "entry": f"lora_{number}",
                                 "default": str(lora.get("strength", 1)) if lora.get("on") else OFF, "min": -2, "max": 2, "step": 0.05,
-                                "usual": str(lora.get("strength", 1) or 1)})
+                                "usual": str(lora.get("strength", 1) or 1),
+                                **({"private_only": True} if lora_check.private_lora(lora["lora"]) else {})})
         elif node["type"] == ENHANCER and not node.get("mode"):
             enabled, strength = (list(node.get("widgets_values") or []) + [True, 1.0])[:2]
             options.append({"id": "prompt_boost", "kind": "strength", "label": "Krea2T Enhancer (prompt adherence)", "node": node["id"],
@@ -448,6 +451,7 @@ H3_SAMPLING = ("BasicGuider", "CFGGuider", "KSampler", "KSamplerAdvanced", "Samp
 # models/loras is offered at once, on any workflow. The one the workflow has is the one to start from: most LoRAs are
 # made for one model. Speed LoRAs (turbo, lightning, n-step) have switches of their own, and aren't listed.
 LORA, LORA_NAME, LORA_STRENGTH = "lora", "lora_name", "lora_strength"
+ADDITIONAL_LORAS = "additional_loras"
 LORA_LOADERS = ("LoraLoaderModelOnly", "LoraLoader")
 SPEED_LORA = re.compile(r"turbo|lightning|lightx2v|\d+.?steps?|distill", re.I)
 FACE_LORA = re.compile(r"(?:enable|use)?[\s_]*loras?", re.I)
@@ -461,7 +465,9 @@ OLD_LORA_IDS = {"lora_slot": LORA_NAME, "lora_slot_strength": LORA_STRENGTH, "fa
 def lora_label(name):
     """A LoRA file as it's said: its folder and name, without .safetensors or a download's "_1"."""
     stem = os.path.splitext(str(name).replace("\\", "/"))[0]
-    return DOWNLOAD_COPY.sub("", stem)
+    stem = DOWNLOAD_COPY.sub("", stem)
+    labels = lora_check.display_label(name)
+    return labels if labels != os.path.basename(stem) else stem
 
 
 def speed_label(name, limit=28):
@@ -480,15 +486,25 @@ def _lora_files(info):
 
 def _installed_lora(info, name):
     """The installed file a workflow's LoRA is: saved under a folder of its author's, it may be installed without one."""
-    files = _lora_files(info)
+    return _matching_lora(_lora_files(info), name)
+
+
+def _matching_lora(files, name):
     if name in files:
         return name
     wanted = os.path.basename(str(name).replace("\\", "/"))
-    return next((file for file in files if os.path.basename(file.replace("\\", "/")) == wanted), name)
+    exact = next((file for file in files if os.path.basename(file.replace("\\", "/")) == wanted), None)
+    if exact:
+        return exact
+    families = lora_check.lora_families(name)
+    matches = [file for file in files if lora_check.display_label(file).casefold() == lora_check.display_label(name).casefold()
+               and (not families or families & lora_check.lora_families(file))]
+    return matches[0] if len(matches) == 1 else name
 
 
 def lora_options(on, name, strength, files):
     """The switch, and under it the LoRA (named as lora_label says) and its strength. Speed LoRAs aren't listed."""
+    name = _matching_lora(files, name)
     choices = sorted({file for file in files if not SPEED_LORA.search(file)} | ({name} if name else set()), key=lambda file: lora_label(file).lower())
     default = name if name in choices else (choices[0] if choices else "")
     return [{"id": LORA, "kind": "switch", "label": "Use LoRA", "default": on, "advanced": True, "below": True},
@@ -515,7 +531,14 @@ def upgraded(chosen, options):
                 chosen[new] = value
     name = next((option for option in options if option["id"] == LORA_NAME), None)
     if name:
+        if LORA_NAME in chosen:
+            chosen[LORA_NAME] = _matching_lora(name["choices"], chosen[LORA_NAME])
         old = f"lora_{_slug(os.path.splitext(os.path.basename(str(name['default']).replace(chr(92), '/')))[0])}"
+        if old not in chosen:
+            aliases = [key for key in chosen if key.startswith("lora_") and key not in known
+                       and _matching_lora([name["default"]], key[5:] + ".safetensors") == name["default"]]
+            if len(aliases) == 1:
+                old = aliases[0]
         if old in chosen and old not in {option["id"] for option in options}:
             value = chosen.pop(old)
             chosen[LORA] = OFF if value == OFF else ON
@@ -532,12 +555,138 @@ def _model_feeds(api):
     return takers if len(sources) == 1 else []
 
 
-def _style_lora(api, info, chosen, options):
+MODEL_LOADERS = {"UNETLoader", "UNETLoaderGGUF", "CheckpointLoader", "CheckpointLoaderSimple", "DiffusionModelLoader"}
+
+
+def _workflow_model(api):
+    """The diffusion model behind the sampler, by its actual model loader, not its workflow name or text encoder."""
+    roots = []
+    for node in api.values():
+        inputs = node.get("inputs", {})
+        if isinstance(inputs.get("model"), list) and (
+                "positive" in inputs or node["class_type"] in H3_SAMPLING or node["class_type"].endswith("Guider")):
+            roots.append(inputs["model"])
+    pending = list(roots)
+    seen = set()
+    models = []
+    while pending:
+        link = pending.pop()
+        if not isinstance(link, list) or not link or str(link[0]) in seen:
+            continue
+        node_id = str(link[0])
+        seen.add(node_id)
+        node = api.get(node_id)
+        if not node:
+            continue
+        class_type, inputs = node["class_type"], node.get("inputs", {})
+        if class_type in MODEL_LOADERS or (class_type.endswith("Loader") and
+                                           any(family in class_type.lower() for family in ("krea", "qwen", "minimax", "ltx", "fibo"))):
+            name = next((inputs[key] for key in ("unet_name", "ckpt_name", "model_name") if isinstance(inputs.get(key), str)), None)
+            if name:
+                models.append(name)
+            else:
+                if lora_check.model_families(class_type):
+                    models.append(class_type)
+            continue
+        pending.extend(value for key, value in inputs.items()
+                       if key in ("model", "guider") and isinstance(value, list))
+    if not models:
+        models = [next((node.get("inputs", {}).get(key) for key in ("unet_name", "ckpt_name", "model_name")
+                        if isinstance(node.get("inputs", {}).get(key), str)), None)
+                  for node in api.values() if node["class_type"] in MODEL_LOADERS]
+        models = [name for name in models if name]
+    families = [lora_check.model_families(name) for name in models]
+    return models[0] if models and families[0] and all(found == families[0] for found in families) else None
+
+
+def _native_loras(ui):
+    """The LoRA names already saved into this workflow, including loaders inside subgraphs."""
+    nodes = list(ui.get("nodes", []))
+    subgraphs = _subgraphs(ui)
+    nodes += [node for subgraph in subgraphs.values() for node in subgraph.get("nodes", [])]
+    found = []
+    for node in nodes:
+        if node.get("type") in LORA_LOADERS:
+            values = node.get("widgets_values") or []
+            if values and isinstance(values[0], str):
+                found.append(values[0])
+        elif node.get("type") == LORA_LOADER:
+            found.extend(entry["lora"] for entry in node.get("widgets_values", []) if isinstance(entry, dict) and entry.get("lora"))
+    for node in ui.get("nodes", []):
+        subgraph = subgraphs.get(node.get("type"))
+        if not subgraph:
+            continue
+        widgets = sw._face_widgets(node, subgraph)
+        found.extend(widgets[entry["name"]] for entry in subgraph.get("inputs", [])
+                     if "lora" in entry["name"].lower() and isinstance(widgets.get(entry["name"]), str))
+    return found
+
+
+def _is_native_lora(name, native):
+    wanted = os.path.basename(str(name).replace("\\", "/"))
+    return any(name == saved or wanted == os.path.basename(str(saved).replace("\\", "/")) for saved in native)
+
+
+def _compatible_lora(name, model, native):
+    family = lora_check.lora_families(name)
+    if lora_check.family(name) in (lora_check.QWEN_21, lora_check.QWEN_EARLIER):
+        family.add("qwen")
+    if family:
+        return bool(model) and bool(family & lora_check.model_families(model)) and not lora_check.problem(name, model)
+    return _is_native_lora(name, native)
+
+
+def _filter_lora_options(options, model, native):
+    """Keep only files whose family matches the loaded model, plus unidentified files already in the workflow."""
+    switches = {option["id"]: option for option in options if option["kind"] == "switch"}
+    for option in options:
+        if option["kind"] != "choice" or not ("lora" in option["id"] and "choices" in option):
+            continue
+        choices = [name for name in option["choices"] if _compatible_lora(name, model, native)]
+        option["choices"] = choices
+        if "labels" in option:
+            option["labels"] = {name: label for name, label in option["labels"].items() if name in choices}
+        if option.get("default") not in choices:
+            option["default"] = choices[0] if choices else ""
+        if not choices:
+            option["problem"] = "No LoRA can be verified for this workflow's model."
+            parent = switches.get(option.get("parent"))
+            if parent:
+                parent["problem"] = option["problem"]
+
+
+def _active_loras(api):
+    """The LoRA files actually applied by loaders in this API workflow."""
+    for node in api.values():
+        class_type, inputs = node.get("class_type"), node.get("inputs", {})
+        if class_type in LORA_LOADERS:
+            name = inputs.get("lora_name")
+            strengths = [inputs[key] for key in ("strength_model", "strength_clip") if key in inputs]
+            if name and not any(isinstance(strength, (int, float)) and strength == 0 for strength in strengths):
+                yield name
+        elif class_type == LORA_LOADER:
+            for entry in inputs.values():
+                if isinstance(entry, dict) and entry.get("on") and entry.get("lora") and entry.get("strength", 1) != 0:
+                    yield entry["lora"]
+
+
+def _validate_loras(api, model, native):
+    for name in _active_loras(api):
+        if not _compatible_lora(name, model, native):
+            known = lora_check.lora_families(name) or lora_check.family(name) in (lora_check.QWEN_21, lora_check.QWEN_EARLIER)
+            reason = lora_check.problem(name, model) if known else "Its family can't be identified, and it isn't included in this workflow."
+            raise sw.Unusable(f"LoRA {name} can't be used: {reason}")
+        problem = lora_check.problem(name, model)
+        if problem:
+            raise sw.Unusable(f"LoRA {name} can't be used: {problem}")
+
+
+def _style_lora(api, info, chosen, options, model=None, native=()):
     """
     The LoRA setting, applied: to its Power Lora Loader row, or (with none and no face of its own) to an empty Power
     Lora Loader, or a Load LoRA put in before what samples. Returns the options it adds.
     """
-    files = _lora_files(info)
+    files = [name for name in _lora_files(info) if _compatible_lora(name, model, native)]
     found = [option for option in options if option["id"] in (LORA, LORA_NAME, LORA_STRENGTH)]
     if found:
         switch = found[0]
@@ -567,6 +716,64 @@ def _style_lora(api, info, chosen, options):
     for node_id, input_name in feeds:
         api[node_id]["inputs"][input_name] = ["style_lora", 0]
     return added
+
+
+def lora_stack(value, option):
+    try:
+        rows = json.loads(value)
+    except (ValueError, TypeError) as error:
+        raise ValueError("Additional LoRAs must be a list of selections.") from error
+    if not isinstance(rows, list):
+        raise ValueError("Additional LoRAs must be a list of selections.")
+    for row in rows:
+        if not isinstance(row, dict) or not isinstance(row.get("on"), bool):
+            raise ValueError("Each additional LoRA needs an enabled state.")
+        if not row["on"]:
+            continue
+        if row.get("name") not in option["choices"]:
+            raise ValueError("Choose an available additional LoRA.")
+        try:
+            strength = float(row["strength"])
+        except (KeyError, TypeError, ValueError) as error:
+            raise ValueError("Additional LoRA strength must be a number.") from error
+        if not math.isfinite(strength) or not option["min"] <= strength <= option["max"]:
+            raise ValueError(f"Additional LoRA strength must be {option['min']}-{option['max']}.")
+    return rows
+
+
+def _additional_loras(api, info, chosen, options):
+    name = next((option for option in options if option["id"] == LORA_NAME), None)
+    strength = next((option for option in options if option["id"] == LORA_STRENGTH), None)
+    if not name or not strength:
+        return
+    option = {"id": ADDITIONAL_LORAS, "kind": "lora_stack", "label": "Additional LoRAs", "default": "[]",
+              "choices": list(name["choices"]), "labels": dict(name.get("labels") or {}),
+              "min": strength["min"], "max": strength["max"], "step": strength["step"], "advanced": True}
+    options.append(option)
+    try:
+        rows = lora_stack(chosen.get(ADDITIONAL_LORAS, "[]"), option)
+    except ValueError as error:
+        raise sw.Unusable(str(error)) from error
+    loaders = [node for node in api.values() if node["class_type"] == LORA_LOADER]
+    for number, row in enumerate(rows, 1):
+        if not row["on"]:
+            continue
+        if len(loaders) == 1:
+            inputs = loaders[0]["inputs"]
+            slot = max([int(key[5:]) for key in inputs if re.fullmatch(r"lora_\d+", key)] or [0]) + 1
+            inputs[f"lora_{slot}"] = {"on": True, "lora": row["name"], "strength": float(row["strength"]), "strengthTwo": None}
+            continue
+        feeds = _model_feeds(api)
+        if not feeds or "LoraLoaderModelOnly" not in info:
+            raise sw.Unusable("There's no place in this workflow to stack additional LoRAs.")
+        node_id = f"additional_lora_{number}"
+        if node_id in api:
+            raise sw.Unusable("The workflow already uses an additional LoRA node identifier.")
+        api[node_id] = {"class_type": "LoraLoaderModelOnly", "_meta": {"title": f"Additional LoRA {number}"},
+                        "inputs": {"lora_name": row["name"], "strength_model": float(row["strength"]),
+                                   "model": list(api[feeds[0][0]]["inputs"]["model"])}}
+        for target, input_name in feeds:
+            api[target]["inputs"][input_name] = [node_id, 0]
 
 
 def _constant(api, value, depth=0):
@@ -945,8 +1152,14 @@ def convert(ui, info, chosen=None, pipeline="image"):
     # References that grow, such as Fibo 2.0's 16 or MiniMax H3's: a saved workflow wires one or two. Shorts gives one.
     if pipeline != "shorts":
         sw._grow_references(api, info)
+    model = _workflow_model(api)
+    native = _native_loras(ui)
+    _filter_lora_options(options, model, native)
     _after(api, options, chosen, info)
-    options += _style_lora(api, info, chosen, options)
+    added = _style_lora(api, info, chosen, options, model, native)
+    _filter_lora_options(added, model, native)
+    options += added
+    _additional_loras(api, info, chosen, options)
     steps = _steps(api) or _main_targets(api).get("steps")
     if steps:
         node_id, name = steps
@@ -964,6 +1177,7 @@ def convert(ui, info, chosen=None, pipeline="image"):
                 if "seedvr2" in option["id"].lower() and option["id"] != "image_upscale":
                     option["moved"] = "Upscale"
     _drop_idle_loras(api)
+    _validate_loras(api, model, native)
     if pipeline == "image":
         return api, sw.find_image_fields(api, info), sw.image_model(api), options
     return api, sw.find_fields(api, info, needs_audio=pipeline == "shorts"), None, options
@@ -974,7 +1188,8 @@ def offered(ui, info, pipeline="image"):
     The options as the form shows them: each with a problem, if choosing the other way can't run. A way for the
     workflow to write its own prompt also says how many images it takes then: image to prompt needs its picture.
     """
-    _, _, model, options = convert(ui, info, pipeline=pipeline)
+    api, _, model, options = convert(ui, info, pipeline=pipeline)
+    model = _workflow_model(api)
     # A switch such as turbo has its own steps, CFG and sampler: they show the ones that go with it as it's set.
     flips = {}
     for option in options:
@@ -1025,8 +1240,10 @@ def remake(workflow_path, chosen, pipeline=None):
             ui = json.load(f)
         with open(stem + ".info.json", "r", encoding="utf-8") as f:
             info = json.load(f)
-    except OSError:
-        raise RuntimeError("This workflow's options need it listed again: open the panel with ComfyUI on.")
+    except (OSError, ValueError) as error:
+        raise RuntimeError(
+            f"This workflow's options need it listed again: open the panel with ComfyUI on. {error}"
+        ) from error
     try:
         api, fields, _, _ = convert(ui, info, chosen, pipeline or saved.get("_pipeline") or "video")
     except sw.Unusable as e:
@@ -1059,6 +1276,11 @@ def check(options, chosen):
             return f"{option['label']} is one of {', '.join(option['choices'])}."
         if option["kind"] == "text" and (not isinstance(value, str) or len(value) > MOST_TEXT):
             return f"{option['label']} is text of up to {MOST_TEXT} characters."
+        if option["kind"] == "lora_stack":
+            try:
+                lora_stack(value, option)
+            except ValueError as error:
+                return str(error)
         if option["kind"] in ("strength", "number"):
             try:
                 number = float(value)
@@ -1124,19 +1346,29 @@ def _made_with(workflow_path, chosen=None, pipeline=None):
         return {}
     stem = os.path.splitext(workflow_path)[0]
     try:
-        stamp = max(os.path.getmtime(path) for path in (workflow_path, stem + ".ui.json") if os.path.exists(path))
-    except ValueError:
+        stamp = tuple((path, os.stat(path).st_mtime_ns, os.path.getsize(path))
+                      for path in (workflow_path, stem + ".ui.json", stem + ".map.json", stem + ".info.json")
+                      if os.path.exists(path))
+    except OSError as error:
+        logging.getLogger(__name__).warning("Could not read workflow metadata for %s: %s", workflow_path, error)
+        return {}
+    if not stamp:
         return {}
     key = (workflow_path, stamp, json.dumps(chosen or {}, sort_keys=True), pipeline)
     if key not in _loras:
         try:
             api = remake(workflow_path, chosen or {}, pipeline)[0]
-        except RuntimeError:
+        except RuntimeError as error:
+            logging.getLogger(__name__).warning(
+                "Could not reconstruct workflow metadata for %s: %s; reading the saved workflow instead.",
+                workflow_path, error)
             # Listed before options were kept: the workflow as saved.
             try:
                 with open(workflow_path, "r", encoding="utf-8") as f:
                     api = json.load(f)
-            except (OSError, ValueError):
+            except (OSError, ValueError) as error:
+                logging.getLogger(__name__).warning("Could not read saved workflow metadata for %s: %s",
+                                                  workflow_path, error)
                 api = {}
         _loras[key] = api if isinstance(api, dict) else {}
     return _loras[key]

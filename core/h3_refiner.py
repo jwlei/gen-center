@@ -7,13 +7,14 @@ import re
 import socket
 import subprocess
 import tempfile
+import threading
 import time
 
 import ffmpeg
 import requests
 
-from core import director, h3_refiner_worker, prompt_writer_instructions
-from core.paths import PROJECT_ROOT
+from core import comfy_memory, director, h3_refiner_worker, prompt_writer_instructions
+from core.paths import LOGS_DIR, PROJECT_ROOT
 from panel import settings as panel_settings
 
 CREATIVITY = ("restrained", "balanced", "bold", "extreme")
@@ -72,24 +73,41 @@ def local_llm_model():
     return panel_settings.load()["local_llm_model"]
 
 
+def _gguf_path(folder, projector=False):
+    label = "vision projector" if projector else "local model"
+    override = "H3IR_PROJECTOR_FILE" if projector else "H3IR_MODEL_FILE"
+    if os.getenv(override):
+        return os.environ[override]
+    matches = []
+    if os.path.isdir(folder):
+        with os.scandir(folder) as entries:
+            matches = sorted(entry.name for entry in entries
+                             if entry.is_file() and entry.name.lower().endswith(".gguf")
+                             and ("mmproj" in entry.name.lower()) == projector)
+    if len(matches) > 1:
+        raise RuntimeError(f"Multiple {label} GGUF files in {folder}: {', '.join(matches)}. "
+                           f"Keep only one or set {override} to the desired file.")
+    return os.path.join(folder, matches[0] if matches else ("mmproj.gguf" if projector else "model.gguf"))
+
+
 def _paths(model_id, require_compiler=True):
     launcher = os.getenv("COMFYUI_LAUNCHER") or ""
     root = os.getenv("H3IR_COMFY_ROOT") or os.path.join(os.path.dirname(launcher), "ComfyUI")
     python = os.getenv("H3IR_PYTHON") or os.path.join(os.path.dirname(launcher), "python_embeded", "python.exe")
     base = os.path.dirname(os.path.dirname(launcher))
     server = os.getenv("H3IR_LLAMA_SERVER") or os.path.join(base, "1_Misc", "llama.cpp", "b12177-vulkan", "llama-server.exe")
-    folder = {"gemma-4-12b": "gemma-4-12b-heretic", "qwen3-14b": "qwen3-14b-abliterated"}[model_id]
+    folder = panel_settings.model_folder(model_id)
     models = os.path.join(PROJECT_ROOT, "models", folder)
-    model = os.getenv("H3IR_MODEL_FILE") or os.path.join(models, "model.gguf")
-    projector = (os.getenv("H3IR_PROJECTOR_FILE") or os.path.join(models, "mmproj.gguf")) if model_id == "gemma-4-12b" else None
-    needed = [("llama.cpp server", server), ("OpenH3-IR model", model)]
+    model = _gguf_path(models)
+    projector = _gguf_path(models, projector=True) if panel_settings.model_family(model_id) == "gemma-4-12b" else None
+    needed = [("llama.cpp server", server), ("local model", model)]
     if require_compiler:
         needed += [("ComfyUI Python", python), ("OpenH3-IR node pack", os.path.join(root, "custom_nodes", "ComfyUI-OpenH3-IR", "compiler.py"))]
     if projector:
         needed.append(("vision projector", projector))
     for label, path in needed:
         if not os.path.isfile(path):
-            raise RuntimeError(f"OpenH3-IR needs {label}: {path}. See docs/video.md.")
+            raise RuntimeError(f"The local model runner needs {label}: {path}. See docs/video.md.")
     return root, python, server, model, projector
 
 
@@ -126,7 +144,7 @@ def video_prompt_format(text):
 
 
 class Refiner:
-    def __init__(self, comfy_url=None, require_compiler=True, model_id=None):
+    def __init__(self, comfy_url=None, require_compiler=True, model_id=None, gpu_layers=None, verbose=False):
         # OpenH3-IR's model unless told which: writing prompts asks for the local LLM's.
         self.model_id = model_id or selected_model()
         self.root, self.python, server, model, projector = _paths(self.model_id, require_compiler)
@@ -134,22 +152,50 @@ class Refiner:
         self.server = server
         self.model = model
         self.projector = projector
+        benchmark = (panel_settings.benchmark_for_model(panel_settings.local_model_benchmarks(), self.model_id,
+                                                        model, server) if gpu_layers is None else None)
+        self.gpu_layers = gpu_layers if gpu_layers is not None else benchmark["gpu_layers"] if benchmark else "all"
+        self.verbose = verbose
         self.comfy_url = comfy_url
+        self.tokens = None
+
+    def _release_comfy_models(self):
+        self.comfy_memory = None
+        wait = int(os.getenv("COMFYUI_STARTUP_WAIT") or 0)
+        deadline = time.monotonic() + wait
+        try:
+            while True:
+                try:
+                    queue = requests.get(f"{self.comfy_url}/queue", timeout=10)
+                    break
+                except (requests.ConnectionError, requests.Timeout) as error:
+                    cause = error
+                    while cause is not None:
+                        if not wait and isinstance(cause, ConnectionRefusedError):
+                            print("ComfyUI is not listening; starting the local model without unloading it.", flush=True)
+                            return
+                        cause = cause.__cause__ or cause.__context__
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        raise
+                    time.sleep(min(5, remaining))
+            queue.raise_for_status()
+            state = queue.json()
+            if not isinstance(state, dict) or not all(isinstance(state.get(key), list) for key in ("queue_running", "queue_pending")):
+                raise RuntimeError("ComfyUI returned an invalid queue status; cannot safely release its models.")
+            if state.get("queue_running") or state.get("queue_pending"):
+                raise RuntimeError("ComfyUI has work running or queued; wait for it before using the local model.")
+            print("Waiting for ComfyUI to finish clearing its models and caches...", flush=True)
+            self.comfy_memory = comfy_memory.release(self.comfy_url)
+            for device in self.comfy_memory:
+                if device["type"] == "cuda":
+                    print(f"ComfyUI cleanup confirmed: {device['vram_free'] / 2**30:.2f} GiB VRAM available.", flush=True)
+        except (requests.RequestException, ValueError) as e:
+            raise RuntimeError(f"Could not release ComfyUI models before starting the local model: {e}") from e
 
     def __enter__(self):
         if self.comfy_url:
-            try:
-                queue = requests.get(f"{self.comfy_url}/queue", timeout=10)
-                queue.raise_for_status()
-                state = queue.json()
-                if not isinstance(state, dict) or not all(isinstance(state.get(key), list) for key in ("queue_running", "queue_pending")):
-                    raise RuntimeError("ComfyUI returned an invalid queue status; cannot safely release its models.")
-                if state.get("queue_running") or state.get("queue_pending"):
-                    raise RuntimeError("ComfyUI has work running or queued; wait for it before using OpenH3-IR.")
-                reply = requests.post(f"{self.comfy_url}/free", json={"unload_models": True, "free_memory": True}, timeout=30)
-                reply.raise_for_status()
-            except (requests.RequestException, ValueError) as e:
-                raise RuntimeError(f"Could not release ComfyUI models before OpenH3-IR: {e}") from e
+            self._release_comfy_models()
         with socket.socket() as sock:
             sock.bind(("127.0.0.1", 0))
             port = sock.getsockname()[1]
@@ -159,34 +205,54 @@ class Refiner:
             args += ["--mmproj", self.projector]
         args += ["--host", "127.0.0.1",
                 "--port", str(port), "--ctx-size", "16384", "--parallel", "1", "--threads", "8",
-                "--gpu-layers", os.getenv("H3IR_GPU_LAYERS") or "16", "--alias", "h3-refiner"]
-        if self.model_id == "qwen3-14b":
+                "--gpu-layers", str(self.gpu_layers), "--alias", "h3-refiner"]
+        if self.gpu_layers == 0:
+            args += ["--device", "none", "--no-mmproj-offload"]
+        if self.verbose:
+            args += ["-lv", "4"]
+        if panel_settings.model_family(self.model_id) == "qwen3-14b":
             args += ["--reasoning-format", "deepseek"]
-        self.log = tempfile.TemporaryFile(mode="w+t", encoding="utf-8")
+        os.makedirs(LOGS_DIR, exist_ok=True)
+        self.log = tempfile.NamedTemporaryFile(mode="w+t", encoding="utf-8", prefix="local-llm-",
+                                               suffix=".log", dir=LOGS_DIR, delete=False)
         try:
             self.process = subprocess.Popen(args, stdout=self.log, stderr=self.log,
                                             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
             print("🧠 Starting the local OpenH3-IR model...", flush=True)
+            print(f"Local LLM diagnostics: {self.log.name}", flush=True)
+            self._token_stop = threading.Event()
+            self._token_previous = None
+            self._token_event("start", arguments=args, model_mtime=os.path.getmtime(self.model),
+                              server_mtime=os.path.getmtime(self.server),
+                              comfy_memory=getattr(self, "comfy_memory", None))
             deadline = time.monotonic() + 180
             while time.monotonic() < deadline:
                 if self.process.poll() is not None:
                     self.log.seek(0)
-                    raise RuntimeError(f"OpenH3-IR model server stopped: {self.log.read()[-3000:]}")
+                    raise RuntimeError(f"Local model server stopped: {self.log.read()[-3000:]}")
                 try:
                     response = requests.get(f"http://127.0.0.1:{port}/v1/models", timeout=2)
                     if response.ok and any(m.get("id") == "h3-refiner" for m in response.json().get("data", [])):
                         # The panel times the start up to here (core/eta_keys.py LocalModelTimer).
                         print("🧠 Local model ready.", flush=True)
+                        self._token_thread = threading.Thread(target=self._monitor_tokens, daemon=True)
+                        self._token_thread.start()
                         return self
                 except (requests.RequestException, ValueError):
                     pass
                 time.sleep(1)
-            raise RuntimeError("OpenH3-IR model server did not start within 180 seconds.")
+            raise RuntimeError("Local model server did not start within 180 seconds.")
         except BaseException:
             self.__exit__(None, None, None)
             raise
 
     def __exit__(self, *_):
+        if hasattr(self, "_token_stop"):
+            self._token_stop.set()
+        if hasattr(self, "_token_thread"):
+            self._token_thread.join()
+            print("Local LLM: idle", flush=True)
+        self.tokens = None
         if self.process and self.process.poll() is None:
             self.process.terminate()
             try:
@@ -197,23 +263,96 @@ class Refiner:
         if hasattr(self, "log"):
             self.log.close()
 
+    def _token_event(self, event, **values):
+        with open(os.path.join(LOGS_DIR, "local_llm_tokens.jsonl"), "a", encoding="utf-8") as target:
+            target.write(json.dumps({"at": time.time(), "pid": self.process.pid, "model": self.model_id,
+                                     "event": event, **values}) + "\n")
+
+    def _sample_tokens(self, slots, now):
+        active = next((slot for slot in slots if slot.get("is_processing")), None)
+        if active is None:
+            self.tokens = None
+            if self._token_previous is not None:
+                print("Local LLM: idle", flush=True)
+                self._token_previous = None
+            return
+        next_token = active.get("next_token") or [{}]
+        decoded = next_token[0].get("n_decoded", 0)
+        task = active["id_task"]
+        previous = self._token_previous
+        if previous is None or previous[0] != task or decoded < previous[1]:
+            previous = (task, 0, now)
+        elapsed = now - previous[2]
+        rate = (decoded - previous[1]) / elapsed if elapsed > 0 else 0
+        self._token_previous = (task, decoded, now)
+        self.tokens = {"per_second": round(rate, 1), "total": decoded}
+        print(f"Local LLM: {rate:.1f} tok/s | {decoded} total tok", flush=True)
+        params = active.get("params") or {}
+        self._token_event("tokens", task=task, generated=decoded, tokens_per_second=round(rate, 2),
+                          input_tokens=active.get("n_prompt_tokens_processed"),
+                          remaining=next_token[0].get("n_remain"),
+                          chat_format=params.get("chat_format"), generation_prompt=params.get("generation_prompt"))
+
+    def _monitor_tokens(self):
+        unavailable = False
+        while not self._token_stop.is_set():
+            try:
+                response = requests.get(f"{self.url.removesuffix('/v1')}/slots", timeout=2)
+                response.raise_for_status()
+                self._sample_tokens(response.json(), time.monotonic())
+                unavailable = False
+            except (requests.RequestException, ValueError, KeyError, IndexError, TypeError) as e:
+                self.tokens = None
+                if not unavailable:
+                    print(f"Local LLM: telemetry unavailable ({e})", flush=True)
+                    unavailable = True
+            except OSError as e:
+                self.tokens = None
+                print(f"Local LLM: telemetry unavailable (could not save diagnostics: {e})", flush=True)
+                return
+            if self._token_stop.wait(5):
+                break
+
+    def _completion_tokens(self, body):
+        self.tokens = None
+        usage = body.get("usage") or {}
+        if not hasattr(self, "_token_stop"):
+            return
+        self._token_event("completion", usage=usage, timings=body.get("timings"),
+                          finish_reason=body["choices"][0].get("finish_reason"),
+                          output_chars=len(body["choices"][0]["message"].get("content") or ""),
+                          reasoning_chars=len(body["choices"][0]["message"].get("reasoning_content") or ""))
+        count = usage.get("completion_tokens")
+        timings = body.get("timings") or {}
+        rate = timings.get("predicted_per_second")
+        if count is not None:
+            speed = f"{rate:.1f} tok/s | " if isinstance(rate, (int, float)) else ""
+            print(f"Local LLM complete: {speed}{count} total tok", flush=True)
+
     def write_prompt(self, text, pipeline):
         instruction = prompt_writer_instructions.INSTRUCTIONS[pipeline]
         try:
+            if hasattr(self, "_token_stop"):
+                self._token_event("request", kind="write_prompt", pipeline=pipeline,
+                                  input_sha256=hashlib.sha256((instruction + text).encode()).hexdigest(),
+                                  max_tokens=4096 if panel_settings.model_family(self.model_id) == "qwen3-14b" else 2048,
+                                  enable_thinking=panel_settings.model_family(self.model_id) == "qwen3-14b", temperature=0.7)
             response = requests.post(f"{self.url}/chat/completions", json={
                 "model": "h3-refiner", "messages": [{"role": "system", "content": instruction},
                                                       {"role": "user", "content": text}],
-                "max_tokens": 4096 if self.model_id == "qwen3-14b" else 2048, "temperature": 0.7,
-                "chat_template_kwargs": {"enable_thinking": self.model_id == "qwen3-14b"},
+                "max_tokens": 4096 if panel_settings.model_family(self.model_id) == "qwen3-14b" else 2048, "temperature": 0.7,
+                "chat_template_kwargs": {"enable_thinking": panel_settings.model_family(self.model_id) == "qwen3-14b"},
             }, timeout=900)
             response.raise_for_status()
-            choice = response.json()["choices"][0]
+            body = response.json()
+            self._completion_tokens(body)
+            choice = body["choices"][0]
             result = choice["message"]["content"]
             if choice.get("finish_reason") == "length":
                 raise RuntimeError("The generated prompt was cut off; try a shorter input.")
             if not isinstance(result, str) or not result.strip():
                 raise RuntimeError("The model returned an empty prompt.")
-            if self.model_id == "qwen3-14b":
+            if panel_settings.model_family(self.model_id) == "qwen3-14b":
                 _, result = h3_refiner_worker.split_qwen_reasoning(result)
             if "<think>" in result or "</think>" in result:
                 raise RuntimeError("The model returned its reasoning instead of a clean prompt. Try again.")
@@ -224,12 +363,17 @@ class Refiner:
             raise RuntimeError(f"Could not write the prompt: {e}") from e
 
     def plan(self, prompt, schema, images=()):
-        if self.model_id == "qwen3-14b" and images:
+        if panel_settings.model_family(self.model_id) == "qwen3-14b" and images:
             raise RuntimeError("Qwen3 14B is text-only and cannot analyze attached images. Choose Gemma 4 in Settings.")
         content = [{"type": "image_url", "image_url": {"url": "data:image/jpeg;base64," +
                     base64.b64encode(image).decode("ascii")}} for image in images]
         content.append({"type": "text", "text": prompt})
         try:
+            if hasattr(self, "_token_stop"):
+                self._token_event("request", kind="plan", image_count=len(images),
+                                  input_sha256=hashlib.sha256(prompt.encode()).hexdigest(),
+                                  schema_sha256=hashlib.sha256(json.dumps(schema, sort_keys=True).encode()).hexdigest(),
+                                  max_tokens=8192, enable_thinking=False, temperature=0.7)
             response = requests.post(f"{self.url}/chat/completions", json={
                 "model": "h3-refiner", "messages": [{"role": "user", "content": content}],
                 "response_format": {"type": "json_schema", "json_schema": {
@@ -238,13 +382,15 @@ class Refiner:
                 "chat_template_kwargs": {"enable_thinking": False},
             }, timeout=TIMEOUT)
             response.raise_for_status()
-            choice = response.json()["choices"][0]
+            body = response.json()
+            self._completion_tokens(body)
+            choice = body["choices"][0]
             if choice.get("finish_reason") == "length":
                 raise RuntimeError("The local model's plan was cut off. Try fewer images or a shorter video.")
             result = choice["message"]["content"]
             if not isinstance(result, str) or not result.strip():
                 raise RuntimeError("The local model returned an empty plan.")
-            if self.model_id == "qwen3-14b":
+            if panel_settings.model_family(self.model_id) == "qwen3-14b":
                 _, result = h3_refiner_worker.split_qwen_reasoning(result)
             return result.strip()
         except (requests.RequestException, ValueError, KeyError, IndexError, TypeError) as e:
@@ -253,7 +399,7 @@ class Refiner:
     def compile(self, prompt, seconds, width, height, creativity, images=(), image_roles=(), videos=(), audios=(), seed=7,
                 first_frame=False):
         _, creativity = settings("render", creativity)
-        if self.model_id == "qwen3-14b" and (images or videos):
+        if panel_settings.model_family(self.model_id) == "qwen3-14b" and (images or videos):
             raise RuntimeError("Qwen3 14B is text-only and cannot analyze image or video references. Choose Gemma 4 in Settings.")
         ratio = width / height
         aspect = min(ASPECTS, key=lambda a: abs(ASPECTS[a] - ratio))
@@ -284,15 +430,19 @@ class Refiner:
             hashes = [digest(asset["path"]) for asset in assets]
             if len(set(hashes)) != len(hashes):
                 raise RuntimeError("OpenH3-IR cannot safely distinguish identical reference files; use distinct files.")
-            brief = {"intent": prompt, "seconds": seconds, "aspect": aspect, "creativity": creativity,
+            # The compiler owns shot headers; incoming prompt markers are prose references, not nested headers.
+            intent = re.sub(r"\[Shot\s+(\d+)\]", r"Shot \1", prompt)
+            if intent != prompt:
+                print("OpenH3-IR: existing shot markers are passed as prose references.", flush=True)
+            brief = {"intent": intent, "seconds": seconds, "aspect": aspect, "creativity": creativity,
                      "effort": "fast", "seed": int(seed if seed is not None else 7) % (2 ** 32),
                      "silent": False, "shots": "auto", "assets": assets, "transcripts": {}}
             request = {"comfy_root": self.root, "brief": brief, "url": self.url, "model": "h3-refiner",
-                       "model_id": self.model_id, "timeout": TIMEOUT}
+                       "model_id": panel_settings.model_family(self.model_id), "timeout": TIMEOUT}
             worker = os.path.join(PROJECT_ROOT, "core", "h3_refiner_worker.py")
             print(f"🧠 OpenH3-IR: writing a brief ({creativity})...", flush=True)
             env = {**os.environ, "PYTHONIOENCODING": "utf-8"}
-            if self.model_id == "gemma-4-12b":
+            if panel_settings.model_family(self.model_id) == "gemma-4-12b":
                 env.setdefault("H3IR_GUIDED_DECODING", "1")
             try:
                 result = subprocess.run([self.python, worker], input=json.dumps(request), encoding="utf-8",
@@ -330,7 +480,7 @@ class Refiner:
                 raise RuntimeError("OpenH3-IR returned a brief whose reference bindings do not match the render.")
             if body.get("degraded"):
                 print(f"⚠️ OpenH3-IR used its fallback: {body.get('fallback_reason')}", flush=True)
-            if self.model_id == "qwen3-14b" and expected_mode == "t2va":
+            if panel_settings.model_family(self.model_id) == "qwen3-14b" and expected_mode == "t2va":
                 start = prompt_out.find("integrated_multimodal_description:")
                 if start > 0:
                     print("⚠️ Removed unexpected text before the OpenH3-IR prompt sections.", flush=True)

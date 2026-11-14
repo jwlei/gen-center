@@ -1,6 +1,7 @@
 import copy
 import io
 import json
+import math
 import os
 import time
 
@@ -14,8 +15,10 @@ from core.saved_workflows import MOST_REFERENCES_FIELD, frames_for, image_slots,
 
 DEFAULT_COMFYUI_URL = "http://127.0.0.1:8188"
 DEFAULT_WORKFLOW = os.path.join(WORKFLOWS_DIR, "video_workflow.json")
-# Counts time spent waiting in ComfyUI's queue too, which other work may be ahead in.
+# Maximum time for one clip to render after ComfyUI starts it.
 DEFAULT_TIMEOUT = 7200
+# How long a queued prompt may wait before ComfyUI reports it running.
+DEFAULT_QUEUE_TIMEOUT = 3600
 VIDEO_EXTENSIONS = (".mp4", ".webm", ".mov", ".mkv", ".gif")
 POLL_INTERVAL = 5
 # ComfyUI can stop answering for minutes while it works, with no harm to the render: loading SeedVR2's 7B model to
@@ -25,6 +28,16 @@ MOST_SILENCE = 1800
 POLL_TIMEOUT = (10, 60)
 # Queueing is answered as soon as ComfyUI has a moment, and one sent again could make the image twice.
 QUEUE_TIMEOUT = (10, 180)
+
+
+def _timeout_setting(name, default):
+    try:
+        seconds = float(os.getenv(name) or default)
+    except (OverflowError, TypeError, ValueError):
+        seconds = 0
+    if not math.isfinite(seconds) or seconds <= 0:
+        raise ValueError(f"{name} must be a finite positive number of seconds.")
+    return seconds
 
 
 class ComfyClient:
@@ -43,7 +56,8 @@ class ComfyClient:
     def __init__(self, options=None, workflow_path=None):
         self.url = (os.getenv("COMFYUI_URL") or DEFAULT_COMFYUI_URL).rstrip("/")
         self.workflow_path = workflow_path or os.getenv("COMFYUI_WORKFLOW") or DEFAULT_WORKFLOW
-        self.timeout = int(os.getenv("COMFYUI_TIMEOUT") or DEFAULT_TIMEOUT)
+        self.timeout = _timeout_setting("COMFYUI_TIMEOUT", DEFAULT_TIMEOUT)
+        self.queue_timeout = _timeout_setting("COMFYUI_QUEUE_TIMEOUT", DEFAULT_QUEUE_TIMEOUT)
         # Fixed, so the panel can listen on ComfyUI's websocket for this run's progress
         # (ComfyUI only sends progress to the client that queued the job), and so
         # cancelling never touches anyone else's renders.
@@ -60,6 +74,10 @@ class ComfyClient:
         """What a run can change in this workflow, as the panel listed it."""
         with open(os.path.splitext(self.workflow_path)[0] + ".map.json", "r", encoding="utf-8") as f:
             return json.load(f).get("_options") or []
+
+    def set_options(self, chosen):
+        workflow, fields = workflow_options.remake(self.workflow_path, chosen)
+        self.workflow, self.fields, self.chosen = workflow, fields, dict(chosen)
 
     def _load_workflow(self):
         map_path = os.path.splitext(self.workflow_path)[0] + ".map.json"
@@ -243,12 +261,13 @@ class ComfyClient:
             if "save_output" in node.get("inputs", {}):
                 node["inputs"]["save_output"] = False
 
+        submitted_at = time.monotonic()
         response = requests.post(f"{self.url}/prompt", json={"prompt": workflow, "client_id": self.client_id}, timeout=QUEUE_TIMEOUT)
         if response.status_code != 200:
             raise RuntimeError(f"ComfyUI rejected the workflow: {response.text[:800]}")
 
         try:
-            entry = self._wait_for(response.json()["prompt_id"])
+            entry = self._wait_for(response.json()["prompt_id"], submitted_at)
         except KeyboardInterrupt:
             print("   🛑 Cancelling this clip in ComfyUI...")
             self.cancel()
@@ -281,26 +300,71 @@ class ComfyClient:
         comfy_files.forget_output(params["filename"], params["subfolder"], params["type"])
         return save_path
 
-    def _wait_for(self, prompt_id):
+    def _wait_for(self, prompt_id, queued_at=None):
         """Polls until the prompt finishes. Returns its history entry, or raises on error or timeout."""
-        answered = time.time()
-        # The limit counts from when ComfyUI starts this prompt, not from when it was queued behind others.
+        queue_timeout = getattr(self, "queue_timeout", None)
+        if queue_timeout is None:
+            queue_timeout = _timeout_setting("COMFYUI_QUEUE_TIMEOUT", DEFAULT_QUEUE_TIMEOUT)
+        queued_at = time.monotonic() if queued_at is None else queued_at
+        queue_deadline = queued_at + queue_timeout
+        overall_deadline = queue_deadline + self.timeout
+        answered = queued_at
         started = None
         quiet = False
-        while started is None or time.time() - started < self.timeout:
+        while True:
+            now = time.monotonic()
+            if started is None and now >= queue_deadline:
+                self.cancel(prompt_id)
+                raise RuntimeError(f"Timed out after {queue_timeout:g}s waiting for ComfyUI to start "
+                                   "this clip (queue wait).")
+            if started is not None and now >= started + self.timeout:
+                self.cancel(prompt_id)
+                raise RuntimeError(f"Timed out after {self.timeout:g}s rendering this ComfyUI clip.")
+            if now >= overall_deadline:
+                self.cancel(prompt_id)
+                raise RuntimeError(f"Timed out after {queue_timeout + self.timeout:g}s overall "
+                                   "waiting for this ComfyUI clip.")
+            deadline = min(overall_deadline, started + self.timeout) if started is not None else queue_deadline
+            remaining = deadline - now
+            request_timeout = (min(POLL_TIMEOUT[0], remaining / 2), min(POLL_TIMEOUT[1], remaining / 2))
             # Busy is not broken: before, one reply slower than 30s gave the image up while ComfyUI went on making it,
             # and the try after it waited behind, so neither was saved.
             try:
-                entry = requests.get(f"{self.url}/history/{prompt_id}", timeout=POLL_TIMEOUT).json().get(prompt_id)
+                entry = requests.get(f"{self.url}/history/{prompt_id}", timeout=request_timeout).json().get(prompt_id)
             except (requests.Timeout, requests.ConnectionError) as e:
-                if time.time() - answered > MOST_SILENCE:
+                now = time.monotonic()
+                if started is None and now >= queue_deadline:
+                    self.cancel(prompt_id)
+                    raise RuntimeError(f"Timed out after {queue_timeout:g}s waiting for ComfyUI to start "
+                                       "this clip (queue wait).") from e
+                if started is not None and now >= started + self.timeout:
+                    self.cancel(prompt_id)
+                    raise RuntimeError(f"Timed out after {self.timeout:g}s rendering this ComfyUI clip.") from e
+                if now >= overall_deadline:
+                    self.cancel(prompt_id)
+                    raise RuntimeError(f"Timed out after {queue_timeout + self.timeout:g}s overall "
+                                       "waiting for this ComfyUI clip.") from e
+                if now - answered > MOST_SILENCE:
+                    self.cancel(prompt_id)
                     raise RuntimeError(f"ComfyUI has not answered for {MOST_SILENCE // 60} minutes ({e}).") from e
                 if not quiet:
                     print("      ⏳ ComfyUI is too busy to answer right now: still waiting for it.")
                     quiet = True
-                time.sleep(POLL_INTERVAL)
+                time.sleep(min(POLL_INTERVAL, max(0, deadline - now)))
                 continue
-            answered, quiet = time.time(), False
+            now = time.monotonic()
+            if started is None and now >= queue_deadline:
+                self.cancel(prompt_id)
+                raise RuntimeError(f"Timed out after {queue_timeout:g}s waiting for ComfyUI to start "
+                                   "this clip (queue wait).")
+            if started is not None and now >= started + self.timeout:
+                self.cancel(prompt_id)
+                raise RuntimeError(f"Timed out after {self.timeout:g}s rendering this ComfyUI clip.")
+            if now >= overall_deadline:
+                self.cancel(prompt_id)
+                raise RuntimeError(f"Timed out after {queue_timeout + self.timeout:g}s overall "
+                                   "waiting for this ComfyUI clip.")
+            answered, quiet = now, False
             if entry:
                 status = entry.get("status", {})
                 if status.get("status_str") == "error":
@@ -309,30 +373,38 @@ class ComfyClient:
                     raise RuntimeError("; ".join(details) or "ComfyUI stopped this clip.")
                 if status.get("completed", True):
                     return entry
-            elif started is None and self._is_running(prompt_id):
-                started = time.time()
-            time.sleep(POLL_INTERVAL)
+            if started is None and self._is_running(prompt_id, request_timeout):
+                now = time.monotonic()
+                if now >= queue_deadline:
+                    self.cancel(prompt_id)
+                    raise RuntimeError(f"Timed out after {queue_timeout:g}s waiting for ComfyUI to start "
+                                       "this clip (queue wait).")
+                if now >= overall_deadline:
+                    self.cancel(prompt_id)
+                    raise RuntimeError(f"Timed out after {queue_timeout + self.timeout:g}s overall "
+                                       "waiting for this ComfyUI clip.")
+                started = now
+            time.sleep(min(POLL_INTERVAL, max(0, deadline - now)))
 
-        self.cancel()
-        raise RuntimeError(f"Timed out after {self.timeout}s.")
-
-    def _is_running(self, prompt_id):
+    def _is_running(self, prompt_id, timeout=POLL_TIMEOUT):
         try:
-            running = requests.get(f"{self.url}/queue", timeout=POLL_TIMEOUT).json().get("queue_running", [])
+            running = requests.get(f"{self.url}/queue", timeout=timeout).json().get("queue_running", [])
         except (requests.RequestException, ValueError):
             return False
         return any(len(item) > 1 and item[1] == prompt_id for item in running)
 
-    def cancel(self):
-        """Cancels this run's clips, rendering or waiting. A render you started in ComfyUI yourself carries on."""
+    def cancel(self, prompt_id=None):
+        """Cancels this client's clips, or only prompt_id when specified; others carry on."""
         try:
             queue = requests.get(f"{self.url}/queue", timeout=5).json()
-            waiting = [entry[1] for entry in queue.get("queue_pending", []) if entry[3].get("client_id") == self.client_id]
+            waiting = [entry[1] for entry in queue.get("queue_pending", [])
+                       if entry[3].get("client_id") == self.client_id and
+                       (prompt_id is None or entry[1] == prompt_id)]
             # Waiting ones first, or the next clip starts as soon as this one stops.
             if waiting:
                 requests.post(f"{self.url}/queue", json={"delete": waiting}, timeout=5)
             for entry in queue.get("queue_running", []):
-                if entry[3].get("client_id") == self.client_id:
+                if entry[3].get("client_id") == self.client_id and (prompt_id is None or entry[1] == prompt_id):
                     requests.post(f"{self.url}/interrupt", json={"prompt_id": entry[1]}, timeout=5)
         except requests.ConnectionError:
             pass  # ComfyUI isn't running, so it has nothing to cancel

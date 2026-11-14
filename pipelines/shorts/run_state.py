@@ -1,11 +1,11 @@
-import json
 import os
 import re
 import shutil
-import time
-from dataclasses import asdict, dataclass, field
+from dataclasses import dataclass, field
 from datetime import datetime
 
+from core import run_checkpoint
+from core.paths import WORKFLOWS_DIR
 from pipelines.shorts.paths import RUNS_DIR
 
 # Same order as main.py's STAGES, which can't be imported here: it pulls in the whole pipeline.
@@ -14,7 +14,6 @@ STAGES = ("Topic & script", "Voice", "Stock footage", "Avatar clips", "Rendering
 RUN_ENV = ("AVATAR_SOURCE", "AVATAR_SIZE", "COMFYUI_WORKFLOW", "COMFYUI_OPTIONS", "AVATAR_CLIPS_MIN", "AVATAR_CLIPS_MAX",
            "AVATAR_MIN_SECONDS", "AVATAR_MAX_SECONDS", "H3IR_ENHANCE", "H3IR_CREATIVITY")
 RUN_ID = re.compile(r"run_\d{8}_\d{6}_\d+")
-SAVE_ATTEMPTS = 5
 # What changes the clips, and of those, what also changes which scenes she appears in.
 RENDER_ENV = ("AVATAR_SOURCE", "COMFYUI_WORKFLOW", "AVATAR_MIN_SECONDS", "AVATAR_MAX_SECONDS", "H3IR_ENHANCE", "H3IR_CREATIVITY")
 SCENE_ENV = ("AVATAR_CLIPS_MIN", "AVATAR_CLIPS_MAX", "AVATAR_MIN_SECONDS", "AVATAR_MAX_SECONDS")
@@ -51,6 +50,7 @@ class RunState:
     avatar_prompts: dict = field(default_factory=dict)  # Written per clip, and paid for: a clip rendered again keeps its own
     avatar_done: bool = False
     final: str = None
+    provenance: dict = None
 
     @classmethod
     def new(cls, argv, number, videos_after):
@@ -63,14 +63,20 @@ class RunState:
         """The saved run, with anything whose files have gone marked as still to do. None if there isn't one."""
         if not RUN_ID.fullmatch(str(run_id)):
             return None
+        path = os.path.join(RUNS_DIR, run_id, "state.json")
+        saved = run_checkpoint.load(path, run_id)
+        if saved is None:
+            return None
+        run_checkpoint.validate(saved, path, {"argv": list, "env": dict, "number": int, "videos_after": int,
+                                             "script": list, "avatar_clips": dict, "avatar_prompts": dict,
+                                             "provenance": dict})
         try:
-            with open(os.path.join(RUNS_DIR, run_id, "state.json"), "r", encoding="utf-8") as f:
-                state = cls(**json.load(f))
+            state = cls(**{name: value for name, value in saved.items() if name in cls.__dataclass_fields__})
             state.avatar_clips = {int(index): path for index, path in state.avatar_clips.items()}
             state.avatar_prompts = {int(index): prompt for index, prompt in state.avatar_prompts.items()}
             state._forget_missing()
-        except (OSError, ValueError, TypeError, AttributeError):
-            return None  # Nothing saved, or a broken file: nothing to continue
+        except (ValueError, TypeError, AttributeError, KeyError) as error:
+            raise run_checkpoint.invalid(path, error) from error
         return state
 
     # --- Where its files go ---
@@ -127,25 +133,19 @@ class RunState:
         self.save()
 
     def save(self):
-        """Never stops the render it is saving: a failed save only costs the chance to continue from here."""
+        """Save progress or raise an actionable checkpoint error."""
         # Before a topic exists, only a later video of a batch has anything to continue: the videos left.
         if not self.topic and not self.script and self.number == 1:
             return
-        temp = self.path + ".tmp"
-        try:
-            os.makedirs(self.folder, exist_ok=True)
-            with open(temp, "w", encoding="utf-8") as f:
-                json.dump(asdict(self), f, ensure_ascii=False, indent=1)
-            for attempt in range(SAVE_ATTEMPTS):
-                try:
-                    os.replace(temp, self.path)
-                    return
-                except PermissionError:  # The panel has it open for a moment
-                    if attempt == SAVE_ATTEMPTS - 1:
-                        raise
-                    time.sleep(0.2)
-        except (OSError, TypeError, ValueError) as e:
-            print(f"   ⚠️ Could not save this run's progress: {e}")
+        workflow = self.env.get("COMFYUI_WORKFLOW") or os.path.join(WORKFLOWS_DIR, "avatar_lipsync.json")
+        run_checkpoint.save(self, workflow, {"argv": self.argv, "env": self.env,
+                                             "tts_provider": os.getenv("TTS_PROVIDER") or "gemini",
+                                             "script_provider": "gemini"})
+
+    def save_manifest(self):
+        """Retain provenance after a finished run's working directory is removed."""
+        path = os.path.join(RUNS_DIR, "manifests", self.id + ".json")
+        run_checkpoint.write(path, {"schema_version": 1, "id": self.id, "provenance": self.provenance})
 
     def release_batch(self):
         """The batch moved on without this video, so continuing it must not make the rest again."""
@@ -205,13 +205,8 @@ class RunState:
 
 
 def list_runs():
-    """Every run that can be continued, newest first."""
-    try:
-        names = os.listdir(RUNS_DIR)
-    except OSError:
-        return []
-    runs = (RunState.load(name) for name in sorted(names, reverse=True))
-    return [run for run in runs if run]
+    """Usable runs, newest first; excluded checkpoints are logged and reported separately."""
+    return run_checkpoint.catalogue(RUNS_DIR, RunState.load)
 
 
 def folder_size(path):

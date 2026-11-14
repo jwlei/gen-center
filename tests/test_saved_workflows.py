@@ -288,7 +288,7 @@ class OptionsTest(unittest.TestCase):
 
     def test_each_switch_and_setting_is_an_option(self):
         options = self.options()
-        self.assertEqual(sorted(options), ["group_color_correction", "group_sharpen", "group_upscaler", "group_upscaler.choice",
+        self.assertEqual(sorted(options), ["additional_loras", "group_color_correction", "group_sharpen", "group_upscaler", "group_upscaler.choice",
                                            "lora", "lora_name", "lora_strength", "prompt_boost", "prompt_enhancer", "steps"])
         self.assertEqual(options["prompt_enhancer"]["role"], "llm", "chosen with the LLM, not as a switch")
         self.assertNotIn("group_prompt_enhancer", options, "the pipeline writes the prompt: its own enhancer stays off")
@@ -406,22 +406,25 @@ class SamplingOptionsTest(unittest.TestCase):
 
     def test_the_lora_setting_goes_in_an_empty_power_lora_loader(self):
         api = self.ltx()
-        added = workflow_options._style_lora(api, self.INFO, {"lora": "1", "lora_name": "b.safetensors", "lora_strength": "0.7"}, [])
+        info = {**self.INFO, "LoraLoader": {"input": {"required": {"lora_name": [["ltx_a.safetensors", "ltx_b.safetensors"]]}}}}
+        added = workflow_options._style_lora(
+            api, info, {"lora": "1", "lora_name": "ltx_b.safetensors", "lora_strength": "0.7"}, [], "ltx_model.safetensors")
         self.assertEqual([option["id"] for option in added], ["lora", "lora_name", "lora_strength"])
-        self.assertEqual(api["11"]["inputs"]["lora_1"], {"on": True, "lora": "b.safetensors", "strength": 0.7, "strengthTwo": None})
+        self.assertEqual(api["11"]["inputs"]["lora_1"], {"on": True, "lora": "ltx_b.safetensors", "strength": 0.7, "strengthTwo": None})
 
     def test_with_nowhere_for_a_lora_one_is_put_in_before_what_samples(self):
         # So a LoRA dropped in ComfyUI's loras folder works on any workflow, with no change to it.
-        info = {**self.INFO, "LoraLoaderModelOnly": {"input": {"required": {"model": ["MODEL"], "lora_name": [["a.safetensors", "b.safetensors",
-                                                                                                                  "x_turbo_4step.safetensors"]]}}}}
+        info = {**self.INFO, "LoraLoaderModelOnly": {"input": {"required": {"model": ["MODEL"], "lora_name": [["ltx_a.safetensors", "ltx_b.safetensors",
+                                                                                                                  "ltx_turbo_4step.safetensors"]]}}}}
         api = {"1": {"class_type": "UNETLoader", "inputs": {"unet_name": "m"}, "_meta": {"title": "m"}},
                "2": {"class_type": "KSampler", "inputs": {"model": ["1", 0], "positive": ["3", 0]}, "_meta": {"title": "s"}}}
-        added = workflow_options._style_lora(api, info, {}, [])
-        self.assertEqual(added[1]["choices"], ["a.safetensors", "b.safetensors"], "speed LoRAs have switches of their own")
+        added = workflow_options._style_lora(api, info, {}, [], "ltx_model.safetensors")
+        self.assertEqual(added[1]["choices"], ["ltx_a.safetensors", "ltx_b.safetensors"], "speed LoRAs have switches of their own")
         self.assertEqual(api["2"]["inputs"]["model"], ["1", 0], "off, nothing changes")
-        workflow_options._style_lora(api, info, {"lora": "1", "lora_name": "b.safetensors", "lora_strength": "0.6"}, [])
+        workflow_options._style_lora(api, info, {"lora": "1", "lora_name": "ltx_b.safetensors", "lora_strength": "0.6"}, [],
+                                     "ltx_model.safetensors")
         self.assertEqual(api["2"]["inputs"]["model"], ["style_lora", 0])
-        self.assertEqual(api["style_lora"]["inputs"], {"lora_name": "b.safetensors", "strength_model": 0.6, "model": ["1", 0]})
+        self.assertEqual(api["style_lora"]["inputs"], {"lora_name": "ltx_b.safetensors", "strength_model": 0.6, "model": ["1", 0]})
 
     def test_what_earlier_runs_chose_for_a_lora_is_the_lora_setting(self):
         options = workflow_options.lora_options("0", "KNPV3_1.safetensors", 1, ["KNPV3_1.safetensors"])
@@ -531,9 +534,13 @@ class TurboTest(unittest.TestCase):
     def turbo_picker(self):
         """turbo_workflow() whose LoRA is a turbo one, with two of them installed beside a style LoRA."""
         ui = turbo_workflow()
+        next(node for node in ui["nodes"] if node["type"] == "CheckpointLoader")["widgets_values"][0] = "minimax_h3_model.safetensors"
         next(node for node in ui["nodes"] if node["id"] == 21)["widgets_values"] = ["h3_turbo_4step.safetensors", 1]
         files = [["h3_turbo_4step.safetensors", "h3_turbo_8step.safetensors", "style.safetensors"]]
-        return ui, {**OBJECT_INFO, "LoraLoaderModelOnly": {"input": {"required": {"model": ["MODEL"], "lora_name": files, "strength_model": ["FLOAT", {}]}}}}
+        info = {**OBJECT_INFO, "CheckpointLoader": {"input": {"required": {
+            "ckpt_name": [["model.safetensors", "minimax_h3_model.safetensors"]]}}},
+            "LoraLoaderModelOnly": {"input": {"required": {"model": ["MODEL"], "lora_name": files, "strength_model": ["FLOAT", {}]}}}}
+        return ui, info
 
     def test_the_turbo_lora_has_a_file_and_strength_as_the_style_lora_does(self):
         ui, info = self.turbo_picker()
@@ -586,6 +593,47 @@ class ShorthandTest(unittest.TestCase):
 
 
 class LorasTest(unittest.TestCase):
+    def test_corrupt_workflow_cache_keeps_output_metadata_readable(self):
+        api = to_api(saved_workflow(), OBJECT_INFO)
+        for broken in (".map.json", ".ui.json", ".info.json"):
+            with self.subTest(broken=broken), tempfile.TemporaryDirectory() as folder:
+                stem = os.path.join(folder, "film")
+                for suffix, value in ((".json", api), (".map.json", {}),
+                                      (".ui.json", saved_workflow()), (".info.json", OBJECT_INFO)):
+                    with open(stem + suffix, "w", encoding="utf-8") as target:
+                        target.write("" if suffix == broken else json.dumps(value))
+                with self.assertRaisesRegex(RuntimeError, "listed again"):
+                    workflow_options.remake(stem + ".json", {})
+                with self.assertLogs("core.workflow_options", level="WARNING") as logs:
+                    self.assertEqual(workflow_options._made_with(stem + ".json"), api)
+                self.assertIn("reading the saved workflow instead", logs.output[0])
+                self.assertEqual(workflow_options.loras_used(stem + ".json"),
+                                 workflow_options.loras_in(api))
+
+    def test_metadata_retries_after_corrupt_map_is_repaired(self):
+        with tempfile.TemporaryDirectory() as folder:
+            stem = os.path.join(folder, "film")
+            for suffix, value in ((".json", {}), (".map.json", None),
+                                  (".ui.json", saved_workflow()), (".info.json", OBJECT_INFO)):
+                with open(stem + suffix, "w", encoding="utf-8") as target:
+                    target.write("" if value is None else json.dumps(value))
+            with self.assertLogs("core.workflow_options", level="WARNING"):
+                self.assertEqual(workflow_options._made_with(stem + ".json"), {})
+            with open(stem + ".map.json", "w", encoding="utf-8") as target:
+                json.dump({}, target)
+            self.assertEqual(workflow_options._made_with(stem + ".json"),
+                             workflow_options.remake(stem + ".json", {})[0])
+            self.assertTrue(workflow_options._made_with(stem + ".json"))
+
+    def test_corrupt_saved_workflow_metadata_is_logged_and_unavailable(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = os.path.join(folder, "film.json")
+            with open(path, "w", encoding="utf-8") as target:
+                target.write("")
+            with self.assertLogs("core.workflow_options", level="WARNING") as logs:
+                self.assertEqual(workflow_options._made_with(path), {})
+            self.assertTrue(any("Could not read saved workflow metadata" in line for line in logs.output))
+
     def test_only_the_loras_an_output_reads_from(self):
         api = {
             "1": {"class_type": "UNETLoader", "inputs": {"unet_name": "m.safetensors"}},
@@ -862,7 +910,7 @@ class QwenImage21TemplateTest(unittest.TestCase):
 
 
 class LoraFamilyTest(unittest.TestCase):
-    """A LoRA made for an earlier Qwen-Image does nothing on 2.1: told apart by its layers, from its header."""
+    """LoRAs are offered by family keywords; Qwen generations keep their tensor-level compatibility guard."""
 
     def make(self, folder, name, keys):
         import json
@@ -870,6 +918,83 @@ class LoraFamilyTest(unittest.TestCase):
         header = json.dumps({key: {"dtype": "F16", "shape": [1], "data_offsets": [0, 2]} for key in keys}).encode()
         with open(os.path.join(folder, "models", "loras", name), "wb") as f:
             f.write(struct.pack("<Q", len(header)) + header + bytes(2))
+
+    def test_native_lora_alias_uses_the_installed_file_once(self):
+        installed = "Krea2_KNPV3_1.safetensors"
+        options = workflow_options.lora_options("1", "KNPV3_1.safetensors", 0.7, [installed])
+        name = options[1]
+        self.assertEqual(name["choices"], [installed])
+        self.assertEqual(name["default"], installed)
+        self.assertEqual(workflow_options.upgraded({"lora_name": "KNPV3_1.safetensors"}, options)["lora_name"], installed)
+        info = {kind: {"input": {"required": {"lora_name": [[installed]]}}}
+                for kind in ("LoraLoader", "LoraLoaderModelOnly")}
+        self.assertEqual(workflow_options._installed_lora(info, "KNPV3_1.safetensors"), installed)
+        self.assertEqual(workflow_options.upgraded({"lora_knpv3_1": "0.7"}, options), {"lora": "1", "lora_strength": "0.7"})
+        ui = switchable_workflow()
+        next(node for node in ui["nodes"] if node["type"] == "CheckpointLoader")["widgets_values"][0] = "krea_model.safetensors"
+        info = {**OBJECT_INFO, **info, "CheckpointLoader": {"input": {"required": {"ckpt_name": [["krea_model.safetensors"]]}}}}
+        api, _, _, offered = workflow_options.convert(ui, info, {"lora": "1", "lora_name": "KNPV3_1.safetensors"})
+        self.assertEqual(next(option for option in offered if option["id"] == "lora_name")["choices"], [installed])
+        self.assertEqual(next(node for node in api.values() if node["class_type"] == "Power Lora Loader (rgthree)")["inputs"]["lora_1"]["lora"], installed)
+
+    def test_fixed_extra_lora_preserves_private_folder_tag(self):
+        ui = switchable_workflow()
+        loader = next(node for node in ui["nodes"] if node["type"] == "Power Lora Loader (rgthree)")
+        loader["widgets_values"].insert(-2, {"on": True, "lora": "NSFW/krea_style.safetensors", "strength": 0.8})
+        option = next(option for option in workflow_options.describe(ui, OBJECT_INFO) if option.get("entry") == "lora_2")
+        self.assertTrue(option["private_only"])
+
+    def test_lora_aliases_do_not_guess_between_files_or_cross_families(self):
+        files = ["krea_style.safetensors", "moss_style.safetensors"]
+        self.assertEqual(workflow_options._matching_lora(files, "style.safetensors"), "style.safetensors")
+        self.assertEqual(workflow_options._matching_lora(files, "qwen_style.safetensors"), "qwen_style.safetensors")
+        self.assertEqual(workflow_options._matching_lora(files, files[1]), files[1])
+
+    def test_additional_loras_append_without_replacing_native_rows(self):
+        ui = switchable_workflow()
+        loader = next(node for node in ui["nodes"] if node["type"] == "Power Lora Loader (rgthree)")
+        loader["widgets_values"].insert(-2, {"on": True, "lora": "KNPV3_1.safetensors", "strength": 0.5})
+        chosen = {"additional_loras": json.dumps([{"on": True, "name": "KNPV3_1.safetensors", "strength": "0.8"}])}
+        api, _, _, options = workflow_options.convert(ui, OBJECT_INFO, chosen)
+        inputs = next(node for node in api.values() if node["class_type"] == "Power Lora Loader (rgthree)")["inputs"]
+        self.assertFalse(inputs["lora_1"]["on"])
+        self.assertEqual(inputs["lora_2"]["strength"], 0.5)
+        self.assertEqual(inputs["lora_3"]["strength"], 0.8)
+        self.assertIsNone(workflow_options.check(options, chosen))
+        for strength in ("NaN", "2.1"):
+            invalid = {"additional_loras": json.dumps([{"on": True, "name": "KNPV3_1.safetensors", "strength": strength}])}
+            self.assertIn("strength", workflow_options.check(options, invalid))
+
+    def test_lora_comparison_matrix_uses_legal_increments_and_private_visibility(self):
+        from core import lora_tests
+        options = workflow_options.lora_options("0", "krea_a.safetensors", 0.7,
+                                                ["krea_a.safetensors", "krea_b.safetensors", "NSFW/krea_c.safetensors"])
+        form = {"lora_strength_test": "1", "lora_style_test": "1", "lora_test_step": "0.5"}
+        values = lora_tests.variations(form, options)
+        self.assertEqual([(value["lora_name"], value["lora_strength"]) for value in values],
+                         [(name, strength) for name in ["krea_a.safetensors", "krea_b.safetensors"] for strength in ["0.5", "1.0", "1.5", "2.0"]])
+        self.assertEqual(len(lora_tests.variations(form, options, private=True)), 12)
+        shots = lora_tests.shots({"prompt": "unchanged"}, values, 0)
+        self.assertEqual({shot["prompt"] for shot in shots}, {"unchanged"})
+        self.assertEqual({shot["seed"] for shot in shots}, {0})
+        self.assertEqual(lora_tests.variations({"lora_style_test": "1", "opt_lora_strength": "0.7"}, options)[0]["lora_strength"], "0.7")
+        small = lora_tests.variations({"lora_strength_test": "1", "lora_test_step": "0.05"}, options)
+        self.assertEqual((len(small), small[0]["lora_strength"], small[-1]["lora_strength"]), (40, "0.05", "2.00"))
+        for step in ("0", "NaN", "0.03", "2.1"):
+            with self.assertRaises(ValueError):
+                lora_tests.variations({**form, "lora_test_step": step}, options)
+
+    def test_additional_loras_chain_after_the_primary_model_lora(self):
+        api = {"base": {"class_type": "UNETLoader", "inputs": {}},
+               "style_lora": {"class_type": "LoraLoaderModelOnly", "inputs": {"model": ["base", 0]}},
+               "sampler": {"class_type": "KSampler", "inputs": {"model": ["style_lora", 0], "positive": ["text", 0]}}}
+        options = workflow_options.lora_options("1", "krea_a.safetensors", 1, ["krea_a.safetensors", "krea_b.safetensors"])
+        rows = [{"on": True, "name": "krea_b.safetensors", "strength": "0.5"},
+                {"on": True, "name": "krea_a.safetensors", "strength": "0.8"}]
+        workflow_options._additional_loras(api, {"LoraLoaderModelOnly": {}}, {"additional_loras": json.dumps(rows)}, options)
+        self.assertEqual(api["additional_lora_1"]["inputs"]["model"], ["style_lora", 0])
+        self.assertEqual(api["additional_lora_2"]["inputs"]["model"], ["additional_lora_1", 0])
+        self.assertEqual(api["sampler"]["inputs"]["model"], ["additional_lora_2", 0])
 
     def test_an_earlier_qwen_image_lora_is_refused_on_2_1_only(self):
         from unittest import mock
@@ -884,8 +1009,44 @@ class LoraFamilyTest(unittest.TestCase):
             self.assertIn("earlier Qwen-Image", lora_check.problem("old.safetensors", "qwen_image_21_edit"))
             self.assertIsNone(lora_check.problem("new.safetensors", "qwen_image_21"))
             self.assertIsNone(lora_check.problem("other.safetensors", "qwen_image_21"), "not telling, so not refused")
-            self.assertIsNone(lora_check.problem("old.safetensors", "krea2"), "only Qwen-Image 2.1 is checked")
+            self.assertIn("not krea", lora_check.problem("old.safetensors", "krea2"))
             self.assertIsNone(lora_check.problem("gone.safetensors", "qwen_image_21"))
+
+    def test_family_keywords_can_match_more_than_one_model_and_only_affect_labels(self):
+        from core import lora_check
+        name = "krea_moss_ultra real.safetensors"
+        self.assertEqual(lora_check.lora_families(name), {"krea", "moss"})
+        self.assertTrue(workflow_options._compatible_lora(name, "krea_moss_model.safetensors", []))
+        self.assertFalse(workflow_options._compatible_lora(name, "qwen_image_21.safetensors", []))
+        self.assertEqual(workflow_options.lora_label(name), "ultra_real")
+
+    def test_unknown_loras_are_native_only_and_known_loras_need_a_model_family(self):
+        unknown = "style.safetensors"
+        self.assertFalse(workflow_options._compatible_lora(unknown, "krea_model.safetensors", []))
+        self.assertTrue(workflow_options._compatible_lora(unknown, "unidentified.safetensors", [unknown]))
+        self.assertFalse(workflow_options._compatible_lora("moss_style.safetensors", None, ["moss_style.safetensors"]))
+        self.assertTrue(workflow_options._compatible_lora("moss_style.safetensors", "moss_model.safetensors", []))
+
+    def test_the_loaded_diffusion_model_not_a_text_encoder_sets_the_family(self):
+        api = {"1": {"class_type": "CLIPLoader", "inputs": {"type": "qwen"}},
+               "2": {"class_type": "CheckpointLoader", "inputs": {"ckpt_name": "unidentified.safetensors"}},
+               "3": {"class_type": "KSampler", "inputs": {"model": ["2", 0], "positive": ["1", 0]}}}
+        self.assertIsNone(workflow_options._workflow_model(api))
+        api["2"]["inputs"]["ckpt_name"] = "krea_moss_model.safetensors"
+        self.assertEqual(workflow_options._workflow_model(api), "krea_moss_model.safetensors")
+
+    def test_a_stale_turbo_lora_choice_cannot_cross_families_at_run_time(self):
+        ui = turbo_workflow()
+        next(node for node in ui["nodes"] if node["type"] == "CheckpointLoader")["widgets_values"][0] = "minimax_h3_model.safetensors"
+        next(node for node in ui["nodes"] if node["id"] == 21)["widgets_values"] = ["h3_turbo_4step.safetensors", 1]
+        files = [["h3_turbo_4step.safetensors", "krea_turbo_8step.safetensors"]]
+        info = {**OBJECT_INFO, "CheckpointLoader": {"input": {"required": {
+            "ckpt_name": [["model.safetensors", "minimax_h3_model.safetensors"]]}}},
+            "LoraLoaderModelOnly": {"input": {"required": {
+                "model": ["MODEL"], "lora_name": files, "strength_model": ["FLOAT", {}]}}}}
+        with self.assertRaisesRegex(Unusable, "can't be used"):
+            workflow_options.convert(ui, info, {"switch_lightning_lora": "1",
+                                                "switch_lightning_lora_name": "krea_turbo_8step.safetensors"}, "video")
 
 if __name__ == "__main__":
     unittest.main()

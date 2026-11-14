@@ -1,0 +1,45 @@
+name: Tests
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  tests:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ['3.11', '3.13']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-dev.txt
+            constraints-windows-py313.txt
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install ffmpeg
+        run: choco install ffmpeg --no-progress -y
+      - name: Install constrained dependencies
+        if: matrix.python == '3.13'
+        run: python -m pip install -r requirements-dev.txt -c constraints-windows-py313.txt
+      - name: Check supported minimum with compatible dependencies
+        if: matrix.python == '3.11'
+        run: python -m pip install -r requirements-dev.txt
+      - name: Check dependency compatibility
+        run: python -m pip check
+      - name: Install Chromium
+        run: python -m playwright install chromium
+      - name: Run unit, integration and browser tests
+        env:
+          GEN_CENTER_BROWSER_TESTS: '1'
+        run: python -m unittest discover -s tests -t . -v

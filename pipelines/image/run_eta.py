@@ -1,5 +1,6 @@
 import re
 import time
+from core import lora_tests
 
 from core.eta_keys import SEPARATOR, LocalModelTimer, Timings, llm_keys, options_in, render_keys
 from pipelines.image.media import FROM_IMAGE, PIXELS_PER_MEGAPIXEL, parse_size
@@ -63,8 +64,11 @@ class RunEta:
         self.options = options_in(argv)
         self.size = _size_label(argv)
         self.workflow = (env or {}).get("COMFYUI_WORKFLOW")
+        tests = lora_tests.in_env(env or {})
         try:
             self.images = int(_option(argv, "--count", 1))
+            if tests:
+                self.images = len(tests)
             # The prompts are written for the whole set, even when only the first is rendered now.
             self.prompts = self.images
             if "--first-only" in argv:
@@ -93,7 +97,7 @@ class RunEta:
         if self.llm == "local":
             try:
                 from core import h3_refiner
-                self.local_model = h3_refiner.local_llm_model()
+                self.local_model = _option(argv, "--local-model") or h3_refiner.local_llm_model()
             except Exception:
                 self.local_model = None
         self.local = LocalModelTimer(self.timings, self.local_model)

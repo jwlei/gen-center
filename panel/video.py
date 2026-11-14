@@ -8,10 +8,11 @@ from types import SimpleNamespace
 
 from flask import abort, request, send_file
 
-from core import director, h3_refiner, pills, run_form, seeds, workflow_options
+from core import director, h3_refiner, lora_tests, pills, run_form, seeds, workflow_options
 from core.upscale_eta import UpscaleEta
+from panel import settings
 from panel.server import (OUTCOME_FILE, read_outcome, form_options, PIPELINES, VIDEO_TIMINGS, _runs_cache, active_runs, app, busy_runs, item_images, job,
-                          password_required, safe_video_path, saved_at, run_queue, saved_runs, saved_workflows, queue_form_snapshot)
+                          password_required, safe_video_path, saved_at, run_queue, saved_runs, saved_workflows, queue_form_snapshot, private_mode)
 from panel.shorts import VOICES
 from pipelines.image import media as image_media
 from pipelines.video import h3_infinite, h3_multishot, h3_prompt, media, output_metadata, paths, planner, roles
@@ -141,7 +142,7 @@ def build_options(form):
             return None, f"Unknown role for image {number}."
         flags += ["--image-role", role]
 
-    if (form.get("prompt_mode") or "llm") == "direct":
+    if lora_tests.requested(form) or (form.get("prompt_mode") or "llm") == "direct":
         # Your prompt as it is, for every clip: no LLM writes them.
         flags.append("--direct")
     else:
@@ -149,6 +150,11 @@ def build_options(form):
         if llm not in dict(planner.LLMS):
             return None, "Unknown LLM."
         flags += ["--llm", llm]
+        if llm == "local":
+            model = form.get("local_model") or h3_refiner.local_llm_model()
+            if model not in {item["id"] for item in settings.local_models()}:
+                return None, "Choose an available local model."
+            flags += ["--local-model", model]
 
     size = (form.get("size") or "").strip().lower()
     if size:
@@ -163,12 +169,12 @@ def build_options(form):
     if seed is not None:
         flags += ["--seed", str(seed)]
 
-    if form.get("review"):
+    if form.get("review") and not lora_tests.requested(form):
         flags.append("--plan-only")
     if form.get("try_first"):
         flags.append("--first-only")
     try:
-        mode, creativity = h3_refiner.settings(form.get("h3_enhance"), form.get("h3_creativity"))
+        mode, creativity = h3_refiner.settings("off" if lora_tests.requested(form) else form.get("h3_enhance"), form.get("h3_creativity"))
     except ValueError as e:
         return None, str(e)
     if mode != "off":
@@ -177,6 +183,11 @@ def build_options(form):
         return None, "H3 Multishot renders the whole take and does not support preview runs or OpenH3-IR."
     if start == "infinite" and mode != "off":
         return None, "H3 Infinite continuation does not support OpenH3-IR."
+    writer_model = form.get("prompt_writer_model")
+    if writer_model and "--local-model" not in flags:
+        if writer_model not in {item["id"] for item in settings.local_models()}:
+            return None, "Choose an available local model."
+        flags += ["--local-model", writer_model]
     return flags, None
 
 
@@ -192,8 +203,23 @@ def estimate():
         return {"ok": False, "error": error}
     # The workflow's options too, as Generate sends them: steps and a turbo LoRA change the time several times over.
     chosen, problem = form_options(request.form, takes)
-    if chosen and not problem:
+    if problem:
+        return {"ok": False, "error": problem}
+    if chosen:
         env = {**env, "COMFYUI_OPTIONS": json.dumps(chosen)}
+    try:
+        tests = lora_tests.variations(request.form, takes.get("options") or [], private_mode())
+    except ValueError as problem:
+        return {"ok": False, "error": str(problem)}
+    if tests:
+        plans = [RunEta(flags, VIDEO_TIMINGS, {**env, "COMFYUI_OPTIONS": json.dumps({**(chosen or {}), **variation})}).plan()
+                 for variation in tests]
+        result = {**plans[0], "total": sum(plan["total"] for plan in plans)}
+        result["videos"] = len(tests)
+        result["clips"] = sum(plan["clips"] for plan in plans)
+        result["steps"] = [{**step, "seconds": sum(part["seconds"] for plan in plans for part in plan["steps"] if part["name"] == step["name"])}
+                           for step in result["steps"]]
+        return {"ok": True, **result}
     # Reviewing first only writes the prompts now, but what you're deciding on is the whole film.
     return {"ok": True, **RunEta([arg for arg in flags if arg != "--plan-only"], VIDEO_TIMINGS, env).plan()}
 
@@ -293,6 +319,15 @@ def generate():
     chosen, error = form_options(request.form, takes)
     if error:
         return {"ok": False, "error": error}, 400
+    try:
+        tests = lora_tests.variations(request.form, takes.get("options") or [], private_mode())
+    except ValueError as error:
+        return {"ok": False, "error": str(error)}, 400
+    if tests:
+        if request.form.get("queue_edit_id"):
+            return {"ok": False, "error": "Finish editing before adding a video LoRA comparison batch."}, 400
+        if "--seed" not in flags:
+            flags += ["--seed", str(seeds.pick())]
     if chosen:
         # Kept with the run, for the rest of its clips (pipelines/video/main.py).
         env = {**env, "COMFYUI_OPTIONS": json.dumps(chosen)}
@@ -331,7 +366,7 @@ def generate():
                                 or narration or (audio_upload and audio_upload.filename)):
         return {"ok": False, "error": "H3 Infinite continuation makes its own sound: it takes no reference video, "
                                      "reference audio, narration or audio file."}, 400
-    if llm == "local" and uploads and h3_refiner.local_llm_model() == "qwen3-14b":
+    if llm == "local" and uploads and settings.model_family(option(flags, "--local-model") or h3_refiner.local_llm_model()) == "qwen3-14b":
         return {"ok": False, "error": "Qwen3 14B is text-only and cannot analyze attached images. Choose Gemma 4 in Settings."}, 400
     try:
         images = [media.load_image(upload.stream) for upload in uploads]
@@ -354,7 +389,7 @@ def generate():
         audio_upload.save(audio_path)
     audio = media.audio_fingerprint(path=audio_path, text=narration or None, voice=voice or None)
 
-    state = None if request.form.get("queue_edit_id") else run_to_continue(prompt, flags, env, takes, images, audio, ref_videos + ref_audios)
+    state = None if tests or request.form.get("queue_edit_id") else run_to_continue(prompt, flags, env, takes, images, audio, ref_videos + ref_audios)
     if state:
         for path in ([audio_path] if audio_path else []) + media_paths:
             os.remove(path)
@@ -396,6 +431,26 @@ def generate():
             "image": image_paths[0] if image_paths else None, "references": image_paths[1:] + ([audio_path] if audio_path else []) + media_paths, "plan_only": plan_only, "first_only": "--first-only" in flags,
             "form": queue_form_snapshot(), "form_files": saved_files,
             "estimate": RunEta(argv, VIDEO_TIMINGS, env).plan()["total"]}
+    if tests:
+        items = []
+        for variation in tests:
+            form = {**item["form"], "seed": [option(flags, "--seed")], "prompt_mode": ["direct"],
+                    "lora_strength_test": ["0"], "lora_style_test": ["0"], "h3_enhance": ["off"],
+                    **{f"opt_{key}": [value] for key, value in variation.items()}}
+            variant_env = {**env, "COMFYUI_OPTIONS": json.dumps({**(chosen or {}), **variation}),
+                           lora_tests.ENV: json.dumps([variation]),
+                           run_form.ENV: run_form.to_env(form)}
+            label = f"{workflow_options.lora_label(variation['lora_name'])} @ {variation['lora_strength']}"
+            items.append({**item, "env": variant_env, "form": form, "detail": item["detail"] + " · " + label,
+                          "estimate": RunEta(argv, VIDEO_TIMINGS, variant_env).plan()["total"]})
+        if request.form.get("queue_top") and not request.form.get("start_later"):
+            items.reverse()
+        with run_queue.lock:
+            for variant in items:
+                run_queue.add(variant)
+                if variant.get("error"):
+                    return {"ok": False, "error": variant["error"]}, 500
+        return {"ok": True, "queued": True, "queued_count": len(items)}
     queued = run_queue.add(item)
     if item.get("error"):
         return {"ok": False, "error": item["error"]}, 500
@@ -421,6 +476,7 @@ def run_to_continue(prompt, flags, env, takes, images, audio=None, references=()
                 and state.fixed_clip == fixed
                 and (not fixed or all(shot["seconds"] == fixed_seconds for shot in state.shots))
                 and (not option(flags, "--llm") or state.llm == option(flags, "--llm"))
+                and (not option(flags, "--local-model") or state.local_model == option(flags, "--local-model"))
                 and state.h3_mode == option(flags, "--h3-enhance", "off")
                 and state.h3_creativity == option(flags, "--h3-creativity", "balanced")
                 and (state.connection_mode or state.start) == (start if start in ("director", "multishot", "infinite") or takes["max_images"] == 1 else "image")
@@ -489,7 +545,7 @@ def run_detail(run_id):
         busy = run_id in active_runs()
         pending = not busy and run_id in busy_runs()
     return {"ok": True, "id": state.id, "title": state.title, "brief": state.brief, "start": state.start,
-            "llm": state.llm, "direct": state.direct, "size": f"{state.width}x{state.height}",
+            "llm": state.llm, "local_model": state.local_model, "direct": state.direct, "size": f"{state.width}x{state.height}",
             "h3_mode": state.h3_mode,
             "busy": busy, "pending": pending, "finished": bool(state.final),
             "take_rendered": bool(state.take_file), "settings": settings_of(state),
@@ -517,7 +573,8 @@ def settings_of(state):
     """What a film was made with, as the form sets it: for "the same again", to change before pressing Generate."""
     workflow = next((w["name"] for w in saved_workflows() if state.workflow and w.get("path") and os.path.abspath(w["path"]) == os.path.abspath(state.workflow)), "")
     files = run_inputs(state)
-    return {"prompt": state.brief, "seconds": state.seconds, "start": state.connection_mode or state.start, "llm": state.llm, "workflow": workflow,
+    return {"prompt": state.brief, "seconds": state.seconds, "start": state.connection_mode or state.start, "llm": state.llm,
+            "local_model": state.local_model, "workflow": workflow,
             "size": f"{state.width}x{state.height}", "options": state.options or {}, "images": len(files["image"]),
             "h3_enhance": state.h3_mode, "h3_creativity": state.h3_creativity, "image_roles": state.image_roles,
             "h3_first_frame": state.h3_first_frame, "h3_multishot_steps": state.h3_multishot_steps,

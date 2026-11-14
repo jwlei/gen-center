@@ -143,7 +143,5 @@ class ImageClient(ComfyClient):
 
     def free_memory(self):
         """Has ComfyUI unload its models and free what it holds, as its own Free model and node cache does."""
-        try:
-            requests.post(f"{self.url}/free", json={"unload_models": True, "free_memory": True}, timeout=30)
-        except requests.RequestException:
-            pass
+        from core import comfy_memory
+        comfy_memory.release(self.url)

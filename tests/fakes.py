@@ -113,6 +113,11 @@ class _ComfyHandler(_Handler):
         elif self.path == "/free":
             state.frees += 1
             self._send({})
+        elif self.path == "/gen-center/free":
+            state.frees += 1
+            self._send({"version": 1, "completed": True, "devices": [
+                {"type": "cuda", "vram_total": 12 * 2**30, "vram_free": 11 * 2**30,
+                 "torch_allocated": 0, "torch_reserved": 0}]})
         elif self.path == "/prompt":
             data = json.loads(body)
             with state.lock:

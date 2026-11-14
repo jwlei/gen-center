@@ -1,10 +1,11 @@
 """Calling Gemini: moves straight on to the next model on any error. Both pipelines go through this."""
+import math
 import os
 import re
-import threading
 import time
 
 from google import genai
+from google.genai import types
 
 from core.api_log import is_daily_quota, is_exhausted, log_api_call, log_api_error, mark_exhausted
 from core.gemini_models import get_text_models
@@ -18,11 +19,15 @@ RETRYABLE_STATUSES = (429, 500, 502, 503, 504)
 MAX_RETRY_WAIT = 90
 
 
-def _get_client():
+def _get_client(timeout):
     api_key = os.getenv("GEMINI_API_KEY")
     if not api_key:
         raise RuntimeError("GEMINI_API_KEY is not set. Create a .env file or set the environment variable before running.")
-    return genai.Client(api_key=api_key)
+    http_options = types.HttpOptions(
+        timeout=max(1, math.ceil(timeout * 1000)),
+        retry_options=types.HttpRetryOptions(attempts=1),
+    )
+    return genai.Client(api_key=api_key, http_options=http_options)
 
 def _is_retryable(error):
     status = getattr(error, "code", None) or getattr(error, "status_code", None)
@@ -44,7 +49,7 @@ def _retry_delay(error):
     return min(float(match.group(1)) + 1, MAX_RETRY_WAIT)
 
 # A text reply normally takes a few seconds. A model that says nothing for this
-# long is overloaded or stuck (it happens, with no error at all), so move on.
+# long is overloaded or stuck, so move on after the SDK's transport deadline.
 DEFAULT_TIMEOUT = 90
 
 # Models that no longer exist, in this process: later calls skip them.
@@ -56,28 +61,19 @@ COOLDOWN = 60
 _cooldowns = {}
 
 
-def _call_with_deadline(fn, seconds):
-    """
-    Runs fn, raising TimeoutError if it has not returned within `seconds`. The
-    SDK can sit on a silent request (or a long retry-after) indefinitely, so the
-    call runs in a daemon thread that is simply abandoned if it hangs.
-    """
-    result = {}
+def _timeout_seconds(value, name):
+    try:
+        seconds = float(value)
+    except (OverflowError, TypeError, ValueError):
+        seconds = 0
+    if not math.isfinite(seconds) or seconds <= 0:
+        raise ValueError(f"{name} must be a finite positive number of seconds.")
+    return seconds
 
-    def target():
-        try:
-            result["value"] = fn()
-        except BaseException as e:
-            result["error"] = e
 
-    thread = threading.Thread(target=target, daemon=True)
-    thread.start()
-    thread.join(seconds)
-    if thread.is_alive():
-        raise TimeoutError(f"no response within {seconds}s")
-    if "error" in result:
-        raise result["error"]
-    return result["value"]
+def _is_timeout(error):
+    return isinstance(error, TimeoutError) or "timeout" in type(error).__name__.lower() or \
+        "timeout" in str(error).lower()
 
 
 def _cooling(model):
@@ -93,8 +89,9 @@ def _generate(prompt, retries=4, models=None, config=None, timeout=None):
     it wait and go through the chain again, up to `retries` passes in all; it
     raises after that, or at once if nothing it saw was worth another pass.
     """
-    client = _get_client()
-    timeout = timeout or int(os.getenv("GEMINI_TIMEOUT") or DEFAULT_TIMEOUT)
+    configured_timeout = (os.getenv("GEMINI_TIMEOUT") or DEFAULT_TIMEOUT) if timeout is None else timeout
+    timeout = _timeout_seconds(configured_timeout, "GEMINI_TIMEOUT")
+    client = _get_client(timeout)
     chain = list(models or get_text_models())
     errors = []
 
@@ -116,14 +113,13 @@ def _generate(prompt, retries=4, models=None, config=None, timeout=None):
         again, delays = False, []
         for model in order:
             try:
-                response = _call_with_deadline(
-                    lambda: client.models.generate_content(model=model, contents=prompt, config=config), timeout)
+                response = client.models.generate_content(model=model, contents=prompt, config=config)
                 log_api_call("Gemini", model)
                 return response
             except Exception as e:
                 log_api_error("Gemini", model, e)
-                if isinstance(e, TimeoutError):
-                    print(f"   ⚠️ {model} did not answer within {timeout}s. Trying the next model...")
+                if _is_timeout(e):
+                    print(f"   ⚠️ {model} did not answer within {timeout:g}s. Trying the next model...")
                     _cooldowns[model] = time.time() + COOLDOWN
                     again = True
                 elif is_daily_quota(e):

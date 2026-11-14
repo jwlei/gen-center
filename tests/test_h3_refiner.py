@@ -1,15 +1,18 @@
+import asyncio
 import json
 import os
 import sys
 import tempfile
+import threading
+import runpy
 import unittest
-from types import SimpleNamespace
+from types import ModuleType, SimpleNamespace
 from unittest import mock
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from fakes import DATA  # noqa: F401, isolate application data before importing the panel
 
-from core import director, h3_refiner, h3_refiner_worker
+from core import comfy_memory, director, h3_refiner, h3_refiner_worker
 from panel import video
 from panel import image
 from panel import shorts
@@ -21,6 +24,340 @@ from pipelines.video.run_state import RunState
 
 
 class H3RefinerTest(unittest.TestCase):
+    def test_local_model_requires_acknowledged_cleanup_and_no_retained_allocations(self):
+        refiner = object.__new__(h3_refiner.Refiner)
+        refiner.comfy_url = "http://127.0.0.1:8188"
+        queue = mock.Mock()
+        queue.json.return_value = {"queue_running": [], "queue_pending": []}
+        device = {"type": "cuda", "vram_total": 12 * 2**30, "vram_free": 11 * 2**30,
+                  "torch_allocated": 0, "torch_reserved": 0}
+        bodies = [{}, {"version": 1, "completed": False, "devices": [device]},
+                  {"version": 1, "completed": True, "devices": [{**device, "torch_allocated": 2**20}]},
+                  {"version": 1, "completed": True, "devices": [{**device, "torch_reserved": 2**20}]},
+                  {"version": 1, "completed": True, "devices": [{**device, "vram_free": float("nan")}]}]
+        for body in bodies:
+            with self.subTest(body=body):
+                response = mock.Mock(status_code=200)
+                response.json.return_value = body
+                with mock.patch.object(h3_refiner.requests, "get", return_value=queue), \
+                     mock.patch.object(h3_refiner.requests, "post", return_value=response), \
+                     mock.patch.object(h3_refiner.subprocess, "Popen") as launch:
+                    with self.assertRaises(RuntimeError):
+                        refiner.__enter__()
+                    launch.assert_not_called()
+        response = mock.Mock(status_code=500)
+        response.raise_for_status.side_effect = h3_refiner.requests.HTTPError("cleanup failed")
+        with mock.patch.object(comfy_memory.requests, "post", return_value=response):
+            with self.assertRaisesRegex(RuntimeError, "cleanup failed"):
+                comfy_memory.release(refiner.comfy_url)
+
+    def test_local_model_rates_use_completed_tokens_and_current_model_file(self):
+        from panel import settings
+        with tempfile.TemporaryDirectory() as root, \
+             mock.patch.object(settings, "PROJECT_ROOT", root), \
+             mock.patch.object(settings, "LOGS_DIR", root), \
+             mock.patch.dict(os.environ, {}, clear=True):
+            folder = os.path.join(root, "models", "gemma-4-12b-heretic")
+            os.makedirs(folder)
+            path = os.path.join(folder, "model.gguf")
+            open(path, "wb").close()
+            mtime = os.path.getmtime(path)
+            events = [
+                {"event": "start", "pid": 1, "model": "gemma-4-12b", "model_mtime": mtime},
+                {"event": "completion", "pid": 1, "model": "gemma-4-12b", "timings": {"predicted_n": 200, "predicted_ms": 10000}},
+                {"event": "completion", "pid": 1, "model": "gemma-4-12b", "timings": {"predicted_n": 300, "predicted_ms": 30000}},
+                {"event": "start", "pid": 2, "model": "gemma-4-12b", "model_mtime": mtime - 1},
+                {"event": "completion", "pid": 2, "model": "gemma-4-12b", "timings": {"predicted_n": 9999, "predicted_ms": 1}},
+                {"event": "completion", "pid": 1, "model": "gemma-4-12b", "timings": {"predicted_n": 10, "predicted_ms": 0}},
+            ]
+            with open(os.path.join(root, "local_llm_tokens.jsonl"), "w", encoding="utf-8") as target:
+                for event in events:
+                    target.write(json.dumps(event) + "\n")
+            found = {model["id"]: model["tokens_per_second"] for model in settings.local_models()}
+            self.assertEqual(found["gemma-4-12b"], 12.5)
+            self.assertIsNone(found["qwen3-14b"])
+            vision = {model["id"]: model["vision"] for model in settings.local_models()}
+            self.assertTrue(vision["gemma-4-12b"])
+            self.assertFalse(vision["qwen3-14b"])
+
+    def test_benchmark_resets_rates_and_applies_only_to_matching_files(self):
+        from panel import settings
+        with tempfile.TemporaryDirectory() as root, \
+             mock.patch.object(settings, "PROJECT_ROOT", root), \
+             mock.patch.object(settings, "LOGS_DIR", root), \
+             mock.patch.dict(os.environ, {}, clear=True):
+            folder = os.path.join(root, "models", "gemma-4-12b-heretic")
+            os.makedirs(folder)
+            model, server = os.path.join(folder, "model.gguf"), os.path.join(root, "server.exe")
+            open(model, "wb").close()
+            open(server, "wb").close()
+            result = {"model_path": os.path.normcase(os.path.abspath(model)), "model_mtime": os.path.getmtime(model),
+                      "server_path": os.path.normcase(os.path.abspath(server)), "server_mtime": os.path.getmtime(server),
+                      "gpu_layers": 24, "tokens": 100, "milliseconds": 10000}
+            with open(os.path.join(root, "local_model_benchmarks.json"), "w", encoding="utf-8") as target:
+                json.dump({"at": 100, "models": {"gemma-4-12b": result}}, target)
+            events = [
+                {"event": "start", "pid": 1, "model": "gemma-4-12b", "model_mtime": os.path.getmtime(model)},
+                {"event": "completion", "at": 99, "pid": 1, "model": "gemma-4-12b",
+                 "timings": {"predicted_n": 1000, "predicted_ms": 1000}},
+                {"event": "completion", "at": 101, "pid": 1, "model": "gemma-4-12b",
+                 "timings": {"predicted_n": 100, "predicted_ms": 5000}},
+            ]
+            with open(os.path.join(root, "local_llm_tokens.jsonl"), "w", encoding="utf-8") as target:
+                for event in events:
+                    target.write(json.dumps(event) + "\n")
+            benchmarks = settings.local_model_benchmarks()
+            self.assertEqual(settings.local_model_rates([{"id": "gemma-4-12b"}])["gemma-4-12b"], 13.3)
+            self.assertEqual(settings.benchmark_for_model(benchmarks, "gemma-4-12b", model, server)["gpu_layers"], 24)
+            os.utime(server, (result["server_mtime"] + 1, result["server_mtime"] + 1))
+            self.assertIsNone(settings.benchmark_for_model(benchmarks, "gemma-4-12b", model, server))
+            os.utime(model, (result["model_mtime"] + 1, result["model_mtime"] + 1))
+            self.assertNotIn("gemma-4-12b", settings.local_model_rates([{"id": "gemma-4-12b"}]))
+
+    def test_discovers_model_folders_and_keeps_selections_when_missing(self):
+        from panel import settings
+        with tempfile.TemporaryDirectory() as root, \
+             mock.patch.object(settings, "PROJECT_ROOT", root), \
+             mock.patch.object(h3_refiner, "PROJECT_ROOT", root), \
+             mock.patch.object(settings, "PATH", os.path.join(root, "settings.json")), \
+             mock.patch.dict(os.environ, {}, clear=True):
+            folder = os.path.join(root, "models", "gemma-4-12B-it-uncensored-Q5_K_M")
+            os.makedirs(folder)
+            for name in ("gemma-Q5.gguf", "gemma-mmproj.gguf"):
+                open(os.path.join(folder, name), "wb").close()
+            server = os.path.join(root, "llama-server.exe")
+            open(server, "wb").close()
+            os.environ["H3IR_LLAMA_SERVER"] = server
+            model_id = "gemma-4-12b:gemma-4-12B-it-uncensored-Q5_K_M"
+            self.assertIn(model_id, [item["id"] for item in settings.local_models()])
+            self.assertTrue(next(item for item in settings.local_models() if item["id"] == model_id)["vision"])
+            settings.update({"local_llm_model": model_id, "h3_model": model_id})
+            self.assertEqual(settings.load()["local_llm_model"], model_id)
+            self.assertEqual(h3_refiner._paths(model_id, False)[3:],
+                             (os.path.join(folder, "gemma-Q5.gguf"), os.path.join(folder, "gemma-mmproj.gguf")))
+            with self.assertRaises(ValueError):
+                settings.update({"h3_model": "gemma-4-12b:../outside"})
+            os.remove(os.path.join(folder, "gemma-Q5.gguf"))
+            self.assertEqual(settings.load()["h3_model"], model_id)
+            with self.assertRaisesRegex(ValueError, "missing or unsupported"):
+                h3_refiner._paths(model_id, False)
+
+    def test_discovered_qwen_keeps_text_only_behavior(self):
+        refiner = object.__new__(h3_refiner.Refiner)
+        refiner.model_id = "qwen3-14b:qwen3-14b-new"
+        with self.assertRaisesRegex(RuntimeError, "text-only"):
+            refiner.plan("prompt", {}, [b"image"])
+        with self.assertRaisesRegex(RuntimeError, "text-only"):
+            refiner.compile("prompt", 5, 640, 384, "balanced", images=["image"])
+
+    def test_discovers_original_and_legacy_gguf_names(self):
+        with tempfile.TemporaryDirectory() as root, \
+             mock.patch.object(h3_refiner, "PROJECT_ROOT", root), \
+             mock.patch.dict(os.environ, {}, clear=True):
+            server = os.path.join(root, "llama-server.exe")
+            open(server, "wb").close()
+            os.environ["H3IR_LLAMA_SERVER"] = server
+            for model_id, folder, model, projector in (
+                ("gemma-4-12b", "gemma-4-12b-heretic", "gemma-Q4_K_M.gguf", "gemma-mmproj-BF16.gguf"),
+                ("qwen3-14b", "qwen3-14b-abliterated", "model.gguf", None),
+            ):
+                with self.subTest(model_id=model_id):
+                    directory = os.path.join(root, "models", folder)
+                    os.makedirs(directory)
+                    for name in (model, projector):
+                        if name:
+                            open(os.path.join(directory, name), "wb").close()
+                    _, _, _, found_model, found_projector = h3_refiner._paths(model_id, require_compiler=False)
+                    self.assertEqual(found_model, os.path.join(directory, model))
+                    self.assertEqual(found_projector, os.path.join(directory, projector) if projector else None)
+
+    def test_gguf_discovery_requires_unambiguous_files_and_honors_overrides(self):
+        with tempfile.TemporaryDirectory() as folder, mock.patch.dict(os.environ, {}, clear=True):
+            for name in ("model.gguf", "other.GGUF", "mmproj.gguf", "other-mmproj.gguf"):
+                open(os.path.join(folder, name), "wb").close()
+            with self.assertRaisesRegex(RuntimeError, "Multiple local model GGUF files.*H3IR_MODEL_FILE"):
+                h3_refiner._gguf_path(folder)
+            with self.assertRaisesRegex(RuntimeError, "Multiple vision projector GGUF files.*H3IR_PROJECTOR_FILE"):
+                h3_refiner._gguf_path(folder, projector=True)
+            with mock.patch.dict(os.environ, {"H3IR_MODEL_FILE": "chosen-model",
+                                              "H3IR_PROJECTOR_FILE": "chosen-projector"}):
+                self.assertEqual(h3_refiner._gguf_path(folder), "chosen-model")
+                self.assertEqual(h3_refiner._gguf_path(folder, projector=True), "chosen-projector")
+
+    def test_missing_projector_is_reported(self):
+        with tempfile.TemporaryDirectory() as root, \
+             mock.patch.object(h3_refiner, "PROJECT_ROOT", root), \
+             mock.patch.dict(os.environ, {}, clear=True):
+            server = os.path.join(root, "llama-server.exe")
+            directory = os.path.join(root, "models", "gemma-4-12b-heretic")
+            os.makedirs(directory)
+            open(server, "wb").close()
+            open(os.path.join(directory, "gemma-Q4_K_M.gguf"), "wb").close()
+            os.environ["H3IR_LLAMA_SERVER"] = server
+            with self.assertRaisesRegex(RuntimeError, "needs vision projector"):
+                h3_refiner._paths("gemma-4-12b", require_compiler=False)
+
+    def test_local_model_launch_uses_selected_gpu_layers(self):
+        for model in ("gemma-4-12b", "qwen3-14b"):
+            with self.subTest(model=model):
+                refiner = object.__new__(h3_refiner.Refiner)
+                refiner.comfy_url = None
+                refiner.server, refiner.model = "server", "model"
+                refiner.projector = "projector" if model == "gemma-4-12b" else None
+                refiner.model_id, refiner.process = model, None
+                refiner.gpu_layers = 24
+                refiner.verbose = False
+                with mock.patch.dict(os.environ, {"H3IR_GPU_LAYERS": "16"}), \
+                     mock.patch.object(h3_refiner.subprocess, "Popen", side_effect=OSError("launch intercepted")) as launch:
+                    with self.assertRaisesRegex(OSError, "launch intercepted"):
+                        refiner.__enter__()
+                args = launch.call_args.args[0]
+                self.assertEqual(args[args.index("--gpu-layers") + 1], "24")
+
+    def test_token_samples_measure_rate_and_reset_between_requests(self):
+        refiner = object.__new__(h3_refiner.Refiner)
+        refiner._token_previous = None
+        slot = {"id_task": 1, "is_processing": True, "n_prompt_tokens_processed": 40,
+                "params": {"chat_format": "peg-gemma4"}, "next_token": [{"n_decoded": 10, "n_remain": 90}]}
+        with mock.patch.object(refiner, "_token_event") as event, mock.patch("builtins.print") as output:
+            refiner._sample_tokens([slot], 100)
+            slot["next_token"][0]["n_decoded"] = 35
+            refiner._sample_tokens([slot], 105)
+            self.assertEqual(event.call_args.kwargs["tokens_per_second"], 5)
+            self.assertEqual(event.call_args.kwargs["generated"], 35)
+            self.assertEqual(event.call_args.kwargs["input_tokens"], 40)
+            self.assertEqual(refiner.tokens, {"per_second": 5.0, "total": 35})
+            output.assert_called_with("Local LLM: 5.0 tok/s | 35 total tok", flush=True)
+            slot["id_task"] = 2
+            slot["next_token"] = []
+            refiner._sample_tokens([slot], 110)
+            self.assertEqual(event.call_args.kwargs["tokens_per_second"], 0)
+            self.assertEqual(event.call_args.kwargs["generated"], 0)
+            refiner._sample_tokens([], 115)
+            output.assert_called_with("Local LLM: idle", flush=True)
+            self.assertIsNone(refiner._token_previous)
+            self.assertIsNone(refiner.tokens)
+
+    def test_token_monitor_reports_failure_and_recovers(self):
+        refiner = object.__new__(h3_refiner.Refiner)
+        refiner.url = "http://127.0.0.1:42/v1"
+        refiner._token_previous = None
+        refiner._token_stop = mock.Mock()
+        refiner._token_stop.is_set.return_value = False
+        refiner._token_stop.wait.side_effect = [False, True]
+        response = mock.Mock()
+        response.json.return_value = []
+        with mock.patch.object(h3_refiner.requests, "get",
+                               side_effect=[h3_refiner.requests.Timeout("slow"), response]) as get, \
+             mock.patch("builtins.print") as output:
+            refiner._monitor_tokens()
+            self.assertEqual(get.call_args.args[0], "http://127.0.0.1:42/slots")
+            output.assert_called_once_with("Local LLM: telemetry unavailable (slow)", flush=True)
+            self.assertEqual(get.call_count, 2)
+
+    def test_completion_logs_usage_and_truncation_without_response_text(self):
+        refiner = object.__new__(h3_refiner.Refiner)
+        refiner._token_stop = mock.Mock()
+        body = {"choices": [{"finish_reason": "length", "message": {"content": "private text"}}],
+                "usage": {"prompt_tokens": 40, "completion_tokens": 100},
+                "timings": {"predicted_per_second": 4.5}}
+        with mock.patch.object(refiner, "_token_event") as event, mock.patch("builtins.print") as output:
+            refiner._completion_tokens(body)
+            self.assertEqual(event.call_args.kwargs["finish_reason"], "length")
+            self.assertEqual(event.call_args.kwargs["usage"]["completion_tokens"], 100)
+            self.assertNotIn("private text", str(event.call_args))
+            output.assert_called_once_with("Local LLM complete: 4.5 tok/s | 100 total tok", flush=True)
+
+    def test_refiner_waits_for_comfyui_started_by_panel(self):
+        refiner = object.__new__(h3_refiner.Refiner)
+        refiner.comfy_url = "http://127.0.0.1:8188"
+        queue = mock.Mock()
+        queue.json.return_value = {"queue_running": [[1]], "queue_pending": []}
+        with mock.patch.dict(os.environ, {"COMFYUI_STARTUP_WAIT": "180"}), \
+             mock.patch.object(h3_refiner.requests, "get", side_effect=[h3_refiner.requests.ConnectionError("starting"), queue]) as get, \
+             mock.patch.object(h3_refiner.requests, "post") as post, \
+             mock.patch.object(h3_refiner.time, "sleep") as sleep:
+            with self.assertRaisesRegex(RuntimeError, "running or queued"):
+                refiner.__enter__()
+            self.assertEqual(get.call_count, 2)
+            sleep.assert_called_once()
+            post.assert_not_called()
+
+    def test_refiner_reports_offline_comfyui_without_startup_wait(self):
+        refiner = object.__new__(h3_refiner.Refiner)
+        refiner.comfy_url = "http://127.0.0.1:8188"
+        with mock.patch.dict(os.environ, {"COMFYUI_STARTUP_WAIT": "0"}), \
+             mock.patch.object(h3_refiner.requests, "get", side_effect=h3_refiner.requests.ConnectionError("offline")) as get, \
+             mock.patch.object(h3_refiner.time, "sleep") as sleep:
+            with self.assertRaisesRegex(RuntimeError, "Could not release ComfyUI models.*offline"):
+                refiner.__enter__()
+            self.assertEqual(get.call_count, 1)
+            sleep.assert_not_called()
+
+    def test_refiner_releases_models_after_comfyui_becomes_ready(self):
+        refiner = object.__new__(h3_refiner.Refiner)
+        refiner.comfy_url, refiner.server, refiner.model, refiner.projector = "http://127.0.0.1:8188", "server", "model", None
+        refiner.model_id, refiner.process = "gemma-4-12b", None
+        refiner.gpu_layers = "all"
+        refiner.verbose = False
+        queue = mock.Mock()
+        queue.json.return_value = {"queue_running": [], "queue_pending": []}
+        cleanup = mock.Mock(status_code=200)
+        cleanup.json.return_value = {"version": 1, "completed": True, "devices": [
+            {"type": "cuda", "vram_total": 12 * 2**30, "vram_free": 11 * 2**30,
+             "torch_allocated": 0, "torch_reserved": 0}]}
+        with mock.patch.dict(os.environ, {"COMFYUI_STARTUP_WAIT": "180"}), \
+             mock.patch.object(h3_refiner.requests, "get", side_effect=[h3_refiner.requests.ConnectionError("starting"), queue]), \
+             mock.patch.object(h3_refiner.requests, "post", return_value=cleanup) as post, \
+             mock.patch.object(h3_refiner.time, "sleep"), \
+             mock.patch.object(h3_refiner.subprocess, "Popen", side_effect=OSError("test launch")):
+            with self.assertRaisesRegex(OSError, "test launch"):
+                refiner.__enter__()
+            post.assert_called_once_with("http://127.0.0.1:8188/gen-center/free", json={}, timeout=125)
+
+    def test_local_model_starts_when_comfyui_connection_is_refused(self):
+        refiner = object.__new__(h3_refiner.Refiner)
+        refiner.comfy_url, refiner.server, refiner.model, refiner.projector = "http://127.0.0.1:8188", "server", "model", None
+        refiner.model_id, refiner.process = "qwen3-14b", None
+        refiner.gpu_layers = "all"
+        refiner.verbose = False
+        error = h3_refiner.requests.ConnectionError("ComfyUI is off")
+        error.__context__ = ConnectionRefusedError("No listener")
+        with mock.patch.dict(os.environ, {"COMFYUI_STARTUP_WAIT": "0"}), \
+             mock.patch.object(h3_refiner.requests, "get", side_effect=error), \
+             mock.patch.object(h3_refiner.requests, "post") as post, \
+             mock.patch.object(h3_refiner.subprocess, "Popen", side_effect=OSError("launch reached")) as launch, \
+             mock.patch("builtins.print") as output:
+            with self.assertRaisesRegex(OSError, "launch reached"):
+                refiner.__enter__()
+            launch.assert_called_once()
+            post.assert_not_called()
+            output.assert_called_once_with(
+                "ComfyUI is not listening; starting the local model without unloading it.", flush=True)
+
+    def test_local_model_does_not_ignore_uncertain_or_failed_comfyui_cleanup(self):
+        refiner = object.__new__(h3_refiner.Refiner)
+        refiner.comfy_url = "http://127.0.0.1:8188"
+        queue = mock.Mock()
+        queue.json.return_value = {"queue_running": [], "queue_pending": []}
+        for error in (h3_refiner.requests.Timeout("not responding"),
+                      h3_refiner.requests.ConnectionError("unknown connection failure")):
+            with self.subTest(error=type(error).__name__), \
+                 mock.patch.dict(os.environ, {"COMFYUI_STARTUP_WAIT": "0"}), \
+                 mock.patch.object(h3_refiner.requests, "get", side_effect=error), \
+                 mock.patch.object(h3_refiner.subprocess, "Popen") as launch:
+                with self.assertRaisesRegex(RuntimeError, "before starting the local model"):
+                    refiner.__enter__()
+                launch.assert_not_called()
+        error = h3_refiner.requests.ConnectionError("free failed")
+        error.__context__ = ConnectionRefusedError("went offline after queue check")
+        with mock.patch.object(h3_refiner.requests, "get", return_value=queue), \
+             mock.patch.object(h3_refiner.requests, "post", side_effect=error), \
+             mock.patch.object(h3_refiner.subprocess, "Popen") as launch:
+            with self.assertRaisesRegex(RuntimeError, "free failed"):
+                refiner.__enter__()
+            launch.assert_not_called()
+
     def test_local_planner_uses_structured_request_and_vision(self):
         refiner = object.__new__(h3_refiner.Refiner)
         refiner.url = "http://127.0.0.1:42/v1"
@@ -181,6 +518,22 @@ class H3RefinerTest(unittest.TestCase):
             with mock.patch.object(h3_refiner.subprocess, "run", side_effect=wrong):
                 with self.assertRaisesRegex(RuntimeError, "bindings"):
                     refiner.compile("a scene", 5, 1280, 736, "balanced", [image])
+
+    def test_compiler_treats_incoming_shot_markers_as_prose_references(self):
+        refiner = object.__new__(h3_refiner.Refiner)
+        refiner.root, refiner.python, refiner.url = "comfy", "python", "http://127.0.0.1:42/v1"
+        refiner.model_id = "gemma-4-12b"
+        prompt = ("retention_analysis: <Subject 1> (appears in [Shot 1]): fully_preserved.\n"
+                  "detailed_description: [Shot 1] An elf walks. [Shot 2] At 00:02.000, she turns.\n"
+                  "overall_soundscape: Leaves rustle.\nnon_diegetic_music: N/A")
+        response = SimpleNamespace(returncode=0, stderr="", stdout=json.dumps({
+            "prompt": "enhanced", "mode": "t2va", "frames": 124, "wiring": []}))
+        with mock.patch.object(h3_refiner.subprocess, "run", return_value=response) as run:
+            self.assertEqual(refiner.compile(prompt, 5, 1280, 736, "extreme"), "enhanced")
+        request = json.loads(run.call_args.kwargs["input"])
+        self.assertEqual(request["brief"]["intent"],
+                         prompt.replace("[Shot 1]", "Shot 1").replace("[Shot 2]", "Shot 2"))
+        self.assertEqual(request["brief"]["creativity"], "extreme")
 
     def test_video_audio_and_paired_soundtrack_bindings(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -357,6 +710,105 @@ class H3RefinerTest(unittest.TestCase):
         self.assertNotIn("3", graph)
         self.assertNotIn("extra", graph["4"]["inputs"])
         self.assertNotIn("extra", graph["5"]["inputs"])
+
+
+class CleanupBridgeTest(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        self.steps = []
+        self.flags = {}
+        self.remaining = 0
+        self.allocated = 2**30
+        self.routes = {}
+        outer = self
+
+        class Executor:
+            def reset(self):
+                outer.steps.append("reset")
+
+        memory = ModuleType("comfy.model_management")
+        memory.current_loaded_models = [object()]
+        memory.get_all_torch_devices = lambda: [SimpleNamespace(type="cuda", index=0)]
+        memory.get_total_memory = lambda device: 12 * 2**30
+        memory.get_free_memory = lambda device: 11 * 2**30
+        memory.torch = SimpleNamespace(cuda=SimpleNamespace(
+            memory_allocated=lambda device: self.allocated,
+            memory_reserved=lambda device: self.allocated))
+
+        def empty():
+            self.steps.append("empty")
+            self.allocated = 0
+
+        memory.soft_empty_cache = empty
+        comfy = ModuleType("comfy")
+        comfy.model_management = memory
+        execution = ModuleType("execution")
+        execution.PromptExecutor = Executor
+        queue = SimpleNamespace(mutex=threading.RLock(), get_tasks_remaining=lambda: self.remaining,
+                                set_flag=lambda key, value: self.flags.__setitem__(key, value))
+
+        def register(path):
+            def decorate(function):
+                self.routes[path] = function
+                return function
+            return decorate
+
+        server = ModuleType("server")
+        server.PromptServer = SimpleNamespace(instance=SimpleNamespace(
+            prompt_queue=queue, routes=SimpleNamespace(post=register)))
+        aiohttp = ModuleType("aiohttp")
+        aiohttp.web = SimpleNamespace(json_response=lambda body, status=200: SimpleNamespace(body=body, status=status))
+        with mock.patch.dict(sys.modules, {"comfy": comfy, "comfy.model_management": memory,
+                                          "execution": execution, "server": server, "aiohttp": aiohttp}):
+            path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "comfyui", "gen_center_cleanup", "__init__.py")
+            self.bridge = runpy.run_path(path)
+        self.memory, self.executor = memory, Executor()
+        collect = mock.patch.object(self.bridge["gc"], "collect", side_effect=lambda: self.steps.append("collect"))
+        collect.start()
+        self.addCleanup(collect.stop)
+
+    def process_flags(self):
+        self.memory.current_loaded_models.clear()
+        if self.flags.pop("free_memory"):
+            self.executor.reset()
+
+    async def test_ack_waits_for_worker_reset_garbage_collection_and_gpu_cache_release(self):
+        task = asyncio.create_task(self.routes["/gen-center/free"](None))
+        await asyncio.sleep(0)
+        self.assertFalse(task.done())
+        self.memory.soft_empty_cache()
+        self.assertFalse(task.done(), "unrelated GPU cleanup must not acknowledge our pending flags")
+        self.steps.clear()
+        self.process_flags()
+        response = await asyncio.wait_for(task, 2)
+        self.assertEqual(self.steps, ["reset", "collect", "empty"])
+        self.assertEqual(response.status, 200)
+        self.assertTrue(response.body["completed"])
+        self.assertEqual(response.body["devices"][0]["torch_allocated"], 0)
+        with mock.patch.object(comfy_memory.requests, "post", return_value=mock.Mock(
+                status_code=200, json=lambda: response.body)):
+            self.assertEqual(comfy_memory.release("http://comfy")[0]["vram_free"], 11 * 2**30)
+
+    async def test_busy_worker_and_late_work_do_not_acknowledge_safe_cleanup(self):
+        self.remaining = 1
+        response = await self.routes["/gen-center/free"](None)
+        self.assertEqual(response.status, 409)
+        self.assertFalse(self.flags)
+        self.remaining = 0
+        task = asyncio.create_task(self.routes["/gen-center/free"](None))
+        await asyncio.sleep(0)
+        self.process_flags()
+        self.remaining = 1
+        response = await asyncio.wait_for(task, 2)
+        self.assertEqual(response.status, 409)
+        self.assertNotIn("completed", response.body)
+
+    async def test_cleanup_timeout_is_not_reported_as_success(self):
+        with mock.patch.object(asyncio, "to_thread", new=mock.AsyncMock(return_value=False)):
+            response = await self.routes["/gen-center/free"](None)
+        self.assertEqual(response.status, 504)
+        self.assertNotIn("completed", response.body)
+        self.assertFalse(self.flags["free_memory"].done.is_set())
+        self.process_flags()
 
 
 if __name__ == "__main__":

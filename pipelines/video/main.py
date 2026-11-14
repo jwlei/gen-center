@@ -7,16 +7,18 @@ import re
 import shutil
 import sys
 import time
+import uuid
 
 import ffmpeg
 import requests
 from dotenv import load_dotenv
 
-from core import director, h3_refiner, run_form, seeds
-from core import pills, titles, workflow_options
+from core import director, h3_refiner, run_checkpoint, run_form, seeds
+from core import lora_tests, pills, titles, workflow_options
 from core.audio import AudioEngine
 from core.paths import LOGS_DIR
 from core.saved_workflows import shorthand, title_words, unique_name
+from panel import settings as panel_settings
 from pipelines.video import h3_infinite, h3_multishot, h3_prompt, media, paths, planner, roles
 from pipelines.video.comfy import ComfyClient
 from pipelines.video.run_state import STAGES, RunState, claimed_films, list_runs
@@ -88,6 +90,7 @@ def parse_args(argv=None):
                         help="Sampling steps for H3 Multishot (default: 20).")
     parser.add_argument("--llm", choices=[name for name, _ in planner.LLMS], default=None,
                         help="Who writes the prompts (default: LLM_PROVIDER in .env, else local).")
+    parser.add_argument("--local-model", help="Local prompt model (default: the model selected in Settings).")
     parser.add_argument("--size", type=parse_size, help="Render size such as 1280x736 (default: the image's shape).")
     parser.add_argument("--audio", metavar="FILE", help="An audio file for the film: its length sets the film's, and a workflow with Load Audio gets it per clip.")
     parser.add_argument("--narration", metavar="TEXT", help="Text to voice with Gemini TTS, used the same way as --audio.")
@@ -172,7 +175,7 @@ def check_setup(args):
         problems.append("ffmpeg isn't installed, or isn't on the PATH.")
     if llm == "local":
         try:
-            h3_refiner._paths(h3_refiner.local_llm_model(), require_compiler=False)
+            h3_refiner._paths(getattr(args, "local_model", None) or h3_refiner.local_llm_model(), require_compiler=False)
             print("✅ Local model and llama.cpp found.")
         except (RuntimeError, ValueError) as e:
             problems.append(str(e))
@@ -283,13 +286,15 @@ def plan_run(args, stages):
     width, height = args.size or media.render_size(*(images[0].size if images else media.DEFAULT_SHAPE),
                                                    media.default_area(video_model))
     llm = args.llm or planner.default_llm()
-    if not args.direct and llm == "local" and h3_refiner.local_llm_model() == "qwen3-14b" and (images or image_2_in_words):
-        raise RuntimeError("Qwen3 14B is text-only and cannot analyze attached images. Choose Gemma 4 in Settings.")
+    local_model = getattr(args, "local_model", None) or (h3_refiner.local_llm_model() if not args.direct and llm == "local" else None)
+    if not args.direct and llm == "local" and panel_settings.model_family(local_model) == "qwen3-14b" and (images or image_2_in_words):
+        raise RuntimeError("Qwen3 14B is text-only and cannot analyze attached images. Choose a Gemma 4 model.")
     if not args.direct and not planner.llm_configured(llm):
         raise RuntimeError(f"{llm} has no credentials: see .env.example.")
     state = RunState.new(args.prompt, args.duration, start, width, height, llm,
                          os.getenv("COMFYUI_WORKFLOW") or None, len(images))
     state.inputs = inputs
+    state.local_model = local_model
     state.options = workflow_options.chosen_in_env() or None
     state.h3_mode, state.h3_creativity, state.image_roles = args.h3_enhance, args.h3_creativity, args.image_roles
     state.clip_relationship = args.clip_relationship
@@ -299,7 +304,7 @@ def plan_run(args, stages):
     state.clip_seconds = list(args.clip_seconds) if args.clip_seconds else None
     if (not args.direct and llm == "local") or args.h3_enhance != "off":
         # The model that wrote the plan, when the local one did; else OpenH3-IR's, which enhanced it.
-        state.h3_model = h3_refiner.local_llm_model() if not args.direct and llm == "local" else h3_refiner.selected_model()
+        state.h3_model = local_model or h3_refiner.selected_model()
     state.form = run_form.from_env()
     print_stage("Plan", stages)
     keep_references(state, videos, audios)
@@ -332,9 +337,15 @@ def plan_run(args, stages):
         print(f"✍️ Your prompt for each of {count} clips, {shortest}-{longest}s a clip, at {width}x{height}.")
         for image, path in zip(images, state.image_paths):
             media.save_input(image, path)
+        comparison = lora_tests.in_env()
+        if comparison and len(comparison) != 1:
+            raise RuntimeError("Each video comparison must select one LoRA and strength.")
         for index, shot in enumerate(shots):
             shot["seed"] = seeds.nth(args.seed, index)
-        state.update(title=titles.titled(title, state.brief, "a short film", comfy.url, None), shots=shots)
+            if comparison:
+                shot["lora_test"] = dict(comparison[0])
+        state.update(title=titles.titled(title, state.brief, "a short film", comfy.url, None,
+                                       model_id=local_model or state.h3_model), shots=shots)
         return state
     print(f"🧠 {llm} is writing {planner.shot_count(state.seconds, video_model, args.clip_seconds)} prompts for a {state.seconds}s film at "
           f"{width}x{height}, {shortest}-{longest}s a clip...")
@@ -344,7 +355,7 @@ def plan_run(args, stages):
                  video_model, args.image_roles, media.preview_jpeg(image_2_in_words) if image_2_in_words else None,
                  state.references())
     if llm == "local":
-        with h3_refiner.Refiner(comfy.url, require_compiler=False, model_id=h3_refiner.local_llm_model()) as refiner:
+        with h3_refiner.Refiner(comfy.url, require_compiler=False, model_id=local_model) as refiner:
             title, shots = planner.plan_film(*plan_args, chosen=args.clip_seconds, refiner=refiner,
                                              first_frame=state.start == "multishot" and state.h3_first_frame,
                                              clip_relationship=state.clip_relationship)
@@ -357,7 +368,7 @@ def plan_run(args, stages):
     for index, shot in enumerate(shots):
         shot["seed"] = seeds.nth(args.seed, index)
         shot["planner_prompt"] = shot["prompt"]
-    title = titles.titled(title, state.brief, "a short film", comfy.url, llm)
+    title = titles.titled(title, state.brief, "a short film", comfy.url, llm, model_id=local_model or state.h3_model)
     state.update(title=title, shots=shots)
 
     print(f"🎞️ {title}")
@@ -416,11 +427,7 @@ def refine_review(state):
         return
     approved = state.approved_prompt_key == state.prompt_key()
     url = (os.getenv("COMFYUI_URL") or "http://127.0.0.1:8188").rstrip("/")
-    try:
-        online = requests.get(f"{url}/system_stats", timeout=5).ok
-    except requests.RequestException:
-        online = False
-    with h3_refiner.Refiner(url if online else None) as refiner:
+    with h3_refiner.Refiner(url) as refiner:
         workflow = ComfyClient().workflow
         for shot in pending:
             enhanced = refine_shot(refiner, state, shot, state.image_paths, workflow)
@@ -460,7 +467,7 @@ def render_shot(state, comfy, index, images, audio=None, references=((), ()), pr
     prompt = shot["prompt"] if prompt is None else prompt
     save_as = os.path.join(state.clips_dir, f"shot_{index + 1:03d}")
     for attempt in range(1, CLIP_ATTEMPTS + 1):
-        seed = seeds.pick(shot.get("seed"), attempt)
+        seed = seeds.pick(shot.get("seed"), 1 if shot.get("lora_test") else attempt)
         print(f"      🌱 Seed {seed}")
         try:
             kwargs = {"h3_refined": True} if state.h3_mode != "off" else {}
@@ -471,6 +478,8 @@ def render_shot(state, comfy, index, images, audio=None, references=((), ()), pr
             else:
                 clip = comfy.render(prompt, images, shot["seconds"], state.width, state.height, save_as, audio, *references,
                                     seed=seed, on_prompt=lambda prompts: record_comfy_prompts(state, index, prompts), **kwargs)
+        except run_checkpoint.CheckpointError:
+            raise
         except (RuntimeError, OSError, ValueError) as e:
             print(f"      ❌ {e} (attempt {attempt}/{CLIP_ATTEMPTS}).")
             continue
@@ -571,19 +580,54 @@ def stitch_film(state):
         state.update(film_name=unique_name(paths.OUTPUT_DIR, clash, ".mp4", taken))
         print(f"   ⚠️ {clash}.mp4 is another run's film: this one is {state.film_name}.mp4.")
     output = os.path.join(paths.OUTPUT_DIR, f"{state.film_name}.mp4")
-    if state.start == "multishot":
-        shutil.copyfile(os.path.join(state.parts_dir, state.take_file), output)
-    elif state.start == "infinite":
-        # The suite stitches its own chain: it trims each clip's carried-over head and smooths the seams.
-        print(f"   🧵 H3 Infinite is stitching {len(state.shots)} saved clips in ComfyUI...")
-        ComfyClient().stitch_continuation(state.id, len(state.shots), os.path.splitext(output)[0])
-    else:
-        clips = [state.clip_path(i) for i in range(len(state.shots))]
-        width, height = media.film_size(clips, state.width, state.height)
-        media.stitch(clips, state.parts_dir, output, width, height, state.start == "chain")
-    if state.has_audio:
-        media.with_audio(output, state.audio_path, pad=state.fixed_clip)
-    state.update(final=output)
+    token = uuid.uuid4().hex
+    temp = os.path.join(paths.OUTPUT_DIR, f".{state.film_name}.{token}.mp4")
+    backup = temp + ".backup"
+    keep_backup = False
+    try:
+        if state.start == "multishot":
+            shutil.copyfile(os.path.join(state.parts_dir, state.take_file), temp)
+        elif state.start == "infinite":
+            # The suite stitches its own chain, trimming carried-over heads and smoothing seams.
+            print(f"   🧵 H3 Infinite is stitching {len(state.shots)} saved clips in ComfyUI...")
+            ComfyClient().stitch_continuation(state.id, len(state.shots), os.path.splitext(temp)[0])
+        else:
+            clips = [state.clip_path(i) for i in range(len(state.shots))]
+            width, height = media.film_size(clips, state.width, state.height)
+            media.stitch(clips, state.parts_dir, temp, width, height, state.start == "chain")
+        if state.has_audio:
+            media.with_audio(temp, state.audio_path, pad=state.fixed_clip)
+        try:
+            length, streams = media._probe(temp)
+        except (ffmpeg.Error, OSError, KeyError, ValueError, TypeError) as error:
+            raise RuntimeError(f"Stitched film cannot be read: {error}") from error
+        if not math.isfinite(length) or length <= 0 or "video" not in streams or (state.has_audio and "audio" not in streams):
+            raise RuntimeError("Stitched film is invalid: expected a positive duration, video and any requested audio.")
+        had_output = os.path.exists(output)
+        if had_output:
+            shutil.copyfile(output, backup)
+        os.replace(temp, output)
+        previous_final = state.final
+        try:
+            state.update(final=output)
+        except Exception as error:
+            state.final = previous_final
+            try:
+                if had_output:
+                    os.replace(backup, output)
+                else:
+                    os.remove(output)
+            except OSError as restore_error:
+                keep_backup = had_output
+                raise RuntimeError(f"Checkpoint failed and the previous film could not be restored; backup: {backup}: {restore_error}") from error
+            raise
+    finally:
+        for path in (temp, temp + ".part", None if keep_backup else backup):
+            if path:
+                try:
+                    os.remove(path)
+                except FileNotFoundError:
+                    pass
     return output
 
 
@@ -620,9 +664,9 @@ def render_take(state, comfy):
 
 def hold_prompt_warnings(state):
     state.check_prompts()
-    state.save()
     if not state.prompt_warning_pending:
         return False
+    state.save()
     pairs = "; ".join(f"Items {warning['items'][0]} and {warning['items'][1]}" for warning in state.prompt_warnings)
     print(f"Warning: Check prompts ({pairs}). Rendering is held; starting this run in the panel approves it.")
     return True
@@ -655,13 +699,19 @@ def run(args):
         if state.final:
             print(f"✅ Already finished: {state.final}")
             return 0
-        if state.prompt_warning_pending:
+        defer_prompt_approval = args.redo is not None and state.prompt_warning_pending
+        if state.prompt_warning_pending and not defer_prompt_approval:
             state.approve_prompts()
-        if hold_prompt_warnings(state):
+        if not defer_prompt_approval and hold_prompt_warnings(state):
             return 0
         # Only stitching left needs no ComfyUI. Saved after this, or a ComfyUI that's
         # down would cost a redo's clips without rendering anything.
         preflight(needs_comfy=state.next_stage() == "Clips" or state.start == "infinite")
+        if defer_prompt_approval:
+            if state.prompt_warning_pending:
+                state.approve_prompts()
+            if hold_prompt_warnings(state):
+                return 0
         state.save()
         print(f"🗂️ Run folder: {state.id}")
         print(f"🎞️ Continuing {state.title}")

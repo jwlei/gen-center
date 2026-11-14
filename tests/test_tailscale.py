@@ -141,8 +141,9 @@ class StartupTest(unittest.TestCase):
                 mock.patch.dict(os.environ, {"APP_PASSWORD": "open sesame"}), \
                 mock.patch.object(webapp.app, "run"), \
                 mock.patch.object(webapp, "ComfyMonitor"), \
+                mock.patch.object(webapp, "monitor_gpu_heat"), \
                 mock.patch.object(webapp.tailscale, "connect", return_value=(None, None)) as connect, \
-                mock.patch.object(webapp.threading, "Thread", side_effect=lambda target, args, daemon: mock.Mock(start=lambda: target(*args))):
+                mock.patch.object(webapp.threading, "Thread", side_effect=lambda target, args=(), daemon=None: mock.Mock(start=lambda: target(*args))):
             webapp.main()
         return connect
 

@@ -77,6 +77,36 @@ class TitlesTest(unittest.TestCase):
                 f.write('{"gemini_titles": true}')
             self.assertEqual(settings.load()["title_source"], "gemini", "Gemini titles on, before it was a choice")
 
+    def test_generation_model_titles_without_loading_the_default(self):
+        refiner = mock.MagicMock()
+        refiner.__enter__.return_value.plan.return_value = '{"title": "Selected Model Title"}'
+        with mock.patch("core.h3_refiner.Refiner", return_value=refiner) as factory, \
+                mock.patch("core.h3_refiner.local_llm_model") as default:
+            self.assertEqual(titles.local_title("Prompt", "a film", "http://comfy", model_id="chosen"),
+                             "Selected Model Title")
+            factory.assert_called_once_with("http://comfy", require_compiler=False, model_id="chosen")
+            default.assert_not_called()
+        with mock.patch.object(titles, "source", return_value="gemini"), \
+                mock.patch.object(titles, "gemini_title") as gemini, \
+                mock.patch.object(titles, "local_title", return_value="Selected Model Title") as local:
+            self.assertEqual(titles.titled("Own", "Prompt", "a film", "http://comfy", model_id="chosen"),
+                             "Selected Model Title")
+            local.assert_called_once_with("Prompt", "a film", "http://comfy", model_id="chosen")
+            gemini.assert_not_called()
+            local.reset_mock()
+            self.assertEqual(titles.titled("Local Plan Title", "Prompt", "a film", "http://comfy", "local", "chosen"),
+                             "Local Plan Title")
+            local.assert_not_called()
+        with mock.patch.object(titles.panel_settings, "load", return_value={"title_source": "gemini"}), \
+                mock.patch.dict(os.environ, {"GEMINI_API_KEY": ""}), \
+                mock.patch.object(titles, "local_title", return_value="Local Title") as local:
+            self.assertEqual(titles.titled("Own", "Prompt", "a film", "http://comfy", model_id="chosen"), "Local Title")
+            local.assert_called_once_with("Prompt", "a film", "http://comfy", model_id="chosen")
+        with mock.patch.object(titles, "source", return_value="off"), \
+                mock.patch.object(titles, "local_title") as local:
+            self.assertEqual(titles.titled("Own", "Prompt", "a film", "http://comfy", model_id="chosen"), "Own")
+            local.assert_not_called()
+
     def test_local_only_never_asks_gemini(self):
         with mock.patch.object(titles.panel_settings, "load", return_value={"title_source": "local"}), \
                 mock.patch.dict(os.environ, {"GEMINI_API_KEY": "x"}), mock.patch.object(titles, "_generate") as ask, \

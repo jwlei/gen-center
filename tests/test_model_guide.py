@@ -53,6 +53,13 @@ class ModelGuideTest(unittest.TestCase):
         self.assertIn("20 steps", notes)
         self.assertIn("15", notes)
 
+    def test_style_lora_guide_explains_picker_and_compatibility(self):
+        found = model_guide.guide(model_guide.STYLE_LORA)
+        self.assertEqual(found["title"], "Style LoRA")
+        text = " ".join(item for section in found["sections"] for item in section["items"])
+        self.assertIn("keywords", text)
+        self.assertIn("not proof of compatibility", text)
+
     def test_a_file_that_cant_be_read_has_no_guide(self):
         with tempfile.TemporaryDirectory() as folder:
             path = os.path.join(folder, "w.json")

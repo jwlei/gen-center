@@ -7,7 +7,8 @@ it would get otherwise (the LLM's, or an exact prompt's first words). It names t
     gemini_sfw  As gemini, but a run made in Private mode (NSFW, PRIVATE_ENV set by the panel) is titled by the local model
                 alone, so its prompt never goes to Gemini.
     local       only the local model writes it, and Gemini is never asked.
-Without a Gemini key, "gemini" and "gemini_sfw" are off. When every one asked fails, the run keeps its own title and goes on.
+A local model chosen for the generation or its prompt writer also titles it whenever titling is enabled.
+Without that choice or a Gemini key, "gemini" and "gemini_sfw" are off. If titling fails, the run keeps its own title.
 """
 import json
 import os
@@ -29,13 +30,15 @@ TITLE_SCHEMA = {"type": "object", "properties": {"title": {"type": "string"}}, "
                 "additionalProperties": False}
 
 
-def source():
+def source(model_id=None):
     """Who titles this run: "off", "gemini" (with the local model behind it) or "local". Settings' Gemini for what isn't NSFW
     resolves to one of those by whether the run is made in Private mode."""
     try:
         chosen = panel_settings.load().get("title_source")
     except (OSError, ValueError):
         return "off"
+    if model_id and chosen in panel_settings.TITLE_SOURCES and chosen != "off":
+        return "local"
     if chosen in ("gemini", "gemini_sfw") and not os.getenv("GEMINI_API_KEY"):
         return "off"
     if chosen == "gemini_sfw":
@@ -65,11 +68,11 @@ def gemini_title(prompt, what):
     return title
 
 
-def local_title(prompt, what, comfy_url):
+def local_title(prompt, what, comfy_url, model_id=None):
     """The local model's title for it, or None. Starting it frees ComfyUI's models first, as writing prompts does."""
     from core import h3_refiner  # Only when needed: it brings the local model's tooling with it
     try:
-        with h3_refiner.Refiner(comfy_url, require_compiler=False, model_id=h3_refiner.local_llm_model()) as refiner:
+        with h3_refiner.Refiner(comfy_url, require_compiler=False, model_id=model_id or h3_refiner.local_llm_model()) as refiner:
             reply = refiner.plan(PROMPT.format(what=what, prompt=prompt[:MOST_PROMPT]), TITLE_SCHEMA)
         return clean(json.loads(reply).get("title")) or None
     except Exception as e:  # A title is never worth stopping a run for
@@ -77,14 +80,16 @@ def local_title(prompt, what, comfy_url):
         return None
 
 
-def titled(title, prompt, what, comfy_url=None, llm=None):
+def titled(title, prompt, what, comfy_url=None, llm=None, model_id=None):
     """
     title, or the one Settings asks for in its place: Gemini's (the local model's when Gemini gives none), or the local
     model's alone. Not asked of the local model when it (llm "local") wrote the prompts and so its title already.
     """
-    chosen = source()
+    chosen = source(model_id) if model_id else source()
     if not (prompt or "").strip() or chosen == "off":
         return title
+    if model_id:
+        chosen = "local"
     better = None
     if chosen == "gemini":
         better = gemini_title(prompt, what)
@@ -93,7 +98,7 @@ def titled(title, prompt, what, comfy_url=None, llm=None):
             return better
     if comfy_url and llm != "local":
         print("🏷️ Asking the local model for a title..." if chosen == "local" else "🏷️ Asking the local model for a title instead...")
-        better = local_title(prompt, what, comfy_url)
+        better = local_title(prompt, what, comfy_url, model_id=model_id) if model_id else local_title(prompt, what, comfy_url)
         if better:
             print(f"🏷️ The local model titled it: {better}")
     return better or title

@@ -46,6 +46,16 @@ TTS_429 = "429: Rate limit exceeded for model gemini-3.8-flash-tts (limit: 10 re
 MINUTE_429 = "429 RESOURCE_EXHAUSTED. {'error': {'message': 'limit: 5', 'details': [{'quotaId': 'GenerateRequestsPerMinutePerProjectPerModel-FreeTier'}, {'retryDelay': '45s'}]}}"
 
 
+class GeminiClientTest(unittest.TestCase):
+    def test_sdk_client_uses_transport_deadline_and_disables_internal_retries(self):
+        with mock.patch.dict(os.environ, {"GEMINI_API_KEY": "test"}), \
+                mock.patch.object(gemini.genai, "Client") as client_factory:
+            gemini._get_client(1.25)
+        options = client_factory.call_args.kwargs["http_options"]
+        self.assertEqual(options.timeout, 1250, "google-genai HttpOptions timeouts are milliseconds")
+        self.assertEqual(options.retry_options.attempts, 1, "fallback owns retry decisions")
+
+
 class Refused(Exception):
     def __init__(self, message):
         super().__init__(message)
@@ -63,10 +73,13 @@ class QuotaTest(unittest.TestCase):
             def generate_content(self, model, contents, config=None):
                 test.asked.append(model)
                 if model in test.refuse:
-                    raise Refused(test.refuse[model])
+                    error = test.refuse[model]
+                    if isinstance(error, BaseException):
+                        raise error
+                    raise Refused(error)
                 return mock.Mock(text="fine")
 
-        patches = [mock.patch.object(gemini, "_get_client", lambda: mock.Mock(models=Models())),
+        patches = [mock.patch.object(gemini, "_get_client", lambda timeout=None: mock.Mock(models=Models())),
                    mock.patch.object(gemini.time, "sleep", lambda seconds: None)]
         for patch in patches:
             patch.start()
@@ -144,6 +157,24 @@ class QuotaTest(unittest.TestCase):
         self.assertEqual(slept, [])
         self.assertFalse(api_log.is_exhausted("m1"), "a per-minute limit is never marked as a day's")
 
+    def test_a_transport_timeout_hands_over_without_leaving_a_worker_behind(self):
+        self.refuse["m1"] = TimeoutError("request timed out")
+        gemini._generate("x", models=["m1", "m2"])
+        self.assertEqual(self.asked, ["m1", "m2"])
+        self.assertIn("m1", gemini._cooldowns)
+
+    def test_timeout_must_be_finite_and_positive(self):
+        for configured in ("0", "-1", "nan", "inf", "not-a-number"):
+            with self.subTest(configured=configured), mock.patch.dict(os.environ, {"GEMINI_TIMEOUT": configured}), \
+                    mock.patch.object(gemini, "_get_client") as get_client:
+                with self.assertRaisesRegex(ValueError, "GEMINI_TIMEOUT must be a finite positive"):
+                    gemini._generate("x", models=["m1"])
+                get_client.assert_not_called()
+        with mock.patch.object(gemini, "_get_client") as get_client:
+            with self.assertRaisesRegex(ValueError, "GEMINI_TIMEOUT must be a finite positive"):
+                gemini._generate("x", models=["m1"], timeout=0)
+            get_client.assert_not_called()
+
     def test_a_model_that_just_failed_is_tried_last_by_the_next_call(self):
         self.refuse["m1"] = "503 UNAVAILABLE. high demand"
         gemini._generate("x", models=["m1", "m2"])
@@ -166,7 +197,7 @@ class QuotaTest(unittest.TestCase):
                     raise Refused("503 UNAVAILABLE. high demand")
                 return mock.Mock(text="fine")
 
-        with mock.patch.object(gemini, "_get_client", lambda: mock.Mock(models=Models())), \
+        with mock.patch.object(gemini, "_get_client", lambda timeout=None: mock.Mock(models=Models())), \
                 mock.patch.object(gemini.time, "sleep", slept.append):
             gemini._generate("x", models=["m1", "m2"])
         self.assertEqual(calls, ["m1", "m2", "m1"])
@@ -236,6 +267,27 @@ class GenerateContinuesTest(unittest.TestCase):
 
     def generate(self, **form):
         return self.client.post("/generate/shorts", data={**BASE, **form}).get_json()
+
+    def test_invalid_sibling_does_not_block_status_or_generation(self):
+        from core import run_checkpoint
+        valid = self.stopped("run_20261101_100000_1", "Valid topic")
+        bad_id = "run_20261101_110000_1"
+        bad = os.path.join(run_state.RUNS_DIR, bad_id, "state.json")
+        os.makedirs(os.path.dirname(bad))
+        with open(bad, "wb") as file:
+            file.write(b"\x00" * 19)
+        with self.assertLogs("core.run_checkpoint", level="WARNING"):
+            self.assertEqual(shorts_panel.run_to_continue("Valid topic", valid.argv).id, valid.id)
+        response = self.client.get("/api/status")
+        self.assertEqual(response.status_code, 200)
+        result = self.generate()
+        self.assertTrue(result["ok"])
+        self.assertEqual(self.added[0]["resume"], valid.id)
+        self.assertIn(bad, [error["path"] for error in run_checkpoint.catalogue_errors()])
+        with self.assertRaisesRegex(run_checkpoint.CheckpointError, "Cannot read checkpoint"):
+            RunState.load(bad_id)
+        with open(bad, "rb") as file:
+            self.assertEqual(file.read(), b"\x00" * 19)
 
     def test_an_empty_topic_takes_the_oldest(self):
         self.stopped("run_20261101_100000_1", "Old topic")
@@ -436,7 +488,8 @@ class FreeComfyTest(unittest.TestCase):
         queue = webapp.JobQueue(mock.Mock(batches=True, stopped=False, returncode=0), prepare=lambda item: None)
         queue.current = {"label": "x", "pipeline": "image", "env": {"COMFYUI_WORKFLOW": "a.json"}}
         queue.items = [{"label": "y", "pipeline": "image", "env": {"COMFYUI_WORKFLOW": "b.json"}}]
-        with mock.patch.object(webapp, "free_comfyui") as free, mock.patch.object(webapp, "note_outcome"),                 mock.patch.object(webapp, "notify_ended"):
+        with mock.patch.object(webapp, "free_comfyui") as free, mock.patch.object(webapp, "_comfy_freeing", False), \
+                mock.patch.object(webapp, "note_outcome"), mock.patch.object(webapp, "notify_ended"):
             queue._finish_current()
             for _ in range(50):  # In the background, so the queue's lock isn't held while ComfyUI answers
                 if free.called:
@@ -500,6 +553,23 @@ class SeedTest(unittest.TestCase):
 
 
 class ProgressActionTest(unittest.TestCase):
+    def test_token_updates_preserve_action_time_and_clear_before_rendering(self):
+        job = webapp.Job()
+        job.pipeline, job.eta = "video", mock.Mock()
+        job._track("▶ Stage 1/3: Plan")
+        started = job.progress["action_started"]
+        job._track("Local LLM: 4.5 tok/s | 125 total tok")
+        self.assertEqual(job.progress["tokens"], {"per_second": 4.5, "total": 125})
+        self.assertEqual(job.progress["action_started"], started)
+        job._track("Local LLM: telemetry unavailable (slow)")
+        self.assertNotIn("tokens", job.progress)
+        job._track("Local LLM: 5.0 tok/s | 150 total tok")
+        job._track("Local LLM complete: 5.0 tok/s | 155 total tok")
+        self.assertNotIn("tokens", job.progress)
+        job._track("Local LLM: 5.0 tok/s | 150 total tok")
+        job._track("▶ Stage 2/3: Clips")
+        self.assertNotIn("tokens", job.progress)
+
     def test_a_started_local_model_says_what_it_is_doing_not_that_it_is_starting(self):
         job = webapp.Job()
         job.pipeline, job.eta = "image", mock.Mock()

@@ -8,6 +8,7 @@ import os
 import types
 from datetime import datetime, timedelta
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -51,23 +52,112 @@ SAVED_OPTIONS = [{"id": "steps", "kind": "number", "label": "Steps", "default": 
                  {"id": "negative", "kind": "text", "label": "Negative prompt", "default": "saved negative", "advanced": True}]
 
 
-def without_lora(workflows, test):
-    """
-    The workflows as listed, less the LoRA setting each now has (core/workflow_options.py style_lora): the test checks
-    each has it, and compares the rest as it was.
-    """
-    found = []
-    for workflow in workflows:
-        takes = dict(workflow["takes"])
-        options = takes.pop("options", [])
-        test.assertEqual([option["id"] for option in options if option["id"].startswith("lora")], ["lora", "lora_name", "lora_strength"],
-                         f"{workflow['name']} offers Use LoRA")
-        rest = [option for option in options if not option["id"].startswith("lora")]
-        found.append({**workflow, "takes": {**takes, **({"options": rest} if rest else {})}})
-    return found
-
-
 class QueueTopTest(unittest.TestCase):
+    def test_lora_video_comparison_estimate_sums_complete_videos(self):
+        from core import workflow_options
+        options = workflow_options.lora_options("0", "krea_a.safetensors", 1, ["krea_a.safetensors"])
+        takes = {"min_images": 0, "max_images": 0, "max_videos": 0, "max_audios": 0, "options": options}
+        form = {"prompt": "same prompt", "duration": "10", "lora_strength_test": "1", "lora_test_step": "1"}
+        with webapp.app.test_request_context("/api/estimate/video", method="POST", data=form), \
+             mock.patch.object(video_panel, "chosen_workflow", return_value=({}, takes, None)), \
+             mock.patch.object(video_panel, "private_mode", return_value=False), \
+             mock.patch.object(video_panel, "RunEta") as eta:
+            eta.return_value.plan.side_effect = [
+                {"total": 20, "clips": 2, "steps": [{"name": "Render", "seconds": 20}]},
+                {"total": 30, "clips": 2, "steps": [{"name": "Render", "seconds": 30}]},
+            ]
+            result = video_panel.estimate.__wrapped__()
+        self.assertTrue(result["ok"])
+        self.assertEqual((result["videos"], result["clips"], result["total"]), (2, 4, 50))
+        self.assertEqual(result["steps"], [{"name": "Render", "seconds": 50}])
+        self.assertEqual([json.loads(call.args[2]["COMFYUI_OPTIONS"])["lora_strength"]
+                          for call in eta.call_args_list], ["1", "2"])
+
+    def test_lora_image_comparisons_queue_one_set_and_ignore_amount(self):
+        from core import lora_tests, workflow_options
+        options = workflow_options.lora_options("0", "krea_a.safetensors", 1, ["krea_a.safetensors", "krea_b.safetensors"])
+        takes = {"min_images": 0, "max_images": 0, "size": True, "options": options}
+        form = {"prompt": "same prompt", "count": "15", "lora_strength_test": "1", "lora_style_test": "1",
+                "lora_test_step": "1", "seed": "0", "start_later": "1"}
+        with webapp.app.test_request_context("/generate/image", method="POST", data=form), \
+             mock.patch.object(image_panel, "chosen_workflow", return_value=({}, takes, None)), \
+             mock.patch.object(image_panel, "run_queue", self.queue), mock.patch.object(webapp, "run_queue", self.queue), \
+             mock.patch.object(image_panel, "private_mode", return_value=False), mock.patch.object(webapp, "private_mode", return_value=False), \
+             mock.patch.object(image_panel, "clean_inputs"), mock.patch.object(image_panel, "RunEta") as eta:
+            eta.return_value.plan.return_value = {"total": 10}
+            result = image_panel.generate.__wrapped__()
+        self.assertTrue(result["ok"])
+        self.assertEqual(len(self.queue.items), 1)
+        item = self.queue.items[0]
+        self.assertTrue(item["label"].startswith("4 images"))
+        self.assertEqual(len(lora_tests.in_env(item["env"])), 4)
+        self.assertEqual(item["argv"][item["argv"].index("--count") + 1], "1")
+        self.assertEqual(item["argv"][item["argv"].index("--seed") + 1], "0")
+        self.assertIn("--direct", item["argv"])
+
+    def test_lora_video_comparisons_queue_complete_videos_with_one_seed(self):
+        from core import workflow_options
+        options = workflow_options.lora_options("0", "krea_a.safetensors", 1, ["krea_a.safetensors", "krea_b.safetensors"])
+        options.append({"id": "additional_loras", "kind": "lora_stack", "default": "[]",
+                        "choices": ["krea_a.safetensors", "krea_b.safetensors"], "min": -2, "max": 2})
+        takes = {"min_images": 0, "max_images": 0, "max_videos": 0, "max_audios": 0, "options": options}
+        stack = json.dumps([{"on": True, "name": "krea_b.safetensors", "strength": "0.5"}])
+        form = {"prompt": "same prompt", "duration": "10", "lora_strength_test": "1", "lora_style_test": "1",
+                "lora_test_step": "1", "seed": "0", "opt_additional_loras": stack, "start_later": "1"}
+        with webapp.app.test_request_context("/generate/video", method="POST", data=form), \
+             mock.patch.object(video_panel, "chosen_workflow", return_value=({}, takes, None)), \
+             mock.patch.object(video_panel, "run_queue", self.queue), mock.patch.object(webapp, "run_queue", self.queue), \
+             mock.patch.object(video_panel, "private_mode", return_value=False), mock.patch.object(webapp, "private_mode", return_value=False), \
+             mock.patch.object(video_panel, "clean_inputs"), mock.patch.object(video_panel, "workflow_model", return_value=None), \
+             mock.patch.object(video_panel, "RunEta") as eta:
+            eta.return_value.plan.return_value = {"total": 10}
+            result = video_panel.generate.__wrapped__()
+        self.assertEqual(result["queued_count"], 4)
+        self.assertEqual(len(self.queue.items), 4)
+        expected = [(name, strength) for name in ["krea_a.safetensors", "krea_b.safetensors"] for strength in ["1", "2"]]
+        actual = []
+        for item in self.queue.items:
+            argv = item["argv"]
+            self.assertEqual(argv[argv.index("--seed") + 1], "0")
+            self.assertEqual(argv[argv.index("--duration") + 1], "10")
+            self.assertIn("--direct", argv)
+            values = json.loads(item["env"]["COMFYUI_OPTIONS"])
+            actual.append((values["lora_name"], values["lora_strength"]))
+            self.assertEqual(values["additional_loras"], stack)
+            self.assertEqual(item["form"]["lora_style_test"], ["0"])
+        self.assertEqual(actual, expected)
+        self.job.start.assert_not_called()
+
+    def test_cleanup_blocks_generation_and_failure_holds_the_queue(self):
+        from core import comfy_memory
+        entered, finish = threading.Event(), threading.Event()
+
+        def delayed(url):
+            entered.set()
+            if not finish.wait(3):
+                raise RuntimeError("test cleanup timeout")
+            raise RuntimeError("cleanup did not complete")
+
+        with mock.patch.object(webapp, "_comfy_freeing", False), \
+             mock.patch.object(webapp.run_queue, "held", False), \
+             mock.patch.object(webapp.run_queue, "_save"), \
+             mock.patch.object(webapp.job, "log") as log, \
+             mock.patch.object(comfy_memory, "release", side_effect=delayed):
+            webapp._comfy_freeing = True
+            worker = threading.Thread(target=webapp.free_comfyui)
+            worker.start()
+            try:
+                self.assertTrue(entered.wait(2))
+                self.assertTrue(webapp.run_queue.blocked())
+                self.assertTrue(webapp.restart_blocked())
+            finally:
+                finish.set()
+                worker.join(3)
+            self.assertFalse(worker.is_alive())
+            self.assertFalse(webapp._comfy_freeing)
+            self.assertTrue(webapp.run_queue.held)
+            self.assertIn("cleanup did not complete", log.call_args.args[0])
+
     def setUp(self):
         self.job = types.SimpleNamespace(idle=True, running=False, closed=False, batches=False,
                                          start=mock.Mock(return_value=True), log=mock.Mock())
@@ -314,6 +404,60 @@ class OutputH3MetadataTest(unittest.TestCase):
             self.assertIsNone(caption("plain.mp4")["h3_mode"])
 
 
+class UnreadableRunTest(unittest.TestCase):
+    def setUp(self):
+        from pipelines.image import paths as image_paths, run_state as image_state
+        self.image_state = image_state
+        self.temp = tempfile.TemporaryDirectory()
+        patcher = mock.patch.object(image_paths, "RUNS_DIR", os.path.join(self.temp.name, "runs"))
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        self.addCleanup(lambda: (self.temp.cleanup(), image_state.list_runs()))
+        self.run_id = "image_20990101_120000"
+        self.folder = os.path.join(image_paths.RUNS_DIR, self.run_id)
+        os.makedirs(self.folder)
+        self.checkpoint = os.path.join(self.folder, "state.json")
+        with open(self.checkpoint, "wb") as file:
+            file.write(b"\x00")
+        with open(os.path.join(self.folder, "input.png"), "wb") as file:
+            file.write(b"input")
+        self.output = os.path.join(self.temp.name, "output.png")
+        with open(self.output, "wb") as file:
+            file.write(b"output")
+        image_state.list_runs()
+        self.client = webapp.app.test_client()
+
+    def delete(self):
+        return self.client.post(f"/runs/{self.run_id}/discard-unreadable")
+
+    def test_delete_unreadable_run_folder_preserves_other_output(self):
+        with mock.patch.object(webapp, "busy_runs", return_value=set()), mock.patch.dict(os.environ, {"APP_PASSWORD": ""}):
+            self.assertTrue(self.delete().get_json()["ok"])
+        self.assertFalse(os.path.exists(self.folder))
+        self.assertTrue(os.path.exists(self.output))
+        self.image_state.list_runs()
+        self.assertNotIn(self.checkpoint, [error["path"] for error in webapp.catalogue_errors()])
+
+    def test_busy_or_repaired_checkpoint_cannot_be_deleted(self):
+        with mock.patch.dict(os.environ, {"APP_PASSWORD": ""}):
+            with mock.patch.object(webapp, "busy_runs", return_value={self.run_id}):
+                self.assertEqual(self.delete().status_code, 409)
+            repaired = self.image_state.RunState.new("brief", 1, True, 64, 64)
+            repaired.id = self.run_id
+            repaired.save()
+            with mock.patch.object(webapp, "busy_runs", return_value=set()):
+                self.assertEqual(self.delete().status_code, 409)
+        self.assertTrue(os.path.exists(self.checkpoint))
+
+    def test_unknown_run_and_reparse_folder_are_rejected(self):
+        with mock.patch.dict(os.environ, {"APP_PASSWORD": ""}), mock.patch.object(webapp, "busy_runs", return_value=set()):
+            self.assertEqual(self.client.post("/runs/image_20990101_120001/discard-unreadable").status_code, 404)
+            info = types.SimpleNamespace(st_mode=stat.S_IFDIR, st_file_attributes=stat.FILE_ATTRIBUTE_REPARSE_POINT)
+            with mock.patch.object(webapp.os, "lstat", return_value=info):
+                self.assertEqual(self.delete().status_code, 409)
+        self.assertTrue(os.path.exists(self.checkpoint))
+
+
 class WorkPrivacyTest(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
@@ -338,18 +482,18 @@ class WorkPrivacyTest(unittest.TestCase):
         return webapp.JobQueue(self.job, prepare=lambda item: None, path=self.path)
 
     def test_waiting_tag_survives_restart_and_edit(self):
-        self.queue.items = [{"id": 1, "pipeline": "image", "label": "Waiting", "edit_token": "token"}]
+        self.queue.items = [{"id": 1, "pipeline": "image", "label": "Waiting", "argv": ["generate"], "edit_token": "token"}]
         self.assertTrue(self.mark("job", 1).get_json()["ok"])
         self.assertTrue(self.restored().items[0]["private"])
         with webapp.app.test_request_context("/generate/image", method="POST",
                                              data={"queue_edit_id": "1", "queue_edit_token": "token"}), \
              mock.patch.object(webapp, "private_mode", return_value=False):
-            replacement = {"pipeline": "image", "label": "Edited"}
+            replacement = {"pipeline": "image", "label": "Edited", "argv": ["generate"]}
             self.queue.add(replacement)
         self.assertTrue(replacement["private"], "editing while Privacy mode is off must not remove the tag")
 
     def test_running_tag_applies_before_and_after_run_id_arrives(self):
-        self.queue.current = {"id": 2, "pipeline": "video", "label": "Running"}
+        self.queue.current = {"id": 2, "pipeline": "video", "label": "Running", "argv": ["generate"]}
         self.assertTrue(self.mark("job", 2).get_json()["ok"])
         self.assertTrue(self.queue.current["private"])
         self.job.progress = {"run_id": "run_live"}
@@ -366,7 +510,7 @@ class WorkPrivacyTest(unittest.TestCase):
         self.assertTrue(self.queue.current["private"], "tagging an already saved active run works too")
 
     def test_saved_video_can_be_tagged_without_a_final_film(self):
-        self.queue.items = [{"id": 3, "pipeline": "video", "label": "Retry", "resume": "run_pending"}]
+        self.queue.items = [{"id": 3, "pipeline": "video", "label": "Retry", "argv": ["generate"], "resume": "run_pending"}]
         with mock.patch.object(webapp.PIPELINES["video"], "load_run", return_value=types.SimpleNamespace(final=None)):
             self.assertTrue(self.mark("video", "run_pending").get_json()["ok"])
         self.assertIn("run_pending", webapp._read_nsfw()["video"])
@@ -437,11 +581,20 @@ class PanelTest(unittest.TestCase):
     def clear_everything(self):
         webapp.stop_run()
         self.wait_idle()
+        errors = {lane: queue.persistence_error for lane, queue in webapp.QUEUES.items() if queue.persistence_error}
         for queue in webapp.QUEUES.values():
-            queue.items, queue.held, queue.results = [], False, []
+            # Reported below, but reset so one test's broken queue doesn't fail every later one.
+            queue.items, queue.held, queue.results, queue.persistence_error = [], False, [], None
             queue._save()
         for folder in (paths.RUNS_DIR, paths.OUTPUT_DIR, paths.INPUTS_DIR):
             shutil.rmtree(folder, ignore_errors=True)
+        self.assertEqual(errors, {}, "the test left a queue unable to save")
+
+    def queue_id(self):
+        """A job number from the queue itself: a made-up one could match a real job already in Finished."""
+        with webapp.run_queue.lock:
+            webapp.run_queue.next_id += 1
+            return webapp.run_queue.next_id - 1
 
     def wait_until(self, condition, what, timeout=90):
         deadline = time.time() + timeout
@@ -519,6 +672,7 @@ class PanelTest(unittest.TestCase):
         refiner = mock.MagicMock()
         refiner.__enter__.return_value = refiner
         refiner.model_id = "gemma-4-12b"
+        refiner.tokens = {"per_second": 62.1, "total": 120}
 
         def write(text, side):
             entered.set()
@@ -536,6 +690,8 @@ class PanelTest(unittest.TestCase):
             thread.start()
             try:
                 self.assertTrue(entered.wait(5))
+                self.assertEqual(self.client.get("/api/status").get_json()["prompt_writer"],
+                                 {"running": True, "tokens": {"per_second": 62.1, "total": 120}})
                 self.assertTrue(webapp.restart_blocked())
                 self.assertTrue(webapp.run_queue.blocked())
                 self.assertEqual(self.client.post("/api/write-prompt", json={"pipeline": "image", "prompt": "x"}).status_code, 409)
@@ -551,6 +707,8 @@ class PanelTest(unittest.TestCase):
             refiner.write_prompt.assert_called_once_with("idea", "video")
             refiner.__exit__.assert_called_once()
             self.assertFalse(webapp.run_queue.blocked())
+            self.assertEqual(self.client.get("/api/status").get_json()["prompt_writer"],
+                             {"running": False, "tokens": None})
             estimate = self.client.get("/api/write-prompt?pipeline=video").get_json()
             self.assertTrue(estimate["ok"])
             self.assertGreater(estimate["seconds"], 0)
@@ -582,12 +740,13 @@ class PanelTest(unittest.TestCase):
             self.assertEqual(estimate("video"), 100)
             self.assertEqual(estimate("image"), 180)
             self.assertEqual(post("video").status_code, 200)
-            self.assertEqual(estimate("video"), 130)
+            self.assertEqual(estimate("video"), 150)
             self.assertEqual(post("image").status_code, 200)
             self.assertEqual(estimate("image"), 30)
             with open(webapp.PROMPT_WRITER_TIMINGS, encoding="utf-8") as file:
                 saved = json.load(file)
-            self.assertEqual(saved["steps"], {"gemma-4-12b | video": 130, "gemma-4-12b | image": 30})
+            self.assertEqual(saved["steps"], {"gemma-4-12b | video": 150, "gemma-4-12b | image": 30})
+            self.assertEqual(saved["samples"]["steps"]["gemma-4-12b | video"], [100, 200])
         with mock.patch.object(h3_refiner, "local_llm_model", return_value="qwen3-14b"), \
                 mock.patch.object(h3_refiner, "Refiner", return_value=refiner):
             self.assertEqual(self.client.get("/api/write-prompt?pipeline=video").get_json()["seconds"], 300)
@@ -671,8 +830,8 @@ class PanelTest(unittest.TestCase):
                     # A reset form (editing a queued run) or a choice it can't put back lands here, not on the first one.
                     self.assertRegex(select, r'value="local"[^>]* selected>')
                     self.assertNotRegex(select, r'value="gemini"[^>]* selected>')
-                self.assertIn('const IMAGE_DEFAULTS = { llm: "local"', html)
-                self.assertIn('const VIDEO_DEFAULTS = { llm: "local"', html)
+                config = json.loads(html.split('<script id="panelConfig" type="application/json">', 1)[1].split("</script>", 1)[0])
+                self.assertEqual(config["default_llm"], "local")
         self.assertIn("claude", dict(video_panel.planner.LLMS))
 
     def test_local_qwen_rejects_attached_images_before_queuing(self):
@@ -686,6 +845,45 @@ class PanelTest(unittest.TestCase):
             self.assertEqual(result.status_code, 400)
             self.assertIn("text-only", result.get_json()["error"])
             self.assertTrue(webapp.job.idle)
+
+    def test_generate_captures_local_model_and_validates_references(self):
+        for panel in (video_panel, image_panel):
+            with self.subTest(pipeline=panel.__name__):
+                flags, error = panel.build_options({"prompt_mode": "direct", "prompt_writer_model": "qwen3-14b"})
+                self.assertIsNone(error)
+                self.assertEqual(panel.option(flags, "--local-model"), "qwen3-14b")
+                flags, error = panel.build_options({"prompt_mode": "direct", "prompt_writer_model": "missing"})
+                self.assertIsNone(flags)
+                self.assertIn("available local model", error)
+        flags, error = video_panel.build_options({"llm": "local", "local_model": "qwen3-14b"})
+        self.assertIsNone(error)
+        self.assertEqual(video_panel.option(flags, "--local-model"), "qwen3-14b")
+        flags, error = video_panel.build_options({"llm": "local", "local_model": "missing"})
+        self.assertIsNone(flags)
+        self.assertIn("available local model", error)
+        flags, error = image_panel.build_options({"llm": "local", "local_model": "qwen3-14b"})
+        self.assertIsNone(error)
+        self.assertEqual(image_panel.option(flags, "--local-model"), "qwen3-14b")
+        flags, error = image_panel.build_options({"llm": "local", "local_model": "missing"})
+        self.assertIsNone(flags)
+        self.assertIn("available local model", error)
+        with mock.patch.object(image_panel.h3_refiner, "local_llm_model", return_value="gemma-4-12b"):
+            result = self.client.post("/generate/image", data={"prompt": "tree", "llm": "local",
+                                      "local_model": "qwen3-14b", "image": (io.BytesIO(png_bytes()), "tree.png")},
+                                      content_type="multipart/form-data")
+        self.assertEqual(result.status_code, 400)
+        self.assertIn("text-only", result.get_json()["error"])
+
+    def test_generate_does_not_reuse_another_local_models_plan(self):
+        state = types.SimpleNamespace(id="image_1", shots=[{}], finished=False, inputs="same", brief="tree",
+                                      count=1, direct=False, workflow=None, llm="local", local_model="gemma-4-12b")
+        flags = ["--count", "1", "--llm", "local", "--local-model", "qwen3-14b"]
+        with mock.patch.object(image_panel, "busy_runs", return_value=set()), \
+             mock.patch.object(image_panel, "list_runs", return_value=[state]), \
+             mock.patch.object(image_panel.video_media, "inputs_fingerprint", return_value="same"):
+            self.assertIsNone(image_panel.run_to_continue("tree", flags, {}, []))
+            state.local_model = "qwen3-14b"
+            self.assertIs(image_panel.run_to_continue("tree", flags, {}, []), state)
 
     # --- The whole way through ---
 
@@ -1401,7 +1599,7 @@ class PanelTest(unittest.TestCase):
         with open(os.path.join(webapp.SAVED_WORKFLOWS_DIR, "not_listed.json"), encoding="utf-8") as f:
             self.assertEqual(json.load(f), {"broken": "Needs gone.safetensors, which isn't installed."})
         self.assertEqual(self.client.get("/api/workflows?pipeline=shorts").get_json()["workflows"], [], "none are tuned for Shorts")
-        self.assertEqual(without_lora(reply["workflows"], self), [
+        self.assertEqual(reply["workflows"], [
             {"name": "r2v.json", "label": "r2v", "takes": {"min_images": 0, "max_images": 20}, "clip_seconds": [5, 10, 8], "openh3": False, "h3_multishot": False, "h3_director": False},
             {"name": "t2v.json", "label": "t2v", "takes": {"min_images": 0, "max_images": 0, "options": SAVED_OPTIONS}, "clip_seconds": [5, 10, 8], "openh3": False, "h3_multishot": False, "h3_director": False},
             {"name": "wan.json", "label": "wan", "takes": {"min_images": 0, "max_images": 1, "options": SAVED_OPTIONS}, "clip_seconds": [5, 10, 8], "openh3": False, "h3_multishot": False, "h3_director": False}],
@@ -1573,7 +1771,7 @@ class PanelTest(unittest.TestCase):
         with mock.patch.dict(os.environ, {"COMFYUI_URL": "http://127.0.0.1:9"}):
             reply = self.client.get("/api/workflows").get_json()
             self.assertFalse(reply["online"])
-            self.assertEqual(without_lora(reply["workflows"], self), [
+            self.assertEqual(reply["workflows"], [
                 {"name": "r2v.json", "label": "r2v", "takes": {"min_images": 0, "max_images": 20}, "clip_seconds": [5, 10, 8], "openh3": False, "h3_multishot": False, "h3_director": False},
                 {"name": "t2v.json", "label": "t2v", "takes": {"min_images": 0, "max_images": 0, "options": SAVED_OPTIONS}, "clip_seconds": [5, 10, 8], "openh3": False, "h3_multishot": False, "h3_director": False},
                 {"name": "wan.json", "label": "wan", "takes": {"min_images": 0, "max_images": 1, "options": SAVED_OPTIONS}, "clip_seconds": [5, 10, 8], "openh3": False, "h3_multishot": False, "h3_director": False}])
@@ -1657,7 +1855,9 @@ class PanelTest(unittest.TestCase):
             self.assertEqual(self.client.post("/api/output/nsfw", json={"kind": "video", "id": "x", "nsfw": "yes"}).status_code, 400)
             with open(path, "w", encoding="utf-8") as f:
                 f.write("{broken")
-            self.assertEqual(post("image", "image_a", True).status_code, 500)
+            failed = post("image", "image_a", True)
+            self.assertEqual(failed.status_code, 500)
+            self.assertEqual(failed.get_json()["error"], "Could not save private tags. Check the panel log.")
             with open(path, encoding="utf-8") as f:
                 self.assertEqual(f.read(), "{broken", "a corrupt tags file is not silently replaced")
 
@@ -1744,7 +1944,10 @@ class PanelTest(unittest.TestCase):
         self.assertEqual(queue.snapshot()["items"][0]["label"], "a film")
         with open(path, "w", encoding="utf-8") as f:
             f.write("{broken")
-        self.assertEqual(webapp.JobQueue(webapp.Job(), lambda item: None, path=path).items, [])
+        broken = webapp.JobQueue(webapp.Job(), lambda item: None, path=path)
+        self.assertEqual(broken.items, [])
+        self.assertTrue(broken.persistence_error)
+        self.assertTrue(broken.held, "a corrupt queue cannot start or be silently reset")
 
     def test_queue_snapshot_exposes_continued_run_for_prompts(self):
         queue = webapp.JobQueue(webapp.Job(), lambda item: None)
@@ -1997,7 +2200,8 @@ class PanelTest(unittest.TestCase):
         self.assertTrue(self.generate(review="1").get_json()["ok"])
         self.wait_idle()
         run_id = self.only_run().id
-        item = {"id": 900, "pipeline": "video", "resume": run_id, "later": True}
+        item = {"id": self.queue_id(), "pipeline": "video", "label": "Continue", "resume": run_id, "later": True,
+                "argv": webapp.PIPELINES["video"].resume_argv(RunState.load(run_id))}
         with webapp.run_queue.lock:
             webapp.run_queue.items.append(item)
         detail = self.client.get(f"/runs/{run_id}").get_json()
@@ -2025,10 +2229,11 @@ class PanelTest(unittest.TestCase):
                        {"title": "Second", "seconds": 10, "prompt": prompt + " Slowly.", "planner_prompt": prompt + " Slowly."}]
         state.check_prompts()
         state.save()
-        item = {"id": 991, "pipeline": "video", "label": "Warning film", "argv": [], "env": {}, "first_only": True}
+        item = {"id": self.queue_id(), "pipeline": "video", "label": "Warning film", "argv": ["x"], "env": {}, "first_only": True}
         with webapp.run_queue.lock, mock.patch.object(webapp.job, "progress", {"run_id": state.id}), \
                 mock.patch.object(webapp.job, "returncode", 0), mock.patch.object(webapp.job, "stopped", False), \
-                mock.patch.object(webapp, "free_comfyui"), mock.patch.object(webapp.run_queue, "_advance"):
+                mock.patch.object(webapp, "free_comfyui"), mock.patch.object(webapp, "_comfy_freeing", False), \
+                mock.patch.object(webapp.run_queue, "_advance"):
             webapp.run_queue.current = item
             webapp.run_queue._finish_current()
             self.assertIsNone(webapp.run_queue.current)
@@ -2040,7 +2245,7 @@ class PanelTest(unittest.TestCase):
             self.assertEqual(webapp.run_queue.results, [], "a warning is not a successful render or failure")
             snapshot = webapp.run_queue.snapshot()["items"][0]
             self.assertEqual(snapshot["prompt_warnings"][0]["items"], [1, 2])
-            self.assertTrue(self.client.post("/queue/run/start/991").get_json()["ok"])
+            self.assertTrue(self.client.post(f"/queue/run/start/{item['id']}").get_json()["ok"])
             self.assertFalse(RunState.load(state.id).prompt_warning_pending)
             self.assertNotIn("prompt_warnings", waiting)
             self.assertEqual(RunState.load(state.id).shots, state.shots, "starting approves without rewriting")
@@ -2079,18 +2284,18 @@ class PanelTest(unittest.TestCase):
         self.wait_idle()
         state = self.only_run()
         prompts = [shot["prompt"] for shot in state.shots]
-        item = {"id": 901, "pipeline": "video", "label": "Continue", "resume": state.id, "later": True,
+        item = {"id": self.queue_id(), "pipeline": "video", "label": "Continue", "resume": state.id, "later": True,
                 "argv": webapp.PIPELINES["video"].resume_argv(state)}
         with webapp.run_queue.lock:
             webapp.run_queue.items.append(item)
         self.addCleanup(lambda: webapp.run_queue.items.clear())
-        edit = self.client.post("/queue/run/edit/901").get_json()
+        edit = self.client.post(f"/queue/run/edit/{item['id']}").get_json()
         self.assertTrue(edit["ok"], edit)
         self.assertEqual(edit["continued"]["prompts"], prompts)
         self.assertEqual(edit["form"]["prompt"], state.brief, "opens as it was made")
 
         # The prompt sent along is ignored: only how the rest is made changes.
-        reply = self.client.post("/queue/run/edit/901/continue", data={
+        reply = self.client.post(f"/queue/run/edit/{item['id']}/continue", data={
             "queue_edit_token": edit["token"], "prompt": "Something else entirely", "size": "640x384", "try_first": "1",
             "start_later": "1"}).get_json()
         self.assertTrue(reply["ok"], reply)
@@ -2098,27 +2303,27 @@ class PanelTest(unittest.TestCase):
         self.assertEqual((after.width, after.height), (640, 384))
         self.assertEqual(after.brief, state.brief)
         self.assertEqual([shot["prompt"] for shot in after.shots], prompts)
-        queued = next(entry for entry in webapp.run_queue.items if entry["id"] == 901)
+        queued = next(entry for entry in webapp.run_queue.items if entry["id"] == item["id"])
         self.assertIn("--first-only", queued["argv"])
         self.assertNotIn("edit_token", queued)
         self.assertTrue(queued["later"])
-        self.assertEqual(self.client.post("/queue/run/edit/901/continue", data={"queue_edit_token": edit["token"]}).status_code, 409,
+        self.assertEqual(self.client.post(f"/queue/run/edit/{item['id']}/continue", data={"queue_edit_token": edit["token"]}).status_code, 409,
                          "the session is spent")
 
     def test_a_continued_run_reopened_as_new_makes_a_new_run_in_pending(self):
         self.assertTrue(self.generate(review="1").get_json()["ok"])
         self.wait_idle()
         state = self.only_run()
-        item = {"id": 902, "pipeline": "video", "label": "Continue", "resume": state.id, "later": True,
+        item = {"id": self.queue_id(), "pipeline": "video", "label": "Continue", "resume": state.id, "later": True,
                 "argv": webapp.PIPELINES["video"].resume_argv(state)}
         with webapp.run_queue.lock:
             webapp.run_queue.items.append(item)
         self.addCleanup(lambda: webapp.run_queue.items.clear())
-        edit = self.client.post("/queue/run/edit/902").get_json()
+        edit = self.client.post(f"/queue/run/edit/{item['id']}").get_json()
         webapp.run_queue.hold()
-        saved = self.generate(prompt="A brand new take", start_later="1", queue_edit_id="902", queue_edit_token=edit["token"])
+        saved = self.generate(prompt="A brand new take", start_later="1", queue_edit_id=str(item["id"]), queue_edit_token=edit["token"])
         self.assertTrue(saved.get_json()["ok"], saved.get_json())
-        queued = next(entry for entry in webapp.run_queue.items if entry["id"] == 902)
+        queued = next(entry for entry in webapp.run_queue.items if entry["id"] == item["id"])
         self.assertNotIn("resume", queued, "a new run, not the paused one")
         self.assertTrue(queued["later"], "added to Pending as asked")
         self.assertEqual(RunState.load(state.id).brief, state.brief, "the paused run is untouched")
@@ -2151,11 +2356,31 @@ class PanelTest(unittest.TestCase):
         timer.assert_called_once()
         self.assertFalse(webapp.job.running)
         self.assertIn(("/interrupt", {"prompt_id": "p1"}), self.comfy.cancels)
-        with open(webapp.run_queue.path, encoding="utf-8") as f:
-            self.assertEqual([item["prompt"] for item in json.load(f)], ["still queued"])
+        with open(webapp.run_queue.ledger_path, encoding="utf-8") as f:
+            self.assertEqual([item["prompt"] for item in json.load(f)["items"]], ["still queued"])
         self.assertTrue(RunState.load(run_id).shots, "it can continue after the restart")
 
     # --- The page ---
+
+    def test_generation_header_keeps_compact_presets_outside_the_forms(self):
+        html = self.client.get("/").get_data(as_text=True)
+        header_start = html.index('<div class="generation-header">')
+        forms_start = html.index('<form class="card pipeline-form')
+        header = html[header_start:forms_start]
+        self.assertNotIn('id="keepSectionsOpen"', header)
+        self.assertEqual(html.count('id="keepSectionsOpen"'), 1)
+        self.assertIn('data-workflow-actions="shorts"', html[forms_start:])
+        for side in ("shorts", "video", "image"):
+            with self.subTest(side=side):
+                self.assertIn(f'<dialog id="{side}PresetDialog"', html)
+                self.assertIn(f'<label for="{side}Preset">Preset</label>', html)
+                self.assertEqual(html.count(f'id="{side}Preset"'), 1)
+                self.assertNotIn(f'id="{side}Preset"', header)
+                self.assertIn(f'data-preset-open="{side}" aria-haspopup="dialog"', html)
+                self.assertIn(f'data-preset-save="{side}"', html)
+                self.assertIn(f'data-preset-default="{side}"', html)
+                self.assertIn(f'data-preset-delete="{side}"', html)
+        self.assertNotIn('class="workflow-top preset-top"', html)
 
     def test_page_script(self):
         node = shutil.which("node")
@@ -2172,9 +2397,9 @@ class PanelTest(unittest.TestCase):
 
     def test_upscale_dialog_picks_only_method_buttons(self):
         # The dialog itself carries data-method, so a bare [data-method] lookup swallowed the Add to queue click.
-        html = self.client.get("/").get_data(as_text=True)
-        self.assertIn("closest('button[data-method]')", html)
-        self.assertNotIn("closest('[data-method]')", html)
+        script = self.client.get("/static/generation-history.js").get_data(as_text=True)
+        self.assertIn("closest('button[data-method]')", script)
+        self.assertNotIn("closest('[data-method]')", script)
 
     def test_stale_server_only_restarts_when_idle(self):
         with mock.patch.object(webapp.threading, "Timer") as timer:

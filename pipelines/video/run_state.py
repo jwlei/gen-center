@@ -3,18 +3,17 @@ import hashlib
 import os
 import re
 import shutil
-import time
-from dataclasses import asdict, dataclass, field
+from dataclasses import dataclass, field
 from datetime import datetime
 
-from core.paths import SAVED_WORKFLOWS_DIR, moved
+from core.paths import SAVED_WORKFLOWS_DIR, WORKFLOWS_DIR, moved
+from core import run_checkpoint
 from pipelines.video import paths, roles
 from pipelines.video.media import on_grid
 
 STAGES = ("Plan", "Clips", "Stitching")
 RUN_ID = re.compile(r"run_\d{8}_\d{6}")
 UPSCALED = re.compile(r"_upscaled(?:_\d+)?\.mp4$")
-SAVE_ATTEMPTS = 5
 
 
 @dataclass
@@ -66,6 +65,8 @@ class RunState:
     form: dict = None  # The panel's Generate form as it was sent, files aside
     prompt_warnings: list = field(default_factory=list)
     approved_prompt_key: str = None
+    provenance: dict = None
+    local_model: str = None
 
     def prompt_key(self):
         return hashlib.sha256(json.dumps([shot["prompt"] for shot in self.shots or []],
@@ -93,15 +94,20 @@ class RunState:
         """The saved run, with anything whose files have gone marked as still to do. None if there isn't one."""
         if not RUN_ID.fullmatch(str(run_id)):
             return None
+        path = os.path.join(paths.RUNS_DIR, run_id, "state.json")
+        saved = run_checkpoint.load(path, run_id)
+        if saved is None:
+            return None
+        run_checkpoint.validate(saved, path, {"brief": str, "seconds": int, "start": str, "width": int,
+                                             "height": int, "shots": list, "clips": dict, "options": dict,
+                                             "provenance": dict})
         try:
-            with open(os.path.join(paths.RUNS_DIR, run_id, "state.json"), "r", encoding="utf-8") as f:
-                saved = json.load(f)
             # Runs made before uploads moved to Shorts say where to upload to.
             state = cls(**{name: value for name, value in saved.items() if name in cls.__dataclass_fields__})
             state.clips = {int(index): name for index, name in state.clips.items()}
             state._forget_missing()
-        except (OSError, ValueError, TypeError, AttributeError):
-            return None  # Nothing saved, or a broken file: nothing to continue
+        except (ValueError, TypeError, AttributeError, KeyError) as error:
+            raise run_checkpoint.invalid(path, error) from error
         return state
 
     # --- Where its files go ---
@@ -160,6 +166,7 @@ class RunState:
     def adopt(self, flags, form=None):
         """Takes the options chosen now, for Generate to continue this run. The plan stays: it's what was paid for."""
         self.llm = next((flags[i + 1] for i, flag in enumerate(flags[:-1]) if flag == "--llm"), self.llm)
+        self.local_model = next((flags[i + 1] for i, flag in enumerate(flags[:-1]) if flag == "--local-model"), self.local_model)
         self.form = form or self.form
         self.first_only = "--first-only" in flags
         size = next((flags[i + 1] for i, flag in enumerate(flags[:-1]) if flag == "--size"), None)
@@ -174,18 +181,10 @@ class RunState:
         self.save()
 
     def save(self):
-        temp = self.path + ".tmp"
-        os.makedirs(self.folder, exist_ok=True)
-        with open(temp, "w", encoding="utf-8") as f:
-            json.dump(asdict(self), f, ensure_ascii=False, indent=1)
-        for attempt in range(SAVE_ATTEMPTS):
-            try:
-                os.replace(temp, self.path)
-                return
-            except PermissionError:  # The panel has it open for a moment
-                if attempt == SAVE_ATTEMPTS - 1:
-                    raise
-                time.sleep(0.2)
+        settings = {name: getattr(self, name) for name in
+                    ("llm", "workflow", "options", "width", "height", "start", "seed", "h3_model",
+                     "h3_mode", "h3_creativity", "clip_seconds", "direct")}
+        run_checkpoint.save(self, self.workflow or os.path.join(WORKFLOWS_DIR, "video_workflow.json"), settings)
 
     def remove(self):
         """State first: without it the run is gone from the list, even if a file refuses to be deleted."""
@@ -270,13 +269,8 @@ def run_of_film(name, films=None):
 
 
 def list_runs():
-    """Every saved run, newest first."""
-    try:
-        names = os.listdir(paths.RUNS_DIR)
-    except OSError:
-        return []
-    runs = (RunState.load(name) for name in sorted(names, reverse=True))
-    return [run for run in runs if run]
+    """Usable runs, newest first; excluded checkpoints are logged and reported separately."""
+    return run_checkpoint.catalogue(paths.RUNS_DIR, RunState.load)
 
 
 def folder_size(path):

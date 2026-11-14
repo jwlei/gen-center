@@ -95,6 +95,7 @@ class MultishotTest(unittest.TestCase):
                 mock.patch.object(paths, "RUNS_DIR", os.path.join(temp, "runs")), \
                 mock.patch.object(paths, "OUTPUT_DIR", os.path.join(temp, "output")), \
                 mock.patch.object(main.media, "clip_problem", return_value=None), \
+                mock.patch.object(main.media, "_probe", return_value=(20.0, {"video"})), \
                 mock.patch.object(main.media, "duration", return_value=21) as duration, \
                 mock.patch.object(main.requests, "get") as get:
             os.makedirs(paths.OUTPUT_DIR)

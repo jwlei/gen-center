@@ -4,33 +4,39 @@
 const fs = require('fs');
 const assert = require('assert');
 const vm = require('vm');
+const path = require('path');
 
 const html = fs.readFileSync(process.argv[2], 'utf8');
-const script = [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)].map(m => m[1]).find(s => s.includes('async function poll'));
-assert(script, 'the page has its script');
+const modules = [...html.matchAll(/<script(?: defer)? src="\/static\/([^"?]+)(?:\?[^"]*)?"><\/script>/g)]
+  .map(m => ({ name: m[1], source: fs.readFileSync(path.join(__dirname, '..', 'panel', 'static', m[1]), 'utf8') }));
+const script = modules.map(module => module.source).join('\n');
+const config = html.match(/<script id="panelConfig" type="application\/json">([\s\S]*?)<\/script>/);
+assert(config && modules.length && script.includes('async function poll'), 'the page loads its configuration and topic scripts');
+assert(!/<script>/.test(html), 'no executable JavaScript is embedded in the HTML');
 
 const status0 = () => html.slice(html.indexOf('id="runCard"'), html.indexOf('id="optionsCard"'));
 // Every id the script reaches for has to be on the page.
-const ids = new Set([...html.matchAll(/\bid="([^"]+)"/g)].map(m => m[1]));
+const ids = new Set([...(html + script).matchAll(/\bid="([^"]+)"/g)].map(m => m[1]));
 for (const [, id] of script.matchAll(/\$\('([A-Za-z]+)'\)/g)) assert(ids.has(id), `#${id} is on the page`);
 
 function element(id) {
   return {
-    id, dataset: {}, style: {}, hidden: false, innerHTML: '', textContent: '', value: '', className: '', elements: [], options: [], selectedOptions: [{}],
+    id, dataset: {}, style: {}, hidden: false, innerHTML: '', textContent: '', value: '', className: '', elements: [], options: [], selectedOptions: [{}], childNodes: [],
     classList: { toggle() {}, add() {}, remove() {}, contains: () => false },
     listeners: {}, listenersAll: {}, addEventListener(name, fn) { this.listeners[name] = fn; (this.listenersAll[name] = this.listenersAll[name] || []).push(fn); }, querySelectorAll: selector => (selector === 'input' ? [element('low'), element('high')] : []), querySelector: () => element('part'), setAttribute() {},
-    reportValidity() { return true; }, dispatchEvent() {},
-    getBoundingClientRect: () => ({ top: 0, bottom: 100 }), appendChild() {}, insertBefore() {}, after() {}, offsetHeight: 90, insertAdjacentHTML() {}, showModal() { this.open = true; }, close() { this.open = false; }, scrollTo() {}, scrollIntoView() {},
+    reportValidity() { return true; }, dispatchEvent() {}, focus() {}, replaceChildren(...nodes) { this.childNodes = nodes; },
+    getBoundingClientRect: () => ({ top: 0, bottom: 100 }), getClientRects: () => [], appendChild() {}, insertBefore() {}, after() {}, offsetHeight: 90, insertAdjacentHTML() {}, showModal() { this.open = true; }, close() { this.open = false; }, scrollTo() {}, scrollIntoView() {},
     pause() {}, play() { return Promise.resolve(); }, removeAttribute(name) { delete this[name]; },
   };
 }
 const els = {};
+els.panelConfig = { ...element('panelConfig'), textContent: config[1] };
 const wide = { matches: false, addEventListener() {} };
 const documentListeners = {}, windowListeners = {};
 const context = {
   // A picture loading in the background: it never finishes here, so the viewer keeps the small one it shows first.
   Image: class { constructor() { this.onload = null; this.src = ''; } },
-  document: { getElementById: id => (els[id] = els[id] || element(id)), querySelectorAll: () => [], documentElement: { dataset: {}, style: { setProperty() {} } }, body: element('body'), addEventListener(name, fn) { (documentListeners[name] = documentListeners[name] || []).push(fn); }, hidden: false },
+  document: { getElementById: id => (els[id] = els[id] || element(id)), querySelector: selector => (els[selector] = els[selector] || element(selector)), querySelectorAll: () => [], documentElement: { dataset: {}, style: { setProperty() {} } }, body: element('body'), addEventListener(name, fn) { (documentListeners[name] = documentListeners[name] || []).push(fn); }, hidden: false },
   history: { replaceState() {} },
   window: { addEventListener(name, fn) { (windowListeners[name] = windowListeners[name] || []).push(fn); }, innerHeight: 800, matchMedia: () => wide, scrollTo() {} },
   localStorage: { getItem: () => null, setItem() {} },
@@ -41,8 +47,148 @@ const context = {
   confirm: () => true, alert() {}, console, Date, performance: { now: () => 0 }, Math, JSON, Set, Object, String,
 };
 vm.createContext(context);
-vm.runInContext(script, context);
+for (const module of modules) vm.runInContext(module.source, context, { filename: module.name });
 const run = code => vm.runInContext(code, context);
+
+{
+  context.privateLoraFixture = [
+    { id: 'lora', kind: 'switch', default: '1', below: true },
+    { id: 'lora_name', kind: 'choice', parent: 'lora', default: 'NSFW/krea_style.safetensors',
+      choices: ['krea_safe.safetensors', 'NSFW/krea_style.safetensors', 'krea_UNCENSORED.safetensors'] },
+    { id: 'lora_extra', kind: 'strength', label: 'LoRA: extra', private_only: true, default: '1' },
+  ];
+  run('privateMode = false');
+  const visible = run('visibleLoraOptions(privateLoraFixture)');
+  assert.deepStrictEqual(Array.from(visible[1].choices), ['krea_safe.safetensors']);
+  assert.strictEqual(visible[1].default, 'krea_safe.safetensors');
+  assert(run('imageOptionHtml(visibleLoraOptions(privateLoraFixture)[2], [])').includes('type="hidden"'));
+  const unavailable = run('visibleLoraOptions([privateLoraFixture[0], {...privateLoraFixture[1], choices: ["NSFW/krea_style.safetensors"]}])');
+  assert.strictEqual(unavailable[0].default, '0');
+  assert(unavailable[0].problem.includes('Private mode'));
+  run('privateMode = true');
+  assert.strictEqual(run('visibleLoraOptions(privateLoraFixture)'), context.privateLoraFixture, 'Private mode keeps the original choices and defaults');
+  run('privateMode = false');
+}
+
+run('lastStatus = { prompt_writer: { running: true, tokens: { per_second: 62.1, total: 120 } } }');
+assert.strictEqual(run('promptWriterSpeed()'), '62.1 tok/s', 'the prompt writer exposes live local throughput');
+run('lastStatus.prompt_writer.running = false');
+assert.strictEqual(run('promptWriterSpeed()'), '', 'a finished writer does not leave stale throughput');
+run('lastStatus = null');
+
+{
+  const header = html.slice(html.indexOf('<div class="generation-header">'), html.indexOf('<form class="card pipeline-form'));
+  assert(!header.includes('id="keepSectionsOpen"') && /data-defaults="shortsOptionsBox"[\s\S]*?id="keepSectionsOpen"/.test(html),
+    'the pin belongs after workflow reset, inside the form');
+  for (const side of ['shorts', 'video', 'image']) {
+    assert(html.includes(`<dialog id="${side}PresetDialog"`) && html.includes(`data-preset-open="${side}" aria-haspopup="dialog"`),
+      `${side}: the workflow preset word opens its management dialog`);
+  }
+  const selectors = context.document.querySelector;
+  const controls = { save: element('savePreset'), remove: element('removePreset'), star: element('starPreset') };
+  context.document.querySelector = selector => selector.includes('data-preset-save') ? controls.save
+    : selector.includes('data-preset-delete') ? controls.remove : selector.includes('data-preset-default') ? controls.star : selectors(selector);
+  run(`presets.image = [{ name: 'Portrait', values: {}, default: true }]; syncPresets('image')`);
+  assert(els.imagePreset.value === 'Portrait' && !controls.save.hidden && !controls.star.hidden && !controls.remove.hidden,
+    'matching presets offer save, favourite and delete in the dialog');
+  run(`presets.image = []; syncPresets('image')`);
+  assert(!controls.save.hidden && controls.star.hidden && controls.remove.hidden,
+    'unmatched settings offer the save icon');
+  context.document.querySelector = selectors;
+}
+
+// Private drafts return to their own mode without exposing text, files or edit context in the other one.
+{
+  const normalFile = { name: 'normal.wav' }, privateFile = { name: 'private.wav' };
+  const local = {}, tab = {};
+  const oldLocal = context.localStorage, oldTab = context.sessionStorage, oldTransfer = context.DataTransfer;
+  context.localStorage = { getItem: key => local[key] || null, setItem: (key, value) => { local[key] = value; } };
+  context.sessionStorage = { getItem: key => tab[key] || null, setItem: (key, value) => { tab[key] = value; } };
+  context.DataTransfer = class {
+    constructor() { this.files = []; this.items = { add: file => this.files.push(file) }; }
+  };
+  const fields = ['topic', 'prompt', 'narration', 'imagePrompt', 'audioFile'].map(id => context.document.getElementById(id));
+  const previous = fields.map(field => ({ value: field.value, name: field.name, type: field.type, files: field.files }));
+  const forms = ['formShorts', 'formVideo', 'formImage'].map(id => els[id].elements);
+  run('var workspaceTestDraft = captureDraft(), workspaceTestEmpty = emptyDraft, workspaceTestStates = new Map(draftWorkspaces)');
+  ['topic', 'prompt', 'narration', 'prompt', 'audio_file'].forEach((name, i) => {
+    Object.assign(fields[i], { name, type: i === 4 ? 'file' : 'textarea', value: '', files: [] });
+  });
+  els.formShorts.elements = [els.topic];
+  els.formVideo.elements = [els.prompt, els.narration, els.audioFile];
+  els.formImage.elements = [els.imagePrompt];
+  run('emptyDraft = captureDraft(true); draftWorkspaces.clear()');
+  els.imagePrompt.value = 'Normal image idea';
+  els.prompt.value = 'Normal film idea';
+  els.topic.value = 'Normal topic';
+  els.narration.value = 'Normal narration';
+  els.audioFile.files = [normalFile];
+  run("draftWrite(OPTIONS_KEY, JSON.stringify({ normal: true })); renderPrivate(true)");
+  assert(fields.every(field => field.type === 'file' ? !field.files.length : !field.value), 'a new private workspace starts without normal inputs');
+  assert.strictEqual(run('draftRead(OPTIONS_KEY)'), null, 'private workflow text does not reuse normal stored options');
+  els.imagePrompt.value = 'Private image idea';
+  els.prompt.value = 'Private film idea';
+  els.topic.value = 'Private topic';
+  els.narration.value = 'Private narration';
+  els.audioFile.files = [privateFile];
+  run(`queueEdit = { id: 7, pipeline: 'image', ready: true, fresh: true };
+    draftWrite(OPTIONS_KEY, JSON.stringify({ private: true })); keepPrompt('image'); renderPrivate(false)`);
+  assert.deepStrictEqual(fields.slice(0, 4).map(field => field.value),
+    ['Normal topic', 'Normal film idea', 'Normal narration', 'Normal image idea'], 'all normal drafts return');
+  assert.strictEqual(els.audioFile.files[0], normalFile, 'normal input media returns');
+  assert.strictEqual(run('queueEdit'), null, 'a private queue edit does not carry into normal mode');
+  assert(!Object.values(local).some(value => value.includes('"private":true')) && !JSON.stringify(tab).includes('Private image idea'),
+    'private draft text is never written to normal browser storage');
+  run('renderPrivate(true)');
+  assert.strictEqual(els.imagePrompt.value, 'Private image idea', 'private prompts return');
+  assert.strictEqual(els.audioFile.files[0], privateFile, 'private input media returns');
+  assert.strictEqual(run('queueEdit.id'), 7, 'private edit context returns');
+  assert.strictEqual(run('JSON.parse(draftRead(OPTIONS_KEY)).private'), true, 'private workflow options return');
+  assert.strictEqual(run('formInProgress()'), true, 'in-memory drafts prevent an automatic reload from discarding them');
+  run('renderPrivate(false)');
+  ['formShorts', 'formVideo', 'formImage'].forEach((id, i) => { els[id].elements = forms[i]; });
+  fields.forEach((field, i) => Object.assign(field, previous[i]));
+  run(`restoreDraft(workspaceTestDraft); emptyDraft = workspaceTestEmpty; draftWorkspaces.clear();
+    workspaceTestStates.forEach((state, mode) => draftWorkspaces.set(mode, state))`);
+  context.localStorage = oldLocal;
+  context.sessionStorage = oldTab;
+  context.DataTransfer = oldTransfer;
+}
+
+assert(/<div class="form-actions" id="formActions" hidden>/.test(html), 'the old full-size generation controls are retired');
+{
+  const previous = context.document.body.dataset.page;
+  for (const [page, hidden] of [['generate', false], ['status', true], ['output', true]]) {
+    context.document.body.dataset.page = page;
+    run('markJump()');
+    assert.strictEqual(els.goBar.hidden, hidden, `footer visibility on ${page}, even with the form end in view`);
+  }
+  wide.matches = true;
+  run('markJump()');
+  assert.strictEqual(els.goBar.hidden, false, 'desktop Generate always has its footer controls');
+  wide.matches = false;
+  context.document.body.dataset.page = previous;
+  run('markJump()');
+}
+{
+  const toggle = element('hintToggle'), panel = element('hintPanel');
+  toggle.dataset.hintTarget = 'hintPanel';
+  panel.hidden = true;
+  els.hintPanel = panel;
+  toggle.setAttribute = (name, value) => { toggle[name] = value; };
+  const click = documentListeners.click.find(fn => fn.toString().includes('[data-hint-target]'));
+  const event = { target: { closest: selector => selector === '[data-hint-target]' ? toggle : null } };
+  click(event);
+  assert(!panel.hidden && toggle['aria-expanded'] === 'true', 'the subheader hint opens accessibly');
+  click(event);
+  assert(panel.hidden && toggle['aria-expanded'] === 'false', 'a second tap folds the hint again');
+}
+
+run(`renderStopped([{ id: 'run_test', pipeline: 'video', label: 'Film', detail: 'Stopped', clips: 1 }], [], [], false)`);
+assert(/data-continue-later="run_test"/.test(els.stoppedRuns.innerHTML), 'continuing a stopped run adds it to Pending');
+assert(/data-continue-top="run_test"/.test(els.stoppedRuns.innerHTML), 'putting a stopped run at the top remains available');
+assert(/\.stopped-run \{ position: relative; \}/.test(html) && /\.work-privacy \{ position: absolute; top: 8px; right: 10px;/.test(html),
+  'run privacy icons are anchored at the top right of their cards');
 
 for (const side of ['video', 'shorts']) {
   const section = html.slice(html.indexOf(`id="${side}H3Creativity"`), html.indexOf('</select>', html.indexOf(`id="${side}H3Creativity"`)));
@@ -53,22 +199,22 @@ assert(html.includes('value="gemma-4-12b"') && html.includes('value="qwen3-14b"'
 assert(els.writeVideoPrompt.innerHTML === run('ICONS.enhanced') && els.writeImagePrompt.innerHTML === run('ICONS.enhanced'), 'prompt writers use the detailed prompt icon');
 assert(!html.includes('Local model uses the model in Settings.'), 'no local model hint');
 assert(html.includes('value="review">Enhance before review') && html.includes('value="render">Enhance before each clip'));
-// The model guide: a quiet link under each workflow picker, there when the workflow's model has a guide.
-for (const id of ['shortsGuideLink', 'videoGuideLink', 'imageGuideLink']) assert(new RegExp(`<button type="button" class="guide-link" id="${id}" hidden></button>`).test(html), `${id} is under its picker`);
+// Workflow's heading hint opens its model guide, or contextual help when no model is known.
+for (const id of ['shortsGuideLink', 'videoGuideLink', 'imageGuideLink']) assert(new RegExp(`<button type="button" class="hint-toggle" id="${id}"[^>]*><span class="res-info-mark"`).test(html), `${id} is a hint icon`);
 assert(/<dialog id="modelGuide"[^>]*>[\s\S]*id="modelGuideBody"[\s\S]*id="modelGuideClose"/.test(html), 'the guide opens in a box like the detailed prompt');
 run(`setGuides('image', { workflows: [{ name: 'k.json', guide: { key: 'krea2', title: 'Krea-2 Turbo' } }, { name: 'x.json' }], built_in_guide: null })`);
 els.imageWorkflow.value = 'k.json';
 run("syncGuideLink('image')");
-assert(!els.imageGuideLink.hidden && els.imageGuideLink.textContent === 'About Krea-2 Turbo' && els.imageGuideLink.dataset.guide === 'krea2', 'the link names the model');
+assert(els.imageGuideLink.title === 'About Krea-2 Turbo' && els.imageGuideLink.dataset.guide === 'krea2', 'the icon describes the model');
 els.imageWorkflow.value = 'x.json';
 run("syncGuideLink('image')");
-assert(els.imageGuideLink.hidden, 'a model with no guide has no link');
+assert(!els.imageGuideLink.dataset.guide, 'a model with no guide falls back to contextual help');
 els.imageWorkflow.value = '';
 run("syncGuideLink('image')");
-assert(els.imageGuideLink.hidden, 'Automatic has no one model to describe');
+assert(!els.imageGuideLink.dataset.guide, 'Automatic has no one model to describe');
 run(`setGuides('video', { workflows: [], built_in_guide: { key: 'ltx23', title: 'LTX-2.3' } })`);
 els.videoWorkflow.value = '';
-assert(els.videoGuideLink.textContent === 'About LTX-2.3' && !els.videoGuideLink.hidden, 'the built-in workflow has its guide');
+assert(els.videoGuideLink.title === 'About LTX-2.3', 'the built-in workflow has its guide');
 {
   const guide = run(`guideHtml({ lead: 'A <b>lead', facts: [['Size', '1 MP']], sections: [{ title: 'One', items: ['a'] }, { title: 'Two', items: ['b'] }, { title: 'Three', items: ['c'] }],
     faq: [['Q?', 'A.']], sources: [['Card', 'https://x.test/a?b=1&c=2']] })`);
@@ -176,7 +322,7 @@ els.start.value = 'chain';
 els.videoWorkflow.value = 'r2v';
 run('syncImageInput()');
 assert(els.start.disabled && els.start.hidden && !els.startUnavailable.hidden, 'reference workflow shows separate moments instead of a disabled continuous take');
-assert(els.startHint.textContent.includes('cannot start a clip'), 'explains the workflow limitation');
+assert(!html.includes('id="startHint"'), 'the clips-connect hint text is removed');
 assert.deepStrictEqual(labels(), ['Image 1: main character (optional)', 'Image 2 (optional)'], 'the boxes open stay open');
 assert.strictEqual(boxes[1].parts.input.value, 'chosen.png', 'a workflow with room for it keeps the image');
 pressPlus();
@@ -188,7 +334,7 @@ els.videoWorkflow.value = 'ti2v';
 run('syncImageInput()');
 assert(!els.start.disabled && !els.start.hidden && els.startUnavailable.hidden, 'single-image workflow restores the selectable mode');
 assert.strictEqual(els.start.value, 'chain', 'switching workflows keeps the original choice');
-assert.deepStrictEqual(labels(), ['Image 1: first frame (optional: without one it starts from text)', 'Image 2 (optional)']);
+assert.deepStrictEqual(labels(), ['Image 1: first frame (optional)', 'Image 2 (optional)']);
 assert(boxes[2].parts.input.disabled, 'a hidden box sends nothing');
 
 els.videoWorkflow.value = 't2v';
@@ -259,7 +405,8 @@ els.videoWorkflow.value = 'director';
 els.start.value = 'director';
 run('syncVideoForm()');
 assert(!els.startDirector.disabled && els.startMultishot.disabled && !els.start.disabled);
-assert(els.startHint.textContent.includes('exactly one image'));
+assert(html.includes('id="connectGuideLink" data-guide="clip_connection">About how clips connect</button>'),
+  'the clips-connect guide link is unchanged');
 assert(els.multishotOptions.hidden && !els.previewRun.disabled && !els.videoClipFixedButton.disabled);
 assert(html.indexOf('id="sizePreset"') < html.indexOf('id="duration"') &&
        html.indexOf('id="videoClipFixedHint"') < html.indexOf('id="connectionBox"'), 'resolution precedes film length and connection follows clip length');
@@ -719,17 +866,21 @@ assert(setHtml.includes('data-grid-set="image_20261102_120000"') && /<button typ
 // Private mode's key in the top bar, by Settings: lit while on, and a tap turns it the other way.
 {
   assert(/<div class="top-icons" id="topIcons">\s*<a href="#" id="privateToggle" role="button" aria-pressed="false"[^>]*><svg[\s\S]*?<\/a>\s*<a href="#" id="settingsBtn"/.test(html), 'the key, before Settings');
+  assert(html.includes('aria-label="Private mode" title="Private mode: off"'), 'the initial control uses Private mode branding');
+  assert(html.includes('<option value="gemini_sfw">Gemini, the local model for private runs</option>'),
+    'private titling is rebranded without changing the saved setting value');
   for (const id of ['privateToggle', 'privateMode']) context.document.getElementById(id);
   const lit = new Set();
   els.privateToggle.classList = { toggle: (name, on) => (on ? lit.add(name) : lit.delete(name)), add() {}, remove() {}, contains: name => lit.has(name) };
   run('renderPrivate(true)');
-  assert(lit.has('on') && els.privateToggle.title === 'Private mode (NSFW): on', 'lit while on');
+  assert(lit.has('on') && els.privateToggle.title === 'Private mode: on', 'lit while on');
   let sent;
   const keptFetch = context.fetch;
   context.fetch = (url, options) => { sent = { url, body: JSON.parse(options.body) }; return new Promise(() => {}); };
   els.privateToggle.listeners.click({ preventDefault() {} });
   context.fetch = keptFetch;
   assert(sent.url === '/api/private' && sent.body.on === false, 'a tap asks for it off');
+  run('privateChanging = false');
   // Turned on, it opened Output on the NSFW filter: back to all, for what follows.
   run("renderPrivate(false)");
   assert.strictEqual(run('nsfwView'), false, 'Private mode off: the NSFW view goes off with it');
@@ -745,7 +896,7 @@ assert(setHtml.includes('data-grid-set="image_20261102_120000"') && /<button typ
   run('renderPrivate(true)');
   assert(run("workPrivacy({ pipeline: 'image', nsfw: true }, 'job', 1)").includes('work-private-pill'), 'private work has a privacy pill');
   const action = run("workPrivacy({ pipeline: 'video' }, 'job', 7)");
-  assert(action.includes('data-work-private-kind="job"') && action.includes('data-work-private-id="7"') && action.includes('tap twice'), 'untagged work uses a two-tap NSFW button');
+  assert(action.includes('data-work-private-kind="job"') && action.includes('data-work-private-id="7"') && action.includes('aria-label="Mark as private"') && action.includes('tap twice'), 'untagged work uses a two-tap private-tag button');
   run(`renderStopped([{ id: 'private_run', pipeline: 'video', label: 'Saved', detail: '', nsfw: true }],
     [{ id: 8, pipeline: 'image', label: 'Pending', detail: '', private: true }],
     [{ job_id: 9, pipeline: 'image', label: 'Failed', outcome: 'failed', recoverable: true }])`);
@@ -765,6 +916,9 @@ assert(setHtml.includes('data-grid-set="image_20261102_120000"') && /<button typ
   assert(!els.failedRuns.innerHTML.includes('Private failure title') && !els.failedRuns.innerHTML.includes('work-private-pill'), 'private failures keep their plain title and no pill outside Privacy mode');
   run('renderStopped([])');
 }
+run(`renderNow({ running: true, pipeline: 'video', progress: { stage: [1, 3, 'Plan'], action: 'Generating prompts', tokens: { per_second: 4.5, total: 125 } } })`);
+assert(els.stageDetail.innerHTML.includes('Generating prompts - 4.5 tok/s · 125 total tok'), 'local generation exposes speed and output count');
+run(`renderNow({ running: true })`);
 // Arranging in the grid: the button left of Close, lit while on; a tap picks one rather than opening it.
 {
   assert(/<div class="thumb-grid-foot">\s*<button type="button" class="thumb-grid-arrange" id="thumbGridArrange"[^>]*><\/button>\s*<button type="button" class="panel-close" id="thumbGridClose">/.test(html), 'arrange, left of Close');
@@ -883,8 +1037,9 @@ assert(/#videos, #imageSets, #collections, #cnav \{ transition: opacity \.25s ea
   assert(script.includes('placeOverPills(box, line);') && script.includes("box.style.top = `${Math.max(8, at.bottom + 4 - box.getBoundingClientRect().height)}px`;"), 'grown up out of the pill line');
   assert(/<dialog id="pillsMenu" class="panel-dialog upscale-dialog pills-menu"/.test(html) && script.includes("if (line.closest('.viewer-meta-details')) {"), 'a box, growing as Move does');
 }
-assert(script.includes("if (pick) moveViewed({ to: pick.dataset.moveTo }, pick);") && /button\.picked \{ background: color-mix\(in srgb, var\(--accent\) 30%/.test(html)
-  && /dialog#moveSheet\.moving \.upscale-methods button:not\(\.picked\) \{ opacity: \.4;/.test(html), 'the collection tapped lights up while it moves, the others dimmed');
+assert(script.includes("if (pick) moveViewed({ to: pick.dataset.moveTo }, pick);") && /button\.picked \{ background: var\(--panel-2\); border-color: var\(--accent\)/.test(html)
+  && /dialog#moveSheet \{ --accent: var\(--shared\); border-color: var\(--accent\); \}/.test(html)
+  && /dialog#moveSheet\.moving \.upscale-methods button:not\(\.picked\) \{ opacity: \.4;/.test(html), 'the collection tapped keeps its neutral fill with a shared-purple border, the others dimmed');
 // A clicked button's request on its way: it pulses until the answer is back.
 {
   const classes = new Set(), attrs = {};
@@ -916,7 +1071,7 @@ assert(/<button type="button" class="plain viewer-use" id="viewerUse" hidden[^>]
   && !script.includes('if (choosingFor) { chooseThis(view.dataset.viewSet') && script.includes("chooseThis(id, position);")
   && /\.viewer-actions\.choosing > button\.plain \{ flex: 1 1 0;/.test(html), 'Use beside Close while choosing; a tap on a thumbnail only opens it');
 // Any box picks from Output: a reference box picks a film, with Use in its preview.
-assert(/Select reference \$\{number\} from Output/.test(html) && script.includes("chooseFromOutput(pick.closest('.image-box'), 'video', 'media')")
+assert(/Select reference \$\{number\} from Output/.test(script) && script.includes("chooseFromOutput(pick.closest('.image-box'), 'video', 'media')")
   && script.includes("const choosing = !!choosingFor && (choosingFor.kind === 'media' ? video : !video);") && script.includes('chooseFilm(name, from);'),
   'reference boxes pick films too, Use choosing them');
 const single = run("imageSetHtml({ id: 'image_9', label: 'One', total: 1, size: '1x1', when: 'now', images: [{ position: 1, title: 'x', version: 1 }] })");
@@ -1039,16 +1194,15 @@ assert(/name="opt_group_2nd_pass" value="0"><input type="checkbox" name="opt_gro
 const upscaler = optionsHtml.slice(optionsHtml.indexOf('Upscaler'), optionsHtml.indexOf('Color correction'));
 assert(upscaler.includes('name="opt_group_up.choice"') && upscaler.includes('<option value="4K" selected>4K</option>') && upscaler.includes('name="opt_face_lora_strength"'),
   'what goes with a switch is beside it');
-// The LoRA setting: its switch, and under it while it's on, the file by name (no .safetensors) and its strength at the right.
+// The LoRA switch, file and strength remain on one line even when unchecked.
 const loraSettingHtml = run(`(() => { const all = [{ id: 'lora', kind: 'switch', label: 'Use LoRA', default: '0', advanced: true, below: true },
   { id: 'lora_name', kind: 'choice', label: 'LoRA', parent: 'lora', default: 'KNPV3_1.safetensors', choices: ['KNPV3_1.safetensors', 'b.safetensors'],
     labels: { 'KNPV3_1.safetensors': 'KNPV3', 'b.safetensors': 'b' } },
   { id: 'lora_strength', kind: 'number', label: 'Strength', parent: 'lora', default: '1', min: -2, max: 2, step: 0.05 }];
   return all.map(option => imageOptionHtml(option, all)).join(''); })()`);
-assert(/<input type="checkbox" name="opt_lora" value="1">\s*<span>Use LoRA<\/span><\/label><div class="option-reveal" data-below="opt_lora"><div class="option-reveal-in"><div class="options-box option-row option-below"><select name="opt_lora_name"[^>]*><option value="KNPV3_1.safetensors" selected>KNPV3<\/option><option value="b.safetensors">b<\/option><\/select><input type="number" class="option-strength" name="opt_lora_strength"[^>]*value="1"/.test(loraSettingHtml),
-  'off, its file and strength wait folded under it, in a dark box; each file said by name');
-assert(/\.option-reveal \{ display: grid; grid-template-rows: 0fr; opacity: 0; transition: grid-template-rows \.3s/.test(html) && /\.option-reveal\.open \{ grid-template-rows: 1fr; opacity: 1; \}/.test(html)
-  && script.includes("if (toggle) under.classList.toggle('open', toggle.checked);"), 'ticked, the box grows open smoothly');
+assert(/<div class="lora-line"><label class="check"><input type="hidden" name="opt_lora" value="0"><input type="checkbox" name="opt_lora" aria-label="Use LoRA" value="1"><\/label><select name="opt_lora_name"[^>]*><option value="KNPV3_1.safetensors" selected>KNPV3<\/option><option value="b.safetensors">b<\/option><\/select><input type="number" class="option-strength" name="opt_lora_strength"[^>]*value="1"/.test(loraSettingHtml),
+  'off, the compact selector and strength are still present beside the accessible checkbox');
+assert(!loraSettingHtml.includes('option-reveal') && !loraSettingHtml.includes('<span>Use LoRA'), 'no collapsing wrapper or redundant LoRA label');
 // Steps, Sampler, Scheduler and CFG first, in a dark box, each named by a button with a hint; then Use LoRA in its own box.
 run(`syncOptions('testOptions', 'testOptionsBox', [{ id: 'group_x', kind: 'switch', label: 'X', default: '0' },
     { id: 'lora', kind: 'switch', label: 'Use LoRA', default: '0', advanced: true, below: true },
@@ -1059,14 +1213,16 @@ run(`syncOptions('testOptions', 'testOptionsBox', [{ id: 'group_x', kind: 'switc
     { id: 'switch_lightning_lora_name', kind: 'choice', label: 'LoRA', parent: 'switch_lightning_lora', default: 't.safetensors', choices: ['t.safetensors', 'u.safetensors'], labels: { 't.safetensors': 't' }, advanced: true, speed: true },
     { id: 'switch_lightning_lora_strength', kind: 'number', label: 'Strength', parent: 'switch_lightning_lora', default: '1', min: -2, max: 2, step: 0.05, advanced: true, speed: true }], 'w')`);
 const laidOut = els.testOptionsBox.innerHTML;
-assert(/^<div class="options-section"><div class="options-subtitle">Sampling<span class="options-subtitle-what"> · how each picture is worked<\/span><\/div><div class="options-sampling"><div class="option-row sampling-line"><button type="button" class="res-info option-info"[^>]*><span>Steps<\/span>[\s\S]*?<span>Sampler<\/span>[\s\S]*?<span>CFG<\/span>[\s\S]*?<\/div><div class="options-lora options-speed"><div class="options-subtitle">Turbo LoRA<span class="options-subtitle-what"> · fewer steps, faster<\/span><\/div>[\s\S]*?<div class="options-lora"><div class="options-subtitle">Style LoRA<span class="options-subtitle-what"> · changes the look<\/span><\/div>/.test(laidOut)
-  && !laidOut.includes('Advanced') && laidOut.indexOf('opt_group_x') > laidOut.indexOf('data-below="opt_lora"'), 'the four first, in their order, then the turbo LoRA, then Use LoRA, then the rest; no Advanced');
+assert(/^<div class="options-section"><div class="options-subtitle">Sampling<span class="options-subtitle-what"> · how each picture is worked<\/span><\/div><div class="options-sampling"><div class="option-row sampling-line"><button type="button" class="res-info option-info"[^>]*><span>Steps<\/span>[\s\S]*?<span>Sampler<\/span>[\s\S]*?<span>CFG<\/span>[\s\S]*?<\/div><div class="options-lora options-speed"><div class="options-subtitle">Turbo LoRA<span class="options-subtitle-what"> · fewer steps, faster<\/span><\/div>[\s\S]*?<div class="options-lora"><div class="options-subtitle">Style LoRA<button[^>]*data-style-lora-guide[^>]*>[\s\S]*?<\/button><span class="options-subtitle-what"> · changes the look<\/span><\/div>/.test(laidOut)
+  && !laidOut.includes('Advanced') && laidOut.indexOf('opt_group_x') > laidOut.indexOf('name="opt_lora"'), 'the four first, in their order, then the turbo LoRA, then Use LoRA, then the rest; no Advanced');
 assert(/\.options-sampling \{ display: grid; grid-template-columns: max-content minmax\(0, 13em\);/.test(html) && /\.options-sampling \.sampling-line \{ display: contents; \}/.test(html)
   && !laidOut.includes('options-box options-sampling'), 'under a heading, no box; names and settings in two lined-up columns');
 assert(/\.options-sampling \.option-hint \{ grid-column: 1 \/ -1; margin: 0; contain: inline-size;/.test(html), 'a hint wraps inside the columns, not widening them');
-assert(/<div class="options-lora options-speed"><div class="options-subtitle">Turbo LoRA<span class="options-subtitle-what"> · fewer steps, faster<\/span><\/div><label class="check">[^]*?name="opt_switch_lightning_lora"[^]*?data-below="opt_switch_lightning_lora"[^]*?<select name="opt_switch_lightning_lora_name"[^>]*><option value="t.safetensors" selected>t<\/option>[^]*?<input type="number" class="option-strength" name="opt_switch_lightning_lora_strength"/.test(laidOut)
-  && laidOut.indexOf('options-speed') < laidOut.indexOf('data-below="opt_lora"'), 'the turbo LoRA first, with the same switch, file and strength as Use LoRA, and a word on what sets it apart');
+assert(/<div class="options-lora options-speed"><div class="options-subtitle">Turbo LoRA<span class="options-subtitle-what"> · fewer steps, faster<\/span><\/div><div class="lora-line"><label class="check">[^]*?name="opt_switch_lightning_lora"[^]*?<select name="opt_switch_lightning_lora_name"[^>]*><option value="t.safetensors" selected>t<\/option>[^]*?<input type="number" class="option-strength" name="opt_switch_lightning_lora_strength"/.test(laidOut)
+  && laidOut.indexOf('options-speed') < laidOut.indexOf('name="opt_lora"'), 'the turbo LoRA first, with the same compact row as style LoRA');
 assert(laidOut.includes('<div class="res-hint option-hint" hidden>How many times') && script.includes("const info = e.target.closest && e.target.closest('.option-info');"), 'each name drops its hint');
+assert(laidOut.includes('<button type="button" class="hint-toggle" data-style-lora-guide aria-label="About style LoRA"')
+  && script.includes("openModelGuide('style_lora')"), 'style LoRA offers its guide from a heading hint icon');
 // The negative prompt goes to the bottom of the Prompt section, not the options; with only it, there are no options to show.
 run(`syncOptions('testOptions', 'testOptionsBox', [{ id: 'negative', kind: 'text', label: 'Negative prompt', default: 'blurry' }], 'n')`);
 assert(/<textarea id="opt_negative" name="opt_negative"[^>]*>blurry<\/textarea>/.test(els.testNegativeSlot.innerHTML) && !els.testNegativeSlot.hidden, 'the negative prompt is in the Prompt section');
@@ -1076,8 +1232,25 @@ assert(els.testNegativeSlot.innerHTML === '' && els.testNegativeSlot.hidden && !
 assert(/<div id="imageNegativeSlot" class="negative-slot"><\/div>\s*<\/details>\s*<details class="section" id="imageOptions"/.test(html)
   && /<div id="videoNegativeSlot" class="negative-slot"><\/div>\s*<\/details>\s*<details class="section" id="videoOptions"/.test(html)
   && /<div id="shortsNegativeSlot" class="negative-slot"><\/div>\s*<\/details>\s*<details class="section" id="shortsOptions"/.test(html), 'last in each Prompt section');
-assert(script.includes("$(box).addEventListener('change', e => { followSwitch($(box), e.target); syncBelow($(box)); rememberOptions($(box)); });")
-  && /\.pipeline-form \.option-below select \{ flex: 1 1 auto;/.test(html), 'switched on, it shows; the file takes the width, the strength at its right');
+{
+  const box = els.imageOptionsBox, savedQuery = box.querySelectorAll, workflow = box.dataset.workflow;
+  const savedWrite = run('draftWrite');
+  let persisted;
+  box.dataset.workflow = 'persist-loras';
+  box.querySelectorAll = selector => selector.includes('input[name]') ? [
+    {name: 'opt_lora_name', type: 'select-one', value: 'krea_a.safetensors'},
+    {name: 'opt_additional_loras', type: 'hidden', value: '[{"on":true,"name":"krea_b.safetensors","strength":"0.5"}]'},
+  ] : [];
+  context.persistLoraWrite = (key, value) => { persisted = JSON.parse(value); };
+  run('draftWrite = persistLoraWrite');
+  box.listeners.change({target: {type: 'select-one', closest: () => null}});
+  assert.strictEqual(persisted['persist-loras'].opt_lora_name, 'krea_a.safetensors');
+  assert(JSON.parse(persisted['persist-loras'].opt_additional_loras)[0].on, 'additional LoRAs persist with workflow settings');
+  box.dataset.workflow = workflow;
+  box.querySelectorAll = savedQuery;
+  context.restoreLoraWrite = savedWrite;
+  run('draftWrite = restoreLoraWrite');
+}
 assert(/name="opt_group_cc" value="1" disabled/.test(optionsHtml) && optionsHtml.includes("Can't be changed"), "one that can't run is locked, saying why");
 assert(/name="opt_lora_k_on" value="1">/.test(optionsHtml) && /name="opt_lora_k_strength"[^>]*value="1"/.test(optionsHtml), 'an unused LoRA offers its usual strength');
 assert(/<label for="opt_steps">Steps<\/label>/.test(optionsHtml) && /name="opt_steps"[^>]*value="8"/.test(optionsHtml));
@@ -1124,10 +1297,12 @@ assert(stoppedBox.indexOf('Wardrobe') < stoppedBox.indexOf('Image · 1 of 2 imag
 assert(stoppedBox.includes('<div class="hint">02 Nov 23:46</div>') && stoppedBox.indexOf('Image · 1 of 2 images') < stoppedBox.indexOf('02 Nov 23:46') && stoppedBox.indexOf('02 Nov 23:46') < stoppedBox.indexOf('class="stopped-actions"'), 'the date on its own line, under the details');
 assert(stoppedBox.indexOf('class="stopped-actions"') < stoppedBox.indexOf('data-continue') && stoppedBox.indexOf('data-continue') < stoppedBox.indexOf('data-shots') && stoppedBox.indexOf('data-shots') < stoppedBox.indexOf('data-config') && stoppedBox.indexOf('data-config') < stoppedBox.indexOf('data-discard'), 'continue is left of the other actions');
 assert(stoppedBox.includes(`data-shots="image_1" aria-label="Prompts" title="View prompts">${run('ICONS.enhanced')}</button>`), 'failed and stopped runs use the star for prompts');
-assert(/class="icon-btn start-item continue-item" data-continue="image_1"/.test(stoppedBox) && stoppedBox.includes('aria-label="Continue"'), 'continuation has an accessible queue icon');
-assert(stoppedBox.includes(`aria-label="Continue" title="Continue: it starts when the queue gets to it">${run('ICONS.queue')}</button>`)
+assert(/class="icon-btn start-item continue-item" data-continue-later="image_1"/.test(stoppedBox) && stoppedBox.includes('aria-label="Add to Pending"'),
+  'a stopped run has an accessible Add to Pending icon');
+assert(stoppedBox.includes(`aria-label="Add to Pending" title="Add to Pending: it waits until you start it">${run('ICONS.queue')}</button>`)
   && stoppedBox.includes(`data-continue-top="image_1" aria-label="Add to the top of the queue" title="Add to the top of the queue: ahead of everything waiting">${run('ICONS.top')}</button>`)
-  && stoppedBox.indexOf('data-continue="image_1"') < stoppedBox.indexOf('data-continue-top="image_1"'), 'a stopped run: the queue icon, then the arrow to the top of the queue');
+  && stoppedBox.indexOf('data-continue-later="image_1"') < stoppedBox.indexOf('data-continue-top="image_1"')
+  && !stoppedBox.includes('data-continue="image_1"'), 'a stopped run: Add to Pending, then the arrow to the top; no immediate retry');
 assert(script.includes("const query = d.continueTop ? '?top=1' : d.continueLater ? '?later=1' : '';") && script.includes("`/runs/${encodeURIComponent(run)}/continue${query}`") && script.includes("`/queue/run/start/${d.start}${d.top ? '?top=1' : ''}`"), 'the arrows ask for the top');
 assert(/\.queue \.stopped-actions \.continue-item, \.queue \.queue-item-actions \.continue-item \{ color: var\(--shared\)/.test(html) && /\.queue \.stopped-actions \.icon-btn:not\(\.continue-item\) \{ color: var\(--muted\)/.test(html), 'only continuations are purple');
 run(`renderStopped([{ id: 'image_2', pipeline: 'image', label: 'Cut', detail: 'd', clips: 1, estimate: 5, outcome: { outcome: 'stopped' } }])`);
@@ -1141,15 +1316,14 @@ assert(els.failedRuns.innerHTML.includes(`data-continue-later="image_3" aria-lab
 assert(script.includes("d.continueLater ? '?later=1'"), 'it asks for Pending');
 run('renderStopped([])');
 
-// Each form starts with its preset, above the line its sections start with; the workflow opens Generation. No Check setup.
+// Presets belong to the shared header; the workflow stays outside Generation. No Check setup.
 for (const form of ['formShorts', 'formVideo', 'formImage']) {
   const start = html.indexOf(`id="${form}"`), section = html.indexOf('<details class="section"', start);
-  const top = html.indexOf('class="workflow-top preset-top"', start);
-  assert(top > start && top < section, `${form}: Preset first`);
-  const inside = html.slice(section, html.indexOf('</details>', section));
-  assert(/<summary class="section-title">Generation<\/summary>\s*<div class="workflow-in"[^>]*>\s*<div class="workflow-head"><label for="\w+">Workflow<\/label><button type="button" class="use-default"/.test(inside), `${form}: Workflow at the top of Generation`);
+  assert(!html.slice(start, section).includes('data-preset-side'), `${form}: no full-size preset row`);
+  assert(/<div class="workflow-in"[^>]*>\s*<div class="workflow-head">(?:<span class="field-heading">)?<label for="\w+">Workflow<\/label>/.test(html.slice(start, section)),
+    `${form}: Workflow remains above the accordion`);
 }
-assert(!html.includes('first-child > .section:first-child'), 'every form has the line above Generation');
+assert(html.includes('border-top: 1px solid var(--line); overflow: hidden;'), 'section boundaries have a hard divider');
 assert(!html.includes('id="check"') && !script.includes('/check/'), 'no Check setup');
 
 // A phone shows one section at a time, from the footer, and the bars over it ease in and out.
@@ -1162,7 +1336,7 @@ assert.strictEqual(context.document.body.dataset.page, 'status');
 run("showPage('generate')");
 assert.strictEqual(context.document.body.dataset.page, 'generate');
 // The progress bars: in the header, left of its icons; a tap grows one down over the page.
-assert(/<div class="top">\s*<div class="top-main" id="topMain">\s*<div class="head-strips" id="headStrips">\s*<div class="strip" id="runStrip"[\s\S]*?id="uploadStrip"/.test(html)
+assert(/<div class="top">\s*<div class="top-main" id="topMain" hidden>\s*<div class="head-strips" id="headStrips">\s*<div class="strip" id="runStrip"[\s\S]*?id="uploadStrip"/.test(html)
   && !/<div class="stick" id="stick">[\s\S]*?id="runStrip"[\s\S]*?<\/nav>/.test(html) && html.indexOf('id="runStrip"') < html.indexOf('id="stick"'), 'in the header, not the footer');
 assert(/\.head-strips \{ position: absolute; top: 0; left: 0; right: 0; z-index: 30;/.test(html)
   && /\.head-strips\.opened \{ background: var\(--bg\); box-shadow:/.test(html) && !/\.head-strips \.strip\.open \{ background/.test(html),
@@ -1186,19 +1360,19 @@ film.run = null;
 const orphan = run('filmHtml(film)');
 assert(!orphan.includes('data-shots') && !orphan.includes('poster='), 'a film whose run is gone has no shots to open');
 
-// The list of runs waiting: a plan is rendered, a stopped run is continued.
+// Plans and stopped runs go to Pending before being started.
 run(`renderStopped([{ id: 'run_1', pipeline: 'video', label: 'A <b>plan', detail: 'Plan ready, 8 shots', clips: 0, estimate: 1860 }])`);
 const box = els.stoppedRuns;
 assert.strictEqual(box.hidden, false);
 assert(box.innerHTML.includes('A &lt;b&gt;plan') && box.innerHTML.includes('~31 min'));
-assert(box.innerHTML.includes('data-shots="run_1"') && box.innerHTML.includes('data-continue="run_1"') && box.innerHTML.includes('aria-label="Render"'));
+assert(box.innerHTML.includes('data-shots="run_1"') && box.innerHTML.includes('data-continue-later="run_1"') && box.innerHTML.includes('aria-label="Add to Pending"'));
 const written = box.innerHTML;
 box.innerHTML = 'untouched';
 run(`renderStopped([{ id: 'run_1', pipeline: 'video', label: 'A <b>plan', detail: 'Plan ready, 8 shots', clips: 0, estimate: 1860 }])`);
 assert.strictEqual(box.innerHTML, 'untouched', 'a poll must not replace buttons that have not changed');
 assert(written.length > 0);
 run(`renderStopped([{ id: 'run_1', pipeline: 'video', label: 'x', detail: 'y', clips: 2, estimate: 60 }])`);
-assert(box.innerHTML.includes('aria-label="Continue"'));
+assert(box.innerHTML.includes('data-continue-later="run_1"') && box.innerHTML.includes('aria-label="Add to Pending"'));
 run(`renderStopped([], [{ id: 7, pipeline: 'video', label: 'Continue', detail: '', resume: 'run_1', continuation: true }, { id: 8, pipeline: 'image', label: 'new', detail: '', continuation: false }, { id: 9, pipeline: 'image', label: 'upscale', detail: '', resume: 'image_1', continuation: false }])`);
 assert(box.innerHTML.includes('data-shots="run_1"') && box.innerHTML.includes('data-edit="7"') && box.innerHTML.includes('data-start="7"'), 'a parked continuation exposes prompts and its other controls');
 assert(box.innerHTML.indexOf('data-start="7"') < box.innerHTML.indexOf('data-shots="run_1"'), 'pending start is left of prompts');
@@ -1221,6 +1395,16 @@ run(`renderStopped([], [], [{ job_id: 8, pipeline: 'video', label: 'Kept', outco
 assert(els.failedRuns.innerHTML.includes('data-requeue-job="8"') && !els.failedRuns.innerHTML.includes('No saved run to retry'), 'a failure with kept settings can go back to Pending');
 assert(els.failedRuns.innerHTML.includes('data-requeue-edit="1"') && els.failedRuns.innerHTML.includes('Change settings'), 'a failure with kept settings has the sliders button');
 assert(els.failedRuns.innerHTML.includes('data-dismiss-job="8"'), 'a failure with kept settings can still be deleted');
+run(`renderStopped([], [], [], false, [{ path: 'runs/bad<run>/state.json', error: 'Cannot read <checkpoint>', run_id: 'image_20261113_222130' },
+  { path: 'runs/other/state.json', error: 'Unsupported version' }])`);
+assert(els.failedRuns.innerHTML.includes('Failed (2)') && els.failedRuns.innerHTML.includes('Saved run could not be read')
+  && els.failedRuns.innerHTML.includes('runs/bad&lt;run&gt;/state.json') && els.failedRuns.innerHTML.includes('Cannot read &lt;checkpoint&gt;')
+  && !els.failedRuns.innerHTML.includes('data-continue=') && els.failedRuns.innerHTML.includes('data-discard-unreadable="image_20261113_222130"')
+  && !els.failedRuns.innerHTML.includes('data-discard-unreadable="undefined"'),
+  'unreadable checkpoints appear individually under Failed with escaped details and a delete button for identified runs');
+run('renderStopped([], [], [], false, [])');
+assert(els.failedRuns.hidden, 'the checkpoint entry disappears when the error is resolved');
+assert(!html.includes('id="checkpointNotice"'), 'checkpoint errors no longer appear in a page-wide warning');
 // How a run or upload ended is said once, under Finished, newest first; the status itself goes back to Idle.
 const finishedClasses = {};
 els.finishedToggle.classList.toggle = (name, value) => { finishedClasses[name] = value; };
@@ -1246,7 +1430,7 @@ assert(/data-goto="shorts" data-tab="uploaded"[^>]*>[\s\S]*?<span class="result-
 assert(!els.finishedList.innerHTML.includes('finished-clear') && els.finishedFoot.hidden === false, 'Clear is outside the list, shown while it has something');
 assert(/<div class="finished-foot" id="finishedFoot" hidden><button type="button" class="finished-clear" id="finishedClear"[^>]*>Clear<\/button><\/div>/.test(html), 'a discreet Clear under the list');
 assert(/if \(cleared\) \{\s*if \(panelShown && panelShown\.which === 'finished'\) closePanel\(\);\s*else if \(DESK\.matches && document\.body\.dataset\.runtab === 'finished'\) setRunTab\('queue'\);/.test(script), 'cleared, Finished closes');
-assert(/\$\('finishedClear'\)\.addEventListener\('click'[\s\S]{0,160}secondTap\(button\)[\s\S]{0,1500}fetch\('\/queue\/finished\/clear', \{ method: 'POST',/.test(html), 'Clear asks first, swipes them out, then clears the selected results');
+assert(/\$\('finishedClear'\)\.addEventListener\('click'[\s\S]{0,160}secondTap\(button\)[\s\S]{0,1500}fetch\('\/queue\/finished\/clear', \{ method: 'POST',/.test(script), 'Clear asks first, swipes them out, then clears the selected results');
 { const d = run('clearDelays(6)'); assert(d[0] === 0 && d.every((v, i) => i < 2 || v - d[i - 1] < d[i - 1] - (d[i - 2] ?? 0)), 'from the top, each sooner after the last than the one before'); }
 assert(/#finishedList \{ overflow-x: clip; \}/.test(html) && !/#finishedList \{ overflow-x: hidden/.test(html), 'the list scrolls with the box, not on its own');
 // A small picture of what it made on the left, and a swipe to the right takes it off the list.
@@ -1256,7 +1440,7 @@ run(`imageSets = [{ id: 'image_1', images: [{ position: 2, version: 9 }] }];
     [{ label: 'Up', outcome: 'done', at: '17:07', job_id: 4 }], [{ label: 'Made', outcome: 'done', at: '17:08', pipeline: 'image', run_id: 'image_2', position: 2 }])`);
 {
   const list = els.finishedList.innerHTML;
-  assert(list.includes('<span class="result-thumb"><img loading="lazy" alt="" src="/image-runs/image_1/thumbnails/2?v=9" onerror="this.remove()"></span><span class="result-mark">'), 'an image set: its first picture');
+  assert(list.includes('<span class="result-thumb"><img loading="lazy" alt="" src="/image-runs/image_1/thumbnails/2?v=9" data-remove-on-error></span><span class="result-mark">'), 'an image set: its first picture');
   assert(list.includes('src="/runs/run_1/image"'), "a film: its run's start image");
   assert(/data-lane="upload" data-key="upload:4">\s*<span class="result-thumb"><\/span>/.test(list), 'an upload: an empty space, so the rows line up');
   assert(list.includes('data-lane="run" data-key="run:4"') && list.includes('data-key="made:image_2:2"'), 'a key per row, by lane, so an upload and a run with one number differ');
@@ -1665,12 +1849,12 @@ assert(!html.includes('.current-work::after'), 'the clickable run title has no c
 }
 assert(/<textarea id="promptEditorText"[^>]*><\/textarea>\s*<div class="prompt-progress-track"><div class="prompt-progress" id="promptEditorProgress" hidden><\/div><\/div>/.test(html)
   && /\.prompt-progress-track \{ position: absolute; inset: 1px; border-radius: 9px; overflow: clip;/.test(html), 'the prompt editor has a progress bar inside the top of its box, following its corners');
-assert(/#promptEditorEnhance\.working svg \{ animation: prompt-writing-icon/.test(html) && /\$\('promptEditorEnhance'\)\.classList\.toggle\('working', busy\)/.test(html), 'the write button animates while the LLM writes');
-assert(/button\.classList\.add\('working'\)/.test(html) && /button\.classList\.remove\('working'\)/.test(html), 'the form write button animates too');
+assert(/#promptEditorEnhance\.working svg \{ animation: prompt-writing-icon/.test(html) && /\$\('promptEditorEnhance'\)\.classList\.toggle\('working', busy\)/.test(script), 'the write button animates while the LLM writes');
+assert(/button\.classList\.add\('working'\)/.test(script) && /button\.classList\.remove\('working'\)/.test(script), 'the form write button animates too');
 assert(/rgba\(255, 255, 255, \.38\)/.test(html) && /#runCard \.step\.done \{ border-color: var\(--job, var\(--shared\)\); \}/.test(html), 'a brighter sweep, finished stages in full colour');
 assert(/#comfyBar::after[^{]*\{[^}]*animation: bar-sheen 3\.6s/.test(html) && /\.step\.now::before \{[^}]*animation: step-sheen 3\.6s/.test(html), 'live bars and the stage under way have a slow, quiet sheen');
 assert(!/\.disk \.bar > div::after/.test(html), 'the disk meter does not flash');
-assert(/new ResizeObserver\(\(\) => \{[\s\S]{0,200}height < lastHeight && window\.scrollY > 0[\s\S]{0,300}window\.scrollTo\(0, y\)/.test(html), 'a page made shorter by a fold is repainted, not left black at the top');
+assert(/new ResizeObserver\(\(\) => \{[\s\S]{0,200}height < lastHeight && window\.scrollY > 0[\s\S]{0,300}window\.scrollTo\(0, y\)/.test(script), 'a page made shorter by a fold is repainted, not left black at the top');
 // A fold that shrinks the page under a scrolled screen: scrolled to the new end by the page first, then let go, and the
 // whole page drawn again, so nothing is left black at the top.
 {
@@ -1861,6 +2045,10 @@ assert(run("filmHtml({ name: 'f.mp4', model: 'wan', resolution: '864x480', durat
   assert.strictEqual(els.viewerMetaDetails.innerHTML, 'kept', 'the same pills at the next poll are left as they are, opened or not');
   run(`pictureMetadata({ model: 'k', pills: [{ text: 'k', kind: 'workflow', diff: false }, { text: 'Upscaled: x', kind: 'upscale', diff: false }] }, { upscaled: 'SeedVR2' })`);
   assert(els.viewerMetaDetails.innerHTML.includes('Upscaled: SeedVR2') && !els.viewerMetaDetails.innerHTML.includes('Upscaled: x'), "a picture's own upscale, not its set's");
+  run(`pictureMetadata({ pills: [{ text: 'Gemma 4-v', kind: 'llm', diff: true }, { text: 'Qwen3 14B', kind: 'llm', diff: false }] }, { prompt_llm: 'Qwen3 14B' })`);
+  assert(els.viewerMetaDetails.innerHTML.includes('Qwen3 14B') && !els.viewerMetaDetails.innerHTML.includes('Gemma 4-v'), "the preview shows only that picture's prompt model");
+  run(`pictureMetadata({ pills: [{ text: 'Gemma 4-v', kind: 'llm', diff: true }] }, { prompt_llm: null })`);
+  assert(!els.viewerMetaDetails.innerHTML.includes('Gemma 4-v'), 'an exact prompt does not inherit the set model');
   assert(/\.pills \{ position: relative; display: flex; flex-wrap: wrap; gap: 4px; max-height: 40px; overflow: hidden;/.test(html)
     && /\.pill\.workflow \{[^}]*var\(--pill, var\(--neutral\)\)/.test(html) && /\.viewer-meta-details \.pills \{ width: 96%; max-height: 18px; margin: 2px auto 0; justify-content: center; \}/.test(html) && /\.pills\.open \{ max-height: none;/.test(html)
     && /\.pills\.more:not\(\.open\)::after \{ content: attr\(data-more\);/.test(html), 'three lines in Output, one centred line in the preview; the workflow in its kind\'s colour; a count of the rest, open on a tap');
@@ -1883,7 +2071,7 @@ assert(run("filmHtml({ name: 'f.mp4', model: 'wan', resolution: '864x480', durat
     assert(!run('pinnedOut'), 'back at the top: back in the header');
     run("SETTINGS.pin_progress = false; pinnedOut = false");
     assert(/body\.strips-out \.head-strips \{ position: fixed; top: 0; left: 0; right: 0;/.test(html) && /\.head-strips\.empty \{ opacity: 0;/.test(html), 'along the top, full width; nothing going, nothing there');
-    assert(/<div class="options-col" id="optionsCard" data-page="generate">\s*<!--[^>]*-->\s*<div class="switch generate-switch" role="tablist" aria-label="Pipeline">/.test(html)
+    assert(/<div class="generation-header">[\s\S]*?<div class="switch generate-switch" role="tablist" aria-label="Pipeline">/.test(html)
       && !/<div class="top">[\s\S]*?id="switchShorts"[\s\S]*?<div class="top-icons"/.test(html) && /@media \(min-width: 1000px\) \{ \.generate-switch \{ display: flex;/.test(html),
       'the side switch: not in the header; at the top of Generate on a desktop');
   }
@@ -2067,7 +2255,7 @@ run("setOutputKind('video')");
 assert(!els.imageSets.innerHTML.includes('image_plain') && els.imageSets.innerHTML.includes('data-play-film="a.mp4"'), 'Videos: films only');
 run("setOutputKind('both'); setNsfwView(true)");
 assert.deepStrictEqual(JSON.parse(run('JSON.stringify(visibleFilms().map(v => v.name))')), ['private.mp4']);
-assert(els.imageSets.innerHTML.includes('data-nsfw-image="image_private"') && els.imageSets.innerHTML.includes('Remove NSFW tag'));
+assert(els.imageSets.innerHTML.includes('data-nsfw-image="image_private"') && els.imageSets.innerHTML.includes('Remove private tag'));
 assert(els.imageSets.innerHTML.includes('data-nsfw-video="private.mp4"') && els.imageSets.innerHTML.includes('data-film-folder="video"'), 'films are listed with the image sets');
 assert(!els.imageSets.innerHTML.includes('image_plain'), 'the other view: only what is tagged');
 // Newest first, whatever kind: a set made between two films is listed between them.
@@ -2117,9 +2305,10 @@ assert(/<div class="viewer-tools" id="viewerTools">/.test(html));
 assert.strictEqual(run('VARIATIONS'), 5, 'selected-image variations default to five');
 assert(/if \(shot\) Object\.assign\(s, \{ prompt: shot\.prompt, direct: true, count: VARIATIONS \}\);/.test(script), 'its own prompt, word for word, on new seeds');
 
-// Presets: the picker where the workflow was, the workflow at the top of Generation; "Save as preset" only while what's set isn't one.
-assert(/<div class="workflow-top preset-top">\s*<div class="preset-head"><label for="imagePreset">Preset<\/label><span class="preset-head-actions"><button type="button" class="preset-default" data-preset-default="image" aria-pressed="false" hidden><svg[^>]*><path[^>]*\/><\/svg><\/button><button type="button" class="preset-save" data-preset-save="image" hidden>Save as preset<\/button><\/span><\/div>/.test(html));
-assert(/<summary class="section-title">Generation<\/summary>\s*<div class="workflow-in">\s*<div class="workflow-head"><label for="imageWorkflow">Workflow<\/label><button type="button" class="use-default" data-defaults="imageOptionsBox" hidden[^>]*>Use default<\/button><\/div>/.test(html), 'the workflow at the top of Generation, Use default at its right');
+// Workflow's preset label opens management; the reset icon restores workflow defaults.
+assert(/<dialog id="imagePresetDialog"[\s\S]*?<select id="imagePreset"/.test(html));
+assert(/<div class="workflow-head"><span class="field-heading"><label for="imageWorkflow">Workflow<\/label>[\s\S]*?data-preset-open="image"[\s\S]*?class="use-default" data-defaults="imageOptionsBox"/.test(html),
+  'the workflow header has preset management and a reset icon at its right');
 assert(['shortsOptionsBox', 'videoOptionsBox'].every(box => html.includes(`data-defaults="${box}"`)), 'each side has one');
 // Use default: each setting back to how the workflow is saved, and what was remembered for it forgotten.
 {
@@ -2283,7 +2472,8 @@ assert(/<select id="videoPromptMode" name="prompt_mode" data-segmented>/.test(ht
   assert(context.fake.value === 'llm' && context.fake.changed === 'change' && painted.props['--i'] === 0, 'a tap sets the value and tells the form');
 }
 assert(html.includes('<option value="llm">LLM</option>') && html.includes('<option value="direct">Exact prompt</option>'));
-assert((html.match(/>Prompt source</g) || []).length === 2 && (html.match(/>Model</g) || []).length >= 2 && !html.includes('What writes the prompts'));
+assert(!html.includes('>Prompt source<') && !html.includes('>Model<') && (html.match(/aria-label="Prompt model"/g) || []).length === 2,
+  'Prompt labels its source, with an accessible model picker directly below and no redundant Model heading');
 assert(!html.includes('Write prompt uses the text only') && !script.includes('call it '), 'writer and reference naming hints removed');
 assert(/<details class="h3-help"><summary>OpenH3-IR<\/summary><div class="hint">Before review/.test(html), 'OpenH3 explanation opens from its heading');
 assert(/\.count-stepper \{[^}]*align-items: stretch/.test(html) && /\.count-stepper button \{[^}]*width: 48px;/.test(html), 'stepper buttons are wider and stretch to the input height');
@@ -2349,11 +2539,11 @@ assert(/id="go">Generate</.test(html) && script.includes("'Add to queue'"), 'Gen
 assert(/<a href="#videosCard" data-page="output" id="jumpResults">Output<\/a>/.test(html) && !html.includes('jumpCount'), 'the footer has no count on Output');
 // Each heading holds its section, and the first is called Generation.
 assert(!html.includes('What to make'));
-assert(/<details class="section" id="formTopic">\s*<summary class="section-title">Generation</.test(html));
-assert(/<details class="section" id="videoGeneration">\s*<summary class="section-title">Generation</.test(html));
+assert(/<details class="section" id="formTopic" open>\s*<summary class="section-title">Generation</.test(html));
+assert(/<details class="section" id="videoGeneration" open>\s*<summary class="section-title">Generation</.test(html));
 assert(!/<div class="section-title">(Voice|Publish|How)/.test(html));
-// Every heading starts folded, nothing brings back how they were left, and changing side folds them again.
-assert(!/<details class="section"[^>]* open/.test(html) && !script.includes('localStorage.setItem(SECTIONS_KEY'));
+// Generation starts open; changing sides still folds the old sections.
+assert((html.match(/<details class="section"[^>]* open/g) || []).length === 3 && !script.includes('localStorage.setItem(SECTIONS_KEY'));
 {
   const section = { open: true };
   const all = context.document.querySelectorAll;
@@ -2521,7 +2711,10 @@ assert(/class="queue-item run-card"[^>]*>[\s\S]*class="queue-item-top"[\s\S]*cla
 assert(/\.queue-item\.run-card \{[^}]*background: var\(--panel-2\); border: 1px solid var\(--line\); border-radius: 10px/.test(html) && /\.stopped-actions, \.queue-item\.run-card \.queue-item-actions \{ display: grid; grid-template-columns: minmax\(max-content, 1fr\) auto minmax\(max-content, 1fr\);/.test(html)
   && /\.acts-side \{ display: flex; flex-wrap: nowrap;/.test(html), 'run cards match Pending: the time centred, each side on one line');
 // Under the running job's title: its workflow on the left, its size on the right.
-assert(/<div class="current-work-size" id="currentWorkSize" hidden><span id="currentWorkflow"><\/span><span id="currentResolution"><\/span><\/div>/.test(html)
+assert(/<div class="current-work-wrap">\s*<div class="work-privacy" id="currentWorkPrivacy"><\/div>\s*<button type="button" class="current-work" id="currentWork"[\s\S]*?<\/button>\s*<div class="current-work-size" id="currentWorkSize" hidden><span id="currentWorkflow"><\/span><span id="currentResolution"><\/span><\/div>\s*<\/div>/.test(html)
+  && /\.current-work-wrap \{ position: relative; \}/.test(html)
+  && /\.current-work-wrap \.work-privacy \{ top: 0; right: 0; \}/.test(html)
+  && /\.current-work-wrap \.current-work \{ padding-right: 30px; \}/.test(html)
   && /#currentWorkSize \{ display: flex; justify-content: space-between;/.test(html), 'workflow left, resolution right');
 assert(script.includes("$('currentWorkflow').textContent = facts.workflow || '';") && script.includes("$('currentResolution').textContent = facts.resolution || '';"));
 assert(!/\.status-head #dot \{ display: none; \}/.test(html) && /\.switch button \.dot \{ display: none; \}/.test(html), 'the status light is in Status, not on the side switch');
@@ -2591,14 +2784,18 @@ assert(queue.innerHTML.includes('aria-label="Expand queue"'), 'the chevron refle
   assert(liveQueue.dataset.html.includes('aria-label="Expand queue"') && liveQueue.dataset.html.includes('tabindex="0" hidden'), 'polling retains the animated controls instead of replacing them');
   let reveal;
   liveQueue.scrollIntoView = options => { reveal = options; };
+  liveQueue.closest = selector => selector === '#queueBox, #optionsCard' ? els.queueBox : null;
   liveQueue.listeners.click({ target: { closest: selector => selector === 'button[data-fold-queue]' ? controls[0] : null } });
-  assert(reveal && reveal.behavior === 'smooth', 'opening the queue reveals it smoothly');
+  assert.strictEqual(reveal.block, 'start', 'opening the queue reveals its header');
   for (const id of ['stoppedRuns', 'failedRuns']) {
     let options;
     els[id]._open = false;
-    const fold = { open: true, matches: selector => selector === '.stopped-fold', scrollIntoView: value => { options = value; } };
+    const fold = { open: true, matches: selector => selector === '.stopped-fold',
+      closest: selector => selector === '#queueBox, #optionsCard' ? els.queueBox : null,
+      querySelector: () => null,
+      scrollIntoView: value => { options = value; } };
     els[id].listeners.toggle({ target: fold });
-    assert(options && options.behavior === 'smooth', `${id} scrolls into view when opened`);
+    assert.strictEqual(options.block, 'start', `${id} reveals its header when opened`);
     options = null;
     els[id].listeners.toggle({ target: fold });
     assert.strictEqual(options, null, `${id} does not scroll again after a redraw`);
@@ -2613,8 +2810,46 @@ assert(queue.innerHTML.includes('aria-label="Expand queue"'), 'the chevron refle
   assert.strictEqual(properties['--three-rows'], '259px', 'the cap fits exactly the first three variable-height cards');
   assert.strictEqual(list.scrollTop, 40, 'redraw restores the scroll position');
 }
+{
+  const savedObserver = context.window.ResizeObserver, savedFrame = context.requestAnimationFrame, savedCancel = context.cancelAnimationFrame;
+  const frames = [], writes = [], rows = [{ offsetTop: 0, offsetHeight: 50, getClientRects: () => [1] }];
+  let observer;
+  context.window.ResizeObserver = class {
+    constructor(callback) { observer = this; this.callback = callback; }
+    observe() {}
+    disconnect() { this.disconnected = true; }
+  };
+  context.requestAnimationFrame = callback => { frames.push(callback); return frames.length; };
+  context.cancelAnimationFrame = () => {};
+  const list = { style: { setProperty: (key, value) => writes.push(value) }, querySelectorAll: () => rows };
+  context.observedSection = { querySelector: () => list };
+  run("setupQueueScroll(observedSection, '.queue-list', '.queue-item')");
+  observer.callback(); observer.callback();
+  assert.strictEqual(frames.length, 1, 'resize measurements are deferred and coalesced');
+  frames.shift()();
+  assert.deepStrictEqual(writes, ['50px'], 'unchanged measurements do not update layout again');
+  rows[0].offsetHeight = 75;
+  observer.callback(); frames.shift()();
+  assert.deepStrictEqual(writes, ['50px', '75px'], 'a changed row height updates the scroll limit');
+  run("setupQueueScroll(observedSection, '.queue-list', '.queue-item')");
+  context.window.ResizeObserver = savedObserver; context.requestAnimationFrame = savedFrame; context.cancelAnimationFrame = savedCancel;
+}
+{
+  const savedConsole = context.console, warnings = [];
+  context.console = { ...console, warn: message => warnings.push(message) };
+  run('panelConnection.success()');
+  windowListeners.error[0]({ message: 'ResizeObserver loop completed with undelivered notifications.' });
+  assert(els.connectionNotice.hidden && warnings.length === 1, 'transient ResizeObserver notifications are logged, not shown as page failures');
+  windowListeners.error[0]({ message: 'A real page error', error: new Error('A real page error') });
+  assert(!els.connectionNotice.hidden && els.connectionMessage.textContent.includes('A real page error'), 'genuine page errors remain visible');
+  run('panelConnection.success()');
+  context.console = savedConsole;
+}
+assert(/\.connection-notice > span \{ min-width: 0; overflow-wrap: anywhere; \}/.test(html)
+  && /\.connection-notice button \{ width: auto; flex: none;/.test(html), 'connection notices fit narrow screens');
 assert(html.includes('.queue-list, .stopped-body') && html.includes('max-height: min(var(--three-rows, 55dvh), 55dvh)'), 'queue, pending and failed scroll rather than growing past the viewport');
 assert(!/\.queue-list, \.stopped-body \{[^}]*overscroll-behavior:\s*contain/.test(html), 'scrolling at a list boundary can continue on the page');
+assert(/#queueBox \.queue-list, #queueBox \.stopped-body \{[^}]*overscroll-behavior:\s*auto/.test(html), 'the compact queue also hands boundary scrolling back to the page');
 
 // ComfyUI's status, a tap on its icon away: one that's up but doesn't answer, on a PC out of memory, says why.
 run(`renderComfy({ online: false, listening: true, can_start: true, ram: { free: 2.1, total: 31.9 }, gpu: { util: 7, mem_used: 5.8, mem_total: 12, power: 26, temp: 40 } })`);
@@ -2625,6 +2860,57 @@ assert(els.comfyFacts.innerHTML.includes('Generating the image · 3/8') && els.c
 
 // The status recovers by itself.
 (async () => {
+  {
+    const savedFetch = context.fetch, savedPoll = run('poll');
+    const parent = { rows: [], appendChild(row) { this.rows.splice(this.rows.indexOf(row), 1); this.rows.push(row); } };
+    const rows = ['1', '2', '3', '4'].map(id => ({dataset: {id}, parentElement: parent, getBoundingClientRect: () => ({top: 0})}));
+    parent.rows = rows;
+    context.sortEtaTest = {dataset: {lane: 'run'}, querySelectorAll: () => parent.rows,
+      _last: [{items: [{id: 1, estimate: 60}, {id: 2}, {id: 3, estimate: 5}, {id: 4, estimate: 5}]}]};
+    let sent;
+    context.fetch = async (url, options) => {
+      sent = {url, ids: JSON.parse(options.body).ids};
+      return {ok: true, json: async () => ({ok: true})};
+    };
+    run('poll = () => {}');
+    await run('sortQueueByEta(sortEtaTest)');
+    assert.deepStrictEqual(sent, {url: '/queue/run/order', ids: [3, 4, 1, 2]}, 'ETA sorting persists shortest first, stable ties, and unknown estimates last');
+    context.fetch = savedFetch;
+    context.restoreEtaPoll = savedPoll;
+    run('poll = restoreEtaPoll');
+  }
+  {
+    const savedFetch = context.fetch, savedTimeout = context.setTimeout, savedQuery = els.finishedList.querySelector;
+    const savedClose = run('closePanel'), savedPoll = run('poll'), savedShown = run('panelShown');
+    const timers = [];
+    context.setTimeout = fn => {timers.push(fn); return timers.length;};
+    context.finishedCloses = 0;
+    context.finishedLastRow = {dataset: {lane: 'run', jobId: '9', key: 'run:9'}, style: {}, classList: classes(),
+      offsetHeight: 40, remove() {els.finishedList.querySelector = () => null;}};
+    els.finishedList.querySelector = () => context.finishedLastRow;
+    let release;
+    context.fetch = () => new Promise(resolve => {release = resolve;});
+    run("poll = () => {}; closePanel = () => {finishedCloses++; panelShown = null;}; panelShown = {which: 'finished'}; forgetResult(finishedLastRow)");
+    while (timers.length) timers.shift()();
+    assert.strictEqual(context.finishedCloses, 0, 'Finished stays open until the last removal succeeds');
+    release({ok: true});
+    await new Promise(resolve => setImmediate(resolve));
+    assert.strictEqual(context.finishedCloses, 1, 'the last successful removal closes Finished');
+    els.finishedList.querySelector = () => context.finishedLastRow;
+    context.finishedCloses = 0;
+    run("panelShown = {which: 'finished'}; forgetResult(finishedLastRow)");
+    while (timers.length) timers.shift()();
+    release({ok: false});
+    await new Promise(resolve => setImmediate(resolve));
+    assert.strictEqual(context.finishedCloses, 0, 'failed removal never closes Finished');
+    context.fetch = savedFetch;
+    context.setTimeout = savedTimeout;
+    els.finishedList.querySelector = savedQuery;
+    context.restoreFinishedClose = savedClose;
+    context.restoreFinishedPoll = savedPoll;
+    context.restoreFinishedShown = savedShown;
+    run('closePanel = restoreFinishedClose; poll = restoreFinishedPoll; panelShown = restoreFinishedShown; forgottenResults.clear()');
+  }
   {
     const savedFetch = context.fetch, savedTimeout = context.setTimeout;
     const savedPoll = run('poll'), savedRows = els.finishedList.querySelectorAll;
@@ -2657,6 +2943,17 @@ assert(els.comfyFacts.innerHTML.includes('Generating the image · 3/8') && els.c
     els.finishedClear.classList = savedClasses;
     context.savedClearPoll = savedPoll;
     run('poll = savedClearPoll; forgottenResults.clear()');
+  }
+  {
+    const savedFetch = context.fetch, prompt = els.imagePrompt.value, mode = run('privateMode');
+    els.imagePrompt.value = 'Keep this draft after a failed switch';
+    context.fetch = async () => ({ ok: false, json: async () => ({ ok: false, error: 'Could not save mode.' }) });
+    await run(`setPrivate(${!mode})`);
+    assert.strictEqual(run('privateMode'), mode, 'a failed mode request does not switch workspaces');
+    assert.strictEqual(els.imagePrompt.value, 'Keep this draft after a failed switch');
+    assert(!els.privateMode.disabled && !run('privateChanging'), 'mode controls unlock after failure');
+    els.imagePrompt.value = prompt;
+    context.fetch = savedFetch;
   }
   {
     const section = element('drag-test'), order = [], sent = [], frames = [];
@@ -2842,6 +3139,10 @@ assert(els.comfyFacts.innerHTML.includes('Generating the image · 3/8') && els.c
     assert.strictEqual(els.videoPromptProgress.style.width, '0%');
     now = 50000; update();
     assert.strictEqual(els.videoPromptProgress.style.width, '50%');
+    run('lastStatus = { prompt_writer: { running: true, tokens: { per_second: 62.1, total: 120 } } }');
+    update();
+    assert.strictEqual(els.videoPromptEta.textContent, '62.1 tok/s · ~50s left', 'throughput precedes the remaining timer');
+    run('lastStatus = null');
     now = 100000; update();
     assert.strictEqual(els.videoPromptProgress.style.width, '95%');
     assert.strictEqual(els.videoPromptEta.textContent, 'Taking longer than estimated');
@@ -2865,6 +3166,22 @@ assert(els.comfyFacts.innerHTML.includes('Generating the image · 3/8') && els.c
     assert.strictEqual(els.imagePrompt.value, 'a tree', 'failure preserves the input');
     assert.strictEqual(els.imagePromptWriteError.textContent, 'model failed');
     assert(!els.imagePromptWriteError.hidden && !els.imagePrompt.readOnly);
+    let finishLate, beganLate;
+    const lateStarted = new Promise(done => { beganLate = done; });
+    context.fetch = url => String(url).includes('?')
+      ? Promise.resolve({ ok: true, json: async () => ({ ok: true, seconds: 100, model: 'gemma-4-12b' }) })
+      : new Promise(done => { finishLate = done; beganLate(); });
+    els.prompt.value = 'An idea from the previous workspace';
+    const lateWriting = run("writePrompt('video')");
+    await lateStarted;
+    run('workspaceEpoch++');
+    els.prompt.value = 'The current workspace draft';
+    els.prompt.readOnly = false;
+    finishLate({ ok: true, json: async () => ({ ok: true, prompt: 'A late private response' }) });
+    await lateWriting;
+    assert.strictEqual(els.prompt.value, 'The current workspace draft', 'a late writer reply never replaces another workspace prompt');
+    els.videoPromptProgress.hidden = els.videoPromptEta.hidden = true;
+    run("syncPromptWriter('video')");
     context.fetch = savedFetch;
     context.setInterval = savedInterval; context.clearInterval = savedClear; context.performance.now = savedNow;
   }
@@ -3133,6 +3450,15 @@ assert(els.comfyFacts.innerHTML.includes('Generating the image · 3/8') && els.c
   await pendingImage;
   assert(els.formError.textContent.includes('box changed'), 'a disabled box does not receive a late selection');
   source.parts.input.disabled = false;
+  const keptSource = source.parts.input.files[0], keptSeed = seed.value;
+  context.fetch = () => new Promise(resolve => { releaseImage = resolve; });
+  const latePrivateImage = run("useOutput(sourceBoxes()[0], 'private_set', 1)");
+  run('workspaceEpoch++');
+  releaseImage({ ok: true, blob: async () => ({ type: 'image/png' }) });
+  context.fetch = async () => ({ ok: true, json: async () => ({ ok: true, shots: [{ used_seed: 999 }] }) });
+  await latePrivateImage;
+  assert.strictEqual(source.parts.input.files[0], keptSource, 'a late output download never changes another workspace image');
+  assert.strictEqual(seed.value, keptSeed, 'nor its source seed');
   els.imageSources.querySelectorAll = () => [];
   run("setPipeline('video', false); showPage('generate'); JUMPS.splice(0, JUMPS.length, ...testJumps)");
   els.prompt.value = 'desktop video prompt';
@@ -3236,11 +3562,31 @@ assert(els.comfyFacts.innerHTML.includes('Generating the image · 3/8') && els.c
   });
   context.setTimeout = fn => { fn(); return 0; };
   await run('poll()');
+  assert.strictEqual(els.connectionNotice.hidden, false, 'a timed-out poll exposes a reconnecting state instead of an endless loader');
   context.setTimeout = () => 0;
   context.fetch = answer({ ...quiet, server_started: 1, returncode: 0 });
   await run('poll()');
+  assert.strictEqual(els.connectionNotice.hidden, true, 'a successful response clears the connection warning');
+  {
+    const savedFetch = context.fetch;
+    context.fetch = answer({ error: 'unavailable' }, { ok: false, status: 503 });
+    await run('poll()');
+    assert(els.connectionMessage.textContent.includes('HTTP 503'), 'HTTP failures are visible even when the body is JSON');
+    context.fetch = savedFetch;
+    await run('poll()');
+    assert.strictEqual(els.connectionNotice.hidden, true);
+  }
   assert.strictEqual(els.statusText.textContent, 'Idle', 'it works again straight after a stuck one, and a finished run leaves it idle');
   assert.strictEqual(els.go.textContent, 'Generate');
+  {
+    const savedFetch = context.fetch;
+    context.fetch = async () => ({ ok: false, status: 500, json: async () => ({ error: 'disk unavailable' }) });
+    const before = run('JSON.stringify(presets)');
+    assert.strictEqual(await run("presetRequest({side:'image', name:'unsaved', values:{}})"), false);
+    assert.strictEqual(run('JSON.stringify(presets)'), before, 'failed saves never change the selected or stored presets');
+    assert(els.imagePresetFeedback.textContent.includes('disk unavailable'), 'preset failures appear beside the controls');
+    context.fetch = savedFetch;
+  }
   context.fetch = answer({ ...quiet, server_started: 1, queue: { ...quiet.queue, items: [{ id: 1, label: 'x', estimate: 60 }] } });
   await run('poll()');
   assert.strictEqual(els.go.textContent, 'Add to queue');
@@ -3393,18 +3739,37 @@ assert(els.comfyFacts.innerHTML.includes('Generating the image · 3/8') && els.c
       assert(!els.promptEditorEnhance.hidden, 'the prompts view has the LLM button too');
       const savedFetch = context.fetch;
       els.llm.options = [{ value: 'local', disabled: false }, { value: 'gemini', disabled: false }];
+      context.fetch = async url => String(url) === '/api/local-models'
+        ? { ok: true, json: async () => ({ ok: true, models: [
+          { id: 'gemma-4-12b', label: 'Gemma 4' }, { id: 'qwen3-14b', label: 'Qwen3' },
+          { id: 'gemma-4-12b:gemma-4-12b-Q5', label: 'Gemma Q5' },
+        ] }) }
+        : savedFetch(url);
+      els.promptEditorEnhance.getBoundingClientRect = () => ({ top: 260 });
+      context.window.visualViewport = { offsetTop: 100 };
       run("promptEditorWriterSelected.video = 'local:qwen3-14b'");
       await run('openPromptWriterMenu()');
       assert(els.promptEditorWriterMenu.innerHTML.includes('data-model="qwen3-14b"') && els.promptEditorWriterMenu.innerHTML.includes('class="selected"'),
         'the selected Qwen writer is highlighted when the menu opens again');
+      assert(els.promptEditorWriterMenu.innerHTML.includes('data-model="gemma-4-12b:gemma-4-12b-Q5"'),
+        'newly discovered models are offered in the prompt writer');
+      assert.strictEqual(els.promptEditorWriterMenu.style.maxHeight, '152px', 'the keyboard viewport limits the menu height');
+      assert(/max-height: 198px/.test(html) && /overflow-y: auto/.test(html), 'the menu scrolls after five rows');
+      assert.strictEqual(run("compactLocalModel({label:'gemma-4-12B-it-uncensored-heretic-Q5_K_M', vision:true})"), 'Gemma 4 Q5_K_M-v');
+      assert.strictEqual(run("localModelLabel({label:'Qwen3 14B', vision:false, tokens_per_second:12.3})"), 'Qwen3 14B · 12.3 tok/s');
       assert(/has-selection #promptEditorEnhance/.test(html), 'the writer icon has a persistent selected colour');
       context.document.activeElement = els.promptEditorText;
       let heldFocus = 0;
       for (const id of ['promptEditorEnhance', 'promptEditorWriterMenu']) {
-        els[id].listeners.pointerdown({ preventDefault() { heldFocus++; } });
+        els[id].listeners.pointerdown({ target: { closest() { return {}; } }, preventDefault() { heldFocus++; } });
       }
       assert.strictEqual(heldFocus, 2, 'opening the writer menu and choosing a model preserve textarea focus');
+      els.promptEditorWriterMenu.listeners.pointerdown({ pointerType: 'touch', target: { closest() { return {}; } }, preventDefault() { heldFocus++; } });
+      assert.strictEqual(heldFocus, 2, 'touch scrolling does not prevent the menu gesture');
+      els.promptEditorWriterMenu.listeners.pointerdown({ pointerType: 'mouse', target: { closest() { return null; } }, preventDefault() { heldFocus++; } });
+      assert.strictEqual(heldFocus, 2, 'the menu background and scrollbar keep native pointer gestures');
       context.document.activeElement = null;
+      delete context.window.visualViewport;
       let releaseEstimate;
       context.fetch = (url, options) => options
         ? Promise.resolve({ ok: true, json: async () => ({ ok: true, prompt: 'A full prompt' }) })
@@ -3710,7 +4075,19 @@ assert(/\.pipeline-form \.option-row\[hidden\] \{ display: none; \}/.test(html),
   els.videoWorkflow.value = '';
 }
 
-// Picking a preset starts again: the prompt goes with the old one. None leaves it.
+// Versioned polls reuse the catalogue without retaining an obsolete generating flag.
+{
+  context.catalogueSample = {
+    catalogue_revision: 'r1', videos: { video: [] }, image_sets: [{ id: 'set-1', images: [] }],
+    collections: [], output_order: [], running: true, pipeline: 'image', progress: { run_id: 'set-1' },
+  };
+  assert(run('statusCatalogue.hydrate(catalogueSample).image_sets[0].generating'));
+  assert.strictEqual(run("statusCatalogue.hydrate({catalogue_revision:'r1', running:false}).image_sets[0].generating"), false);
+  assert.throws(() => run("statusCatalogue.hydrate({catalogue_revision:'unknown'})"), /out of sync/);
+  assert.strictEqual(run('statusCatalogue.url()'), '/api/status?catalogue_revision=', 'an unknown revision requests full data on retry');
+}
+
+// Picking a preset requires confirmation before discarding a prompt. None leaves it.
 {
   els.imagePrompt.value = 'kept until a preset is picked';
   els.imagePreset.value = '';
@@ -3719,7 +4096,10 @@ assert(/\.pipeline-form \.option-row\[hidden\] \{ display: none; \}/.test(html),
   run("presets.image = [{ name: 'Portrait', values: {} }]; var realApplyPreset = applyPreset; applyPreset = () => {}");
   els.imagePreset.value = 'Portrait';
   els.imagePreset.listeners.change({ target: els.imagePreset });
-  assert.strictEqual(els.imagePrompt.value, '', 'a preset picked clears it');
+  assert.strictEqual(els.imagePrompt.value, 'kept until a preset is picked', 'choosing alone does not discard the prompt');
+  assert.strictEqual(els.imagePresetEditor.hidden, false);
+  run("confirmPresetEdit('image')");
+  assert.strictEqual(els.imagePrompt.value, '', 'confirming explicitly clears it');
   run('presets.image = []; applyPreset = realApplyPreset');
 }
 

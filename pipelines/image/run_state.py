@@ -2,16 +2,15 @@ import json
 import os
 import re
 import shutil
-import time
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from datetime import datetime
 
 from core.paths import SAVED_WORKFLOWS_DIR, moved
+from core import run_checkpoint
 from pipelines.image import paths
 
 STAGES = ("Prompts", "Images")
 RUN_ID = re.compile(r"image_\d{8}_\d{6}")
-SAVE_ATTEMPTS = 5
 
 
 @dataclass
@@ -42,6 +41,8 @@ class RunState:
     source_seeds: list = None  # Seeds that made the images it starts from, which its own never repeat (core/seeds.py avoid)
     region: dict = None  # Part of image 1 changed, or it expanded: what pipelines/image/regions.py prepared
     form: dict = None  # The panel's Generate form as it was sent, files aside: reopened, the set comes back as it was made
+    provenance: dict = None
+    local_model: str = None
 
     @classmethod
     def new(cls, brief, count, direct, width, height, llm=None, workflow=None, image_count=0):
@@ -53,17 +54,21 @@ class RunState:
         """The saved run, with anything whose file has gone marked as still to do. None if there isn't one."""
         if not RUN_ID.fullmatch(str(run_id)):
             return None
+        path = os.path.join(paths.RUNS_DIR, run_id, "state.json")
+        saved = run_checkpoint.load(path, run_id)
+        if saved is None:
+            return None
+        run_checkpoint.validate(saved, path, {"brief": str, "count": int, "width": int, "height": int,
+                                             "shots": list, "options": dict, "provenance": dict, "local_model": str})
         try:
-            with open(os.path.join(paths.RUNS_DIR, run_id, "state.json"), "r", encoding="utf-8") as f:
-                saved = json.load(f)
             state = cls(**{name: value for name, value in saved.items() if name in cls.__dataclass_fields__})
             # Saved with the project's folder in it: moved or renamed, the workflow is found where it is now.
             state.workflow = moved(state.workflow, SAVED_WORKFLOWS_DIR)
             for shot in state.shots or []:
                 if shot.get("file") and not os.path.exists(state.image_path(shot)):
                     shot["file"] = None
-        except (OSError, ValueError, TypeError, AttributeError):
-            return None  # Nothing saved, or a broken file: nothing to continue
+        except (ValueError, TypeError, AttributeError, KeyError) as error:
+            raise run_checkpoint.invalid(path, error) from error
         return state
 
     # --- Where its files go ---
@@ -104,7 +109,7 @@ class RunState:
 
     # What made an image, kept with it ("setup") when it is made: a set continued another way later, or the image moved
     # to a collection, it still knows its own. Its prompt, seed and title are its own already.
-    SETUP_FIELDS = ("brief", "direct", "llm", "workflow", "options", "width", "height", "compose", "transparent", "detail",
+    SETUP_FIELDS = ("brief", "direct", "llm", "local_model", "workflow", "options", "width", "height", "compose", "transparent", "detail",
                     "region", "form", "source_seeds", "image_count", "title")
 
     def setup(self):
@@ -123,18 +128,9 @@ class RunState:
         self.save()
 
     def save(self):
-        temp = self.path + ".tmp"
-        os.makedirs(self.folder, exist_ok=True)
-        with open(temp, "w", encoding="utf-8") as f:
-            json.dump(asdict(self), f, ensure_ascii=False, indent=1)
-        for attempt in range(SAVE_ATTEMPTS):
-            try:
-                os.replace(temp, self.path)
-                return
-            except PermissionError:  # The panel has it open for a moment
-                if attempt == SAVE_ATTEMPTS - 1:
-                    raise
-                time.sleep(0.2)
+        settings = {name: getattr(self, name) for name in
+                    ("llm", "workflow", "options", "width", "height", "direct", "compose", "transparent", "detail")}
+        run_checkpoint.save(self, self.workflow, settings)
 
     def remove(self):
         """State first: without it the run is gone from the list, even if a file refuses to be deleted."""
@@ -157,10 +153,5 @@ class RunState:
 
 
 def list_runs():
-    """Every saved run, newest first."""
-    try:
-        names = os.listdir(paths.RUNS_DIR)
-    except OSError:
-        return []
-    runs = (RunState.load(name) for name in sorted(names, reverse=True))
-    return [run for run in runs if run]
+    """Usable runs, newest first; excluded checkpoints are logged and reported separately."""
+    return run_checkpoint.catalogue(paths.RUNS_DIR, RunState.load)

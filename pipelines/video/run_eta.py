@@ -88,7 +88,7 @@ class RunEta:
             self.take_steps = int(_option(argv, "--h3-multishot-steps", MULTISHOT_STEPS))
         except ValueError:
             self.take_steps = MULTISHOT_STEPS
-        self.local_model = None
+        self.local_model = _option(argv, "--local-model", None)
         try:
             self.film_seconds = int(_option(argv, "--duration", 0))
         except ValueError:
@@ -121,7 +121,7 @@ class RunEta:
             self.start = state.connection_mode or state.start
             self.h3_mode, self.creativity = state.h3_mode, state.h3_creativity
             self.take_steps = state.h3_multishot_steps or MULTISHOT_STEPS
-            self.local_model = state.h3_model
+            self.local_model = self.local_model or state.local_model or state.h3_model
         self.llm = None if self.direct else self.llm or default_llm()
         if not self.local_model and (self.llm == "local" or self.h3_mode != "off"):
             try:

@@ -2,6 +2,7 @@
 import json
 import math
 import os
+import re
 import secrets
 import sys
 from types import SimpleNamespace
@@ -9,11 +10,12 @@ from types import SimpleNamespace
 from flask import abort, request, send_file
 from PIL import Image
 
-from core import h3_refiner, pills, run_form, seeds, workflow_options
+from core import h3_refiner, lora_tests, pills, run_form, seeds, workflow_options
 from core.upscale_eta import UpscaleEta
 from core.saved_workflows import display_label, shorthand
+from panel import settings
 from panel.server import (read_outcome, IMAGE_TIMINGS, PIPELINES, _runs_cache, active_runs, app, busy_runs, form_options, job, password_required, run_queue, saved_at, queue_form_snapshot,
-                          saved_workflows)
+                          saved_workflows, private_mode)
 from panel.video import clean_inputs, queue_label, shot_seeds
 from pipelines.image import media, models, regions
 from pipelines.image import planner as image_planner
@@ -164,13 +166,41 @@ def resume_argv(state, redo=None):
     return argv + ["--redo", str(redo)] if redo else argv
 
 
+def prompt_llm_pill(setup):
+    if setup.get("direct") or not setup.get("llm"):
+        return None
+    llm, model = setup["llm"], setup.get("local_model")
+    if llm != "local" or not model:
+        return llm
+    family, separator, folder = model.partition(":")
+    if not separator:
+        return {"gemma-4-12b": "Gemma 4 12B-v", "qwen3-14b": "Qwen3 14B"}.get(family, model)
+    name = re.sub(r"(?:[-_ ]uncensored|[-_ ]heretic)", "", folder, flags=re.I)
+    name = re.sub(r"^gemma[-_]?4[-_]?12b[-_]?it", "Gemma 4", name, flags=re.I)
+    name = re.sub(r"^gemma[-_]?4[-_]?12b", "Gemma 4", name, flags=re.I)
+    name = re.sub(r"^qwen3[-_]?14b", "Qwen3 14B", name, flags=re.I)
+    quant = re.search(r"[-_.](I?Q\d(?:_[A-Za-z0-9]+)+|BF16)$", name, flags=re.I)
+    if quant:
+        name = name[:quant.start()]
+    name = re.sub(r"[-_]+", " ", name).strip()
+    suffix = (f" {quant.group(1)}" if quant else "") + ("-v" if family == "gemma-4-12b" else "")
+    limit = 22 - len(suffix)
+    if len(name) > limit:
+        name = name[:max(1, limit - 1)].rstrip() + "…"
+    return name + suffix
+
+
 def image_files(state):
     """What the gallery shows of a run. The time makes a remade image load anew rather than from the browser's cache."""
     files = []
     for position, shot in enumerate(state.shots or [], 1):
         if shot.get("file"):
             path = state.image_path(shot)
-            stat = os.stat(path)
+            try:
+                stat = os.stat(path)
+            except FileNotFoundError:
+                app.logger.warning("Image disappeared while listing saved runs: %s", path)
+                continue
             version = f"{stat.st_mtime_ns}-{shot['number']}"
             try:
                 with Image.open(path) as image:
@@ -180,7 +210,8 @@ def image_files(state):
                 resolution = None
             files.append({"position": position, "file": shot["file"], "title": shot["title"], "version": version,
                           "resolution": resolution, "size_bytes": stat.st_size, "mtime": stat.st_mtime,
-                          "upscaled": upscaled_with(shot) or upscaled_in_generation(state)})
+                          "upscaled": upscaled_with(shot) or upscaled_in_generation(state),
+                          "prompt_llm": prompt_llm_pill(state.shot_setup(shot))})
     return files
 
 
@@ -214,15 +245,19 @@ def describe_run(state):
     upscaled = upscaled_in_generation(state) or ", ".join(dict.fromkeys(image["upscaled"] for image in files if image["upscaled"])) or None
     loras = workflow_options.loras_used(state.workflow, state.options, "image")
     writer = workflow_options.prompt_writer_used(state.workflow, state.options, state.form)
+    facts = pills.facts(shorthand(state.workflow, "image"), upscaled, loras=loras, llm=state.llm, direct=state.direct,
+                        sampling=workflow_options.sampling_used(state.workflow, state.options, "image"),
+                        cfg=workflow_options.cfg_used(state.workflow, state.options, "image"),
+                        prompt_writer=writer[1] if writer else None)
+    llms = ([image["prompt_llm"] for image in files] if files else [prompt_llm_pill(state.setup())])
+    facts = [fact for fact in facts if fact[0] != "llm"]
+    facts.extend(("llm", llm) for llm in dict.fromkeys(llms) if llm)
     return {"id": state.id, "pipeline": "image", "label": state.title or state.brief, "detail": " · ".join(parts),
             "model": shorthand(state.workflow, "image"), "outcome": read_outcome(state.folder), "loras": loras,
             "llm": writer[0] if writer else state.llm, "size_bytes": size_bytes, "resolutions": resolutions,
             "upscaled": upscaled,
             # What Output's pills are made from (core/pills.py): saved_runs turns them into pills.
-            "_facts": pills.facts(shorthand(state.workflow, "image"), upscaled, loras=loras, llm=state.llm, direct=state.direct,
-                                  sampling=workflow_options.sampling_used(state.workflow, state.options, "image"),
-                                  cfg=workflow_options.cfg_used(state.workflow, state.options, "image"),
-                                  prompt_writer=writer[1] if writer else None),
+            "_facts": facts,
             "_sibling": pills.sibling_key("image", state.brief),
             "when": saved_at(state.path), "mtime": max((image["mtime"] for image in files), default=0), "clips": done, "finished": state.finished, "total": total, "images": files,
             "size": f"{state.width}x{state.height}", "estimate": RunEta(resume_argv(state), env, IMAGE_TIMINGS).plan()["total"]}
@@ -260,7 +295,7 @@ def size_flags(form):
 def build_options(form):
     """Turns the form's options into main.py's flags. Returns (flags, error). What it's of isn't needed for that."""
     try:
-        count = int(form.get("count") or 1)
+        count = 1 if lora_tests.requested(form) else int(form.get("count") or 1)
     except ValueError:
         return None, "How many images must be a whole number."
     if not 1 <= count <= image_planner.MAX_IMAGES:
@@ -273,7 +308,7 @@ def build_options(form):
     if seed is not None:
         flags += ["--seed", str(seed)]
 
-    mode = form.get("prompt_mode") or "llm"
+    mode = "direct" if lora_tests.requested(form) else form.get("prompt_mode") or "llm"
     if mode not in ("llm", "direct"):
         return None, "Unknown prompt mode."
     if mode == "direct":
@@ -290,6 +325,11 @@ def build_options(form):
             return None, "Unknown LLM."
         else:
             flags += ["--llm", llm]
+            if llm == "local" and (form.get("image_mode") or "edit") not in ("areas", "expand"):
+                model = form.get("local_model") or h3_refiner.local_llm_model()
+                if model not in {item["id"] for item in settings.local_models()}:
+                    return None, "Choose an available local model."
+                flags += ["--local-model", model]
             if form.get("review"):
                 flags.append("--plan-only")
 
@@ -314,7 +354,16 @@ def build_options(form):
         if "--llm" in flags:
             index = flags.index("--llm")
             del flags[index:index + 2]
+        if "--local-model" in flags:
+            index = flags.index("--local-model")
+            del flags[index:index + 2]
         flags = [flag for flag in flags if flag != "--direct"]
+    writer_model = form.get("prompt_writer_model")
+    if writer_model and "--local-model" not in flags:
+        if writer_model not in {item["id"] for item in settings.local_models()}:
+            return None, "Choose an available local model."
+        flags += ["--local-model", writer_model]
+    if mode in ("areas", "expand"):
         return flags, None
 
     flags_, error = size_flags(form)
@@ -330,13 +379,21 @@ def estimate():
         return {"ok": False, "error": error}
     count = request.form.get("image_count")
     env, takes, error = chosen_workflow(request.form, int(count) if (count or "").isdigit() else None)
+    if not error:
+        try:
+            tests = lora_tests.variations(request.form, takes.get("options") or [], private_mode())
+            if tests:
+                env = {**env, lora_tests.ENV: json.dumps(tests)}
+        except ValueError as problem:
+            return {"ok": False, "error": str(problem)}
     error = error or model_problem(flags, takes, None)
     if error:
         return {"ok": False, "error": error}
     # The workflow's options too, as Generate sends them: steps, turbo and an upscaler change the time by minutes.
     option_flags, problem = chosen_options(request.form, takes)
-    if not problem:
-        flags = flags + option_flags
+    if problem:
+        return {"ok": False, "error": problem}
+    flags = flags + option_flags
     # Reviewing first only writes the prompts now, but what you're deciding on is the whole set.
     return {"ok": True, **RunEta([arg for arg in flags if arg != "--plan-only"], env, IMAGE_TIMINGS).plan()}
 
@@ -364,8 +421,8 @@ def generate():
         return {"ok": False, "error": f"{llm} has no credentials. See .env.example, or use your own prompt."}, 400
 
     uploads = form_uploads(request.files)
-    if llm == "local" and uploads and h3_refiner.local_llm_model() == "qwen3-14b":
-        return {"ok": False, "error": "Qwen3 14B is text-only and cannot analyze attached images. Choose Gemma 4 in Settings."}, 400
+    if llm == "local" and uploads and settings.model_family(option(flags, "--local-model")) == "qwen3-14b":
+        return {"ok": False, "error": "Qwen3 14B is text-only and cannot analyze attached images. Choose a Gemma 4 model."}, 400
     env, takes, error = chosen_workflow(request.form, len(uploads))
     if error:
         return {"ok": False, "error": error}, 400
@@ -404,9 +461,17 @@ def generate():
     if problem:
         return {"ok": False, "error": problem}, 400
     flags += option_flags
+    try:
+        tests = lora_tests.variations(request.form, takes.get("options") or [], private_mode())
+    except ValueError as error:
+        return {"ok": False, "error": str(error)}, 400
+    if tests:
+        env = {**env, lora_tests.ENV: json.dumps(tests)}
+        if "--seed" not in flags:
+            flags += ["--seed", str(seeds.pick())]
 
     # A change to part of an image is a new one each time: what's painted isn't something to look for in a stopped run.
-    state = None if extra or request.form.get("queue_edit_id") else run_to_continue(prompt, flags, env, images)
+    state = None if tests or extra or request.form.get("queue_edit_id") else run_to_continue(prompt, flags, env, images)
     if state:
         if "--plan-only" in flags:
             return {"ok": True, "queued": False, "shots": state.id, "continued": state.title}
@@ -431,7 +496,7 @@ def generate():
 
     argv = [*COMMAND, *flags, *[flag for path in image_paths for flag in ("--image", path)], *(["--", prompt] if prompt else [])]
     plan_only = "--plan-only" in flags or "--enhance-only" in flags
-    count = int(option(flags, "--count"))
+    count = len(tests) if tests else int(option(flags, "--count"))
     what = {"compose": "a new picture from the images", "areas": "changes painted areas", "expand": "expands the image"}.get(
         mode, "edits an image" if images else "from text")
     writer = "its own instruction" if mode in ("areas", "expand") else ROLE_NAMES.get(role) or llm or "your prompt, word for word"
@@ -468,7 +533,8 @@ def run_to_continue(prompt, flags, env, images):
     for state in reversed(list_runs()):
         if (state.id not in busy and state.shots and not state.finished and state.inputs == inputs and state.brief == prompt
                 and state.count == count and state.direct == direct and state.workflow == env.get("COMFYUI_WORKFLOW")
-                and (not option(flags, "--llm") or state.llm == option(flags, "--llm"))):
+                and (not option(flags, "--llm") or state.llm == option(flags, "--llm"))
+                and (not option(flags, "--local-model") or state.local_model == option(flags, "--local-model"))):
             return state
     return None
 
@@ -629,6 +695,7 @@ def settings_of(state, setup=None):
     writer = workflow_options.prompt_writer_used(path, made.get("options"), made.get("form"))
     return {"prompt": made.get("brief"), "direct": bool(made.get("direct")) and not writer,
             "count": len(state.shots or []) or state.count, "llm": writer[0] if writer else made.get("llm"),
+            "local_model": made.get("local_model"),
             "workflow": workflow, "size": f"{made.get('width')}x{made.get('height')}", "options": made.get("options") or {},
             "inputs": sum(1 for path in state.input_paths if os.path.exists(path)),
             # The form as it was sent: anything above that it doesn't hold comes from the set itself.

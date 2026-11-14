@@ -1,6 +1,8 @@
 """Finished: what ended is kept over a restart, until Clear."""
 import json
 import os
+import subprocess
+import sys
 import tempfile
 import unittest
 from unittest import mock
@@ -19,8 +21,10 @@ class FinishedTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as folder:
             first = self.queue(folder)
             first._record({"label": "A film", "pipeline": "shorts", "id": 7}, "failed", "exit 1")
-            saved = os.path.join(folder, "queue_runs_finished.json")
+            saved = first.ledger_path
             self.assertTrue(os.path.exists(saved), "saved beside the queue")
+            self.assertEqual(first.results_path, os.path.join(folder, "queue_runs_finished.json"),
+                             "the legacy Finished path remains available to callers")
 
             again = self.queue(folder)
             self.assertEqual([(r["label"], r["outcome"], r["job_id"]) for r in again.results], [("A film", "failed", 7)])
@@ -28,21 +32,144 @@ class FinishedTest(unittest.TestCase):
 
             again.clear_results()
             with open(saved, encoding="utf-8") as f:
-                self.assertEqual(json.load(f), [])
+                self.assertEqual(json.load(f)["results"], [])
             self.assertEqual(self.queue(folder).results, [], "cleared stays cleared")
 
     def test_only_the_last_twenty_are_kept(self):
         with tempfile.TemporaryDirectory() as folder:
             queue = self.queue(folder)
-            for number in range(25):
+            for number in range(1, 26):
                 queue._record({"label": f"job {number}", "pipeline": "shorts", "id": number}, "done")
-            self.assertEqual([r["label"] for r in self.queue(folder).results], [f"job {n}" for n in range(5, 25)])
+            self.assertEqual([r["label"] for r in self.queue(folder).results], [f"job {n}" for n in range(6, 26)])
 
     def test_a_broken_file_starts_it_empty(self):
         with tempfile.TemporaryDirectory() as folder:
-            with open(os.path.join(folder, "queue_runs_finished.json"), "w", encoding="utf-8") as f:
+            original = os.path.join(folder, "queue_runs_finished.json")
+            with open(original, "w", encoding="utf-8") as f:
                 f.write("{not json")
-            self.assertEqual(self.queue(folder).results, [])
+            queue = self.queue(folder)
+            self.assertTrue(queue.persistence_error)
+            self.assertTrue(queue.held)
+            self.assertFalse(queue._save_results(), "corruption is not silently replaced")
+            with open(original, encoding="utf-8") as f:
+                self.assertEqual(f.read(), "{not json")
+
+    def test_legacy_queue_and_results_migrate_without_changing_originals(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = os.path.join(folder, "queue_runs.json")
+            results_path = os.path.join(folder, "queue_runs_finished.json")
+            item = {"id": 5, "label": "Waiting", "argv": ["python", "render.py"]}
+            result = {"job_id": 4, "label": "Finished", "outcome": "done"}
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump([item], f)
+            with open(results_path, "w", encoding="utf-8") as f:
+                json.dump([result], f)
+            with open(path, "rb") as f:
+                original_queue = f.read()
+            with open(results_path, "rb") as f:
+                original_results = f.read()
+
+            queue = server.JobQueue(server.Job(), lambda queued: None, path=path)
+            self.assertTrue(queue.held)
+            self.assertEqual([queued["id"] for queued in queue.items], [5])
+            self.assertEqual(queue.next_id, 6)
+            self.assertTrue(queue._activate())
+            with open(path, "rb") as f:
+                self.assertEqual(f.read(), original_queue)
+            with open(results_path, "rb") as f:
+                self.assertEqual(f.read(), original_results)
+            with open(queue.ledger_path, encoding="utf-8") as f:
+                self.assertEqual(json.load(f)["version"], 1)
+
+    def test_interrupted_current_is_requeued_on_hold(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = os.path.join(folder, "queue_runs.json")
+            state_path = os.path.splitext(path)[0] + "_state.json"
+            with open(state_path, "w", encoding="utf-8") as f:
+                json.dump({"version": 1,
+                           "items": [{"id": 2, "label": "Next", "argv": ["python", "next.py"]}],
+                           "current": {"id": 1, "label": "Interrupted", "argv": ["python", "render.py"]},
+                           "results": [], "next_id": 3, "held": False}, f)
+            queue = self.queue(folder)
+            self.assertIsNone(queue.current)
+            self.assertTrue(queue.held)
+            self.assertEqual([item["id"] for item in queue.items], [1, 2])
+            self.assertTrue(queue.items[0]["interrupted"])
+            self.assertTrue(queue._activate())
+            restored = self.queue(folder)
+            self.assertIsNone(restored.current)
+            self.assertTrue(restored.held)
+            self.assertEqual([item["id"] for item in restored.items], [1, 2])
+
+    def test_restored_waiting_jobs_never_resume_automatically(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = os.path.join(folder, "queue_runs.json")
+            state_path = os.path.splitext(path)[0] + "_state.json"
+            with open(state_path, "w", encoding="utf-8") as f:
+                json.dump({"version": 1,
+                           "items": [{"id": 1, "label": "Waiting", "argv": ["python", "render.py"]}],
+                           "current": None, "results": [], "next_id": 2, "held": False}, f)
+            queue = self.queue(folder)
+            self.assertTrue(queue.held)
+            self.assertEqual(len(queue.items), 1)
+
+    def test_old_pending_jobs_remain_until_user_starts_or_removes_them(self):
+        with tempfile.TemporaryDirectory() as folder:
+            queue = self.queue(folder)
+            queue.items = [{"id": 1, "label": "Old", "argv": ["python", "render.py"],
+                            "queued_at": 1}]
+            queue.held = True
+            self.assertTrue(queue._save())
+            queue._advance()
+            restored = self.queue(folder)
+            self.assertEqual([item["label"] for item in restored.items], ["Old"])
+            self.assertTrue(restored.held)
+            self.assertEqual(restored.results, [])
+
+    def test_queue_does_not_start_a_job_without_process_ownership(self):
+        job = mock.Mock(closed=False)
+        queue = server.JobQueue(job, lambda item: None)
+        item = {"id": 1, "label": "GPU work", "argv": ["python", "render.py"]}
+        with mock.patch.object(server.PANEL_OWNER, "acquire", return_value=False), \
+                mock.patch.object(server.PANEL_OWNER, "error", "another panel owns the GPU"):
+            queue._start(item)
+        job.start.assert_not_called()
+        self.assertIsNone(queue.current)
+        self.assertIs(queue.items[0], item)
+        self.assertTrue(queue.held)
+        self.assertTrue(queue.persistence_error)
+
+    def test_panel_owner_lock_blocks_second_process_and_releases_on_exit(self):
+        self.assertEqual(server.PANEL_OWNER.path, os.path.join(fakes.DATA, "logs", "panel_owner.lock"),
+                         "the fakes fixture redirects the shared lock path with AUTOGEN_DATA")
+        with tempfile.TemporaryDirectory() as folder:
+            path = os.path.join(folder, "owner.lock")
+            owner = server.PanelOwnerLock(path)
+            self.assertIsNone(owner._file, "constructing the lock does not acquire it")
+
+            probe_code = (
+                "import sys; from panel.server import PanelOwnerLock; "
+                "lock=PanelOwnerLock(sys.argv[1]); "
+                "sys.exit(0 if lock.acquire() else 3)"
+            )
+
+            def probe():
+                return subprocess.run(
+                    [sys.executable, "-c", probe_code, path],
+                    cwd=os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                    stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=30,
+                    creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+
+            self.assertTrue(owner.acquire())
+            try:
+                blocked = probe()
+                self.assertEqual(blocked.returncode, 3, blocked.stderr)
+            finally:
+                owner.release()
+            acquired = probe()
+            self.assertEqual(acquired.returncode, 0, acquired.stderr)
+            acquired_after_exit = probe()
+            self.assertEqual(acquired_after_exit.returncode, 0, acquired_after_exit.stderr)
 
     def test_what_is_deleted_from_output_leaves_finished(self):
         with tempfile.TemporaryDirectory() as folder:
