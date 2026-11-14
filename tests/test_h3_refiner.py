@@ -718,6 +718,7 @@ class CleanupBridgeTest(unittest.IsolatedAsyncioTestCase):
         self.flags = {}
         self.remaining = 0
         self.allocated = 2**30
+        self.workspace_allocated = 8 * 2**20
         self.routes = {}
         outer = self
 
@@ -730,9 +731,16 @@ class CleanupBridgeTest(unittest.IsolatedAsyncioTestCase):
         memory.get_all_torch_devices = lambda: [SimpleNamespace(type="cuda", index=0)]
         memory.get_total_memory = lambda device: 12 * 2**30
         memory.get_free_memory = lambda device: 11 * 2**30
-        memory.torch = SimpleNamespace(cuda=SimpleNamespace(
-            memory_allocated=lambda device: self.allocated,
-            memory_reserved=lambda device: self.allocated))
+        def clear_workspaces():
+            self.steps.append("cublas")
+            self.workspace_allocated = 0
+
+        memory.torch = SimpleNamespace(
+            _C=SimpleNamespace(_cuda_clearCublasWorkspaces=clear_workspaces),
+            cuda=SimpleNamespace(
+                synchronize=lambda device: self.steps.append("synchronize"),
+                memory_allocated=lambda device: self.allocated + self.workspace_allocated,
+                memory_reserved=lambda device: self.allocated + self.workspace_allocated))
 
         def empty():
             self.steps.append("empty")
@@ -780,13 +788,24 @@ class CleanupBridgeTest(unittest.IsolatedAsyncioTestCase):
         self.steps.clear()
         self.process_flags()
         response = await asyncio.wait_for(task, 2)
-        self.assertEqual(self.steps, ["reset", "collect", "empty"])
+        self.assertEqual(self.steps, ["reset", "collect", "synchronize", "cublas", "empty"])
         self.assertEqual(response.status, 200)
         self.assertTrue(response.body["completed"])
         self.assertEqual(response.body["devices"][0]["torch_allocated"], 0)
         with mock.patch.object(comfy_memory.requests, "post", return_value=mock.Mock(
                 status_code=200, json=lambda: response.body)):
             self.assertEqual(comfy_memory.release("http://comfy")[0]["vram_free"], 11 * 2**30)
+
+    async def test_cpu_cleanup_does_not_access_cuda_workspace_hooks(self):
+        self.memory.get_all_torch_devices = lambda: [SimpleNamespace(type="cpu", index=None)]
+        self.memory.torch = SimpleNamespace()
+        task = asyncio.create_task(self.routes["/gen-center/free"](None))
+        await asyncio.sleep(0)
+        self.process_flags()
+        response = await asyncio.wait_for(task, 2)
+        self.assertEqual(response.status, 200)
+        self.assertEqual(self.steps, ["reset", "collect", "empty"])
+        self.assertEqual(response.body["devices"][0]["torch_allocated"], 0)
 
     async def test_busy_worker_and_late_work_do_not_acknowledge_safe_cleanup(self):
         self.remaining = 1

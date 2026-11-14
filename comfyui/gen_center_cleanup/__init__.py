@@ -54,6 +54,12 @@ def reset(self):
     try:
         _reset(self)
         gc.collect()
+        cuda_devices = [device for device in memory.get_all_torch_devices() if device.type == "cuda"]
+        for device in cuda_devices:
+            memory.torch.cuda.synchronize(device)
+        if cuda_devices:
+            # cuBLAS workspaces survive executor reset and empty_cache.
+            memory.torch._C._cuda_clearCublasWorkspaces()
         memory.soft_empty_cache()
         cleanup.devices = measurements()
     except Exception as error:

@@ -145,7 +145,9 @@ Fill in `.env`. `APP_PASSWORD` lets you reach the panel from a phone. `COMFYUI_L
 
 For local LLMs and verified between-job/OOM cleanup, install the ComfyUI integration with
 `python scripts/install_comfy_cleanup.py` (or supply `--comfy-root`), then restart ComfyUI when idle.
-Cleanup waits for ComfyUI's worker to unload models, reset node caches, collect garbage and release its GPU cache.
+Cleanup waits for ComfyUI's worker to unload models, reset node caches, collect garbage, synchronize CUDA,
+release cuBLAS workspaces and clear its GPU cache. It uses PyTorch's internal cuBLAS workspace-release hook,
+also used by PyTorch's memory-leak checks; unsupported versions fail explicitly rather than skipping cleanup.
 The panel checks the acknowledgement and GPU allocation measurements before proceeding; it holds generation
 while between-job cleanup is running and parks the queue if cleanup fails. Available VRAM is recorded when
 starting a local LLM. This verifies ComfyUI's cleanup, not other applications' GPU use or an LLM's total memory needs.
