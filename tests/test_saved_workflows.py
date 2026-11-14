@@ -937,6 +937,12 @@ class LoraFamilyTest(unittest.TestCase):
         self.assertEqual(next(option for option in offered if option["id"] == "lora_name")["choices"], [installed])
         self.assertEqual(next(node for node in api.values() if node["class_type"] == "Power Lora Loader (rgthree)")["inputs"]["lora_1"]["lora"], installed)
 
+    def test_a_saved_lora_comfyui_lacks_is_not_offered(self):
+        installed = "Krea2_KNPV3_1_NSFW.safetensors"
+        options = workflow_options.lora_options("0", "Krea2\\KNPV3_1.safetensors", 1, [installed])
+        self.assertEqual((options[1]["choices"], options[1]["default"]), ([installed], installed),
+                         "the workflow's own file isn't installed, so only the one that is can be picked")
+
     def test_fixed_extra_lora_preserves_private_folder_tag(self):
         ui = switchable_workflow()
         loader = next(node for node in ui["nodes"] if node["type"] == "Power Lora Loader (rgthree)")

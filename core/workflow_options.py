@@ -503,8 +503,13 @@ def _matching_lora(files, name):
 
 
 def lora_options(on, name, strength, files):
-    """The switch, and under it the LoRA (named as lora_label says) and its strength. Speed LoRAs aren't listed."""
+    """
+    The switch, and under it the LoRA (named as lora_label says) and its strength. Speed LoRAs aren't listed, nor is a
+    file the workflow saved that ComfyUI doesn't have (when it said what it has): picking it could only fail.
+    """
     name = _matching_lora(files, name)
+    if files and name not in files:
+        name = None
     choices = sorted({file for file in files if not SPEED_LORA.search(file)} | ({name} if name else set()), key=lambda file: lora_label(file).lower())
     default = name if name in choices else (choices[0] if choices else "")
     return [{"id": LORA, "kind": "switch", "label": "Use LoRA", "default": on, "advanced": True, "below": True},
