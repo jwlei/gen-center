@@ -703,8 +703,12 @@ class PanelTest(unittest.TestCase):
                 release.set()
                 thread.join(10)
             self.assertEqual(replies[0].get_json(), {"ok": True, "prompt": "finished"})
-            factory.assert_called_once_with(self.comfy.url, require_compiler=False, model_id=mock.ANY)
+            # From words alone: started without the vision projector.
+            factory.assert_called_once_with(self.comfy.url, require_compiler=False, model_id=mock.ANY, vision=False)
             refiner.write_prompt.assert_called_once_with("idea", "video")
+            # Kept loaded for the next write; closed, it no longer holds the queue back.
+            refiner.__exit__.assert_not_called()
+            webapp.close_warm_writer()
             refiner.__exit__.assert_called_once()
             self.assertFalse(webapp.run_queue.blocked())
             self.assertEqual(self.client.get("/api/status").get_json()["prompt_writer"],
