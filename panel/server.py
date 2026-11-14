@@ -864,10 +864,11 @@ class JobQueue:
             self._finish_current()
         if not self.items:
             self.held = False
-        elif self.job.idle and not self.held and not self.blocked():
+        elif self.job.idle and not self.held:
             # The first that may start: one waiting to be started lets those behind it go first.
             ready = next((i for i, waiting in enumerate(self.items) if not waiting.get("later")), None)
-            if ready is None:
+            # Asked only with one ready: being asked closes the prompt writer's warm model (warm_writer_in_the_way).
+            if ready is None or self.blocked():
                 return
             item = self.items.pop(ready)
             self._start(item)
@@ -2151,8 +2152,105 @@ _prompt_refiner = None
 _panel_closing = False
 _comfy_restarting = False
 _comfy_freeing = False
+
+# --- The prompt writer's warm model ---
+# Writing a prompt again soon after (a retry, the other form's prompt) would otherwise load the model again: 7-11 s
+# each time. So the model the writer used stays loaded for WARM_SECONDS after it answers. Whatever else needs the GPU
+# closes it first: a job starting (the queue waits for it), the workflow's own prompt enhancer, and the panel exiting.
+WARM_SECONDS = 90
+_warm_lock = threading.Lock()
+_warm = None  # (refiner, timer) while a model is kept loaded
+_warm_closing = False
+
+
+def keep_warm(refiner):
+    global _warm
+    timer = threading.Timer(WARM_SECONDS, close_warm_writer, kwargs={"only": refiner})
+    timer.daemon = True
+    with _warm_lock:
+        old, _warm = _warm, (refiner, timer)
+    if old:
+        _close_warm(old)
+    timer.start()
+
+
+def take_warm(model):
+    """The warm model, now the caller's, when it is this one and still running; otherwise None, any other closed."""
+    global _warm
+    with _warm_lock:
+        held, _warm = _warm, None
+    if not held:
+        return None
+    refiner, timer = held
+    timer.cancel()
+    if refiner.model_id == model and refiner.process and refiner.process.poll() is None:
+        return refiner
+    _close_warm(held)
+    return None
+
+
+def warm_model():
+    """Which model is kept loaded, or None."""
+    with _warm_lock:
+        return _warm[0].model_id if _warm else None
+
+
+def close_warm_writer(only=None):
+    """Closes the warm model (only that one, when given: its own timer must not close a newer one)."""
+    global _warm
+    with _warm_lock:
+        if _warm is None or (only is not None and _warm[0] is not only):
+            return
+        held, _warm = _warm, None
+    _close_warm(held)
+
+
+def _close_warm(held):
+    refiner, timer = held
+    timer.cancel()
+    try:
+        refiner.__exit__(None, None, None)
+    except Exception as error:  # Closing must not take what asked for it down with it
+        app.logger.warning("Could not close the prompt writer's warm model: %s", error)
+
+
+def warm_writer_in_the_way():
+    """
+    For the run queue: whether a warm model stands between it and its next job. It is then closed on a thread, as
+    closing takes seconds and the queue's lock is held here, and the queue moves on once it's gone.
+    """
+    global _warm_closing
+    with _warm_lock:
+        if _warm is None:
+            return _warm_closing
+        if _warm_closing:
+            return True
+        _warm_closing = True
+
+    def close():
+        global _warm_closing
+        try:
+            close_warm_writer()
+        finally:
+            with _warm_lock:
+                _warm_closing = False
+            run_queue._advance_locked()
+    threading.Thread(target=close, daemon=True).start()
+    return True
+
+
+def exit_soon():
+    """Exits the panel in half a second, its answer sent first, and the warm model closed: os._exit skips atexit."""
+    def leave():
+        close_warm_writer()
+        os._exit(0)
+    threading.Timer(0.5, leave).start()
+
+
+atexit.register(close_warm_writer)
 # A ComfyUI restart going (after an aimdo error) holds the next run back until it is done.
-run_queue = JobQueue(job, prepare_run, blocked=lambda: _writing_prompt or _panel_closing or _comfy_restarting or _comfy_freeing, path=os.path.join(LOGS_DIR, "queue_runs.json"))
+run_queue = JobQueue(job, prepare_run, blocked=lambda: _writing_prompt or _panel_closing or _comfy_restarting or _comfy_freeing
+                     or warm_writer_in_the_way(), path=os.path.join(LOGS_DIR, "queue_runs.json"))
 # A run's own upload step is waited out, when its video sits in Ready with no topic recorded yet.
 upload_queue = JobQueue(uploads, prepare_upload, blocked=lambda: job.uploading,
                         path=os.path.join(LOGS_DIR, "queue_uploads.json"))
@@ -3199,7 +3297,9 @@ def write_prompt():
         if writer == "local" and model not in {item["id"] for item in settings.local_models()}:
             return {"ok": False, "error": "Choose a local prompt model available in Settings."}, 400
         timings = eta_keys.Timings(PROMPT_WRITER_TIMINGS, {})
-        estimate = timings.step(f"{model} | {side}")
+        # Kept loaded, it skips the start: timed apart, the cold time standing in until it has been.
+        cold = f"{model} | {side}"
+        estimate = timings.step([cold + " | warm", cold] if writer == "local" and warm_model() == model else cold)
         if estimate is not None and (not math.isfinite(estimate) or estimate <= 0):
             app.logger.warning("Invalid prompt writer timing for %s / %s: %s", model, side, estimate)
             estimate = None
@@ -3231,17 +3331,35 @@ def write_prompt():
         if _writing_prompt or _panel_closing or _comfy_restarting or _comfy_freeing or job.running or (run_queue.pending() and not run_queue.held):
             return {"ok": False, "error": "Wait for the current generation or prompt writer to finish."}, 409
         _writing_prompt = True
+    warm = False
     try:
         started = time.monotonic()
         if writer == "local":
-            url = (os.getenv("COMFYUI_URL") or "http://127.0.0.1:8188").rstrip("/")
-            refiner = h3_refiner.Refiner(url, require_compiler=False, model_id=model)
-            if refiner.model_id != model:
-                return {"ok": False, "error": "The selected model changed. Try writing the prompt again."}, 409
+            refiner = take_warm(model)
+            warm = refiner is not None
+            if warm:
+                # Something may have used ComfyUI since (its own page): it lets go of what it loaded again first.
+                try:
+                    refiner._release_comfy_models()
+                except BaseException:
+                    refiner.__exit__(None, None, None)
+                    raise
+            else:
+                url = (os.getenv("COMFYUI_URL") or "http://127.0.0.1:8188").rstrip("/")
+                # Writing from words alone: no vision projector, which leaves its memory to the model.
+                refiner = h3_refiner.Refiner(url, require_compiler=False, model_id=model, vision=False)
+                if refiner.model_id != model:
+                    return {"ok": False, "error": "The selected model changed. Try writing the prompt again."}, 409
             with run_queue.lock:
                 _prompt_refiner = refiner
-            with refiner:
+            try:
+                if not warm:
+                    refiner.__enter__()
                 prompt = refiner.write_prompt(text.strip(), side)
+            except BaseException:
+                refiner.__exit__(None, None, None)
+                raise
+            keep_warm(refiner)
         elif writer == "gemini":
             from google.genai import types
             from core import gemini, prompt_writer_instructions
@@ -3253,6 +3371,8 @@ def write_prompt():
                 raise RuntimeError("Gemini returned an empty prompt.")
             prompt = prompt.strip()
         else:
+            # The workflow's enhancer runs in ComfyUI, which needs the memory a warm local model holds.
+            close_warm_writer()
             from panel import image as image_panel
             from pipelines.image.comfy import ImageClient
             uploads = image_panel.form_uploads(request.files)
@@ -3290,8 +3410,8 @@ def write_prompt():
             if not prompt or not prompt.strip():
                 raise RuntimeError("The workflow's prompt enhancer returned no text.")
         timings = eta_keys.Timings(PROMPT_WRITER_TIMINGS, {})
-        key = f"{model} | {side}"
-        old = timings.step(key)
+        key = f"{model} | {side}" + (" | warm" if warm else "")
+        old = timings.timed_step(key)
         if old is not None and (not math.isfinite(old) or old <= 0):
             app.logger.warning("Discarding invalid prompt writer timing for %s: %s", key, old)
             timings.timed_steps.discard(key)
@@ -3430,7 +3550,7 @@ def restart_panel():
         subprocess.Popen(command, cwd=PROJECT_ROOT, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                          stderr=subprocess.DEVNULL, creationflags=flags)
         _panel_closing = True
-        threading.Timer(0.5, os._exit, args=(0,)).start()
+        exit_soon()
     return {"ok": True}
 
 
@@ -3491,7 +3611,7 @@ def shutdown():
         return {"ok": False, "error": f"{STOP_FAILED} Then shut down again."}, 500
     close_comfyui()
     # Reply first, then exit, so the browser gets its answer.
-    threading.Timer(0.5, os._exit, args=(0,)).start()
+    exit_soon()
     return {"ok": True}
 
 
@@ -3512,7 +3632,7 @@ def launcher_refresh():
         if code_changed_at <= STARTED_AT or restart_blocked():
             return {"restarting": False}
         _panel_closing = True
-        threading.Timer(0.5, os._exit, args=(0,)).start()
+        exit_soon()
     return {"restarting": True}
 
 

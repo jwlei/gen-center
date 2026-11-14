@@ -2760,7 +2760,9 @@ assert(!/id="stopAfter"/.test(html), 'pause moved out of the run actions');
 assert(!script.includes('ComfyUI is making each image.'), 'the redundant image stage hint is not shown');
 assert(queue.innerHTML.includes('data-fold-queue="1" aria-expanded="true"') && queue.innerHTML.includes('class="queue-list" tabindex="0"'), 'run queue has a separate collapsible scrollable list');
 assert(/class="queue-head run-queue-head"[\s\S]*class="queue-fold-toggle queue-fold-title"[\s\S]*data-queue-toggle="1"[\s\S]*class="queue-fold-toggle queue-fold-arrow" data-fold-queue="1" aria-expanded="true" aria-label="Collapse queue"/.test(queue.innerHTML), 'queue-wide control stays on the right');
-assert(/\.queue-head\.run-queue-head \{ display: grid; grid-template-columns: minmax\(0, 1fr\) auto 26px 20px; \}/.test(html) && /\.run-queue-head \[data-queue-toggle\] \{ grid-column: 3; \}/.test(html), 'queue-wide control and chevron stay right of the title');
+assert(/\.queue-head\.run-queue-head \{ display: grid; grid-template-columns: minmax\(0, 1fr\) auto 26px 26px 20px; \}/.test(html) && /\.run-queue-head \[data-queue-toggle\] \{ grid-column: 3; \}/.test(html), 'queue-wide control and chevron stay right of the title');
+assert(/\.run-queue-head \[data-sort-queue\] \{ grid-column: 4; \}/.test(html) && /\.queue-head \.queue-fold-arrow \{ grid-column: 5;/.test(html)
+  && /\.queue \.queue-head button\[data-sort-queue\] \{ width: 26px; height: 26px; padding: 0; display: inline-flex; align-items: center;/.test(html), 'sort sits in its own column beside play/pause, sized and centred like it');
 assert(/\.queue \.queue-head button\[data-queue-toggle\] \{ width: 26px; height: 26px; padding: 0; display: inline-flex; align-items: center;/.test(html), 'the queue play is small, its icon centred');
 assert(/\.queue-head \.queue-fold-arrow \{[^}]*justify-content: flex-end/.test(html) && /\.queue-fold-toggle \.chev \{[^}]*transition: transform \.25s ease; margin-right: 4px/.test(html), 'queue chevron aligns and turns like Pending and Failed');
 queue._open = false;

@@ -758,6 +758,49 @@ class PanelTest(unittest.TestCase):
             with open(webapp.PROMPT_WRITER_TIMINGS, encoding="utf-8") as file:
                 self.assertEqual(json.load(file), saved)
 
+    def test_prompt_writer_keeps_its_model_loaded_until_something_else_needs_the_gpu(self):
+        from core import h3_refiner
+        refiner = mock.MagicMock()
+        refiner.model_id = "gemma-4-12b"
+        refiner.process.poll.return_value = None
+        refiner.write_prompt.return_value = "written"
+        post = lambda: self.client.post("/api/write-prompt", json={"pipeline": "video", "prompt": "idea", "model": "gemma-4-12b"})
+        try:
+            with mock.patch.object(h3_refiner, "Refiner", return_value=refiner) as factory:
+                self.assertEqual(post().status_code, 200)
+                self.assertEqual(webapp.warm_model(), "gemma-4-12b")
+                self.assertEqual(post().status_code, 200)
+            # Started once, without its vision projector; the second skipped the start, and is timed apart.
+            factory.assert_called_once()
+            self.assertIs(factory.call_args.kwargs["vision"], False)
+            refiner.__enter__.assert_called_once()
+            refiner._release_comfy_models.assert_called_once()
+            refiner.__exit__.assert_not_called()
+            with open(webapp.PROMPT_WRITER_TIMINGS, encoding="utf-8") as file:
+                self.assertEqual(set(json.load(file)["steps"]), {"gemma-4-12b | video", "gemma-4-12b | video | warm"})
+            # A job about to start: the queue waits while it closes, then may go.
+            self.assertTrue(webapp.warm_writer_in_the_way())
+            for _ in range(200):
+                if not webapp.warm_writer_in_the_way():
+                    break
+                time.sleep(0.01)
+            self.assertFalse(webapp.warm_writer_in_the_way())
+            refiner.__exit__.assert_called_once()
+            self.assertIsNone(webapp.warm_model())
+            # A failed write closes it at once rather than keeping it.
+            refiner.write_prompt.side_effect = RuntimeError("failed")
+            with mock.patch.object(h3_refiner, "Refiner", return_value=refiner):
+                self.assertEqual(post().status_code, 500)
+            self.assertIsNone(webapp.warm_model())
+            self.assertEqual(refiner.__exit__.call_count, 2)
+            # Only its own timer's close applies: a newer model stays.
+            newer = mock.MagicMock()
+            webapp.keep_warm(newer)
+            webapp.close_warm_writer(only=refiner)
+            self.assertIs(webapp._warm[0], newer)
+        finally:
+            webapp.close_warm_writer()
+
     def test_prompt_writer_can_use_gemini_or_the_selected_image_workflow_enhancer(self):
         from core import gemini
         with mock.patch.dict(os.environ, {"GEMINI_API_KEY": "test-key"}), \

@@ -90,12 +90,14 @@
   .queue-head b { font-weight: 600; }
   .queue-foot { display: flex; justify-content: flex-end; margin-top: 8px; }
   .queue-head .when { color: var(--muted); font-size: .78rem; }
-  .queue-head.run-queue-head { display: grid; grid-template-columns: minmax(0, 1fr) auto 26px 20px; }
+  .queue-head.run-queue-head { display: grid; grid-template-columns: minmax(0, 1fr) auto 26px 26px 20px; }
   .run-queue-head .when { grid-column: 2; min-width: 0; }
   .run-queue-head [data-queue-toggle] { grid-column: 3; }
+  /* Its own column beside play/pause: placed by the grid instead, it fell to a second row under "All done around". */
+  .run-queue-head [data-sort-queue] { grid-column: 4; }
   .queue-head .queue-fold-toggle { padding: 2px 0; border: 0; background: transparent; text-align: left; }
   .queue-head .queue-fold-title { grid-column: 1; min-width: 0; }
-  .queue-head .queue-fold-arrow { grid-column: 4; width: 20px; height: 30px; display: flex; align-items: center; justify-content: flex-end; }
+  .queue-head .queue-fold-arrow { grid-column: 5; width: 20px; height: 30px; display: flex; align-items: center; justify-content: flex-end; }
   .queue-fold-toggle .chev { width: 8px; height: 8px; border-right: 2px solid var(--muted); border-bottom: 2px solid var(--muted); transform: rotate(45deg); transition: transform .25s ease; margin-right: 4px; }
   .queue-fold-toggle[aria-expanded="true"] .chev { transform: rotate(-135deg); }
   .queue-list, .stopped-body { position: relative; max-height: min(var(--three-rows, 55dvh), 55dvh); overflow-y: auto; }
@@ -149,6 +151,10 @@
   .queue .queue-head button[data-queue-toggle] { width: 26px; height: 26px; padding: 0; display: inline-flex; align-items: center;
     justify-content: center; line-height: 1; font-size: .62rem; }
   .queue .queue-head button[data-queue-toggle] svg { display: block; width: 12px; height: 12px; }
+  /* Sort, beside it: the same box, its icon in the middle. */
+  .queue .queue-head button[data-sort-queue] { width: 26px; height: 26px; padding: 0; display: inline-flex; align-items: center;
+    justify-content: center; }
+  .queue .queue-head button[data-sort-queue] svg { display: block; width: 14px; height: 14px; }
   .queue-item .what[role="button"] { cursor: pointer; }
   .queue .results { margin-top: 6px; }
   /* A stopped run in a box of its own: what it is, how far it got, then what you can do with it. */

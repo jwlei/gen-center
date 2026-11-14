@@ -31,6 +31,27 @@ class BenchmarkInterrupted(RuntimeError):
     pass
 
 
+# The runner's own account of the GPU when it loads: "| - Vulkan0 (RTX 3080 Ti) | 12084 = 11312 + (7897 = ..." is
+# total = free + (what this model needs = ...). When the model needs more than is free the driver doesn't refuse: it
+# quietly keeps part of it in system memory, and the speed measured is a fraction of the real one.
+MEMORY = re.compile(r"memory_breakdown_print: \|\s+- Vulkan0 \([^)]*\)\s*\|\s*(\d+) = (\d+) \+ \((\d+) =")
+MARGIN_MIB = 256
+
+
+def memory_fits(log, layers):
+    match = MEMORY.search(log)
+    if layers == 0:
+        return None
+    if not match:
+        raise RuntimeError("The runner did not report its GPU memory.")
+    total, free, needed = (int(value) for value in match.groups())
+    if needed + MARGIN_MIB > free:
+        raise BenchmarkInterrupted(
+            f"Only {free} MiB of {total} MiB GPU memory is free and this model needs {needed} MiB: something else is "
+            f"holding it (a game, a browser with video, ComfyUI). Close it and run the benchmark again.")
+    return {"vram_total_mib": total, "vram_free_mib": free, "vram_needed_mib": needed}
+
+
 def connection_refused(error):
     while error is not None:
         if isinstance(error, ConnectionRefusedError):
@@ -98,6 +119,7 @@ def measure(session, model_id, layers):
                 raise RuntimeError(f"Partial offload requested but runner reported {actual[0]}/{actual[1]} layers.")
             if layers == 0 and actual[0] != 0:
                 raise RuntimeError(f"CPU-only requested but runner offloaded {actual[0]} layers.")
+            memory = memory_fits(log, layers)
             total_tokens = total_ms = 0
             for iteration in range(3):
                 response = requests.post(refiner.url + "/chat/completions", json={
@@ -122,7 +144,7 @@ def measure(session, model_id, layers):
                 raise RuntimeError(interrupted[0])
             check_idle(session)
             return {"gpu_layers": layers, "offloaded": actual[0], "total_layers": actual[1],
-                    "tokens": total_tokens, "milliseconds": total_ms}
+                    "tokens": total_tokens, "milliseconds": total_ms, **(memory or {})}
     finally:
         stop.set()
         watcher.join()

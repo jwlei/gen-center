@@ -355,7 +355,9 @@ def plan_run(args, stages):
                  video_model, args.image_roles, media.preview_jpeg(image_2_in_words) if image_2_in_words else None,
                  state.references())
     if llm == "local":
-        with h3_refiner.Refiner(comfy.url, require_compiler=False, model_id=local_model) as refiner:
+        # The images it sees: the clips' own, and image 2 when only the prompts can carry it.
+        sees_images = bool(plan_args[0] or plan_args[7])
+        with h3_refiner.Refiner(comfy.url, require_compiler=False, model_id=local_model, vision=sees_images) as refiner:
             title, shots = planner.plan_film(*plan_args, chosen=args.clip_seconds, refiner=refiner,
                                              first_frame=state.start == "multishot" and state.h3_first_frame,
                                              clip_relationship=state.clip_relationship)

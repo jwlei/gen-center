@@ -224,7 +224,7 @@ def plan_run(args, stages):
         print(f"🧠 {llm} is writing {args.count} {'prompt' if args.count == 1 else 'prompts'}...")
         plan_args = ([video_media.preview_jpeg(image) for image in images], args.prompt, args.count, llm, model)
         if llm == "local":
-            with h3_refiner.Refiner(comfy.url, require_compiler=False, model_id=local_model) as refiner:
+            with h3_refiner.Refiner(comfy.url, require_compiler=False, model_id=local_model, vision=bool(plan_args[0])) as refiner:
                 title, versions = image_planner.write_prompts(*plan_args, compose=args.compose,
                                                               transparent=args.transparent, refiner=refiner)
         else:

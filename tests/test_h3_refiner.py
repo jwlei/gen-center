@@ -214,6 +214,48 @@ class H3RefinerTest(unittest.TestCase):
                 args = launch.call_args.args[0]
                 self.assertEqual(args[args.index("--gpu-layers") + 1], "24")
 
+    def _launch_args(self, model, projector):
+        refiner = object.__new__(h3_refiner.Refiner)
+        refiner.comfy_url, refiner.server, refiner.model, refiner.projector = None, "server", "model", projector
+        refiner.model_id, refiner.process, refiner.gpu_layers, refiner.verbose = model, None, "all", False
+        with mock.patch.object(h3_refiner.subprocess, "Popen", side_effect=OSError("launch intercepted")) as launch:
+            with self.assertRaisesRegex(OSError, "launch intercepted"):
+                refiner.__enter__()
+        return launch.call_args.args[0]
+
+    def test_qwen_keeps_its_cache_at_8_bits_and_gemma_at_full_precision(self):
+        qwen = self._launch_args("qwen3-14b", None)
+        self.assertEqual(qwen[qwen.index("--ctx-size") + 1], str(h3_refiner.CONTEXT))
+        self.assertEqual((qwen[qwen.index("--cache-type-k") + 1], qwen[qwen.index("--cache-type-v") + 1]), ("q8_0", "q8_0"))
+        self.assertEqual(qwen[qwen.index("--flash-attn") + 1], "on")
+        gemma = self._launch_args("gemma-4-12b", "projector")
+        self.assertNotIn("--cache-type-k", gemma)
+        self.assertEqual(gemma[gemma.index("--mmproj") + 1], "projector")
+
+    def test_work_without_images_starts_without_the_vision_projector(self):
+        with mock.patch.object(h3_refiner, "_paths", return_value=("root", "python", "server", "model", "projector")), \
+             mock.patch.object(h3_refiner.panel_settings, "local_model_benchmarks", return_value={"models": {}}):
+            self.assertIsNone(h3_refiner.Refiner(model_id="gemma-4-12b", require_compiler=False, vision=False).projector)
+            seeing = h3_refiner.Refiner(model_id="gemma-4-12b", require_compiler=False)
+        self.assertEqual(seeing.projector, "projector")
+        self.assertNotIn("--mmproj", self._launch_args("gemma-4-12b", None))
+        blind = object.__new__(h3_refiner.Refiner)
+        blind.model_id, blind.projector = "gemma-4-12b", None
+        with self.assertRaisesRegex(RuntimeError, "without its vision projector"):
+            blind.plan("prompt", {}, [b"jpeg"])
+
+    def test_benchmark_refuses_to_measure_a_model_that_overflows_the_gpu(self):
+        from scripts import benchmark_local_models as benchmark
+        line = ("0.00.45 I common_memory_breakdown_print: |   - Vulkan0 (RTX 3080 Ti) | 12084 = {free} + "
+                "(7897 =  7024 +     736 +     137) +       -7126 |")
+        self.assertEqual(benchmark.memory_fits(line.format(free=11312), "all"),
+                         {"vram_total_mib": 12084, "vram_free_mib": 11312, "vram_needed_mib": 7897})
+        with self.assertRaisesRegex(benchmark.BenchmarkInterrupted, "Only 7900 MiB of 12084 MiB"):
+            benchmark.memory_fits(line.format(free=7900), "all")
+        self.assertIsNone(benchmark.memory_fits("", 0))
+        with self.assertRaisesRegex(RuntimeError, "did not report its GPU memory"):
+            benchmark.memory_fits("", 24)
+
     def test_token_samples_measure_rate_and_reset_between_requests(self):
         refiner = object.__new__(h3_refiner.Refiner)
         refiner._token_previous = None
@@ -361,7 +403,7 @@ class H3RefinerTest(unittest.TestCase):
     def test_local_planner_uses_structured_request_and_vision(self):
         refiner = object.__new__(h3_refiner.Refiner)
         refiner.url = "http://127.0.0.1:42/v1"
-        refiner.model_id = "gemma-4-12b"
+        refiner.model_id, refiner.projector = "gemma-4-12b", "projector"
         response = mock.Mock()
         response.json.return_value = {"choices": [{"message": {"content": '{"title":"Test","versions":[]}'}, "finish_reason": "stop"}]}
         with mock.patch.object(h3_refiner.requests, "post", return_value=response) as post:

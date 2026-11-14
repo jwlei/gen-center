@@ -22,6 +22,14 @@ TIMINGS = ("off", "review", "render")
 ASPECTS = {"21:9": 21 / 9, "16:9": 16 / 9, "4:3": 4 / 3,
            "1:1": 1, "3:4": 3 / 4, "9:16": 9 / 16}
 TIMEOUT = 3600
+# The context every local model is started with: the longest request so far (a plan's prompt and its 8192-token
+# answer) is under 9k tokens. What that context costs differs by family: most of Gemma 4's layers only look back
+# 1024 tokens, so its cache is about 0.75 GB at 16k; every one of Qwen3 14B's keeps the whole context, 2.5 GB at 16k,
+# which with its 8.2 GB of weights is more than a 12 GB card has free. Once it overflows, the driver quietly moves part
+# of the model into system memory and writing drops from ~70 to ~10 tok/s. So Qwen's cache is kept at 8 bits: half
+# the size, and next to no change in what it writes. (Flash attention, which that needs, is on for both.)
+CONTEXT = 16384
+KV_CACHE = {"qwen3-14b": "q8_0"}
 
 
 def settings(mode, creativity):
@@ -144,14 +152,16 @@ def video_prompt_format(text):
 
 
 class Refiner:
-    def __init__(self, comfy_url=None, require_compiler=True, model_id=None, gpu_layers=None, verbose=False):
+    def __init__(self, comfy_url=None, require_compiler=True, model_id=None, gpu_layers=None, verbose=False, vision=True):
         # OpenH3-IR's model unless told which: writing prompts asks for the local LLM's.
         self.model_id = model_id or selected_model()
         self.root, self.python, server, model, projector = _paths(self.model_id, require_compiler)
         self.process = None
         self.server = server
         self.model = model
-        self.projector = projector
+        # vision=False for work with no image to look at: the projector is then not loaded, which leaves its ~0.35 GB
+        # of GPU memory to the model.
+        self.projector = projector if vision else None
         benchmark = (panel_settings.benchmark_for_model(panel_settings.local_model_benchmarks(), self.model_id,
                                                         model, server) if gpu_layers is None else None)
         self.gpu_layers = gpu_layers if gpu_layers is not None else benchmark["gpu_layers"] if benchmark else "all"
@@ -204,8 +214,11 @@ class Refiner:
         if self.projector:
             args += ["--mmproj", self.projector]
         args += ["--host", "127.0.0.1",
-                "--port", str(port), "--ctx-size", "16384", "--parallel", "1", "--threads", "8",
+                "--port", str(port), "--ctx-size", str(CONTEXT), "--parallel", "1", "--threads", "8",
                 "--gpu-layers", str(self.gpu_layers), "--alias", "h3-refiner"]
+        cache = KV_CACHE.get(panel_settings.model_family(self.model_id))
+        if cache:
+            args += ["--flash-attn", "on", "--cache-type-k", cache, "--cache-type-v", cache]
         if self.gpu_layers == 0:
             args += ["--device", "none", "--no-mmproj-offload"]
         if self.verbose:
@@ -365,6 +378,8 @@ class Refiner:
     def plan(self, prompt, schema, images=()):
         if panel_settings.model_family(self.model_id) == "qwen3-14b" and images:
             raise RuntimeError("Qwen3 14B is text-only and cannot analyze attached images. Choose Gemma 4 in Settings.")
+        if images and not self.projector:
+            raise RuntimeError("The local model was started without its vision projector, so it can't see the attached images.")
         content = [{"type": "image_url", "image_url": {"url": "data:image/jpeg;base64," +
                     base64.b64encode(image).decode("ascii")}} for image in images]
         content.append({"type": "text", "text": prompt})

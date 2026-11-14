@@ -440,7 +440,8 @@ class PipelineTest(unittest.TestCase):
         with mock.patch.object(main.h3_refiner, "Refiner") as refiner, \
                 mock.patch.object(main.titles, "titled", return_value="Selected Title") as title:
             self.assertEqual(self.film("--plan-only", "--llm", "local", "--local-model", chosen), 0)
-        refiner.assert_called_once_with(self.server.url, require_compiler=False, model_id=chosen)
+        # The film starts from an image, which the model has to see: its vision projector is loaded.
+        refiner.assert_called_once_with(self.server.url, require_compiler=False, model_id=chosen, vision=True)
         self.assertEqual(title.call_args.kwargs["model_id"], chosen)
         state = self.only_run()
         self.assertEqual(state.local_model, chosen)

@@ -84,7 +84,8 @@ class TitlesTest(unittest.TestCase):
                 mock.patch("core.h3_refiner.local_llm_model") as default:
             self.assertEqual(titles.local_title("Prompt", "a film", "http://comfy", model_id="chosen"),
                              "Selected Model Title")
-            factory.assert_called_once_with("http://comfy", require_compiler=False, model_id="chosen")
+            # A title is written from words alone: no vision projector.
+            factory.assert_called_once_with("http://comfy", require_compiler=False, model_id="chosen", vision=False)
             default.assert_not_called()
         with mock.patch.object(titles, "source", return_value="gemini"), \
                 mock.patch.object(titles, "gemini_title") as gemini, \

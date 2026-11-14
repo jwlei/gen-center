@@ -72,7 +72,8 @@ def local_title(prompt, what, comfy_url, model_id=None):
     """The local model's title for it, or None. Starting it frees ComfyUI's models first, as writing prompts does."""
     from core import h3_refiner  # Only when needed: it brings the local model's tooling with it
     try:
-        with h3_refiner.Refiner(comfy_url, require_compiler=False, model_id=model_id or h3_refiner.local_llm_model()) as refiner:
+        with h3_refiner.Refiner(comfy_url, require_compiler=False, model_id=model_id or h3_refiner.local_llm_model(),
+                                vision=False) as refiner:
             reply = refiner.plan(PROMPT.format(what=what, prompt=prompt[:MOST_PROMPT]), TITLE_SCHEMA)
         return clean(json.loads(reply).get("title")) or None
     except Exception as e:  # A title is never worth stopping a run for
