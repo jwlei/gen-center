@@ -204,6 +204,28 @@ DEFAULT_RESERVE_GB = 3
 DEFAULTS = {"low_priority": False, "reserve_ram_gb": DEFAULT_RESERVE_GB, "h3_model": H3_MODELS[0], "local_llm_model": H3_MODELS[0],
             "default_workflow": {side: "" for side in SIDES}, "title_source": "off", "pin_progress": False, "theme": "standard"}
 _lock = threading.Lock()
+# GPU heat guard (panel/gpu_guard.py): MSI Afterburner restarted above gpu_restart_above C, with profile gpu_profile,
+# and again only once the GPU has cooled to gpu_rearm_at C.
+GPU_GUARD_DEFAULTS = {"gpu_guard": True, "gpu_restart_above": 78, "gpu_rearm_at": 75, "gpu_profile": 3}
+GPU_LOWEST_C, GPU_HIGHEST_C = 40, 95
+
+
+def _whole(value, low, high):
+    """value as a whole number from low to high, or None."""
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return int(number) if number == int(number) and low <= number <= high else None
+
+
+def _gpu_guard(saved):
+    above = _whole(saved.get("gpu_restart_above"), GPU_LOWEST_C, GPU_HIGHEST_C) or GPU_GUARD_DEFAULTS["gpu_restart_above"]
+    rearm = _whole(saved.get("gpu_rearm_at"), GPU_LOWEST_C, GPU_HIGHEST_C) or GPU_GUARD_DEFAULTS["gpu_rearm_at"]
+    if rearm >= above:
+        above, rearm = GPU_GUARD_DEFAULTS["gpu_restart_above"], GPU_GUARD_DEFAULTS["gpu_rearm_at"]
+    return {"gpu_guard": bool(saved.get("gpu_guard", True)), "gpu_restart_above": above, "gpu_rearm_at": rearm,
+            "gpu_profile": _whole(saved.get("gpu_profile"), 1, 5) or GPU_GUARD_DEFAULTS["gpu_profile"]}
 
 
 def _gigabytes(value):
@@ -253,6 +275,7 @@ def load():
             # Pin the progress bar: scrolled away from the top, the header's progress bar stays, along the top of the screen.
             "pin_progress": bool(saved.get("pin_progress")),
             "output_order": saved.get("output_order", []),
+            **_gpu_guard(saved),
             "theme": theme if isinstance(theme, str) and theme in THEMES else DEFAULTS["theme"]}
 
 
@@ -297,6 +320,21 @@ def update(changes):
             if not isinstance(changes["theme"], str) or changes["theme"] not in THEMES:
                 raise ValueError("Unknown theme.")
             current["theme"] = changes["theme"]
+        if "gpu_guard" in changes:
+            current["gpu_guard"] = bool(changes["gpu_guard"])
+        for key in ("gpu_restart_above", "gpu_rearm_at"):
+            if key in changes:
+                value = _whole(changes[key], GPU_LOWEST_C, GPU_HIGHEST_C)
+                if value is None:
+                    raise ValueError(f"Temperatures are whole degrees from {GPU_LOWEST_C} to {GPU_HIGHEST_C} C.")
+                current[key] = value
+        if current["gpu_rearm_at"] >= current["gpu_restart_above"]:
+            raise ValueError("The cool-down temperature must be below the restart temperature.")
+        if "gpu_profile" in changes:
+            profile = _whole(changes["gpu_profile"], 1, 5)
+            if profile is None:
+                raise ValueError("The Afterburner profile is 1 to 5.")
+            current["gpu_profile"] = profile
         if "edit_preset" in changes:
             current["edit_preset"] = str(changes["edit_preset"] or "")[:200]
         if "edit_video_preset" in changes:

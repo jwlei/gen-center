@@ -970,8 +970,20 @@ let swipeFrom = null;
 const MOST_ZOOM = 5, TAP_ZOOM = 2.5;
 const zoom = { scale: 1, x: 0, y: 0 };
 let pinch = null, drag = null, lastTap = null;
+// Zoomed in, the picture still fills its frame: an edge stops at the frame's edge rather than going off the page.
+// The frame's black bars (object-fit: contain) don't count; a side still narrower than the frame stays centred.
+function clampZoom(image) {
+  const boxW = image.offsetWidth, boxH = image.offsetHeight;
+  if (!boxW || !boxH) return;
+  const ratio = image.naturalWidth && image.naturalHeight ? image.naturalWidth / image.naturalHeight : boxW / boxH;
+  const shownW = Math.min(boxW, boxH * ratio), shownH = Math.min(boxH, boxW / ratio);
+  const roomX = Math.max(0, (shownW * zoom.scale - boxW) / 2), roomY = Math.max(0, (shownH * zoom.scale - boxH) / 2);
+  zoom.x = Math.min(roomX, Math.max(-roomX, zoom.x));
+  zoom.y = Math.min(roomY, Math.max(-roomY, zoom.y));
+}
 function applyZoom(ease = false) {
   const image = $('viewerImage');
+  if (zoom.scale > 1) clampZoom(image);
   image.classList.toggle('easing', ease);
   image.style.transform = zoom.scale > 1 ? `translate(${zoom.x}px, ${zoom.y}px) scale(${zoom.scale})` : '';
 }

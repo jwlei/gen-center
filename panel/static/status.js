@@ -23,7 +23,9 @@ const statusCatalogue = (() => {
 })();
 
 const panelConnection = (() => {
-  let lastSuccess = null;
+  // A status call that fails once (a panel restart, a slow reply) isn't worth a notice: it shows only after 5 s down.
+  const DISCONNECTED_AFTER_MS = 5000;
+  let lastSuccess = null, disconnectTimer = null, lastError = null;
   function show(message) {
     const notice = document.getElementById('connectionNotice');
     notice.hidden = false;
@@ -33,11 +35,17 @@ const panelConnection = (() => {
   return {
     success() {
       lastSuccess = new Date();
+      clearTimeout(disconnectTimer);
+      disconnectTimer = null;
       document.getElementById('connectionNotice').hidden = true;
     },
     failure(error) {
-      const last = lastSuccess ? ` Last update: ${lastSuccess.toLocaleTimeString()}.` : ' No status received yet.';
-      show(`Panel disconnected. Retrying automatically.${last} ${error.message || 'Could not reach the panel.'}`);
+      lastError = error;
+      if (disconnectTimer) return;
+      disconnectTimer = setTimeout(() => {
+        const last = lastSuccess ? ` Last update: ${lastSuccess.toLocaleTimeString()}.` : ' No status received yet.';
+        show(`Panel disconnected. Retrying automatically.${last} ${lastError.message || 'Could not reach the panel.'}`);
+      }, DISCONNECTED_AFTER_MS);
     },
     renderFailure(error) {
       show(`A page section could not update. Retry now or reload the page. ${error.message || ''}`);

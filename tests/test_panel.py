@@ -2,6 +2,7 @@
 The panel in-process, starting the real main.py as a real process, which talks to
 a fake ComfyUI and a fake Claude and runs real ffmpeg. Stop really kills it.
 """
+import gzip
 import io
 import json
 import os
@@ -50,6 +51,24 @@ def png_bytes(color=(10, 200, 30)):
 
 SAVED_OPTIONS = [{"id": "steps", "kind": "number", "label": "Steps", "default": "20", "min": 1, "max": 150, "step": 1, "advanced": True},
                  {"id": "negative", "kind": "text", "label": "Negative prompt", "default": "saved negative", "advanced": True}]
+
+
+class RestartReasonTest(unittest.TestCase):
+    def job(self, *texts):
+        return types.SimpleNamespace(first_line=0, lines=[{"n": n, "text": text} for n, text in enumerate(texts, 1)])
+
+    def test_exit_one_from_a_crash_restarts_comfyui(self):
+        self.assertEqual(webapp.restart_reason(self.job("   🖼️ Image 5/24", "Traceback (most recent call last):"), 1), "exit code 1")
+
+    def test_settings_comfyui_refuses_do_not_restart_it(self):
+        refused = self.job("   🖼️ Image 5/24", "      ❌ Can't use the LoRA Krea2\\KNPV3_1.safetensors: LoRA is one of a, b.")
+        self.assertIsNone(webapp.restart_reason(refused, 1))
+        plain, _ = webapp.explain_failure(refused, 1)
+        self.assertTrue(plain.startswith("A LoRA this run saved"), plain)
+
+    def test_aimdo_still_restarts_even_beside_a_refused_setting(self):
+        job = self.job("aimdo memory compile error", "LoRA is one of a, b.")
+        self.assertEqual(webapp.restart_reason(job, 1), "ComfyUI's aimdo memory compile error")
 
 
 class QueueTopTest(unittest.TestCase):
@@ -643,6 +662,67 @@ class PanelTest(unittest.TestCase):
 
     def texts_rendered(self):
         return [p["prompt"]["121"]["inputs"]["text"] for p in self.comfy.prompts]
+
+    def test_status_sends_only_the_log_lines_the_page_does_not_have(self):
+        lines = [{"n": n, "t": "12:00:00", "k": "", "text": f"line {n}"} for n in range(10, 15)]
+        with mock.patch.object(webapp.job, "lines", lines):
+            whole = self.client.get("/api/status").get_json()
+            self.assertFalse(whole["log_delta"])
+            self.assertEqual([line["n"] for line in whole["lines"]], [10, 11, 12, 13, 14])
+            # From the last line the page has, that one again: its ETA can be added just after it is logged.
+            since = self.client.get("/api/status?log_after=12").get_json()
+            self.assertTrue(since["log_delta"])
+            self.assertEqual([line["n"] for line in since["lines"]], [12, 13, 14])
+            self.assertEqual(since["log_first"], 10)
+            # A line the panel no longer has (a new job started a new log): the whole log again.
+            gone = self.client.get("/api/status?log_after=3").get_json()
+            self.assertFalse(gone["log_delta"])
+            self.assertEqual(len(gone["lines"]), 5)
+
+    def test_the_next_job_in_the_queue_starts_the_log_as_a_new_run(self):
+        line = webapp.new_run_line
+        self.assertEqual(line({"label": "20 images: An elf archer", "detail": "20 images · from text"}),
+                         "===== New run, 20 images ===== An elf archer")
+        self.assertEqual(line({"label": "Midnight Desires", "detail": "1:00 film · local"}),
+                         "===== New run, 1:00 film ===== Midnight Desires")
+        self.assertEqual(line({"label": "Midnight Desires", "detail": "Continue"}), "===== New run ===== Midnight Desires")
+        self.assertEqual(line({"label": "3 videos", "detail": "en-GB"}), "===== New run, 3 videos =====")
+
+    def test_the_status_stream_pushes_a_change_at_once_with_only_what_is_new(self):
+        lines = [{"n": n, "t": "12:00:00", "k": "", "text": f"line {n}"} for n in range(1, 4)]
+        # The job's own count goes on from the lines it has, as it would.
+        with mock.patch.object(webapp.job, "lines", lines), mock.patch.object(webapp.job, "seq", 3), \
+                mock.patch.object(webapp, "STREAM_EVERY", 30), mock.patch.object(webapp, "STREAM_GATHER", 0):
+            response = self.client.get("/api/status/stream?catalogue_revision=", buffered=False)
+            self.assertEqual(response.mimetype, "text/event-stream")
+            self.assertNotIn("Content-Encoding", response.headers)
+            chunks = response.iter_encoded()
+            self.assertEqual(next(chunks), b"retry: 2000\n\n")
+            first = json.loads(next(chunks).decode("utf-8").removeprefix("data: "))
+            self.assertIn("image_sets", first, "the Output catalogue the first time")
+            self.assertEqual([line["n"] for line in first["lines"]], [1, 2, 3])
+            started = time.monotonic()
+            threading.Timer(0.3, webapp.job.log, args=("a new line",)).start()
+            # Anything else changing sends an update too; the one with the new line comes as soon as it is logged.
+            for _ in range(20):
+                second = json.loads(next(chunks).decode("utf-8").removeprefix("data: "))
+                if any(line["text"] == "a new line" for line in second["lines"]):
+                    break
+            self.assertLess(time.monotonic() - started, 5, "sent on the change, not after STREAM_EVERY")
+            self.assertTrue(second["log_delta"])
+            self.assertEqual([line["text"] for line in second["lines"]], ["line 3", "a new line"])
+            self.assertNotIn("image_sets", second, "the catalogue only again when it changes")
+            response.close()
+
+    def test_a_large_status_is_gzipped_for_a_browser_that_takes_it(self):
+        lines = [{"n": n, "t": "12:00:00", "k": "", "text": "x" * 100} for n in range(100)]
+        with mock.patch.object(webapp.job, "lines", lines):
+            zipped = self.client.get("/api/status", headers={"Accept-Encoding": "gzip, deflate"})
+            plain = self.client.get("/api/status")
+        self.assertEqual(zipped.headers.get("Content-Encoding"), "gzip")
+        self.assertEqual(json.loads(gzip.decompress(zipped.data))["lines"], lines)
+        self.assertNotIn("Content-Encoding", plain.headers)
+        self.assertEqual(plain.get_json()["lines"], lines)
 
     def test_fixed_clip_form_and_legacy_queue(self):
         fixed, error = video_panel.build_options({"duration": "30", "clip_seconds": "8-8", "clip_fixed": "on"})
@@ -2111,6 +2191,67 @@ class PanelTest(unittest.TestCase):
             guard.check(80)
             self.assertEqual(restart.call_count, 3, "a failed restart does not loop while hot")
 
+    def test_gpu_heat_guard_follows_its_settings(self):
+        from panel.gpu_guard import GPUHeatGuard
+
+        config = {"gpu_guard": True, "gpu_restart_above": 70, "gpu_rearm_at": 60, "gpu_profile": 5}
+        guard = GPUHeatGuard(mock.Mock(), lambda: config)
+        with mock.patch("panel.gpu_guard.restart_afterburner") as restart:
+            guard.check(71)
+            restart.assert_called_once_with(5)
+            guard.check(65)
+            guard.check(72)
+            self.assertEqual(restart.call_count, 1, "not again until cooled to the cool-down temperature")
+            guard.check(60)
+            config["gpu_guard"] = False
+            guard.check(90)
+            self.assertEqual(restart.call_count, 1, "switched off, it only watches")
+
+    def test_gpu_guard_settings_are_checked_and_kept(self):
+        patch = mock.patch.object(webapp.settings, "PATH", os.path.join(self.temp, "settings.json"))
+        patch.start()
+        self.addCleanup(patch.stop)
+        self.assertEqual({key: webapp.settings.load()[key] for key in ("gpu_guard", "gpu_restart_above", "gpu_rearm_at", "gpu_profile")},
+                         {"gpu_guard": True, "gpu_restart_above": 78, "gpu_rearm_at": 75, "gpu_profile": 3})
+        saved = self.client.post("/api/settings", json={"gpu_restart_above": 82, "gpu_rearm_at": 72, "gpu_profile": 1, "gpu_guard": False}).get_json()
+        self.assertTrue(saved["ok"], saved)
+        self.assertEqual([saved["settings"][key] for key in ("gpu_guard", "gpu_restart_above", "gpu_rearm_at", "gpu_profile")], [False, 82, 72, 1])
+        for bad in ({"gpu_rearm_at": 82}, {"gpu_restart_above": 70}, {"gpu_profile": 6}, {"gpu_profile": "x"}, {"gpu_restart_above": 120}):
+            self.assertEqual(self.client.post("/api/settings", json=bad).status_code, 400, bad)
+        self.assertEqual(webapp.settings.load()["gpu_restart_above"], 82, "a refused change leaves what was saved")
+
+    def test_temperatures_api_gives_the_range_and_the_guard_lines(self):
+        from panel import temperatures
+
+        patch = mock.patch.object(webapp.settings, "PATH", os.path.join(self.temp, "settings.json"))
+        patch.start()
+        self.addCleanup(patch.stop)
+        log = temperatures.TemperatureLog(os.path.join(self.temp, "temperatures.jsonl"))
+        log.add(gpu=70, cpu=60)
+        with mock.patch.object(webapp, "_temperature_log", log):
+            body = self.client.get("/api/temperatures?hours=24").get_json()
+            self.assertTrue(body["ok"], body)
+            self.assertEqual(body["summary"]["gpu"]["now"], 70)
+            self.assertEqual(body["guard"], {"on": True, "restart_above": 78, "rearm_at": 75})
+            self.assertEqual(self.client.get("/api/temperatures?hours=5").status_code, 400)
+
+    def test_restart_afterburner_now_uses_the_chosen_profile(self):
+        from panel import gpu_guard
+
+        patch = mock.patch.object(webapp.settings, "PATH", os.path.join(self.temp, "settings.json"))
+        patch.start()
+        self.addCleanup(patch.stop)
+        self.client.post("/api/settings", json={"gpu_profile": 4})
+        with mock.patch.object(gpu_guard, "restart_afterburner") as restart:
+            self.assertEqual(self.client.post("/restart/afterburner").get_json(), {"ok": True, "profile": 4})
+            restart.assert_called_once_with(4)
+            restart.side_effect = gpu_guard.Busy("MSI Afterburner is already restarting.")
+            self.assertEqual(self.client.post("/restart/afterburner").status_code, 409)
+            restart.side_effect = RuntimeError("MSI Afterburner was not found.")
+            failed = self.client.post("/restart/afterburner")
+            self.assertEqual(failed.status_code, 500)
+            self.assertIn("not found", failed.get_json()["error"])
+
     def test_afterburner_restart_only_stops_the_current_users_instance(self):
         from panel import gpu_guard
         import psutil
@@ -2129,7 +2270,7 @@ class PanelTest(unittest.TestCase):
             mine.terminate.assert_called_once()
             other.terminate.assert_not_called()
             wait.assert_called_once_with([mine], timeout=5)
-            self.assertEqual(launch.call_args.args[0], [mine.info["exe"], gpu_guard.STARTUP_PROFILE])
+            self.assertEqual(launch.call_args.args[0], [mine.info["exe"], "-Profile3"])
             wait.return_value = ([], [mine])
             with self.assertRaisesRegex(RuntimeError, "did not exit"):
                 gpu_guard.restart_afterburner()
@@ -2152,7 +2293,7 @@ class PanelTest(unittest.TestCase):
             windll.shell32.ShellExecuteW.return_value = 42
             gpu_guard.restart_afterburner()
             self.assertEqual(windll.shell32.ShellExecuteW.call_args.args[1:4],
-                             ("runas", mine.info["exe"], gpu_guard.STARTUP_PROFILE))
+                             ("runas", mine.info["exe"], "-Profile3"))
             windll.shell32.ShellExecuteW.return_value = 5
             with self.assertRaisesRegex(RuntimeError, "administrator"):
                 gpu_guard.restart_afterburner()

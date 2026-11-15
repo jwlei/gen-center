@@ -437,6 +437,18 @@ class PromptSourceTest(unittest.TestCase):
         self.assertEqual([call.args[-1] for call in comfy.render_image.call_args_list], [7, 7])
         comfy.set_options.assert_called_once_with({"additional_loras": "[]", **variation})
 
+    def test_comparison_lora_comfyui_no_longer_has_fails_only_its_image(self):
+        from pipelines.image import main
+        shot = {"title": "Test", "prompt": "unchanged", "seed": 7,
+                "lora_test": {"lora": "1", "lora_name": "Krea2\\old.safetensors", "lora_strength": "0.5"}}
+        state = mock.Mock(region=None, width=512, height=512, source_seeds=[], options={}, output_dir="unused", transparent=False)
+        state.file_stem.return_value = "test"
+        comfy = mock.Mock()
+        comfy.render_size.return_value = (512, 512)
+        comfy.set_options.side_effect = RuntimeError("LoRA is one of Krea2_new.safetensors.")
+        self.assertIsNone(main.render_image(state, comfy, shot, []))
+        comfy.render_image.assert_not_called()
+
     def test_reopening_restores_workflow_writer_not_internal_direct_flag(self):
         state = RunState.new("a lighthouse", 2, True, 1024, 1024)
         state.options = {"prompt_enhancer": "1"}

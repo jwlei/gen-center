@@ -51,12 +51,13 @@
     background: #0a0b0f;
     border: 1px solid var(--line);
     border-radius: 10px;
-    padding: 10px 12px;
+    padding: 8px 9px;
     max-height: 340px;
     overflow: auto;
-    font-size: .84rem;
+    font-size: .78rem;
     line-height: 1.5;
-    color: #cbd0dd;
+    /* Plain lines are quiet grey: the headers (violet stages and runs, white groups) and problems stand out. */
+    color: var(--muted);
   }
   .log .empty-log { color: var(--muted); }
   .estimate { margin-top: 10px; font-size: .9rem; }
@@ -190,8 +191,9 @@
   }
   .queue .failed { color: var(--err); }
   /* One row per line: a muted timestamp gutter, then the text colour-coded by kind. */
-  .ln { display: grid; grid-template-columns: 5.2em minmax(0, 1fr); gap: 10px; padding: 1px 0; }
-  .ln .t { color: #5d6376; font: .74rem/1.9 ui-monospace, "Cascadia Mono", Consolas, monospace; user-select: none; }
+  /* The time is to the minute: a narrow column, and the text has the room. */
+  .ln { display: grid; grid-template-columns: 3.3em minmax(0, 1fr); gap: 8px; padding: 1px 0; }
+  .ln .t { color: #5d6376; font: .7rem/1.9 ui-monospace, "Cascadia Mono", Consolas, monospace; user-select: none; }
   .ln .x { white-space: pre-wrap; word-break: break-word; }
   .ln.err .x { color: var(--err); }
   .ln.warn .x { color: #f2b84b; }
@@ -202,14 +204,18 @@
   .log-panes.problems-only .ln:not(.err):not(.warn):not(.stage) { display: none; }
   .log-tools { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 6px; }
   /* How much to show on the left; ComfyUI and Errors, which add or narrow, on the right. */
-  .log-tools #logComfy { margin-left: auto; }
+  .log-tools .log-filters { margin-left: auto; }
   .log-chip { width: auto; margin: 0; padding: 2px 10px; font-size: .78rem; font-weight: 400; border-radius: 999px; border: 1px solid var(--line); background: transparent; color: var(--muted); cursor: pointer; }
   .log-chip[aria-pressed="true"] { color: var(--accent); border-color: var(--accent); }
   /* Summary and Detailed are one switch: two halves of a pill. */
   .log-seg { display: inline-flex; }
   .log-seg .log-chip:first-child { border-radius: 999px 0 0 999px; }
   .log-seg .log-chip:last-child { border-radius: 0 999px 999px 0; margin-left: -1px; }
-  .log-seg .log-chip[aria-pressed="true"] { position: relative; }
+  /* The half chosen is filled, as a switch: a filter on the right only gets its outline and a tick. */
+  .log-seg .log-chip[aria-pressed="true"] { position: relative; background: var(--accent); color: #fff; }
+  .log-filters { display: inline-flex; align-items: center; gap: 6px; }
+  .log-filters-label { color: var(--muted); font-size: .72rem; }
+  .log-filters .log-chip[aria-pressed="true"]::before { content: "✓ "; }
   /* A stage is a section: its heading says how it went, and closed it keeps only what went wrong. */
   .stage-sec { margin-top: 8px; padding-top: 7px; border-top: 1px solid var(--line); }
   .stage-sec:first-child { margin-top: 0; padding-top: 1px; border-top: 0; }
@@ -225,6 +231,11 @@
   .log-grp .grp-body { display: none; margin: 1px 0 3px; padding-left: 8px; border-left: 2px solid var(--line); }
   .log-grp.open .grp-body { display: block; }
   .ln.child .x { color: var(--muted); font-size: .92em; }
+  /* A group (an image, a clip, a prompt) is the second header: white, under the violet stage. */
+  .log-grp > .ln:not(.err):not(.warn) .x { color: var(--text); }
+  /* The next job in the queue starting: "New run, 20 images" in violet, its title in white under it. */
+  .ln.run-start .run-start-head { display: block; color: var(--shared); font-weight: 700; }
+  .ln.run-start .run-start-title { display: block; color: var(--text); font-weight: 600; }
   .ln.child.err .x { color: var(--err); }
   .ln.child.comfy .x { color: #7fb4d9; }
   .ln.long .x-full, .ln.long.expanded .x-short { display: none; }
@@ -412,9 +423,9 @@
   dialog.log-open .log-panes { flex: 1 1 0; min-height: 0; position: static; }
   dialog.log-open .log-tools { margin: 0 0 4px; }
   dialog.log-open .q-group { margin: 4px 2px 2px; }
-  dialog.log-open .log { flex: 1 1 0; height: auto; min-height: 0; padding: 6px 8px; border-radius: 8px; font-size: 1rem; line-height: 1.55; }
+  dialog.log-open .log { flex: 1 1 0; height: auto; min-height: 0; padding: 6px 8px; border-radius: 8px; font-size: .9rem; line-height: 1.55; }
   dialog.log-open .log.only-shorts { flex: 0 1 28%; }
-  dialog.log-open .ln { grid-template-columns: 4.6em minmax(0, 1fr); gap: 8px; padding: 2px 0; }
+  dialog.log-open .ln { grid-template-columns: 3.3em minmax(0, 1fr); gap: 8px; padding: 2px 0; }
   dialog.log-open .ln .t { font-size: .8rem; line-height: 1.95; }
   dialog.log-open .panel-close { padding: 4px 18px; }
   @media (prefers-reduced-motion: reduce) { dialog.panel-dialog { animation: none; } }
@@ -571,6 +582,57 @@
   .settings-row { display: flex; align-items: center; gap: 10px; }
   .settings-row > label { flex: 0 0 64px; margin: 0; }
   .settings-row select { margin: 0; }
+  /* Its drop-downs as small as Generate's. */
+  .settings-dialog select, .settings-dialog input[type=number] { height: 28px; padding: 3px 6px; font-size: .75rem; border-radius: 7px; }
+  .gpu-guard-grid { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: 8px 12px; }
+  .gpu-guard-grid > label { margin: 0; text-transform: none; letter-spacing: 0; font-size: .9rem; color: var(--text); }
+  .gpu-guard-grid select { margin: 0; }
+  .gpu-temp { display: flex; align-items: center; gap: 6px; }
+  .gpu-temp input { width: 5.5em; margin: 0; font-variant-numeric: tabular-nums; }
+  .gpu-temp span { color: var(--muted); }
+  /* Restart and Temperatures: small and quiet, side by side under the guard's settings. */
+  .gpu-guard-actions { gap: 8px; }
+  .gpu-guard-actions button { width: auto; margin: 0; padding: 5px 12px; font-size: .78rem; font-weight: 500; background: transparent;
+    border: 1px solid var(--line); color: var(--muted); }
+  .gpu-guard-actions button:hover:not(:disabled) { color: var(--text); border-color: var(--muted); }
+  /* First tap: it asks for a second, in the warning colour. */
+  .gpu-guard-actions button.armed { color: var(--warn); border-color: var(--warn); }
+  /* Temperatures: GPU green, CPU blue, dark steps validated for the dark surfaces; the direct labels carry them for tritan. */
+  .temp-dialog { --temp-gpu: #0ca30c; --temp-cpu: #3987e5; width: min(760px, calc(100vw - 32px)); }
+  .temp-ranges { display: flex; gap: 6px; margin: 4px 0 12px; }
+  .temp-ranges button { flex: 1; margin: 0; padding: 6px 0; background: var(--panel-2); border: 1px solid var(--line); color: var(--muted); }
+  .temp-ranges button[aria-pressed="true"] { color: var(--text); border-color: var(--accent); }
+  /* GPU and CPU side by side, on a phone too. */
+  .temp-tiles { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+  .temp-tile { padding: 8px 10px; background: var(--panel-2); border: 1px solid var(--line); border-radius: 10px; }
+  .temp-tile-head { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: .8rem; }
+  /* The temperature now, and beside it its lowest, average and highest, three small lines as tall as it is. */
+  .temp-reading { display: flex; align-items: center; gap: 10px; margin-top: 2px; }
+  .temp-now { font-size: 1.4rem; font-weight: 600; color: var(--text); font-variant-numeric: tabular-nums; line-height: 1.95rem; white-space: nowrap; }
+  .temp-stats { display: flex; flex-direction: column; color: var(--muted); font-size: .6rem; line-height: .65rem; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .temp-stats b { color: var(--text); font-weight: 600; }
+  .temp-legend { display: flex; flex-wrap: wrap; gap: 6px 14px; margin: 12px 0 4px; color: var(--muted); font-size: .78rem; }
+  .temp-legend span { display: inline-flex; align-items: center; gap: 6px; }
+  .temp-key { display: inline-block; width: 14px; height: 3px; border-radius: 2px; }
+  .temp-key-gpu { background: var(--temp-gpu); }
+  .temp-key-cpu { background: var(--temp-cpu); }
+  .temp-key-band { height: 10px; background: color-mix(in srgb, var(--muted) 30%, transparent); }
+  .temp-key-guard { height: 0; border-top: 1.5px dashed var(--muted); }
+  .temp-chart { position: relative; min-height: 240px; touch-action: pan-y; }
+  .temp-chart svg { display: block; width: 100%; height: 240px; overflow: visible; }
+  .temp-chart text { fill: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
+  .temp-chart .temp-label { fill: var(--text); font-weight: 600; }
+  .temp-tip { position: fixed; z-index: 10; pointer-events: none; padding: 7px 10px; background: var(--panel-2); border: 1px solid var(--line); border-radius: 8px; color: var(--text); font-size: .78rem; font-variant-numeric: tabular-nums; box-shadow: 0 6px 18px #0006; white-space: nowrap; }
+  .temp-tip .temp-tip-time { color: var(--muted); margin-bottom: 3px; }
+  .temp-tip .temp-tip-row { display: flex; align-items: center; gap: 6px; }
+  .temp-table-box { margin-top: 10px; font-size: .82rem; }
+  .temp-table-box summary { cursor: pointer; color: var(--muted); }
+  .temp-table-scroll { max-height: 220px; overflow: auto; margin-top: 6px; }
+  .temp-table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+  .temp-table th, .temp-table td { padding: 3px 8px; text-align: right; border-bottom: 1px solid var(--line); }
+  .temp-table th:first-child, .temp-table td:first-child { text-align: left; }
+  /* The body scrolls; Close stays in sight under it, centred as in the other boxes. */
+  .temp-dialog .panel-dialog-body { display: flex; flex-direction: column; }
   .theme-picker { margin: 0; padding: 11px 12px; text-align: left; background: var(--panel-2); border: 1px solid var(--line); color: var(--text); }
   .theme-list { display: flex; flex-direction: column; gap: 6px; }
   .theme-choice { display: flex; align-items: center; gap: 10px; margin: 0; padding: 9px 10px; text-align: left; background: var(--panel-2); border: 1px solid var(--line); color: var(--text); font-size: .9rem; }
@@ -1562,9 +1624,10 @@
   body { --side-accent: var(--side); }
   /* The log, and Status in the bottom bar, say what kind of job it is: its colour while one runs, else the side's. */
   #runCard .log-chip[aria-pressed="true"] { color: var(--job, var(--side-accent)); border-color: var(--job, var(--side-accent)); }
+  #runCard .log-seg .log-chip[aria-pressed="true"] { color: #fff; background: var(--job, var(--side-accent)); }
   #runCard .ln-more { color: var(--job, var(--side-accent)); }
-  /* The log is shared too: its stage headers are silver, as Status's. */
-  .ln.stage .x { color: var(--neutral); }
+  /* The log is shared too: its stage headers are the shared violet. */
+  .ln.stage .x { color: var(--shared); }
   /* Status and Output belong to no one side: a soft violet that sits with the blue and the green (Output on Shorts:
      Shorts' red). Status's button is violet always, whatever is running. */
   .side-menu button[data-output-kind="both"] { border-color: var(--shared); }
@@ -1910,8 +1973,8 @@
     </div>
   </div>
   <div class="run-actions" id="runActions" hidden>
-    <button type="button" id="skip" title="Cancel this run and put it back under Pending">Cancel</button>
-    <button type="button" id="stop" title="Stop everything: the queue waits until you press Resume">Stop</button>
+    <button type="button" id="skip" title="Pause this run: it goes back under Pending, to continue from where it got to">Pause run</button>
+    <button type="button" id="stop" title="Stop the run and the queue: nothing starts until you press Resume">Stop queue</button>
   </div>
   </div>
   </div>
@@ -1941,8 +2004,11 @@
           <button type="button" class="log-chip" id="logSummary" aria-pressed="true" title="Each clip and the stock footage on one line, long prompts shortened. Tap a line to open it">Summary</button>
           <button type="button" class="log-chip" id="logDetailed" aria-pressed="false" title="Every line, as it was printed">Detailed</button>
         </span>
-        <button type="button" class="log-chip" id="logComfy" aria-pressed="true" title="What ComfyUI is doing, and how long each part took">ComfyUI</button>
-        <button type="button" class="log-chip" id="logProblems" aria-pressed="false" title="Only the stages, warnings and errors">Errors</button>
+        <span class="log-filters" role="group" aria-label="What the log shows">
+          <span class="log-filters-label" aria-hidden="true">Show</span>
+          <button type="button" class="log-chip" id="logComfy" aria-pressed="true" title="What ComfyUI is doing, and how long each part took">ComfyUI</button>
+          <button type="button" class="log-chip" id="logProblems" aria-pressed="false" title="Only the stages, warnings and errors">Errors only</button>
+        </span>
       </div>
       <div class="q-group">Generation</div>
       <div class="log" id="log"><span class="empty-log">No run yet.</span></div>
@@ -1981,7 +2047,7 @@
       </div>
 
     <details class="section" id="formTopic" open>
-      <summary class="section-title">Generation</summary>
+      <summary class="section-title">Setup</summary>
       <label for="runs">Amount</label>
       <div class="count-stepper">
         <button type="button" id="runsDown" aria-label="Fewer videos">−</button>
@@ -2018,7 +2084,7 @@
       <div id="shortsNegativeSlot" class="negative-slot"></div>
     </details>
     <details class="section" id="shortsOptions" hidden>
-      <summary class="section-title">Workflow options</summary>
+      <summary class="section-title">Workflow specific</summary>
       <div id="shortsOptionsBox"></div>
     </details>
   </div>
@@ -2103,7 +2169,7 @@
     </div>
 
   <details class="section" id="videoGeneration" open>
-    <summary class="section-title">Generation</summary>
+    <summary class="section-title">Setup</summary>
     <div class="image-boxes" id="imageBoxes"></div>
     <button type="button" class="ghost" id="addImage" aria-label="Add another image" title="Add another image" hidden>+</button>
     <div class="hint" id="imagesHint" hidden></div>
@@ -2275,12 +2341,12 @@
   </details>
 
   <details class="section" id="videoOptions" hidden>
-    <summary class="section-title">Workflow options</summary>
+    <summary class="section-title">Workflow specific</summary>
     <div id="videoOptionsBox"></div>
   </details>
 
   <details class="section" id="videoHow">
-    <summary class="section-title">Other</summary>
+    <summary class="section-title">Tests &amp; misc</summary>
     <div class="options-section" id="videoLoraTests">
       <label class="check"><input type="checkbox" name="lora_strength_test" id="videoLoraStrengthTest"><span>LoRA Strength test</span></label>
       <div class="option-row"><label for="videoLoraTestStep">Each</label><div class="count-stepper">
@@ -2316,7 +2382,7 @@
     </div>
 
   <details class="section" id="imageGeneration" open>
-    <summary class="section-title">Generation</summary>
+    <summary class="section-title">Setup</summary>
     <div id="imageSourcesHome"><div id="imageSources"></div></div>
     <button type="button" class="ghost" id="addSource" aria-label="Add another image" title="Add another image" hidden>+</button>
     <div id="imageModeBox" hidden>
@@ -2441,12 +2507,12 @@
 
 
   <details class="section" id="imageOptions" hidden>
-    <summary class="section-title">Workflow options</summary>
+    <summary class="section-title">Workflow specific</summary>
     <div id="imageOptionsBox"></div>
   </details>
 
   <details class="section" id="imageHow">
-    <summary class="section-title">Other</summary>
+    <summary class="section-title">Tests &amp; misc</summary>
     <div class="options-section" id="imageLoraTests">
       <label class="check"><input type="checkbox" name="lora_strength_test" id="imageLoraStrengthTest"><span>LoRA Strength test</span></label>
       <div class="option-row"><label for="imageLoraTestStep">Each</label><div class="count-stepper">
@@ -2548,6 +2614,21 @@
   <div class="model-guide-body" id="modelGuideBody" tabindex="0"></div>
   <div class="model-guide-actions"><button type="button" class="panel-close" id="modelGuideClose" autofocus>Close</button></div>
 </dialog>
+<dialog id="tempDialog" class="panel-dialog temp-dialog" aria-labelledby="tempTitle">
+  <div class="panel-dialog-title" id="tempTitle">Temperatures</div>
+  <div class="panel-dialog-body">
+  <div class="temp-ranges" role="group" aria-label="Time range">
+    <button type="button" data-hours="1" aria-pressed="false">1 h</button><button type="button" data-hours="6" aria-pressed="true">6 h</button><button type="button" data-hours="24" aria-pressed="false">24 h</button><button type="button" data-hours="168" aria-pressed="false">7 d</button>
+  </div>
+  <div class="temp-tiles" id="tempTiles"></div>
+  <div class="temp-legend" aria-hidden="true"><span><i class="temp-key temp-key-gpu"></i>GPU</span><span><i class="temp-key temp-key-cpu"></i>CPU</span><span><i class="temp-key temp-key-band"></i>Shaded: lowest to highest</span><span><i class="temp-key temp-key-guard"></i>Heat guard</span></div>
+  <div class="temp-chart" id="tempChart"><div class="hint">Loading…</div></div>
+  <div class="temp-tip" id="tempTip" hidden></div>
+  <div class="hint" id="tempNote" hidden></div>
+  <details class="temp-table-box"><summary>Show as table</summary><div class="temp-table-scroll"><table class="temp-table" id="tempTable"></table></div></details>
+  </div>
+  <button type="button" class="panel-close" id="tempClose" autofocus>Close</button>
+</dialog>
 <dialog id="settingsDialog" class="panel-dialog settings-dialog" aria-labelledby="settingsTitle">
   <div class="settings-head" id="settingsHead">
     <div class="panel-dialog-title" id="settingsTitle">Settings</div>
@@ -2556,12 +2637,6 @@
   <div class="hint settings-note" id="settingsNote" hidden></div>
   <div class="settings-group" id="themeSettingTitle">Theme</div>
   <button type="button" class="theme-picker" id="themePicker" aria-haspopup="dialog" aria-labelledby="themeSettingTitle themePicker"></button>
-  <div class="settings-group" id="reserveTitle">Reserve free RAM</div>
-  <div class="reserve-row" role="group" aria-labelledby="reserveTitle">
-    <button type="button" id="reserveSet" hidden>Set</button>
-    <div class="count-stepper"><button type="button" id="reserveDown" aria-label="Less free RAM">−</button><span class="mp-field" id="reserveRamValue" aria-live="polite"></span><button type="button" id="reserveUp" aria-label="More free RAM">+</button></div>
-  </div>
-  <label class="settings-check"><input type="checkbox" id="lowPriority"><span>Run generation at lower priority<small>The pipeline and ComfyUI give way to your other programs, so the PC stays responsive while it renders.</small></span></label>
   <label class="settings-check"><input type="checkbox" id="privateMode"><span>Private mode<small>What you make is tagged private, and Output opens on the private filter. Stays on until you turn it off.</small></span></label>
   <label class="settings-check"><input type="checkbox" id="pinProgress"><span>Pin the progress bar<small>Scrolled away from the top, the progress bar stays in sight, stretched along the top of the screen.</small></span></label>
   <div class="settings-group"><span id="titlesTitle">Titles</span>{{ hint_button('titleSourceHint', 'titles') }}</div>
@@ -2582,12 +2657,26 @@
   <div class="settings-row"><select id="editPreset" aria-labelledby="editPresetTitle"></select></div>
   <div class="settings-group" id="editVideoPresetTitle">Video from image (the pen in the viewer)</div>
   <div class="settings-row"><select id="editVideoPreset" aria-labelledby="editVideoPresetTitle"></select></div>
+  <div class="settings-group" id="reserveTitle">Reserve free RAM</div>
+  <div class="reserve-row" role="group" aria-labelledby="reserveTitle">
+    <button type="button" id="reserveSet" hidden>Set</button>
+    <div class="count-stepper"><button type="button" id="reserveDown" aria-label="Less free RAM">−</button><span class="mp-field" id="reserveRamValue" aria-live="polite"></span><button type="button" id="reserveUp" aria-label="More free RAM">+</button></div>
+  </div>
+  <label class="settings-check"><input type="checkbox" id="lowPriority"><span>Run generation at lower priority<small>The pipeline and ComfyUI give way to your other programs, so the PC stays responsive while it renders.</small></span></label>
+  <div class="settings-group" id="gpuGuardTitle">GPU heat guard</div>
+  <label class="settings-check"><input type="checkbox" id="gpuGuard"><span>Restart MSI Afterburner when the GPU runs hot<small>Once above the restart temperature, Afterburner is restarted with the profile below, which brings its fan control back. Not again until the GPU has cooled down.</small></span></label>
+  <div class="gpu-guard-grid" role="group" aria-labelledby="gpuGuardTitle">
+    <label for="gpuRestartAbove">Restart above</label><span class="gpu-temp"><input type="number" id="gpuRestartAbove" min="40" max="95" step="1" inputmode="numeric"><span>°C</span></span>
+    <label for="gpuRearmAt">Cool down to</label><span class="gpu-temp"><input type="number" id="gpuRearmAt" min="40" max="95" step="1" inputmode="numeric"><span>°C</span></span>
+    <label for="gpuProfile">Profile</label><select id="gpuProfile">{% for n in range(1, 6) %}<option value="{{ n }}">Profile {{ n }}</option>{% endfor %}</select>
+  </div>
+  <div class="settings-row gpu-guard-actions"><button type="button" id="restartAfterburner" title="Close MSI Afterburner and start it again now with the chosen profile, whatever the temperature. Tap twice.">Restart Afterburner</button><button type="button" id="openTemperatures" aria-haspopup="dialog" title="GPU and CPU temperatures over time: lowest, average and highest.">Temperatures</button></div>
+  <div class="settings-group">Storage</div>
+  <div class="disk" id="diskBox"><div class="hint">Checking…</div></div>
   <div class="settings-group">URL's</div>
   <div class="settings-row url-row"><span class="url-name">Local</span><code>{{ phone_url }}</code><button type="button" class="copy-url" data-url="{{ phone_url }}">Copy</button></div>
   {% if tailscale_url %}<div class="settings-row url-row"><span class="url-name">Tailscale</span><code>{{ tailscale_url }}</code><button type="button" class="copy-url" data-url="{{ tailscale_url }}">Copy</button></div>{% endif %}
   {% if tailscale_problem %}<div class="hint">Tailscale: {{ tailscale_problem }}</div>{% endif %}
-  <div class="settings-group">Storage</div>
-  <div class="disk" id="diskBox"><div class="hint">Checking…</div></div>
   </div>
   <div class="settings-actions">
     <button type="button" id="restartPanel" aria-label="Restart panel" title="Start the panel again, to load new code. Not while a run or upload is going."><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 11a8 8 0 1 0-2.3 5.7"/><path d="M20 4v7h-7"/></svg><span>Restart</span></button>
@@ -2880,6 +2969,7 @@
 <script defer src="{{ url_for('static', filename='output.js') }}"></script>
 <script defer src="{{ url_for('static', filename='video-inputs.js') }}"></script>
 <script defer src="{{ url_for('static', filename='settings.js') }}"></script>
+<script defer src="{{ url_for('static', filename='temperatures.js') }}"></script>
 <script defer src="{{ url_for('static', filename='video-generation.js') }}"></script>
 <script defer src="{{ url_for('static', filename='image-inputs.js') }}"></script>
 <script defer src="{{ url_for('static', filename='image-paint.js') }}"></script>

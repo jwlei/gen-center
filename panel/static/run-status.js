@@ -530,6 +530,7 @@ function logStageHeading(stage) {
   return parts.join(' · ');
 }
 
+const RUN_START = /^=====\s*(.*?)\s*=====\s*(.*)$/s;
 function logRowHtml(entry, detailed, child = false) {
   const problem = entry.k === 'err' || entry.k === 'warn';
   // Summary shows nesting by its folds, so a line's own indent goes; Detailed keeps it.
@@ -537,6 +538,12 @@ function logRowHtml(entry, detailed, child = false) {
   const long = !detailed && text.length > LOG_PREVIEW_AT;
   const classes = `ln ${entry.k}${child ? ' child' : ''}`;
   const t = logMinute(entry.t);
+  // "===== New run, 20 images ===== its title": the heading, and the title under it.
+  const starting = RUN_START.exec(plain(entry.text).trim());
+  if (starting) {
+    return `<div class="${classes} run-start" data-n="${entry.n}"><span class="t">${t}</span><span class="x"><span class="run-start-head">${esc(starting[1])}</span>`
+      + `${starting[2] ? `<span class="run-start-title">${esc(starting[2])}</span>` : ''}</span></div>`;
+  }
   if (!long) return `<div class="${classes}" data-n="${entry.n}"><span class="t">${t}</span><span class="x">${esc(text)}</span></div>`;
   const cut = text.slice(0, LOG_PREVIEW), space = cut.lastIndexOf(' ');
   const preview = (space > LOG_PREVIEW / 2 ? cut.slice(0, space) : cut).trimEnd();

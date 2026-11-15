@@ -1424,7 +1424,7 @@ assert(/data-goto="video"/.test(els.finishedList.innerHTML) && /<span class="res
 assert(/class="result done" style="--side:var\(--c-video\)" data-goto="video"/.test(els.finishedList.innerHTML) && /class="result failed"/.test(els.finishedList.innerHTML), 'each outlined in the colour of the page that made it');
 assert(/\.results \.result \{ display: flex; align-items: center;/.test(html) && /border: 1px solid var\(--side/.test(html) && /\.result \.when \{ margin-left: auto;/.test(html)
   && /\.result-label \{[^}]*-webkit-line-clamp: 2/.test(html), 'outlined, text left, the time quietly at the right');
-assert(/id="skip"[^>]*>Cancel<\/button>/.test(html) && /id="stop"[^>]*>Stop<\/button>/.test(html) && /\.run-actions \{ display: flex; justify-content: center;/.test(html), 'Cancel and Stop, small and centred');
+assert(/id="skip"[^>]*>Pause run<\/button>/.test(html) && /id="stop"[^>]*>Stop queue<\/button>/.test(html) && /\.run-actions \{ display: flex; justify-content: center;/.test(html), 'Pause run and Stop queue, small and centred');
 assert(/data-goto="shorts" data-tab="uploaded"[^>]*>[\s\S]*?<span class="result-type">Upload</.test(els.finishedList.innerHTML), 'an upload goes to what was uploaded');
 // Kept over a restart: a quiet Clear at the end, and one from another day says which.
 assert(!els.finishedList.innerHTML.includes('finished-clear') && els.finishedFoot.hidden === false, 'Clear is outside the list, shown while it has something');
@@ -1693,6 +1693,15 @@ const imageSample = [
   ['10:02:14', '      🌱 Seed 999'],
 ].map(([t, text, eta], i) => ({ n: i + 1, t, text, ...(eta ? { eta } : {}) }));
 context.imageSample = imageSample;
+// The next job in the queue starting: "New run, 20 images" as a heading, its title under it, in both views.
+for (const detailed of [false, true]) {
+  const shown = run(`logHtml([{ n: 1, t: '12:00:00', k: 'stage', text: '===== New run, 20 images ===== Elf archer <dawn>' }], ${detailed})`);
+  assert(/class="ln stage run-start"[^>]*>.*<span class="run-start-head">New run, 20 images<\/span><span class="run-start-title">Elf archer &lt;dawn&gt;<\/span>/.test(shown),
+    'a new run: its count as the heading, its title (escaped) under it');
+}
+assert(/\.ln \{ display: grid; grid-template-columns: 3\.3em minmax\(0, 1fr\);/.test(html) && /\.ln\.stage \.x \{ color: var\(--shared\); \}/.test(html)
+  && /\.log-grp > \.ln:not\(\.err\):not\(\.warn\) \.x \{ color: var\(--text\); \}/.test(html),
+  'a narrow time column; stages violet, groups white, the rest grey');
 run('var imageSummary = logHtml(imageSample, false)');
 const images = context.imageSummary;
 assert(!/\p{Extended_Pictographic}/u.test(images.replace(/<[^>]+>/g, '')), 'no emoji');
@@ -2268,6 +2277,19 @@ run('zoomAround(9, { x: 0, y: 0 }, 1, { x: 0, y: 0 }, { x: 0, y: 0 })');
 assert.strictEqual(run('zoom.scale'), 5, 'up to 5x');
 run('resetZoom()');
 assert.deepStrictEqual(JSON.parse(run('JSON.stringify(zoom)')), { scale: 1, x: 0, y: 0 });
+// Dragged past an edge, the picture stops with that edge on its frame's: it never goes off the page.
+{
+  const image = els.viewerImage, saved = ['offsetWidth', 'offsetHeight', 'naturalWidth', 'naturalHeight'].map(k => image[k]);
+  // A 400x400 frame holding a 1000x500 picture: shown 400x200, black above and below.
+  Object.assign(image, { offsetWidth: 400, offsetHeight: 400, naturalWidth: 1000, naturalHeight: 500 });
+  run('zoom.scale = 2; zoom.x = 900; zoom.y = -900; applyZoom()');
+  assert.deepStrictEqual(JSON.parse(run('JSON.stringify(zoom)')), { scale: 2, x: 200, y: 0 },
+    'sideways up to its edge (800 wide in a 400 frame: 200 each way); its 400 height fills the frame, so it stays put');
+  run('zoom.scale = 4; zoom.x = -50; zoom.y = -900; applyZoom()');
+  assert.deepStrictEqual(JSON.parse(run('JSON.stringify(zoom)')), { scale: 4, x: -50, y: -200 }, 'inside the edges it moves freely');
+  ['offsetWidth', 'offsetHeight', 'naturalWidth', 'naturalHeight'].forEach((k, i) => { image[k] = saved[i]; });
+  run('resetZoom()');
+}
 run("viewing = { id: 'image_20261102_120000', position: 1 }; zoom.scale = 2");
 els.imageViewer.listeners.touchstart({ touches: [{ clientX: 20, clientY: 20 }] });
 assert.strictEqual(run('swipeFrom'), null, 'zoomed in, a finger moves the image rather than turning the page');
@@ -2522,7 +2544,7 @@ assert.strictEqual(run("roleLabel({id: 'prompt_enhancer', label: 'Enhance group'
 assert.strictEqual(run("roleLabel({id: 'prompt_enhancer', label: 'Prompt enhancer H3', named: true})"), 'Prompt enhancer H3', "one with its own name keeps it");
 assert(!script.includes("select.value = 'prompt_enhancer'"), 'a workflow with a prompt enhancer offers it, and never picks it by itself');
 assert(!html.includes('id="imageResolution"') && /id="imageGeneration"[\s\S]*?id="imageAspect"[\s\S]*?<\/details>/.test(html), 'Resolution in Generation');
-assert(/id="imageHow">[\s\S]*?id="imageReview"[\s\S]*?id="imageSeed"/.test(html) && /id="videoHow">[\s\S]*?id="review"[\s\S]*?id="videoSeed"/.test(html), 'review and seed under Other');
+assert(/id="imageHow">[\s\S]*?id="imageReview"[\s\S]*?id="imageSeed"/.test(html) && /id="videoHow">[\s\S]*?id="review"[\s\S]*?id="videoSeed"/.test(html), 'review and seed under Tests & misc');
 for (const [field, down, up, min, max, step] of [['runs', 'runsDown', 'runsUp', 1, 10, 1], ['imageCount', 'imageCountDown', 'imageCountUp', 1, 20, 1], ['duration', 'durationDown', 'durationUp', 5, 600, 5]]) {
   const input = context.document.getElementById(field), events = [];
   input.value = String(min);
@@ -2554,7 +2576,7 @@ for (const [field, writer] of [['prompt', 'writeVideoPrompt'], ['imagePrompt', '
   els[field].readOnly = false; els[field].value = ''; els[field].listeners.input();
 }
 assert(/<div class="go-under">\s*<button type="button" class="start-later" id="goTop"[^>]*>[^<]*<\/button>\s*<button type="button" class="start-later" id="goLater"/.test(html) && (html.match(/name="try_first"/g) || []).length === 1, 'Add to top of queue under the button, left of Add to pending');
-assert(/<details class="section" id="videoHow">[\s\S]*?id="review"[\s\S]*?<label class="check not-shorts" id="previewRunLabel">/.test(html) && script.includes(".after($('previewRunLabel'))"), 'Preview run in Other, moved to whichever form is showing');
+assert(/<details class="section" id="videoHow">[\s\S]*?id="review"[\s\S]*?<label class="check not-shorts" id="previewRunLabel">/.test(html) && script.includes(".after($('previewRunLabel'))"), 'Preview run in Tests & misc, moved to whichever form is showing');
 assert(/<select id="avatarSize" name="avatar_size">/.test(html), 'Shorts has a resolution');
 assert(/<div id="imageToPromptSlot"><\/div>/.test(html) && /imageRole\(\) === 'image_to_prompt' \? \$\('imageToPromptSlot'\)/.test(script), "image to prompt's image right under the choice");
 for (const n of [1, 2, 20]) {
@@ -2579,8 +2601,8 @@ assert(/id="go">Generate</.test(html) && script.includes("'Add to queue'"), 'Gen
 assert(/<a href="#videosCard" data-page="output" id="jumpResults">Output<\/a>/.test(html) && !html.includes('jumpCount'), 'the footer has no count on Output');
 // Each heading holds its section, and the first is called Generation.
 assert(!html.includes('What to make'));
-assert(/<details class="section" id="formTopic" open>\s*<summary class="section-title">Generation</.test(html));
-assert(/<details class="section" id="videoGeneration" open>\s*<summary class="section-title">Generation</.test(html));
+assert(/<details class="section" id="formTopic" open>\s*<summary class="section-title">Setup</.test(html));
+assert(/<details class="section" id="videoGeneration" open>\s*<summary class="section-title">Setup</.test(html));
 assert(!/<div class="section-title">(Voice|Publish|How)/.test(html));
 // Generation starts open; changing sides still folds the old sections.
 assert((html.match(/<details class="section"[^>]* open/g) || []).length === 3 && !script.includes('localStorage.setItem(SECTIONS_KEY'));
@@ -2623,8 +2645,9 @@ assert(/\.switch button\.active \{[^}]*color: var\(--accent\)/.test(html) && /bo
 // The side switch is Generate's, at its top; the header has no title, only the progress bars and the gear; shut down is in the settings box.
 assert(html.indexOf('id="switchShorts"') > html.indexOf('id="optionsCard"') && !/<h1>/.test(html.slice(0, html.indexOf('<script>'))));
 assert(/id="settingsBtn"[^>]*aria-label="Settings"/.test(html) && !/Sign out/.test(html));
-assert(/<dialog id="settingsDialog"[\s\S]*id="lowPriority"[\s\S]*id="localLlmModel"[\s\S]*id="h3Model"[\s\S]*id="defaultShorts"[\s\S]*id="diskBox"[\s\S]*<div class="settings-actions">[\s\S]*id="restartPanel"[\s\S]*id="restartComfy"[\s\S]*id="forceRestartComfy"[\s\S]*class="settings-power"[\s\S]*id="shutdown"[\s\S]*id="shutdownMenu"[\s\S]*href="\/logout" id="logout"[\s\S]*id="settingsClose"/.test(html),
-  'settings, then at the foot short restart controls and Power with Log out; the local LLM above OpenH3-IR');
+assert(/<dialog id="settingsDialog"[\s\S]*id="themePicker"[\s\S]*id="poweroff"[\s\S]*id="localLlmModel"[\s\S]*id="h3Model"[\s\S]*id="defaultShorts"[\s\S]*id="reserveTitle"[\s\S]*id="lowPriority"[\s\S]*id="gpuGuard"[\s\S]*id="diskBox"[\s\S]*class="copy-url"[\s\S]*<div class="settings-actions">[\s\S]*id="restartPanel"[\s\S]*id="restartComfy"[\s\S]*id="forceRestartComfy"[\s\S]*class="settings-power"[\s\S]*id="shutdown"[\s\S]*id="shutdownMenu"[\s\S]*href="\/logout" id="logout"[\s\S]*id="settingsClose"/.test(html)
+  && !html.includes('settings-tabs') && /\.settings-dialog select, \.settings-dialog input\[type=number\] \{ height: 28px;[^}]*font-size: \.75rem;/.test(html),
+  'settings on one page (general, models, machine, connection), its drop-downs as small as Generate\'s; at the foot short restart controls and Power with Log out');
 assert(/\.settings-actions \{ display: flex; gap: 6px; flex: none;/.test(html), 'the buttons stay at the foot, smaller');
 assert(/<div class="go-bar" id="goBar" hidden>[\s\S]*?id="goStickTop" aria-label="Add to top of queue"[\s\S]*?id="goStickLater" aria-label="Add to pending"[\s\S]*?id="goStick">/.test(html)
   && script.includes("$('goStickTop').addEventListener('click', () => $('goTop').click());") && script.includes("$('goStickLater').addEventListener('click', () => $('goLater').click());")
@@ -2769,8 +2792,11 @@ assert(/#runCard \{ --accent: var\(--shared\); \}/.test(html) && /#runCard \.bar
 assert(script.includes("document.documentElement.style.setProperty('--job', running && SIDE_COLOURS[data.pipeline] || '');"), 'the job colour follows what is generating, and goes when idle');
 assert(/#runCard \.ln-more \{ color: var\(--job, var\(--side-accent\)\); \}/.test(html) && /\.jump a\.run\.active \{ border-color: var\(--shared\); \}/.test(html),
   'the log\'s highlights keep the type colour; Status in the bottom bar always violet');
-assert(/\.ln\.stage \.x \{ color: var\(--neutral\); \}/.test(html) && /\.settings-group \{[^}]*color: var\(--neutral\);/.test(html), 'the log\'s and settings\' headers are silver, as Status\'s');
-assert(!html.includes('id="logWorkflow"') && /\.log-tools #logComfy \{ margin-left: auto; \}/.test(html), 'no Workflow in the log; ComfyUI and Errors on the right');
+assert(/\.ln\.stage \.x \{ color: var\(--shared\); \}/.test(html) && /\.settings-group \{[^}]*color: var\(--neutral\);/.test(html), 'the log\'s stage headers are the shared violet; settings\' headers silver, as Status\'s');
+assert(!html.includes('id="logWorkflow"') && /\.log-tools \.log-filters \{ margin-left: auto; \}/.test(html)
+  && /class="log-filters"[^>]*>\s*<span class="log-filters-label"[^>]*>Show<\/span>\s*<button[^>]*id="logComfy"[\s\S]*?id="logProblems"[^>]*>Errors only<\/button>/.test(html)
+  && /\.log-seg \.log-chip\[aria-pressed="true"\] \{[^}]*background: var\(--accent\);/.test(html),
+  'no Workflow in the log; the Summary/Detailed switch filled on the left, the Show filters (ComfyUI, Errors only) ticked on the right');
 // Titles in the queues: two lines and "…", with no tap to open them.
 assert(queue.innerHTML.includes('<span class="queue-title" data-title-key="queue-4"><span class="queue-pos">1.</span> Video: continue</span>'), 'a queue title is cut to two lines, titled as the running one, its place greyed');
 assert(/\.queue-pos \{ color: var\(--muted\);/.test(html), 'the place in the queue is grey');
@@ -3521,7 +3547,7 @@ assert(els.comfyFacts.innerHTML.includes('Generating the image · 3/8') && els.c
   for (const id of ['stop', 'skip']) {
     const button = els[id];
     button.classList = classes();
-    button.innerHTML = id === 'stop' ? 'Stop' : 'Cancel';
+    button.innerHTML = id === 'stop' ? 'Stop queue' : 'Pause run';
     button.attrs = {};
     button.getAttribute = name => button.attrs[name] ?? null;
     button.setAttribute = (name, value) => { button.attrs[name] = value; };
@@ -3611,15 +3637,47 @@ assert(els.comfyFacts.innerHTML.includes('Generating the image · 3/8') && els.c
   assert.strictEqual(els.connectionNotice.hidden, true, 'a successful response clears the connection warning');
   {
     const savedFetch = context.fetch;
+    const savedTimeout = context.setTimeout, waits = [];
+    context.setTimeout = (fn, ms) => { waits.push([fn, ms]); return waits.length; };
     context.fetch = answer({ error: 'unavailable' }, { ok: false, status: 503 });
     await run('poll()');
+    assert.strictEqual(els.connectionNotice.hidden, true, 'a failed poll is not shown straight away');
+    const notice = waits.find(([, ms]) => ms === 5000);
+    assert(notice, 'the disconnected notice waits 5 s');
+    notice[0]();
     assert(els.connectionMessage.textContent.includes('HTTP 503'), 'HTTP failures are visible even when the body is JSON');
+    context.setTimeout = savedTimeout;
     context.fetch = savedFetch;
     await run('poll()');
     assert.strictEqual(els.connectionNotice.hidden, true);
   }
   assert.strictEqual(els.statusText.textContent, 'Idle', 'it works again straight after a stuck one, and a finished run leaves it idle');
   assert.strictEqual(els.go.textContent, 'Generate');
+  // Pushed by the panel: each update is shown as a poll's answer is; one that can't be read connects again.
+  {
+    const sources = [], savedTimeout = context.setTimeout, quietTimers = [];
+    context.EventSource = class { constructor(url) { this.url = url; sources.push(this); } close() { this.closed = true; } };
+    context.setTimeout = (fn, ms) => { if (ms === 8000) quietTimers.push(fn); return 0; };
+    assert.strictEqual(run('openStatusStream()'), true);
+    assert(sources[0].url.startsWith('/api/status/stream?catalogue_revision='), 'the stream says what the page has');
+    sources[0].onmessage({ data: JSON.stringify({ ...quiet, server_started: 1, returncode: 0, marker: 'pushed' }) });
+    assert.strictEqual(run('lastStatus.marker'), 'pushed', 'a pushed update is shown');
+    assert.strictEqual(els.connectionNotice.hidden, true);
+    sources[0].onmessage({ data: 'not json' });
+    assert(sources[0].closed && sources.length === 2, 'an update it cannot read: connected again');
+    sources[0].onmessage({ data: JSON.stringify({ ...quiet, server_started: 1, returncode: 0, marker: 'old' }) });
+    assert.strictEqual(run('lastStatus.marker'), 'pushed', 'nothing from a stream that was replaced');
+    const savedFetch = context.fetch, asked = [];
+    context.fetch = async url => { asked.push(url); return answer({ ...quiet, server_started: 1, returncode: 0 })(); };
+    quietTimers.at(-1)();
+    assert(asked[0].startsWith('/api/status?') && sources.length === 3, 'quiet for 8 s: asked the usual way, and connected again');
+    for (let i = 0; i < 50 && run('polling'); i++) await new Promise(resolve => setImmediate(resolve));
+    assert.strictEqual(run('polling'), false, 'that poll has finished');
+    context.fetch = savedFetch;
+    run('statusStream.close(); statusStream = null; clearTimeout(streamQuiet)');
+    context.setTimeout = savedTimeout;
+    delete context.EventSource;
+  }
   {
     const savedFetch = context.fetch;
     context.fetch = async () => ({ ok: false, status: 500, json: async () => ({ error: 'disk unavailable' }) });
@@ -3869,7 +3927,12 @@ assert(els.comfyFacts.innerHTML.includes('Generating the image · 3/8') && els.c
     for (const action of ['data-start="901"', 'data-run-now="901"', 'data-edit="901"', 'data-remove="901"', 'data-shots="run_history"']) {
       assert(els.warningRuns.innerHTML.includes(action), `Warning retains Pending action ${action}`);
     }
-    assert(html.indexOf('id="warningRuns"') < html.indexOf('id="runQueue"'), 'Warning is the top queue section');
+    {
+      const at = id => html.indexOf(`id="${id}"`);
+      assert(at('queueBox') < at('warningRuns') && at('warningRuns') < at('runQueue') && at('runQueue') < at('stoppedRuns')
+        && at('stoppedRuns') < at('failedRuns') && at('failedRuns') < at('statusToggles') && !html.includes('finishedWindow'),
+        'Warning, Queue, Pending and Failed are in the queue box, in that order; Finished is only its list');
+    }
     run('renderStopped([], [])');
     assert(els.warningRuns.hidden, 'Warning disappears when empty');
     run(`pipeline = 'video'; folder = 'video'; viewerCollection = 'c_history';

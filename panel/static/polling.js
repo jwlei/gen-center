@@ -61,6 +61,13 @@ function resumePolling() {
   poll();
 }
 $('connectionRetry').addEventListener('click', resumePolling);
+// The panel sends the log from the last line the page has (log_delta), not all of it: the whole log every 2 seconds
+// was too much for a phone away from home. Lines the panel has dropped off the top (before log_first) go here too.
+function withNewLogLines(data) {
+  if (!data.log_delta) return data.lines;
+  const from = data.log_first ?? -Infinity, upTo = data.lines.length ? data.lines[0].n : Infinity;
+  return logLines.filter(line => line.n >= from && line.n < upTo).concat(data.lines);
+}
 async function pollOnce(generation) {
   const askedAt = performance.now();
   const editAtRequest = queueEdit, upscaleAtRequest = queueUpscaleEdit;
@@ -69,7 +76,7 @@ async function pollOnce(generation) {
   const timer = setTimeout(() => abort.abort(), POLL_TIMEOUT);
   let data;
   try {
-    const response = await fetch(statusCatalogue.url(), { cache: 'no-store', signal: abort.signal });
+    const response = await fetch(statusUrl('/api/status'), { cache: 'no-store', signal: abort.signal });
     if (generation !== pollGeneration) return;
     // Signed out in the meantime: nothing here would ever update again.
     if (response.redirected) { location.reload(); return; }
@@ -86,7 +93,57 @@ async function pollOnce(generation) {
     clearTimeout(timer);
     if (pollAbort === abort) pollAbort = null;
   }
-
+  applyStatus(data, askedAt, editAtRequest, upscaleAtRequest);
+}
+// What the page has, so the panel sends only what is new: its Output catalogue's revision, and its last log line.
+function statusUrl(path) {
+  const lastLine = logLines.length ? logLines[logLines.length - 1].n : null;
+  return statusCatalogue.url().replace('/api/status?', `${path}?`) + (lastLine === null ? '' : `&log_after=${lastLine}`);
+}
+// The panel pushes the status as it changes (Server-Sent Events), and at least every 2 s for the clock and the GPU.
+// Before, the page asked every 2 s, so a change took up to 2 s to show. poll() stays for an answer straight after a
+// button, and for when the stream goes quiet.
+const STREAM_QUIET_MS = 8000;
+let statusStream = null, streamQuiet = null, streamHeardAt = 0;
+function openStatusStream() {
+  if (typeof EventSource !== 'function') return false;
+  if (statusStream) statusStream.close();
+  const source = statusStream = new EventSource(statusUrl('/api/status/stream'));
+  streamHeardAt = performance.now();
+  source.onmessage = event => {
+    if (source !== statusStream) return;
+    // Each update is worked out after the one before arrived: as fresh as an answer asked for then.
+    const askedAt = streamHeardAt;
+    streamHeardAt = performance.now();
+    watchStreamQuiet();
+    let data;
+    try {
+      data = JSON.parse(event.data);
+      if (!data || !data.queue || !data.upload) throw new Error('The panel returned an invalid status response.');
+      data = statusCatalogue.hydrate(data);
+    } catch (e) {
+      panelConnection.failure(e);
+      // Connected again from what the page has now: out of sync, that is the whole catalogue.
+      openStatusStream();
+      return;
+    }
+    panelConnection.success();
+    applyStatus(data, askedAt, queueEdit, queueUpscaleEdit);
+  };
+  // The browser connects again by itself; the notice shows only if that takes a while.
+  source.onerror = () => {
+    if (source === statusStream) panelConnection.failure(new Error('Could not reach the panel.'));
+  };
+  watchStreamQuiet();
+  return true;
+}
+// Nothing for a while (the phone's network changed, signed out, a proxy holding the stream back): ask the usual way,
+// which says what is wrong or reloads after a sign-out, and connect again.
+function watchStreamQuiet() {
+  clearTimeout(streamQuiet);
+  streamQuiet = setTimeout(() => { poll(); openStatusStream(); }, STREAM_QUIET_MS);
+}
+function applyStatus(data, askedAt, editAtRequest, upscaleAtRequest) {
   // A new server has new code: pick it up, unless that would lose what is being typed.
   if (serverStarted && serverStarted !== data.server_started) {
     if (!formInProgress()) {
@@ -164,7 +221,7 @@ async function pollOnce(generation) {
   $('skip').hidden = $('stop').hidden = !running;
   // A Cancel waiting for the run to have something saved: it says so until it happens.
   if (!$('skip').classList.contains('queue-request')) {
-    $('skip').textContent = data.cancelling ? 'Cancelling…' : 'Cancel';
+    $('skip').textContent = data.cancelling ? 'Pausing…' : 'Pause run';
     $('skip').disabled = !!data.cancelling;
   }
   // A batch (Shorts' videos, Image's images) can end once the one being made is done; a film is one video.
@@ -177,6 +234,7 @@ async function pollOnce(generation) {
   $('statusStarted').textContent = data.started_at ? data.started_at.slice(0, 5) : '—';
   $('statusDuration').textContent = running ? fmt(data.elapsed) : '';
 
+  data.lines = withNewLogLines(data);
   if (data.lines.length) safely(() => renderLog(data.lines));
 
   const c = data.comfyui;

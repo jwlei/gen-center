@@ -87,6 +87,7 @@ async function fillSettings() {
   $('lowPriority').checked = !!SETTINGS.low_priority;
   $('titleSource').value = SETTINGS.title_source || 'off';
   $('pinProgress').checked = !!SETTINGS.pin_progress;
+  showGpuGuard();
   $('h3Model').value = SETTINGS.h3_model;
   $('localLlmModel').value = SETTINGS.local_llm_model || SETTINGS.h3_model;
   try { await refreshLocalModels(); } catch (e) { settingsNote(e.message || 'Could not load local models.', true); }
@@ -132,6 +133,37 @@ settingsDialog.addEventListener('click', e => { if (e.target === settingsDialog)
 $('lowPriority').addEventListener('change', () => saveSettings({ low_priority: $('lowPriority').checked }));
 $('titleSource').addEventListener('change', () => saveSettings({ title_source: $('titleSource').value }));
 $('pinProgress').addEventListener('change', async () => { await saveSettings({ pin_progress: $('pinProgress').checked }); syncPin(); });
+// GPU heat guard: restart MSI Afterburner above one temperature, again only once cooled to the other (panel/gpu_guard.py).
+// A page from before a panel restart has none of these: the rest of Settings must still work.
+function showGpuGuard() {
+  if (!$('gpuGuard')) return;
+  $('gpuGuard').checked = SETTINGS.gpu_guard !== false;
+  $('gpuRestartAbove').value = SETTINGS.gpu_restart_above ?? 78;
+  $('gpuRearmAt').value = SETTINGS.gpu_rearm_at ?? 75;
+  $('gpuProfile').value = String(SETTINGS.gpu_profile ?? 3);
+  for (const id of ['gpuRestartAbove', 'gpuRearmAt', 'gpuProfile']) $(id).disabled = !$('gpuGuard').checked;
+}
+async function saveGpuGuard(changes) {
+  await saveSettings(changes);
+  showGpuGuard();  // Refused (cool-down not below restart, out of range): back to what is saved
+}
+if ($('gpuGuard')) {
+  $('gpuGuard').addEventListener('change', () => saveGpuGuard({ gpu_guard: $('gpuGuard').checked }));
+  $('gpuRestartAbove').addEventListener('change', () => saveGpuGuard({ gpu_restart_above: Number($('gpuRestartAbove').value) }));
+  $('gpuRearmAt').addEventListener('change', () => saveGpuGuard({ gpu_rearm_at: Number($('gpuRearmAt').value) }));
+  $('gpuProfile').addEventListener('change', () => saveGpuGuard({ gpu_profile: Number($('gpuProfile').value) }));
+  $('restartAfterburner').addEventListener('click', async () => {
+    const button = $('restartAfterburner');
+    if (!confirmTap('restartAfterburner', 'Restart Afterburner')) return;
+    button.disabled = true;
+    settingsNote('Restarting MSI Afterburner…');
+    try {
+      const body = await (await fetch('/restart/afterburner', { method: 'POST' })).json();
+      settingsNote(body.ok ? `MSI Afterburner restarted with profile ${body.profile}.` : body.error || 'Could not restart it.', !body.ok);
+    } catch (error) { settingsNote('Could not reach the panel. Try again.', true); }
+    button.disabled = false;
+  });
+}
 $('h3Model').addEventListener('change', () => saveSettings({ h3_model: $('h3Model').value }));
 $('localLlmModel').addEventListener('change', () => saveSettings({ local_llm_model: $('localLlmModel').value }));
 $('editPreset').addEventListener('change', () => saveSettings({ edit_preset: $('editPreset').value }));

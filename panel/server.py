@@ -14,6 +14,7 @@ any host but 127.0.0.1: an open instance lets anyone spend your API quota and GP
 """
 import argparse
 import copy
+import gzip
 import hashlib
 import atexit
 import json
@@ -38,8 +39,8 @@ from functools import lru_cache, wraps
 import requests
 import websocket
 from dotenv import load_dotenv
-from flask import (Flask, abort, has_request_context, redirect, render_template, request,
-                   send_file, session, url_for)
+from flask import (Flask, Response, abort, has_request_context, redirect, render_template, request,
+                   send_file, session, stream_with_context, url_for)
 from werkzeug.exceptions import NotFound
 from werkzeug.datastructures import MultiDict
 
@@ -49,7 +50,7 @@ from core.upscale_eta import UpscaleEta, is_upscale
 from core.paths import LOGS_DIR, PROJECT_ROOT, SAVED_WORKFLOWS_DIR, comfyui_client_id
 from core.quota import quota_summary
 from core.saved_workflows import display_label, list_saved, pipeline_of
-from panel import settings, tailscale
+from panel import settings, tailscale, temperatures
 from panel.catalogue import CatalogueCache
 from pipelines.image.paths import OUTPUT_DIR as IMAGE_OUTPUT
 from pipelines.image.run_eta import RunEta as ImageEta
@@ -204,6 +205,29 @@ PANEL_OWNER = PanelOwnerLock(PANEL_OWNER_PATH)
 atexit.register(PANEL_OWNER.release)
 
 
+# Bumped when the log or a queue changes, so the status stream sends the change straight away.
+_status_change = threading.Condition()
+_status_version = 0
+
+
+def status_changed():
+    global _status_version
+    with _status_change:
+        _status_version += 1
+        _status_change.notify_all()
+
+
+def status_version():
+    with _status_change:
+        return _status_version
+
+
+def wait_for_status_change(seen, timeout):
+    """Until the status changes from version `seen`, or `timeout` seconds."""
+    with _status_change:
+        _status_change.wait_for(lambda: _status_version != seen, timeout)
+
+
 class Job:
     """
     Tracks one process at a time. Rendering saturates the CPU and GPU, so a second
@@ -311,7 +335,8 @@ class Job:
             self.seq += 1
             entry = {"n": self.seq, "t": datetime.now().strftime("%H:%M:%S"), "k": line_kind(text), "text": text}
             self.lines.append(entry)
-            return entry
+        status_changed()
+        return entry
 
     # Lines main.py and its modules print, turned into structured progress.
     PATTERNS = {
@@ -527,6 +552,24 @@ RECORD_HOOKS = []
 STATUS_HOOKS = []
 # Called once as the panel starts serving (main), not on import: panel/comfy_cleanup.py clears ComfyUI's folders.
 STARTUP_HOOKS = []
+
+
+RUN_COUNT = re.compile(r"^(\d+ (?:images?|videos?|clips?|films?))(?::\s*(.*))?$", re.S)
+
+
+def new_run_line(item):
+    """
+    The log's line as the next job in the queue starts: "===== New run, 20 images ===== its title", which the page
+    shows as two lines. How many comes from its label ("20 images: …") or the start of its detail ("1:00 film · …").
+    """
+    label = (item.get("label") or "").strip()
+    count = RUN_COUNT.match(label)
+    if count:
+        what, title = count.group(1), (count.group(2) or "").strip()
+    else:
+        first = (item.get("detail") or "").split(" · ")[0].strip()
+        what, title = (first if re.search(r"\d", first) else ""), label
+    return f"===== New run{', ' + what if what else ''} ===== {title}".rstrip()
 
 
 class JobQueue:
@@ -789,6 +832,7 @@ class JobQueue:
                     pass
 
     def _save_snapshot(self, allow_closed=False):
+        status_changed()
         if not self.path:
             return True
         if not allow_closed and self.job.closed:
@@ -990,7 +1034,7 @@ class JobQueue:
             self.held = True
             return False
         if item.get("waited"):
-            self.job.log(f"===== Next in the queue: {item['label']} =====")
+            self.job.log(new_run_line(item))
         # Record ownership before preflight or process creation. A crash at any
         # point after this snapshot restores the job on hold instead of losing it.
         if not self._save():
@@ -1875,11 +1919,41 @@ def _read_gpu():
 def monitor_gpu_heat():
     from panel.gpu_guard import GPUHeatGuard
 
-    guard = GPUHeatGuard(job.log)
+    guard = GPUHeatGuard(job.log, settings.load)
     while not job.closed:
         reading = gpu_stats()
-        guard.check(reading["temp"] if reading else None)
+        gpu = reading["temp"] if reading else None
+        guard.check(gpu)
+        # Settings' temperature graph: logged every reading, kept a minute at a time.
+        try:
+            temperature_log().add(gpu=gpu, cpu=temperatures.cpu_temperature())
+        except Exception as e:  # The graph must never stop the heat guard
+            app.logger.warning("Could not log temperatures: %s", e)
         time.sleep(3)
+
+
+_temperature_log = None
+
+
+def temperature_log():
+    global _temperature_log
+    if _temperature_log is None:
+        _temperature_log = temperatures.TemperatureLog()
+    return _temperature_log
+
+
+@app.route("/api/temperatures")
+@password_required
+def api_temperatures():
+    try:
+        hours = int(request.args.get("hours", 6))
+    except ValueError:
+        hours = 0
+    if hours not in temperatures.RANGES_HOURS:
+        return {"ok": False, "error": f"hours is one of {', '.join(map(str, temperatures.RANGES_HOURS))}."}, 400
+    guard = settings.load()
+    return {"ok": True, **temperature_log().query(hours),
+            "guard": {"on": guard["gpu_guard"], "restart_above": guard["gpu_restart_above"], "rearm_at": guard["gpu_rearm_at"]}}
 
 
 def comfyui_launcher():
@@ -2338,6 +2412,9 @@ TROUBLE = re.compile(r"❌|⚠️|Error|Exception|Traceback|failed|refused|can't
 MOST_WHY_LINES = 4
 # ComfyUI's memory compiler (comfy-aimdo) failing: a fresh ComfyUI clears it, so it is restarted and tried once more.
 AIMDO_ERROR = re.compile(r"aimdo memory compile error", re.I)
+SETTINGS_REFUSED = re.compile(r"Can't use the LoRA|\bis one of\b|Value not in list|isn't installed|"
+                              r"prompt_outputs_failed_validation|Prompt outputs failed validation|ComfyUI rejected the workflow|"
+                              r"options need it listed again|the workflow can't run", re.I)
 EXIT_ONE_ERROR = re.compile(r"\b(?:exit(?:ed)? (?:with )?(?:(?:exit )?code |status )?1|returned non-zero exit status 1)\b", re.I)
 
 
@@ -2360,6 +2437,11 @@ def restart_reason(job, code):
     failure it isn't restarted for. ComfyUI's aimdo error needs a fresh ComfyUI. Exit 1 is the run's own failure code,
     and one of the ways a ComfyUI that has died or hung shows.
     """
+    if hit_aimdo(job):
+        return "ComfyUI's aimdo memory compile error"
+    # Refused for what it asked for (a file ComfyUI doesn't have, an option out of its list): a fresh ComfyUI refuses it too.
+    if any(SETTINGS_REFUSED.search(line["text"]) for line in job.lines if line["n"] > getattr(job, "first_line", 0)):
+        return None
     reason = live_crash_reason(job)
     if reason:
         return reason
@@ -2397,6 +2479,9 @@ FAILURES = (
      "Out of GPU memory. Try a smaller size (1 MP), fewer references, or turn off SeedVR2 or the 2nd pass under Workflow options."),
     (r"Needs the node [^,]+, which isn't installed|missing_node_type|node type .* not found|does not exist in the node",
      "A node this workflow needs isn't installed in ComfyUI. Install it with ComfyUI Manager, or turn off the option that uses it."),
+    (r"Can't use the LoRA",
+     "A LoRA this run saved isn't one ComfyUI has any more (renamed or moved): its images failed, the rest were made. "
+     "To test it, start a new comparison and pick it from the list."),
     (r"is not installed|Value not in list: (ckpt|unet|vae|lora|clip|model)_name|No such file or directory: .*models",
      "A model file this workflow needs isn't in ComfyUI's models folder. Download it there, then continue."),
     (r"ComfyUI isn't running|Connection refused|Max retries exceeded|Failed to establish a new connection|ConnectionError",
@@ -3589,6 +3674,24 @@ def restart_comfyui_now():
         job.log(f"⚠️ {e}")
 
 
+@app.route("/restart/afterburner", methods=["POST"])
+@password_required
+def restart_afterburner():
+    """Settings' GPU heat guard: MSI Afterburner closed and started again now, with the chosen profile, whatever the heat."""
+    from panel import gpu_guard
+
+    profile = settings.load()["gpu_profile"]
+    try:
+        gpu_guard.restart_afterburner(profile)
+    except gpu_guard.Busy as e:
+        return {"ok": False, "error": str(e)}, 409
+    except (OSError, RuntimeError, gpu_guard.psutil.Error) as e:
+        job.log(f"Could not restart MSI Afterburner: {e}")
+        return {"ok": False, "error": f"Could not restart MSI Afterburner: {e}"}, 500
+    job.log(f"MSI Afterburner restarted from Settings with profile {profile}.")
+    return {"ok": True, "profile": profile}
+
+
 @app.route("/restart/comfyui", methods=["POST"])
 @password_required
 def restart_comfyui():
@@ -3674,6 +3777,14 @@ def _scan_output_catalogue():
 @app.route("/api/status")
 @password_required
 def status():
+    return status_payload(request.args.get("catalogue_revision"), request.args.get("log_after", type=int))
+
+
+def status_payload(catalogue_revision=None, log_after=None):
+    """
+    The page's status. With the revision of the Output catalogue the page has, the catalogue only when it changed; with
+    the last log line it has, the log from there.
+    """
     payload, queue = run_queue.snapshot_with_job()
     with run_queue.lock:
         payload["prompt_writer"] = {"running": _writing_prompt,
@@ -3691,9 +3802,9 @@ def status():
     payload["made_now"] = made_in_this_run()
     payload["upload"] = uploads.snapshot()
     payload["upload"]["queue"] = upload_queue.snapshot()
-    compact = "catalogue_revision" in request.args
+    compact = catalogue_revision is not None
     if compact:
-        catalogue, film_runs, catalogue_revision = _catalogue_cache.get(_scan_output_catalogue, active=payload["running"])
+        catalogue, film_runs, scanned_revision = _catalogue_cache.get(_scan_output_catalogue, active=payload["running"])
         payload.update(copy.deepcopy(catalogue))
         for run in payload["image_sets"]:
             run["generating"] = bool(payload["running"] and payload.get("pipeline") == "image" and run["id"] == run_id)
@@ -3728,14 +3839,85 @@ def status():
     ]
     if compact:
         revision = hashlib.sha256(json.dumps(
-            [catalogue_revision, tags, payload["private"], payload["output_order"], payload.get("collections", [])],
+            [scanned_revision, tags, payload["private"], payload["output_order"], payload.get("collections", [])],
             sort_keys=True,
         ).encode()).hexdigest()
         payload["catalogue_revision"] = revision
-        if request.args["catalogue_revision"] == revision:
+        if catalogue_revision == revision:
             for key in ("videos", "image_sets", "collections", "output_order"):
                 payload.pop(key, None)
+    _only_new_log_lines(payload, log_after)
     return payload
+
+
+# The status pushed to the page (Server-Sent Events): as soon as something changes, and at least this often, for the
+# clock, the GPU and the ETA. Before, the page asked every 2 seconds, so a change took up to 2 seconds to show.
+STREAM_EVERY = 2.0
+# Changes that come in a burst (log lines one after another) go in one update.
+STREAM_GATHER = 0.25
+
+
+@app.route("/api/status/stream")
+@password_required
+def status_stream():
+    revision = request.args.get("catalogue_revision", "")
+    log_after = request.args.get("log_after", type=int)
+
+    def events():
+        nonlocal revision, log_after
+        # Lost (the panel restarting), the browser connects again after this long.
+        yield "retry: 2000\n\n"
+        while not _panel_closing:
+            seen = status_version()
+            payload = status_payload(revision, log_after)
+            revision = payload.get("catalogue_revision", revision)
+            if payload["lines"]:
+                log_after = payload["lines"][-1]["n"]
+            yield f"data: {json.dumps(payload, separators=(',', ':'))}\n\n"
+            wait_for_status_change(seen, STREAM_EVERY)
+            time.sleep(STREAM_GATHER)
+
+    response = Response(stream_with_context(events()), mimetype="text/event-stream")
+    response.headers["Cache-Control"] = "no-store"
+    response.headers["X-Accel-Buffering"] = "no"
+    return response
+
+
+def _only_new_log_lines(payload, log_after):
+    """
+    The log from the line the page last has, not all of it: the whole log, up to 2000 lines, sent every 2 seconds
+    made each status about 280 KB, which a phone away from home couldn't fetch in time, so it showed the panel as
+    disconnected. That line is sent again because its ETA can be added just after it is logged. Without it (a new job
+    started a new log, or the page has none yet), the whole log is sent, and log_delta is False.
+    """
+    lines = payload["lines"]
+    payload["log_first"] = lines[0]["n"] if lines else None
+    payload["log_delta"] = log_after is not None and any(line["n"] == log_after for line in lines)
+    if payload["log_delta"]:
+        payload["lines"] = [line for line in lines if line["n"] >= log_after]
+
+
+# Gzipped only when worth it: a status without the Output catalogue is a few KB.
+GZIP_FROM_BYTES = 2048
+
+
+@app.after_request
+def gzip_json(response):
+    """
+    Large JSON goes compressed (the status with the Output catalogue: about 600 KB, 10 times smaller gzipped), so a
+    phone on mobile data or Tailscale gets it within the poll's time limit.
+    """
+    if (response.mimetype != "application/json" or response.direct_passthrough or response.status_code < 200
+            or response.status_code >= 300 or "Content-Encoding" in response.headers
+            or "gzip" not in request.headers.get("Accept-Encoding", "").lower()):
+        return response
+    data = response.get_data()
+    if len(data) < GZIP_FROM_BYTES:
+        return response
+    response.set_data(gzip.compress(data, compresslevel=5))
+    response.headers["Content-Encoding"] = "gzip"
+    response.headers.add("Vary", "Accept-Encoding")
+    return response
 
 
 def _shown(value):

@@ -362,7 +362,12 @@ def render_image(state, comfy, shot, images):
     rendered = tuple(state.region["work"]) if state.region else comfy.render_size(state.width, state.height)
     taken = set(state.source_seeds or ())
     if shot.get("lora_test"):
-        comfy.set_options({**(state.options or {}), **shot["lora_test"]})
+        # A LoRA the comparison saved that ComfyUI no longer has (renamed, moved) costs this image, not the whole set.
+        try:
+            comfy.set_options({**(state.options or {}), **shot["lora_test"]})
+        except RuntimeError as e:
+            print(f"      ❌ Can't use the LoRA {shot['lora_test'].get('lora_name')}: {e}")
+            return None
     for attempt in range(1, IMAGE_ATTEMPTS + 1):
         seed = seeds.pick(shot.get("seed"), 1 if shot.get("lora_test") else attempt)
         if seed in taken:

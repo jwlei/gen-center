@@ -510,7 +510,7 @@ $('skip').addEventListener('click', async () => {
   disarm($('stop'));
   if (!secondTap($('skip'))) return;
   // No question: it stops now, or as soon as it has something saved to continue from, and the queue goes on.
-  const data = await queueRequest($('skip'), async () => (await fetch('/skip', { method: 'POST' })).json(), 'Cancelled', 'Cancelling…');
+  const data = await queueRequest($('skip'), async () => (await fetch('/skip', { method: 'POST' })).json(), 'Paused', 'Pausing…');
   if (data) poll();
 });
 
