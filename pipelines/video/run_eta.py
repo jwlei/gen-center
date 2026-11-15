@@ -215,6 +215,10 @@ class RunEta:
         self.attempt_started = now
         self.attempt_seconds = seconds
 
+    def expected(self):
+        """What the clip that just started should take, in seconds: its prompt written, if it is, and its render."""
+        return round(self._render_seconds(self.attempt_seconds) + self._enhance_per_clip())
+
     def clip_retry(self, attempt, attempts, problem):
         """A render failed or was cut off: another starts now, unless that was the last try."""
         clip = f"Clip {self.clip_number} of {self.shots}"

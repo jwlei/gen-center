@@ -155,6 +155,10 @@ class RunEta:
         self.images = 1 if self.first_only else total
         self.image_started = time.time()
 
+    def expected(self):
+        """What the image that just started should take, in seconds."""
+        return round(self._image_seconds())
+
     def clip_retry(self, attempt, attempts, problem):
         """A render failed or was cut off: another starts now, unless that was the last try."""
         problem = problem[:80]

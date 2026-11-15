@@ -1652,12 +1652,12 @@ context.logSample = logSample;
 run('var logSummary = logHtml(logSample, false)');
 run('var logFull = logHtml(logSample, true)');
 const summary = context.logSummary, full = context.logFull;
-assert(summary.includes('▶ Stage 3/4 · Avatar clips · 1/2 clips · <span class="bad">1 failed</span>'), 'a stage says how its clips went');
-assert(summary.includes('🎬 Clip 1/2 · Scene 1 · 5s · image-to-video · saved in 42s'), 'a clip is one line');
+assert(summary.includes('Stage 3/4 · Avatar clips · 1/2 clips · <span class="bad">1 failed</span>'), 'a stage says how its clips went');
+assert(summary.includes('Clip 1/2 · Scene 1 · 5s · image-to-video · 42s'), 'a clip is one line, with how long it took');
 assert(summary.indexOf('Seed 123') > summary.indexOf('grp-body') && summary.indexOf('Saved avatar_scene_1') < summary.indexOf('Clip 2/2'), 'its seed and render details wait inside it');
-assert(/class="ln [^"]*child"[^>]*><span class="t">[^<]*<\/span><span class="x">\s*✅ Saved avatar_scene_1/.test(summary), 'the saved file is a child of its clip');
-assert(summary.includes('🎥 Stock footage: 2/3 scenes ready · scene 2 using fallback · scene 3 failed'), 'the stock footage is one line');
-assert(summary.includes('⚠️ Scene 2: avatar failed · using stock footage'), 'what failed and what happened next is one line');
+assert(/class="ln [^"]*child"[^>]*><span class="t">[^<]*<\/span><span class="x">Saved avatar_scene_1/.test(summary), 'the saved file is a child of its clip');
+assert(summary.includes('Stock footage: 2/3 scenes ready · scene 2 using fallback · scene 3 failed'), 'the stock footage is one line');
+assert(summary.includes('Scene 2: avatar failed · using stock footage'), 'what failed and what happened next is one line');
 assert(summary.includes('Scene 2 Clip A missing') && summary.includes('Scene 3 Completely Failed'), 'warnings and failures stay on show');
 assert(summary.includes('Show full prompt') && summary.includes('class="ln  long'), 'a long prompt is cut short, with a way to read it all');
 assert(!full.includes('Show full prompt') && !full.includes('grp-body') && full.includes('Seed 123') && full.includes('avatar clip not made'), 'Detailed keeps every line as printed');
@@ -1666,6 +1666,46 @@ assert(/class="stage-sec open"[^>]*data-key="s20"/.test(summary), 'the stage bei
 assert(!/class="stage-sec"/.test(full), 'Detailed opens every stage');
 assert(/\.stage-sec:not\(\.open\) \.stage-body \.ln:not\(\.err\):not\(\.warn\) \{ display: none; \}/.test(html), 'a closed stage keeps its warnings and errors');
 assert(html.includes('id="logSummary"') && html.includes('id="logDetailed"') && html.includes('id="logProblems"'), 'Summary, Detailed and Errors are all there');
+
+// An image run: no emoji, the time to the minute, each image one line with how it did against its ETA, each prompt
+// one line with the prompt inside, and the local model's words and speed on the Prompts stage.
+const imageSample = [
+  ['10:00:00', '▶ Stage 1/2: Prompts'],
+  ['10:00:01', 'Waiting for ComfyUI to finish clearing its models and caches...'],
+  ['10:00:02', 'ComfyUI cleanup confirmed: 10.76 GiB VRAM available.'],
+  ['10:00:02', '🧠 Starting the local OpenH3-IR model...'],
+  ['10:00:02', 'Local LLM diagnostics: C:\logs\local-llm-x.log'],
+  ['10:00:11', '🧠 Local model ready.'],
+  ['10:00:16', 'Local LLM: 76.0 tok/s | 380 total tok'],
+  ['10:00:40', 'Local LLM complete: 80.0 tok/s | 2000 total tok'],
+  ['10:00:41', '1. Moonlit Library'],
+  ['10:00:41', '   ' + 'a quiet reading nook under the moon '.repeat(6)],
+  ['10:00:41', '2. Elven Dancer'],
+  ['10:00:41', '   an elf sways in a dim hall'],
+  ['10:00:42', '▶ Stage 2/2: Images'],
+  ['10:00:42', '   🖼️ Image 1/3 · Moonlit Library', 60],
+  ['10:00:42', '      🌱 Seed 777'],
+  ['10:01:44', '      ✅ Done, about 2 min left.'],
+  ['10:01:44', '   🖼️ Image 2/3 · Elven Dancer', 60],
+  ['10:01:44', '      🌱 Seed 888'],
+  ['10:02:14', '      ✅ Done, about 1 min left.'],
+  ['10:02:14', '   🖼️ Image 3/3 · Harbour', 60],
+  ['10:02:14', '      🌱 Seed 999'],
+].map(([t, text, eta], i) => ({ n: i + 1, t, text, ...(eta ? { eta } : {}) }));
+context.imageSample = imageSample;
+run('var imageSummary = logHtml(imageSample, false)');
+const images = context.imageSummary;
+assert(!/\p{Extended_Pictographic}/u.test(images.replace(/<[^>]+>/g, '')), 'no emoji');
+assert(images.includes('<span class="t">10:00</span>') && !/<span class="t">\d+:\d+:\d+<\/span>/.test(images), 'the time to the minute');
+assert(images.includes('Stage 1/2 · Prompts · 41s · 2,000 tokens · 80.0 tok/s'), 'the Prompts stage says how much the model wrote, and how fast');
+assert(images.includes('Local model wrote 2,000 tokens · 80.0 tok/s') && !images.includes('76.0 tok/s'), 'the running count is left out');
+assert(images.includes('Local model started · 10s') && images.indexOf('cleanup confirmed') > images.indexOf('Local model started'), 'starting the model is one line');
+assert(images.includes('Prompt 2 · Elven Dancer') && images.indexOf('an elf sways') > images.indexOf('Prompt 2 · Elven Dancer'), 'a prompt is one line, the prompt inside');
+assert(images.includes('Image 1/3 · Moonlit Library · 1m 2s · on ETA'), 'on time');
+assert(images.includes('Image 2/3 · Elven Dancer · 30s · 30s sooner than its 1m ETA'), 'sooner, by how much');
+assert(images.includes('Image 3/3 · Harbour · ETA 1m'), 'the one rendering says what it should take');
+assert(images.indexOf('Seed 888') > images.indexOf('Image 2/3') && /class="log-grp"/.test(images), 'the seed waits inside its image');
+assert(images.includes('Stage 2/2 · Images · 2/3 images'), 'the stage counts images');
 
 // A log keeps where you are reading: the upload log only follows when it's at its end, and old lines going off the
 // top don't move what you're looking at.

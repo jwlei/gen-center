@@ -238,9 +238,13 @@ function lineKind(text) {
   if (/^Deleted:|^🧹/.test(s)) return 'dim';
   return '';
 }
+// Shown without emoji, and to the minute: the lines keep both as printed, for what reads them.
+const LOG_EMOJI = /[\p{Extended_Pictographic}\u{1F1E6}-\u{1F1FF}\u{FE0F}\u{200D}\u{20E3}]\s*/gu;
+function plain(text) { return String(text).replace(LOG_EMOJI, ''); }
+function logMinute(t) { return /^\d+:\d+:\d+$/.test(t || '') ? t.slice(0, -3) : (t || ''); }
 function logWriter(el, follow) {
   let first = null, last = 0;
-  const row = l => `<div class="ln ${l.k ?? lineKind(l.text)}"><span class="t">${l.t}</span><span class="x">${esc(l.text)}</span></div>`;
+  const row = l => `<div class="ln ${l.k ?? lineKind(l.text)}"><span class="t">${logMinute(l.t)}</span><span class="x">${esc(plain(l.text))}</span></div>`;
   return lines => {
     // A new run, or old lines trimmed off the top: redraw. Otherwise append what is new.
     if (first !== null && lines[0].n > first && lines[0].n <= last) {
@@ -262,12 +266,22 @@ function logWriter(el, follow) {
   };
 }
 // --- The generation log: sections per stage ---
-// Summary puts the lines of one clip, or of the stock footage, on a line of their own that opens to show them, and
-// shortens long prompts. Detailed leaves every line as it was printed. A warning or a failure is never folded away:
-// it stays on show, even in a stage that is closed.
+// Summary puts each image or clip, each written prompt, the local model starting and the stock footage on a line of
+// its own that opens to show the rest: the seed, the full prompt, the render's details. An image or clip says how
+// long it took against what it was expected to take. Detailed leaves every line as it was printed. A warning or a
+// failure is never folded away: it stays on show, even in a stage that is closed.
 const LOG_STAGE = /^▶ Stage (\d+)\/(\d+): (.+)$/;
 const LOG_CLIP = /^🎬 Clip (\d+)\/(\d+) · (.+)$/;
-const LOG_KEPT = /^♻️ Clip (\d+)(?:\/| of )(\d+)\b.*kept from earlier/;
+const LOG_IMAGE = /^(?:🖼️?\s*)?Image (\d+)\/(\d+) · (.+)$/u;
+const LOG_PROMPT = /^(\d+)\. (.+)$/;
+const LOG_PROMPT_TITLE = 70;
+const LOG_TELEMETRY = /^Local LLM: (?:[\d.]+ tok\/s|idle|telemetry unavailable)/;
+const LOG_WRITTEN = /^Local LLM complete: (?:([\d.]+) tok\/s \| )?(\d+) total tok/;
+const LOG_MODEL_START = /^(?:Waiting for ComfyUI to finish clearing|🧠 Starting the local)/u;
+const LOG_MODEL_READY = /^🧠 Local model ready/u;
+// Within this much of its ETA, it finished on time.
+const LOG_ON_TIME = eta => Math.max(5, eta * 0.1);
+const LOG_KEPT = /^♻️ (?:Clip|Image) (\d+)(?:\/| of )(\d+)\b.*kept from earlier/u;
 const LOG_AVATAR_FAILED = /^❌ Scene (\d+) avatar failed: (.*)$/;
 const LOG_AVATAR_GAVE_UP = /^❌ Scene (\d+) avatar clip not made; using stock footage\.?$/;
 const LOG_FELL_BACK = /^[❌⚠️]+\s*Scene (\d+) (.+?)\s*(?:;|—)\s*using stock footage\.?$/u;
@@ -288,15 +302,41 @@ function logTook(from, to) {
   const m = Math.floor(sec / 60);
   return sec < 60 ? `${sec}s` : m < 60 ? `${m}m ${sec % 60}s` : `${Math.floor(m / 60)}h ${m % 60}m`;
 }
+function logSeconds(sec) {
+  const m = Math.floor(sec / 60);
+  return sec < 60 ? `${sec}s` : m < 60 ? (sec % 60 ? `${m}m ${sec % 60}s` : `${m}m`) : `${Math.floor(m / 60)}h ${m % 60}m`;
+}
+// "48s · on ETA", "48s · 12s sooner than its 60s ETA", or while it renders, "ETA 60s".
+function logAgainstEta(took, eta) {
+  if (took === null) return eta ? ` · ETA ${logSeconds(eta)}` : '';
+  if (!eta) return ` · ${logSeconds(took)}`;
+  const off = took - eta;
+  if (Math.abs(off) <= LOG_ON_TIME(eta)) return ` · ${logSeconds(took)} · on ETA`;
+  return ` · ${logSeconds(took)} · ${logSeconds(Math.abs(off))} ${off < 0 ? 'sooner' : 'later'} than its ${logSeconds(eta)} ETA`;
+}
 function logClipTitle(c) {
   const avatar = /^scene (\d+): (\d+s)\s*(.*)$/i.exec(c.rest);
-  return `🎬 Clip ${c.number}/${c.total} · ` + (avatar ? `Scene ${avatar[1]} · ${avatar[2]}${avatar[3] ? ` · ${avatar[3]}` : ''}` : c.rest)
-    + (c.failed ? ' · failed' : c.saved ? ` · saved${c.secs ? ` in ${c.secs}s` : ''}` : '');
+  const what = c.kind === 'Image' ? c.rest
+    : avatar ? `Scene ${avatar[1]} · ${avatar[2]}${avatar[3] ? ` · ${avatar[3]}` : ''}` : c.rest;
+  const took = c.secs || (c.saved && c.from !== null && c.to !== null ? (c.to >= c.from ? c.to - c.from : c.to + 86400 - c.from) : null);
+  return `${c.kind} ${c.number}/${c.total} · ${plain(what)}`
+    + (c.failed ? ' · failed' : c.saved ? logAgainstEta(took, c.eta) : c.running ? logAgainstEta(null, c.eta) : '');
+}
+function logPromptTitle(number, text) {
+  const words = plain(text).trim();
+  if (words.length <= LOG_PROMPT_TITLE) return `Prompt ${number} · ${words}`;
+  const cut = words.slice(0, LOG_PROMPT_TITLE), space = cut.lastIndexOf(' ');
+  return `Prompt ${number} · ${(space > LOG_PROMPT_TITLE / 2 ? cut.slice(0, space) : cut).trimEnd()}…`;
+}
+function logTokens(stage) {
+  if (!stage.tokens) return '';
+  const rate = stage.writeSeconds ? stage.rated / stage.writeSeconds : null;
+  return `${stage.tokens.toLocaleString('en-US')} tokens` + (rate ? ` · ${rate.toFixed(1)} tok/s` : '');
 }
 function logStockTitle(g) {
   const total = g.scenes || g.ready.size + g.failed.size;
   const list = set => [...set].sort((a, b) => a - b).join(', ');
-  return `🎥 Stock footage: ${g.ready.size}/${total} scene${total === 1 ? '' : 's'} ready`
+  return `Stock footage: ${g.ready.size}/${total} scene${total === 1 ? '' : 's'} ready`
     + (g.fallback.size ? ` · scene${g.fallback.size === 1 ? '' : 's'} ${list(g.fallback)} using fallback` : '')
     + (g.failed.size ? ` · scene${g.failed.size === 1 ? '' : 's'} ${list(g.failed)} failed` : '');
 }
@@ -304,7 +344,7 @@ function logStockTitle(g) {
 // Turns the lines into stages, each with its entries: a line, or a group that stands for several.
 function buildLog(lines, detailed) {
   const blocks = [];
-  let stage = null, current = null, inClip = false, stock = null, held = null, scenes = 0;
+  let stage = null, current = null, inClip = false, stock = null, held = null, scenes = 0, prompt = null, model = null;
   const emit = entry => {
     (stage ? stage.entries : blocks).push(entry);
     if (stage && entry.k === 'err') stage.err++;
@@ -315,23 +355,23 @@ function buildLog(lines, detailed) {
   const group = (entry, children, text) => ({ ...entry, text, children });
   for (const l of lines) {
     const text = l.text, trimmed = text.trim(), k = l.k ?? lineKind(text);
-    const entry = { n: l.n, t: l.t, k, text };
+    const entry = { n: l.n, t: l.t, k, text, ...(l.eta !== undefined ? { eta: l.eta } : {}) };
     const total = /(?:narration|Generation) for (\d+) scenes/.exec(trimmed);
     if (total) scenes = +total[1];
 
     const begins = LOG_STAGE.exec(trimmed);
     if (begins) {
       flush();
-      current = stock = null;
+      current = stock = prompt = model = null;
       inClip = false;
       stage = { n: l.n, t: l.t, idx: +begins[1], total: +begins[2], name: begins[3], entries: [], warn: 0, err: 0,
-        from: logClock(l.t), to: logClock(l.t), clips: [], stocks: [] };
+        from: logClock(l.t), to: logClock(l.t), clips: [], stocks: [], tokens: 0, rated: 0, writeSeconds: 0 };
       blocks.push(stage);
       continue;
     }
     if (/^=====/.test(trimmed)) {
       flush();
-      current = stock = null;
+      current = stock = prompt = model = null;
       inClip = false;
       stage = null;
       blocks.push({ ...entry, k: 'stage' });
@@ -342,18 +382,20 @@ function buildLog(lines, detailed) {
     // What it says about the clip being made, whichever way the lines are shown.
     const problem = k === 'err' || k === 'warn';
     const detail = k === 'comfy' || (/^\s{3,}/.test(text) && !problem);
-    const clipLine = LOG_CLIP.exec(trimmed);
+    const clipLine = LOG_CLIP.exec(trimmed) || LOG_IMAGE.exec(trimmed);
     if (clipLine && stage) {
-      current = { n: l.n, number: +clipLine[1], total: +clipLine[2], rest: clipLine[3], scene: (/^scene (\d+):/i.exec(clipLine[3]) || [])[1], saved: false, failed: false, kept: false, secs: 0 };
+      current = { n: l.n, kind: LOG_CLIP.test(trimmed) ? 'Clip' : 'Image', number: +clipLine[1], total: +clipLine[2], rest: clipLine[3],
+        scene: (/^scene (\d+):/i.exec(clipLine[3]) || [])[1], saved: false, failed: false, kept: false, secs: 0,
+        eta: l.eta ?? null, from: logClock(l.t), to: null };
       stage.clips.push(current);
     } else if (stage && LOG_KEPT.test(trimmed)) {
-      stage.clips.push({ n: l.n, kept: true, total: +LOG_KEPT.exec(trimmed)[2] });
+      stage.clips.push({ n: l.n, kept: true, kind: /Image/.test(trimmed) ? 'Image' : 'Clip', total: +LOG_KEPT.exec(trimmed)[2] });
     } else if (current) {
-      if (/^✅ Saved /.test(trimmed)) current.saved = true;
+      if (/^✅ (?:Saved |Done\b)/u.test(trimmed)) { current.saved = true; current.to = logClock(l.t); }
       const took = /Rendered in (\d+)s/.exec(trimmed);
       if (took) current.secs += +took[1];
     }
-    const failedClip = /^❌ Clip (\d+) failed/.exec(trimmed);
+    const failedClip = /^❌ (?:Clip|Image) (\d+) failed/u.exec(trimmed);
     const failedScene = /^[❌⚠️]+\s*Scene (\d+) .*(?:avatar failed|avatar clip not made|never passed)/u.exec(trimmed);
     if (stage && (failedClip || failedScene)) {
       const hit = stage.clips.find(c => failedClip ? c.number === +failedClip[1] : c.scene === failedScene[1]);
@@ -362,13 +404,55 @@ function buildLog(lines, detailed) {
     if (clipLine) inClip = true;
     else if (!problem && !detail) inClip = false;
 
+    const written = LOG_WRITTEN.exec(trimmed);
+    if (written && stage) {
+      stage.tokens += +written[2];
+      if (written[1] && +written[1] > 0) { stage.rated += +written[2]; stage.writeSeconds += +written[2] / +written[1]; }
+    }
+
     if (detailed) { emit(entry); continue; }
+
+    // The model's running count of what it has written, every few seconds: the total is on the line below.
+    if (LOG_TELEMETRY.test(trimmed)) continue;
+    if (written) {
+      emit({ ...entry, k: 'dim', text: `Local model wrote ${(+written[2]).toLocaleString('en-US')} tokens${written[1] ? ` · ${(+written[1]).toFixed(1)} tok/s` : ''}` });
+      continue;
+    }
+    // Starting the local model, from ComfyUI making room for it to its being ready, in one line.
+    if (!model && LOG_MODEL_START.test(trimmed)) {
+      flush();
+      model = emit(group(entry, [entry], 'Starting the local model'));
+      model.from = logClock(l.t);
+      continue;
+    }
+    if (model && !problem) {
+      model.children.push(entry);
+      if (LOG_MODEL_READY.test(trimmed)) {
+        const took = logTook(model.from, logClock(l.t));
+        model.text = `Local model started${took ? ` · ${took}` : ''}`;
+        model = null;
+      }
+      continue;
+    }
+    // A written prompt: its number and title on the line, the prompt itself inside.
+    const promptLine = stage && /prompt|plan/i.test(stage.name) && !problem && !/^\s/.test(text) ? LOG_PROMPT.exec(trimmed) : null;
+    if (promptLine) {
+      flush();
+      const long = plain(promptLine[2]).trim().length > LOG_PROMPT_TITLE;
+      prompt = emit(group(entry, long ? [entry] : [], logPromptTitle(promptLine[1], promptLine[2])));
+      continue;
+    }
+    if (prompt && /^\s{3,}/.test(text) && !problem) {
+      prompt.children.push(entry);
+      continue;
+    }
+    prompt = null;
 
     // A failure the app recovered from, in one line: what happened, and what it did next.
     if (held) {
       const gaveUp = LOG_AVATAR_GAVE_UP.exec(trimmed);
       if (gaveUp && gaveUp[1] === held.scene) {
-        emit(group({ n: held.entry.n, t: held.entry.t, k: 'warn' }, [held.entry, entry], `⚠️ Scene ${held.scene}: avatar failed · using stock footage`));
+        emit(group({ n: held.entry.n, t: held.entry.t, k: 'warn' }, [held.entry, entry], `Scene ${held.scene}: avatar failed · using stock footage`));
         held = null;
         continue;
       }
@@ -377,7 +461,7 @@ function buildLog(lines, detailed) {
     const failed = LOG_AVATAR_FAILED.exec(trimmed);
     if (failed) { held = { scene: failed[1], entry }; continue; }
     const fellBack = LOG_FELL_BACK.exec(trimmed);
-    if (fellBack) { emit({ ...entry, k: 'warn', text: `⚠️ Scene ${fellBack[1]}: ${fellBack[2]} · using stock footage` }); continue; }
+    if (fellBack) { emit({ ...entry, k: 'warn', text: `Scene ${fellBack[1]}: ${fellBack[2]} · using stock footage` }); continue; }
 
     if (clipLine && stage) {
       current.entry = emit(group(entry, [], logClipTitle(current)));
@@ -414,19 +498,23 @@ function buildLog(lines, detailed) {
   for (const block of blocks) {
     if (!block.entries) continue;
     const active = block === last;
-    for (const c of block.clips) c.running = !!(active && inClip && c === current && !c.saved && !c.failed);
+    for (const c of block.clips) {
+      c.running = !!(active && inClip && c === current && !c.saved && !c.failed);
+      if (c.entry) c.entry.text = logClipTitle(c);
+    }
   }
   return blocks;
 }
 
 function logStageHeading(stage) {
-  const parts = [`▶ Stage ${stage.idx}/${stage.total}`, esc(stage.name)];
+  const parts = [`Stage ${stage.idx}/${stage.total}`, esc(plain(stage.name))];
   const clips = stage.clips;
   if (clips.length) {
     const total = Math.max(...clips.map(c => c.total));
     const done = clips.filter(c => c.kept || c.saved || (!c.failed && !c.running)).length;
     const failed = clips.filter(c => c.failed).length;
-    parts.push(done === total && !failed ? `${done}/${total} complete` : `${done}/${total} clips`);
+    const things = clips.some(c => c.kind === 'Image') ? 'images' : 'clips';
+    parts.push(done === total && !failed ? `${done}/${total} complete` : `${done}/${total} ${things}`);
     if (failed) parts.push(`<span class="bad">${failed} failed</span>`);
   } else if (stage.stocks.length) {
     const stock = stage.stocks[stage.stocks.length - 1];
@@ -435,21 +523,26 @@ function logStageHeading(stage) {
   }
   const took = logTook(stage.from, stage.to);
   if (took) parts.push(took);
-  if (stage.err) parts.push(`<span class="bad">✖ ${stage.err}</span>`);
-  if (stage.warn) parts.push(`<span class="caution">⚠ ${stage.warn}</span>`);
+  const tokens = logTokens(stage);
+  if (tokens) parts.push(tokens);
+  if (stage.err) parts.push(`<span class="bad">${stage.err} error${stage.err === 1 ? '' : 's'}</span>`);
+  if (stage.warn) parts.push(`<span class="caution">${stage.warn} warning${stage.warn === 1 ? '' : 's'}</span>`);
   return parts.join(' · ');
 }
 
 function logRowHtml(entry, detailed, child = false) {
   const problem = entry.k === 'err' || entry.k === 'warn';
-  const long = !detailed && entry.text.length > LOG_PREVIEW_AT;
+  // Summary shows nesting by its folds, so a line's own indent goes; Detailed keeps it.
+  const text = detailed ? plain(entry.text) : plain(entry.text).trim();
+  const long = !detailed && text.length > LOG_PREVIEW_AT;
   const classes = `ln ${entry.k}${child ? ' child' : ''}`;
-  if (!long) return `<div class="${classes}" data-n="${entry.n}"><span class="t">${entry.t}</span><span class="x">${esc(entry.text)}</span></div>`;
-  const cut = entry.text.slice(0, LOG_PREVIEW), space = cut.lastIndexOf(' ');
+  const t = logMinute(entry.t);
+  if (!long) return `<div class="${classes}" data-n="${entry.n}"><span class="t">${t}</span><span class="x">${esc(text)}</span></div>`;
+  const cut = text.slice(0, LOG_PREVIEW), space = cut.lastIndexOf(' ');
   const preview = (space > LOG_PREVIEW / 2 ? cut.slice(0, space) : cut).trimEnd();
   const label = problem ? 'Show full message' : /^\s{3,}/.test(entry.text) || /prompt/i.test(entry.text.slice(0, 80)) ? 'Show full prompt' : 'Show full response';
   const open = logOpened.get(`m${entry.n}`) === true;
-  return `<div class="${classes} long${open ? ' expanded' : ''}" data-n="${entry.n}"><span class="t">${entry.t}</span><span class="x"><span class="x-short">${esc(preview)}…</span><span class="x-full">${esc(entry.text)}</span>`
+  return `<div class="${classes} long${open ? ' expanded' : ''}" data-n="${entry.n}"><span class="t">${t}</span><span class="x"><span class="x-short">${esc(preview)}…</span><span class="x-full">${esc(text)}</span>`
     + `<button type="button" class="ln-more" data-more="${entry.n}" data-label="${label}">${open ? 'Hide' : label}</button></span></div>`;
 }
 
@@ -459,15 +552,18 @@ function logHtml(lines, detailed) {
   const entryHtml = entry => {
     if (!entry.children) return logRowHtml(entry, detailed);
     const key = `g${entry.n}`, open = logOpened.get(key) === true;
-    return `<div class="log-grp${open ? ' open' : ''}" data-key="${key}"><div class="ln ${entry.k}" data-n="${entry.n}"><span class="t">${entry.t}</span>`
-      + `<span class="x"><button type="button" class="log-fold" aria-expanded="${open}"><span class="grp-text">${esc(entry.text)}</span><span class="log-chev"></span></button></span></div>`
+    const row = `<div class="ln ${entry.k}" data-n="${entry.n}"><span class="t">${logMinute(entry.t)}</span>`;
+    // Nothing more to show: a line, without a fold.
+    if (!entry.children.length) return `${row}<span class="x">${esc(plain(entry.text))}</span></div>`;
+    return `<div class="log-grp${open ? ' open' : ''}" data-key="${key}">${row}`
+      + `<span class="x"><button type="button" class="log-fold" aria-expanded="${open}"><span class="grp-text">${esc(plain(entry.text))}</span><span class="log-chev"></span></button></span></div>`
       + `<div class="grp-body">${entry.children.map(child => logRowHtml(child, detailed, true)).join('')}</div></div>`;
   };
   return blocks.map(block => {
     if (!block.entries) return logRowHtml(block, detailed);
     const key = `s${block.n}`;
     const open = logOpened.has(key) ? logOpened.get(key) : detailed || block === last;
-    return `<section class="stage-sec${open ? ' open' : ''}" data-key="${key}"><div class="ln stage" data-n="${block.n}"><span class="t">${block.t}</span>`
+    return `<section class="stage-sec${open ? ' open' : ''}" data-key="${key}"><div class="ln stage" data-n="${block.n}"><span class="t">${logMinute(block.t)}</span>`
       + `<span class="x"><button type="button" class="log-fold" aria-expanded="${open}"><span class="stage-text">${logStageHeading(block)}</span><span class="log-chev"></span></button></span></div>`
       + `<div class="stage-body">${block.entries.map(entryHtml).join('')}</div></section>`;
   }).join('');

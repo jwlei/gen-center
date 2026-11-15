@@ -219,6 +219,8 @@ class Job:
         # {"n": sequence number, "t": "HH:MM:SS", "text": ...}; the page appends by n.
         self.lines = []
         self.seq = 0
+        # What the image or clip that just started should take, in seconds, for its line in the log.
+        self.expected = None
         # Lines come from the pipeline's output and from ComfyUI's websocket at once.
         self._log_lock = threading.Lock()
         # The workflow file and options this run was started with, kept after it ends so it can still be looked at.
@@ -289,8 +291,12 @@ class Job:
             # ffmpeg's progress carriage-returns would flood the log.
             if not line or line.startswith("frame=") or line.startswith("[") or NATIVE_NOISE.match(line):
                 continue
-            self.log(line)
+            entry = self.log(line)
+            self.expected = None
             self._track(line)
+            if self.expected is not None:
+                # The log says whether it finished on time, sooner or later.
+                entry["eta"] = self.expected
             # Keep memory bounded on long batches.
             if len(self.lines) > 2000:
                 del self.lines[:500]
@@ -303,7 +309,9 @@ class Job:
     def log(self, text):
         with self._log_lock:
             self.seq += 1
-            self.lines.append({"n": self.seq, "t": datetime.now().strftime("%H:%M:%S"), "k": line_kind(text), "text": text})
+            entry = {"n": self.seq, "t": datetime.now().strftime("%H:%M:%S"), "k": line_kind(text), "text": text}
+            self.lines.append(entry)
+            return entry
 
     # Lines main.py and its modules print, turned into structured progress.
     PATTERNS = {
@@ -383,6 +391,14 @@ class Job:
             if self.progress.get("action") != before:
                 self.progress["action_started"] = time.time()
 
+    def _expect(self):
+        expected = getattr(self.eta, "expected", None)
+        try:
+            seconds = expected() if expected else None
+        except Exception:  # Only for the log: never let it stop the run's tracking.
+            seconds = None
+        self.expected = round(seconds) if isinstance(seconds, (int, float)) and not isinstance(seconds, bool) else None
+
     def _track_line(self, line):
         p = self.progress
         tokens = re.fullmatch(r"Local LLM: (\d+(?:\.\d+)?) tok/s \| (\d+) total tok", line)
@@ -438,9 +454,11 @@ class Job:
             elif kind == "shot":
                 p["detail"] = f"Clip {m.group(1)} of {m.group(2)}: {m.group(3)}, {m.group(4)}s"
                 self.eta.clip(int(m.group(1)), int(m.group(2)), int(m.group(4)))
+                self._expect()
             elif kind == "image":
                 p["detail"] = f"Image {m.group(1)} of {m.group(2)}: {m.group(3)}"
                 self.eta.image(int(m.group(1)), int(m.group(2)))
+                self._expect()
             elif kind == "retry":
                 self.eta.clip_retry(int(m.group(2)), int(m.group(3)), m.group(1))
             elif kind == "part":

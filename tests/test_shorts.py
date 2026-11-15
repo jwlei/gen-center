@@ -570,6 +570,22 @@ class ProgressActionTest(unittest.TestCase):
         job._track("▶ Stage 2/3: Clips")
         self.assertNotIn("tokens", job.progress)
 
+    def test_an_image_or_clip_line_carries_what_it_should_take(self):
+        job = webapp.Job()
+        job.pipeline, job.eta = "image", mock.Mock()
+        job.eta.expected.return_value = 75
+        job.process = mock.Mock(stdout=["▶ Stage 2/2: Images", "   🖼️ Image 1/2 · Harbour", "      🌱 Seed 7"], returncode=0)
+        job._drain()
+        self.assertEqual([line.get("eta") for line in job.lines], [None, 75, None],
+                         "the log can say if it finished on its ETA, sooner or later")
+        job = webapp.Job()
+        job.pipeline, job.eta = "video", mock.Mock()
+        job.eta.expected.side_effect = RuntimeError("no timings")
+        job.process = mock.Mock(stdout=["   🎬 Clip 1/3 · Harbour · 5s"], returncode=0)
+        job._drain()
+        self.assertNotIn("eta", job.lines[0], "without one, the line is still logged")
+        job.eta.clip.assert_called_once()
+
     def test_a_started_local_model_says_what_it_is_doing_not_that_it_is_starting(self):
         job = webapp.Job()
         job.pipeline, job.eta = "image", mock.Mock()
