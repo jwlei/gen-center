@@ -244,6 +244,8 @@ def plan_run(args, stages):
     # At once: the prompts are what was paid for.
     workflow = shorthand(state.workflow, "image")
     name = f"{title_words(title, 'images')}_{workflow}"
+    # Its shots first: a LoRA comparison's name tells it apart by the LoRAs it tests (pills.image_loras).
+    state.shots = shots
     tag = set_tag(state, workflow)
     # Its folder is made with its first image: a set that has none yet still has its name, and keeps it.
     taken = {other.output_name for other in list_runs() if other.id != state.id and other.output_name}

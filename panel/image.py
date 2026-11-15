@@ -211,7 +211,8 @@ def image_files(state):
             files.append({"position": position, "file": shot["file"], "title": shot["title"], "version": version,
                           "resolution": resolution, "size_bytes": stat.st_size, "mtime": stat.st_mtime,
                           "upscaled": upscaled_with(shot) or upscaled_in_generation(state),
-                          "prompt_llm": prompt_llm_pill(state.shot_setup(shot))})
+                          "prompt_llm": prompt_llm_pill(state.shot_setup(shot)),
+                          **({"lora": lora_tests.shot_lora(shot)} if shot.get("lora_test") else {})})
     return files
 
 
@@ -243,7 +244,7 @@ def describe_run(state):
     size_bytes = sum(image["size_bytes"] for image in files)
     resolutions = list(dict.fromkeys(image["resolution"] for image in files if image["resolution"]))
     upscaled = upscaled_in_generation(state) or ", ".join(dict.fromkeys(image["upscaled"] for image in files if image["upscaled"])) or None
-    loras = workflow_options.loras_used(state.workflow, state.options, "image")
+    loras = pills.image_loras(state)
     writer = workflow_options.prompt_writer_used(state.workflow, state.options, state.form)
     facts = pills.facts(shorthand(state.workflow, "image"), upscaled, loras=loras, llm=state.llm, direct=state.direct,
                         sampling=workflow_options.sampling_used(state.workflow, state.options, "image"),

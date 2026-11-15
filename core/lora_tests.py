@@ -60,6 +60,39 @@ def in_env(env=None):
     return values
 
 
+def tested(shots):
+    """
+    The LoRAs a comparison's images ran with, as pills say them: each file once, in the order tested, with the
+    strengths it ran at ("knpv3_1_nsfw (0.5-2)"). [] for a set that isn't a comparison.
+    """
+    strengths = {}
+    for shot in shots or []:
+        test = shot.get("lora_test")
+        if isinstance(test, dict) and test.get("lora_name"):
+            strengths.setdefault(test["lora_name"], []).append(_strength(test))
+    return [f"{workflow_options.lora_label(name)} ({_said(min(values))}" + (f"-{_said(max(values))})" if min(values) != max(values) else ")")
+            for name, values in strengths.items()]
+
+
+def shot_lora(shot):
+    """The LoRA one comparison image ran with, as its pill says it ("knpv3_1_nsfw (0.5)"), or None."""
+    test = shot.get("lora_test")
+    if not isinstance(test, dict) or not test.get("lora_name"):
+        return None
+    return f"{workflow_options.lora_label(test['lora_name'])} ({_said(_strength(test))})"
+
+
+def _strength(test):
+    try:
+        return Decimal(str(test.get("lora_strength") or "1"))
+    except InvalidOperation:
+        return Decimal("1")
+
+
+def _said(value):
+    return format(value.normalize(), "f")
+
+
 def shots(template, values, seed):
     return [{**template, "number": index, "file": None, "seed": seed, "lora_test": dict(value),
              "title": f"{workflow_options.lora_label(value['lora_name'])} · {value['lora_strength']}"}

@@ -8,7 +8,7 @@ takes the differing ones when it is made (fixed_tag), in place of a bare _2, _3.
 """
 import re
 
-from core import workflow_options
+from core import lora_tests, workflow_options
 
 # How a film's clips connect, in short: the long names are Generate's "How clips connect".
 CONNECTIONS = {"chain": "Continuous take", "image": "Separate moments", "director": "H3 Motion Director",
@@ -39,6 +39,14 @@ def image_upscale_description(options):
     return f"{method}, denoise {denoise}" if denoise and method != "UltraSharp" else method
 
 
+def image_loras(state):
+    """
+    The LoRAs an image set's pills name: for a LoRA comparison, those its images tested (the set's own LoRA setting
+    is none of them); otherwise the ones its workflow ran with.
+    """
+    return lora_tests.tested(state.shots) or workflow_options.loras_used(state.workflow, state.options, "image")
+
+
 def run_facts(state, pipeline, workflow_name):
     """A saved run's facts as it was set up: what a new file name is told apart by (fixed_tag)."""
     if pipeline == "video":
@@ -48,7 +56,7 @@ def run_facts(state, pipeline, workflow_name):
                      workflow_options.cfg_used(state.workflow, state.options, "video"))
     writer = workflow_options.prompt_writer_used(state.workflow, state.options, state.form)
     return facts(workflow_name, image_upscale_description(state.options),
-                 loras=workflow_options.loras_used(state.workflow, state.options, "image"), llm=state.llm, direct=state.direct,
+                 loras=image_loras(state), llm=state.llm, direct=state.direct,
                  sampling=workflow_options.sampling_used(state.workflow, state.options, "image"),
                  cfg=workflow_options.cfg_used(state.workflow, state.options, "image"), prompt_writer=writer[1] if writer else None)
 

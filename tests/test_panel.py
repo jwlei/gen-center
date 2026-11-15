@@ -95,6 +95,22 @@ class QueueTopTest(unittest.TestCase):
         self.assertEqual(item["argv"][item["argv"].index("--seed") + 1], "0")
         self.assertIn("--direct", item["argv"])
 
+    def test_lora_image_comparison_pills_name_the_loras_tested(self):
+        from types import SimpleNamespace
+        from core import lora_tests, pills
+        tests = [{"lora": "1", "lora_name": name, "lora_strength": strength}
+                 for name in ("Krea2_a.safetensors", "Krea2_b.safetensors") for strength in ("0.5", "1.0", "2.0")]
+        shots = lora_tests.shots({"prompt": "p", "title": "t"}, tests, 7)
+        # The set's own LoRA setting (on, another file) is none of those tested: it isn't what its pills say.
+        state = SimpleNamespace(shots=shots, workflow="w.json", options={"lora": "1", "lora_name": "other.safetensors"})
+        with mock.patch.object(pills.workflow_options, "loras_used", return_value=["other (1)"]) as used:
+            self.assertEqual(pills.image_loras(state), ["a (0.5-2)", "b (0.5-2)"])
+            used.assert_not_called()
+            self.assertEqual(lora_tests.shot_lora(shots[1]), "a (1)", "each image: its own LoRA and strength")
+            self.assertIsNone(lora_tests.shot_lora({"prompt": "p"}))
+            state.shots = [{"prompt": "p"}]
+            self.assertEqual(pills.image_loras(state), ["other (1)"], "a set that isn't a comparison: its workflow's")
+
     def test_lora_video_comparisons_queue_complete_videos_with_one_seed(self):
         from core import workflow_options
         options = workflow_options.lora_options("0", "krea_a.safetensors", 1, ["krea_a.safetensors", "krea_b.safetensors"])

@@ -748,12 +748,15 @@ function upscaleProblem(method, width, height) {
     return `Too big: ${Math.max(width, height)}px on its longer side, past ${TILED_MOST_SIDE}px.`;
   return '';
 }
-// A picture in the viewer: its own upscale, not the set's; its other pills are the set's.
+// A picture in the viewer: its own upscale, not the set's, and in a LoRA comparison its own LoRA, not all those the
+// set tests; its other pills are the set's.
 function pictureMetadata(set, picture) {
   const ownWriter = Object.prototype.hasOwnProperty.call(picture, 'prompt_llm');
-  const pills = set.pills && [...set.pills.filter(p => p.kind !== 'upscale' && (!ownWriter || p.kind !== 'llm')),
+  const ownLora = Object.prototype.hasOwnProperty.call(picture, 'lora');
+  const pills = set.pills && [...set.pills.filter(p => p.kind !== 'upscale' && (!ownWriter || p.kind !== 'llm') && (!ownLora || p.kind !== 'lora')),
     ...(ownWriter && picture.prompt_llm ? [{ text: picture.prompt_llm, kind: 'llm',
       diff: set.pills.some(p => p.kind === 'llm' && p.text === picture.prompt_llm && p.diff) }] : []),
+    ...(ownLora && picture.lora ? [{ text: `LoRA: ${picture.lora}`, kind: 'lora', diff: true }] : []),
     ...(picture.upscaled ? [{ text: `Upscaled: ${picture.upscaled}`, kind: 'upscale', diff: false }] : [])];
   viewerMetadata({ ...set, upscaled: picture.upscaled || null, pills }, 'image');
 }
