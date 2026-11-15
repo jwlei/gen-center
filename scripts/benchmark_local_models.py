@@ -153,6 +153,35 @@ def measure(session, model_id, layers):
             raise BenchmarkInterrupted("Benchmark interrupted: " + interrupted[0])
 
 
+# Past about 7 GB of weights the driver keeps part of a model "on the GPU" in system memory: every layer offloaded,
+# and writing at a fifth of its speed. Leaving a few layers on the CPU is then faster. So from all layers it steps
+# down, two at a time, while that keeps getting faster, and stops at the first that doesn't: a model that fits
+# stops after one step. CPU-only is measured only if nothing on the GPU worked.
+STEP = 2
+STILL_SPILLING = 0.75
+
+
+def layer_counts(blocks, rate_of):
+    """Measures layer counts in turn with rate_of(layers) -> tok/s, or None when it failed."""
+    best = rate_of("all") or 0
+    worked = best > 0
+    peaked = False
+    layers = blocks - STEP
+    while layers >= blocks // 2:
+        rate = rate_of(layers)
+        if rate is not None:
+            worked = True
+            if rate >= best:
+                best, peaked = rate, True
+            # Slower. A model that fits loses ~40% with two layers on the CPU, and that is the end. One that still
+            # spills hardly changes: it needs more on the CPU yet.
+            elif peaked or rate < best * STILL_SPILLING:
+                break
+        layers -= STEP
+    if not worked:
+        rate_of(0)
+
+
 def main():
     session = requests.Session()
     password = os.getenv("APP_PASSWORD")
@@ -170,19 +199,24 @@ def main():
         blocks = metadata.fields[architecture + ".block_count"].contents()
         del metadata
         candidates, failures = [], []
-        for layers in ("all", blocks // 2, 0):
+
+        def rate_of(layers):
             print(f"\nBenchmarking {model_id}: gpu-layers={layers}", flush=True)
             try:
                 candidate = measure(session, model_id, layers)
-                candidates.append(candidate)
-                print(f"  {candidate['tokens'] * 1000 / candidate['milliseconds']:.1f} tok/s; "
-                      f"offloaded {candidate['offloaded']}/{candidate['total_layers']} layers", flush=True)
             except BenchmarkInterrupted:
                 raise
             except (requests.RequestException, RuntimeError, ValueError, OSError, KeyError) as error:
                 check_idle(session)
                 failures.append({"gpu_layers": layers, "error": str(error)})
                 print(f"  Failed: {error}", flush=True)
+                return None
+            candidates.append(candidate)
+            rate = candidate["tokens"] * 1000 / candidate["milliseconds"]
+            print(f"  {rate:.1f} tok/s; offloaded {candidate['offloaded']}/{candidate['total_layers']} layers", flush=True)
+            return rate
+
+        layer_counts(blocks, rate_of)
         if os.path.getmtime(path) != model_mtime or os.path.getmtime(server) != server_mtime:
             raise RuntimeError(f"Model or runner changed during benchmark for {model_id}; previous results remain unchanged.")
         if not candidates:

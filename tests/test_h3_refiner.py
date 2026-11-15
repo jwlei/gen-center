@@ -256,6 +256,22 @@ class H3RefinerTest(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "did not report its GPU memory"):
             benchmark.memory_fits("", 24)
 
+    def test_benchmark_looks_below_all_layers_for_a_model_that_spills(self):
+        from scripts import benchmark_local_models as benchmark
+
+        def tried(rates):
+            asked = []
+            benchmark.layer_counts(48, lambda layers: asked.append(layers) or rates.get(layers))
+            return asked
+        # It fits: one step down is slower, and that's the end of it.
+        self.assertEqual(tried({"all": 73, 46: 30}), ["all", 46])
+        # It spills at all layers: faster with fewer, until it isn't.
+        self.assertEqual(tried({"all": 14, 46: 40, 44: 52, 42: 24}), ["all", 46, 44, 42])
+        # Still spilling two layers down: hardly slower, so it goes on until it is faster, then past its best.
+        self.assertEqual(tried({"all": 12.8, 46: 11.1, 44: 13, 42: 38, 40: 30}), ["all", 46, 44, 42, 40])
+        # Nothing on the GPU works: then, and only then, the CPU.
+        self.assertEqual(tried({0: 5}), ["all"] + list(range(46, 23, -2)) + [0])
+
     def test_token_samples_measure_rate_and_reset_between_requests(self):
         refiner = object.__new__(h3_refiner.Refiner)
         refiner._token_previous = None
