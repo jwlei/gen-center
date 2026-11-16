@@ -172,22 +172,12 @@ def prompt_llm_pill(setup):
     llm, model = setup["llm"], setup.get("local_model")
     if llm != "local" or not model:
         return llm
-    family, separator, folder = model.partition(":")
-    if not separator:
-        return {"gemma-4-12b": "Gemma 4 12B-v", "qwen3-14b": "Qwen3 14B"}.get(family, model)
-    name = re.sub(r"(?:[-_ ]uncensored|[-_ ]heretic)", "", folder, flags=re.I)
-    name = re.sub(r"^gemma[-_]?4[-_]?12b[-_]?it", "Gemma 4", name, flags=re.I)
-    name = re.sub(r"^gemma[-_]?4[-_]?12b", "Gemma 4", name, flags=re.I)
-    name = re.sub(r"^qwen3[-_]?14b", "Qwen3 14B", name, flags=re.I)
-    quant = re.search(r"[-_.](I?Q\d(?:_[A-Za-z0-9]+)+|BF16)$", name, flags=re.I)
-    if quant:
-        name = name[:quant.start()]
-    name = re.sub(r"[-_]+", " ", name).strip()
-    suffix = (f" {quant.group(1)}" if quant else "") + ("-v" if family == "gemma-4-12b" else "")
-    limit = 22 - len(suffix)
-    if len(name) > limit:
-        name = name[:max(1, limit - 1)].rstrip() + "…"
-    return name + suffix
+    # Named as the model pickers name it (panel/settings.py short_name): "Gemma 4 QAT-H Q4_K_M".
+    try:
+        settings.model_family(model)
+    except ValueError:
+        return model
+    return settings.short_name(model)
 
 
 def image_files(state):

@@ -181,7 +181,7 @@ class QueueTopTest(unittest.TestCase):
         self.assertTrue(result["ok"], result)
         item = self.queue.items[0]
         self.assertEqual([(test["llm"], test["label"]) for test in llm_tests.in_env(item["env"])],
-                         [("gemini", "Gemini"), ("local", "Gemma 4 12B-v"), ("local", "Qwen3 14B")])
+                         [("gemini", "Gemini"), ("local", image_panel.settings.short_name("gemma-4-12b")), ("local", "Qwen3 14B")])
         argv = item["argv"]
         self.assertEqual(argv[argv.index("--count") + 1], "1")
         self.assertNotIn("--direct", argv, "written, whatever the prompt mode said")
@@ -193,7 +193,7 @@ class QueueTopTest(unittest.TestCase):
         with webapp.app.test_request_context("/", method="POST", data={"llm_test": "on"}), \
              mock.patch.object(image_panel.settings, "local_models", return_value=models), \
              mock.patch.object(image_panel.planner, "llm_configured", return_value=False):
-            self.assertEqual([test["label"] for test in image_panel.compared_llms(webapp.request.form, 1)[0]], ["Gemma 4 12B-v"])
+            self.assertEqual([test["label"] for test in image_panel.compared_llms(webapp.request.form, 1)[0]], [image_panel.settings.short_name("gemma-4-12b")])
         self.assertIn("can't go with", image_panel.compared_llms({"llm_test": "on", "workflow_test_t2i": "on"}, 0)[1])
 
     def test_lora_image_comparison_pills_name_the_loras_tested(self):

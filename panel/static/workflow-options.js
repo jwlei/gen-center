@@ -58,24 +58,39 @@ function renderLoraStack(box) {
     syncLoraRanges(box);
   } catch (error) { showFormError(error.message); }
 }
-// The strength range worth using for a LoRA (core/lora_hints.py), by its file's name: '' for one it doesn't know.
+// The strength ranges for a LoRA (core/lora_hints.py), by its file's name: { ours, author }, or {} for one it doesn't know.
 function loraRange(name) {
   const key = String(name || '').replace(/\\/g, '/').split('/').pop().replace(/\.safetensors$/i, '').toLowerCase();
-  return (PANEL_CONFIG.lora_ranges || {})[key] || '';
+  return (PANEL_CONFIG.lora_ranges || {})[key] || {};
 }
-// Beside each LoRA line's strength, the range worth using for the LoRA chosen on it.
+// "0.5–1.5" as [0.5, 1.5].
+function rangeBounds(range) {
+  const [low, high] = String(range || '').split('–').map(Number);
+  return Number.isFinite(low) && Number.isFinite(high) ? [low, high] : null;
+}
+// Beside each LoRA line's strength: our range for the LoRA chosen on it, and the author's under it.
 function syncLoraRanges(root) {
   for (const line of root && root.querySelectorAll ? root.querySelectorAll('.lora-line') : []) {
     const select = line.querySelector('select'), out = line.querySelector('.lora-range');
     if (!out) continue;
-    const range = select ? loraRange(select.value) : '';
-    out.textContent = range;
-    out.title = range ? `Strength worth using: ${range}` : '';
+    const { ours, author } = select ? loraRange(select.value) : {};
+    out.innerHTML = (ours ? `<span class="lora-range-ours">${esc(ours)}</span>` : '') + (author ? `<span class="lora-range-author">${esc(author)}</span>` : '');
+    out.title = [ours && `Worth using: ${ours}`, author && `Its author's: ${author}`].filter(Boolean).join('\n');
   }
 }
+// Another LoRA chosen: its strength brought within our range for it, and the ranges beside it shown.
 document.addEventListener('change', e => {
   const line = e.target && e.target.closest && e.target.tagName === 'SELECT' && e.target.closest('.lora-line');
-  if (line) syncLoraRanges(line.parentNode);
+  if (!line) return;
+  const bounds = rangeBounds(loraRange(e.target.value).ours), strength = line.querySelector('.option-strength');
+  if (bounds && strength && strength.value !== '') {
+    const value = Number(strength.value), within = Math.min(bounds[1], Math.max(bounds[0], value));
+    if (within !== value) {
+      strength.value = String(within);
+      strength.dispatchEvent(new Event('change', { bubbles: true }));
+    }
+  }
+  syncLoraRanges(line.parentNode);
 });
 function rememberLoraStack(box) {
   const stack = box.querySelector('[data-lora-stack]');

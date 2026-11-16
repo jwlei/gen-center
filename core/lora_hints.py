@@ -15,13 +15,15 @@ Keyed by the file's name without its folder or .safetensors, lower case.
 import os
 import re
 
+# Each: ours (shown first, and what a strength is brought within when the LoRA is swapped), and the author's or the
+# release's own, where one was found (shown under it).
 RANGES = {
-    "krea2_knpv3_1_nsfw": "0.5–1.5",
-    "krea2_pornmaster_uncensored_v1_nsfw": "0.5–1",
-    "krea2_realism-v2": "0.7–1.5",
-    "krea2_ultra_real_v1_nsfw": "0.5–1",
-    "krea2_ultra_real_v2_pro_sfw": "0.4–0.8",
-    "moss_ultra_real_v2_sfw": "0.5–0.8",
+    "krea2_knpv3_1_nsfw": {"ours": "0.5–1.5", "author": None},
+    "krea2_pornmaster_uncensored_v1_nsfw": {"ours": "0.5–1", "author": "0.5–1"},
+    "krea2_realism-v2": {"ours": "0.7–1.5", "author": None},
+    "krea2_ultra_real_v1_nsfw": {"ours": "0.5–1", "author": "0.7–0.8"},
+    "krea2_ultra_real_v2_pro_sfw": {"ours": "0.4–0.8", "author": "0.6–0.8"},
+    "moss_ultra_real_v2_sfw": {"ours": "0.5–0.8", "author": None},
 }
 
 
@@ -31,4 +33,10 @@ def key(name):
 
 
 def range_of(name):
-    return RANGES.get(key(name))
+    """Our range for a LoRA ("0.5–1"), or None for one it doesn't know."""
+    return (RANGES.get(key(name)) or {}).get("ours")
+
+
+def author_range_of(name):
+    """The author's own range for a LoRA, or None where none was found."""
+    return (RANGES.get(key(name)) or {}).get("author")

@@ -8,7 +8,8 @@ const path = require('path');
 
 const html = fs.readFileSync(process.argv[2], 'utf8');
 const modules = [...html.matchAll(/<script(?: defer)? src="\/static\/([^"?]+)(?:\?[^"]*)?"><\/script>/g)]
-  .map(m => ({ name: m[1], source: fs.readFileSync(path.join(__dirname, '..', 'panel', 'static', m[1]), 'utf8') }));
+  // Line endings as one: git may check the scripts out with CRLF (core.autocrlf), and the checks read them by line.
+  .map(m => ({ name: m[1], source: fs.readFileSync(path.join(__dirname, '..', 'panel', 'static', m[1]), 'utf8').replace(/\r\n/g, '\n') }));
 const script = modules.map(module => module.source).join('\n');
 const config = html.match(/<script id="panelConfig" type="application\/json">([\s\S]*?)<\/script>/);
 assert(config && modules.length && script.includes('async function poll'), 'the page loads its configuration and topic scripts');
@@ -1654,8 +1655,12 @@ assert(/\.go-bar button \{[^}]*padding: 5px 12px; font-size: \.85rem;/.test(html
   const savedPipeline = run('pipeline'), savedPlan = run('plan');
   run(`pipeline = 'image'; plan = { ok: true, total: 360, images: 5, steps: [], tokens: { each: 290, written: 1450, rounds: 1, context: 2100 } }; renderPlan()`);
   const footer = els.goBarEta.innerHTML;
-  assert(footer.startsWith('<span class="go-count" title="5 images" aria-label="5 images"><svg') && footer.includes('</svg>5</span>')
+  assert(footer.startsWith('<span class="go-count one-digit" title="5 images" aria-label="5 images"><svg') && footer.includes('</svg>5</span>')
     && footer.includes('<span class="go-eta-lines"><b>') && footer.includes('</b>~2.1k tok</span>') && !footer.includes(' · ~'), `the footer: an image count badge, how long, the tokens without a dot: ${footer}`);
+  run(`plan = { ok: true, total: 360, images: 20, steps: [] }; renderPlan()`);
+  assert(els.goBarEta.innerHTML.startsWith('<span class="go-count" title="20 images"'), 'two digits: from the edge, not centred');
+  assert(/\.go-count\.one-digit \{ align-items: center; \}/.test(html) && /\.go-count \{[^}]*align-items: flex-start;[^}]*margin-left: -4px;/.test(html)
+    && !/\.go-count \{[^}]*border: 1px/.test(html), 'no box; one digit centred under the image, more from the edge of Status');
   run(`pipeline = 'video'; plan = { ok: true, total: 360, clips: 3, steps: [] }; renderPlan()`);
   assert(!els.goBarEta.innerHTML.includes('go-count'), 'no image badge for a film');
   context.savedFooterPipeline = savedPipeline; context.savedFooterPlan = savedPlan;
@@ -1664,8 +1669,10 @@ assert(/\.go-bar button \{[^}]*padding: 5px 12px; font-size: \.85rem;/.test(html
 assert(run('fmtTokens(9640)') === '9.6k' && run('fmtTokens(800)') === '800', 'tokens in thousands');
 assert(run("tokensDetail({ each: 290, written: 8700, rounds: 2, context: 5457 })")
   === 'Prompts: ~290 tokens each, ~8,700 written in 2 requests; largest request ~5.5k tokens of context', 'the tokens in full on hover');
-assert(/<input type="range" id="imageWords" name="words" min="40" max="400" step="10" value="200"/.test(html) && html.includes('Suggested: 120–250 words'),
+assert(/<input type="range" id="imageWords" name="words" min="40" max="400" step="10" value="200"/.test(html) && html.includes('<div class="words-band" aria-hidden="true"><span>suggested</span></div>'),
   'words per prompt is a slider, 40-400, with its suggested range marked');
+assert(/<label for="imageWords">Words per prompt<\/label><span class="options-subtitle-what">/.test(html) && !html.includes('WordsHelp')
+  && html.indexOf('id="imageWordsTokens"') < html.indexOf('id="imageWords" name="words"'), 'no hint by its name; what it asks for above the line');
 assert(/<input type="range" id="videoWords" name="words" min="30" max="500" step="10" value="30" data-auto="30"/.test(html),
   "the video's starts on Auto, a step below 40: each model's own length");
 
@@ -2406,7 +2413,7 @@ assert(/\.meta\.loras \{ white-space: nowrap; overflow: hidden; text-overflow: e
 // A chip tapped quickly moves on at each tap; the form's own work waits until the taps stop, once for them all.
 {
   const body = script.slice(script.indexOf('function chipSelect('), script.indexOf("for (const select of document.querySelectorAll('select[data-chip]'))"));
-  assert(/select\.value = values\[[^\n]+\n\s*clearTimeout\(settle\);\n\s*settle = setTimeout\(\(\) => select\.dispatchEvent\(new Event\('change'/.test(body),
+  assert(/select\.value = values\[[^\n]+\s+clearTimeout\(settle\);\s+settle = setTimeout\(\(\) => select\.dispatchEvent\(new Event\('change'/.test(body),
     'a chip changes at once, and tells the form once the taps stop');
 }
 // Discarding a stopped run takes two taps, with no pop-up; deleting a whole set from Output has its own address.
@@ -4183,14 +4190,28 @@ assert(html.includes('.pill.comparison { --pill: var(--shared);') && run("pillsH
 // keeps the room of the extra lines' trash, so the strengths line up; off, the line is greyed.
 {
   const savedRanges = run('PANEL_CONFIG.lora_ranges');
-  run(`PANEL_CONFIG.lora_ranges = { 'krea2_knpv3_1_nsfw': '0.5–1.5' }`);
-  assert.strictEqual(run(`loraRange('Krea2\\\\Krea2_KNPV3_1_NSFW.safetensors')`), '0.5–1.5', 'found by its file name, folder and case aside');
-  assert.strictEqual(run(`loraRange('other.safetensors')`), '', 'none for a LoRA it knows nothing of');
-  const out = { textContent: '', title: '' };
-  const line = { querySelector: selector => selector === 'select' ? { value: 'Krea2_KNPV3_1_NSFW.safetensors' } : selector === '.lora-range' ? out : null };
-  context.testLoraRoot = { querySelectorAll: () => [line] };
+  run(`PANEL_CONFIG.lora_ranges = { 'krea2_knpv3_1_nsfw': { ours: '0.5–1.5', author: null }, 'krea2_ultra_real_v1_nsfw': { ours: '0.5–1', author: '0.7–0.8' } }`);
+  assert.strictEqual(run(`loraRange('Krea2\\\\Krea2_KNPV3_1_NSFW.safetensors').ours`), '0.5–1.5', 'found by its file name, folder and case aside');
+  assert.strictEqual(JSON.stringify(run(`loraRange('other.safetensors')`)), '{}', 'none for a LoRA it knows nothing of');
+  assert.deepStrictEqual([...run(`rangeBounds('0.5–1.5')`)], [0.5, 1.5]);
+  // Ours over the author's, where there is one.
+  const out = { innerHTML: '', title: '' }, select = { value: 'Krea2_ultra_real_v1_NSFW.safetensors', tagName: 'SELECT' };
+  const strength = { value: '1.8', dispatched: 0, dispatchEvent() { this.dispatched++; } };
+  const line = { parentNode: null, querySelector: selector => selector === 'select' ? select : selector === '.lora-range' ? out : selector === '.option-strength' ? strength : null };
+  context.testLoraRoot = line.parentNode = { querySelectorAll: () => [line] };
   run('syncLoraRanges(testLoraRoot)');
-  assert.deepStrictEqual([out.textContent, out.title], ['0.5–1.5', 'Strength worth using: 0.5–1.5']);
+  assert.deepStrictEqual([out.innerHTML, out.title], ['<span class="lora-range-ours">0.5–1</span><span class="lora-range-author">0.7–0.8</span>', "Worth using: 0.5–1\nIts author's: 0.7–0.8"]);
+  // Swapped to it, a strength over our range for it comes down to its top; one under, up to its bottom.
+  select.closest = () => line;
+  const swapped = documentListeners.change.find(fn => String(fn).includes('rangeBounds('));
+  swapped({ target: select });
+  assert.deepStrictEqual([strength.value, strength.dispatched], ['1', 1], 'over: brought down to 1');
+  strength.value = '0.2';
+  swapped({ target: select });
+  assert.strictEqual(strength.value, '0.5', 'under: brought up to 0.5');
+  strength.value = '0.7';
+  swapped({ target: select });
+  assert.deepStrictEqual([strength.value, strength.dispatched], ['0.7', 2], 'within: left as it is');
   context.savedLoraRanges = savedRanges;
   run('PANEL_CONFIG.lora_ranges = savedLoraRanges');
   const main = run(`imageOptionHtml({ id: 'lora', kind: 'switch', below: true, label: 'Use LoRA', default: '1' }, [{ id: 'lora', kind: 'switch', below: true }, { id: 'lora_name', kind: 'choice', parent: 'lora', label: 'LoRA', choices: ['a'], default: 'a' }, { id: 'lora_strength', kind: 'number', parent: 'lora', label: 'Strength', min: 0, max: 2, step: 0.1, default: '1' }])`);
@@ -4221,7 +4242,7 @@ assert(/:is\(#go, #goStick\):not\(:disabled\) \{ animation: test-flash 1\.4s eas
   run("syncWords('image', 1)");
   assert.strictEqual(els.imageWordsTokens.textContent, '160–240 words, ~290 tokens each', 'one prompt: no total');
   [els.imageWords.value, els.imageWords.dataset] = savedWords;
-  assert(/\.words-band \{[^}]*top: 11px; height: 9px;/.test(html) && /\.words-slider input::-webkit-slider-thumb \{[^}]*width: 13px; height: 13px;/.test(html),
+  assert(/\.words-band \{[^}]*top: 13px; height: 9px;/.test(html) && /\.words-slider input::-webkit-slider-thumb \{[^}]*width: 15px; height: 15px;/.test(html),
     'the suggested band close under the line, a smaller grabber');
 }
 // The local models, by family, each under a short name (panel/settings.py short_name), its whole name on hover.

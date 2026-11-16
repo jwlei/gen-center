@@ -36,13 +36,12 @@
    (syncWords, shared.js). The image form starts at its usual; the video form is blank for each model's own length.
 #}
 {% macro words_box(side, w) %}<div class="words-box" id="{{ side }}WordsBox">
-  <div class="options-subtitle"><label for="{{ side }}Words">Words per prompt</label>{{ hint_button(side ~ 'WordsHelp', 'words per prompt') }}<span class="options-subtitle-what"> · <span id="{{ side }}WordsValue">{{ w.usual }}</span></span></div>
-  <div class="field-help" id="{{ side }}WordsHelp" hidden><div class="hint">{% if side == 'image' %}How long the LLM writes each prompt for a new picture, or one made from references: it is asked for a range of 20% either side of this number. Suggested: {{ w.suggested[0] }}–{{ w.suggested[1] }} words, about what the workflows' own prompt enhancers write; shorter leaves the model to guess, and much longer is mostly ignored. Edit instructions keep their own 20–60. Longer prompts are written in more, smaller rounds.{% else %}How long the LLM writes each clip's prompt: it is asked for a range of 20% either side of this number. All the way left (Auto) is the video model's own: LTX-2 60–120 words, Wan 80–120, H3 150–500 as the film allows. Suggested: {{ w.suggested[0] }}–{{ w.suggested[1] }}; a clip's few seconds hold one main action, so much longer is mostly ignored, though H3 does best with more. A long film's prompts all come in one reply, so very long ones can run out of room.{% endif %}</div></div>
+  <div class="options-subtitle"><label for="{{ side }}Words">Words per prompt</label><span class="options-subtitle-what"> · <span id="{{ side }}WordsValue">{{ w.usual }}</span></span></div>
+  <div class="hint words-tokens" id="{{ side }}WordsTokens"></div>
   <div class="words-slider" style="--lo: {{ '%.1f' % ((w.suggested[0] - w.least) * 100 / (w.most - w.least)) }}%; --hi: {{ '%.1f' % ((w.suggested[1] - w.least) * 100 / (w.most - w.least)) }}%">
     <input type="range" id="{{ side }}Words" name="words" min="{{ w.least }}" max="{{ w.most }}" step="10" value="{{ w.usual }}"{% if side == 'video' %} data-auto="{{ w.least }}"{% endif %} data-per-word="{{ w.per_word }}" data-per-version="{{ w.per_version }}" data-spread="{{ w.spread }}" data-suggested="{{ w.suggested[0] }}-{{ w.suggested[1] }}" aria-label="Words per prompt">
     <div class="words-band" aria-hidden="true"><span>suggested</span></div>
   </div>
-  <div class="hint words-tokens" id="{{ side }}WordsTokens"></div>
 </div>{% endmacro %}
 {% macro explicit_box(side) %}<div class="explicit-box">
   <label class="check"><input type="checkbox" id="{{ side }}Explicit" name="explicit"><span class="options-subtitle">Explicit content</span></label>
@@ -374,6 +373,7 @@
   /* Tests & misc's comparisons, in one box: LoRA, Workflows and Prompt models, each under its heading, a line between. */
   .tests-box { padding: 6px 8px 8px; }
   #imageLocalModelBox, #videoLocalModelBox { margin-top: 5px; }
+  #optionsCard .pipeline-form select.local-model-select { font-size: .66rem; padding-left: 4px; padding-right: 4px; }
   .tests-group + .tests-group { margin-top: 8px; padding-top: 6px; border-top: 1px solid var(--line); }
   .tests-line { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 4px; }
   .tests-line > .check { margin: 0; flex: 1; min-width: 0; }
@@ -731,16 +731,16 @@
   .words-box { margin-top: 8px; }
   .words-box > .options-subtitle { margin: 0 0 4px; }
   .words-box > .options-subtitle label { display: inline; margin: 0; font: inherit; color: inherit; letter-spacing: inherit; }
-  .words-slider { position: relative; padding-bottom: 9px; }
+  .words-slider { position: relative; padding-bottom: 7px; }
   .words-slider input[type=range] { display: block; width: 100%; height: 16px; margin: 0; padding: 0; border: 0; background: none; -webkit-appearance: none; appearance: none; }
   .words-slider input::-webkit-slider-runnable-track { height: 4px; border-radius: 2px; background: var(--line); }
   .words-slider input::-moz-range-track { height: 4px; border-radius: 2px; background: var(--line); }
-  .words-slider input::-webkit-slider-thumb { -webkit-appearance: none; width: 13px; height: 13px; margin-top: -4.5px; border-radius: 50%; background: var(--accent); border: 2px solid var(--panel); cursor: pointer; }
-  .words-slider input::-moz-range-thumb { box-sizing: border-box; width: 13px; height: 13px; border-radius: 50%; background: var(--accent); border: 2px solid var(--panel); cursor: pointer; }
+  .words-slider input::-webkit-slider-thumb { -webkit-appearance: none; width: 15px; height: 15px; margin-top: -5.5px; border-radius: 50%; background: var(--accent); border: 2px solid var(--panel); cursor: pointer; }
+  .words-slider input::-moz-range-thumb { box-sizing: border-box; width: 15px; height: 15px; border-radius: 50%; background: var(--accent); border: 2px solid var(--panel); cursor: pointer; }
   .words-slider input:focus-visible::-webkit-slider-thumb { outline: 2px solid var(--text); }
-  .words-band { position: absolute; left: var(--lo); width: calc(var(--hi) - var(--lo)); top: 11px; height: 9px; border-top: 2px solid var(--accent); opacity: .7; }
+  .words-band { position: absolute; left: var(--lo); width: calc(var(--hi) - var(--lo)); top: 13px; height: 9px; border-top: 2px solid var(--accent); opacity: .7; }
   .words-band span { display: block; text-align: center; font-size: .56rem; line-height: 8px; color: var(--muted); }
-  .words-tokens { margin: 0; }
+  .words-tokens { margin: 2px 0 3px; }
   .words-box.off-band [id$="WordsValue"] { color: var(--warn); }
   /* Its name is a label, in a sub-heading's line: inline, with what it does after it. */
   .variety-box > .options-subtitle { margin: 0 0 6px; }
@@ -1836,9 +1836,12 @@
   .go-error:not([hidden]) + .go-eta { display: none; }
   .go-eta b { display: block; color: var(--text); }
   .go-eta.with-count { display: flex; align-items: stretch; gap: 7px; }
-  .go-count { flex: none; display: inline-flex; flex-direction: column; align-items: center; justify-content: center; gap: 1px; min-width: 30px; padding: 2px 5px;
-    border: 1px solid var(--line); border-radius: 7px; background: var(--panel-2); color: var(--text); font-size: .72rem; font-weight: 600; line-height: 1; font-variant-numeric: tabular-nums; }
+  /* No box: the icon over the number, both from the left, 4px out of the bar's 16px edge to the 12px of the buttons
+     under it, so the count starts where Status does. */
+  .go-count { flex: none; display: inline-flex; flex-direction: column; align-items: flex-start; justify-content: center; gap: 2px; margin-left: -4px;
+    color: var(--text); font-size: .72rem; font-weight: 600; line-height: 1; font-variant-numeric: tabular-nums; }
   .go-count svg { width: 13px; height: 13px; color: var(--muted); }
+  .go-count.one-digit { align-items: center; }  /* One digit sits centred under the image; two or more start at the edge */
   .go-eta-lines { min-width: 0; }
   .go-bar button { width: auto; flex: none; margin: 0; padding: 5px 12px; font-size: .85rem; }
   /* Add to top of queue and Add to pending, as symbols beside the main button; they go as the form's own do. */
@@ -1854,6 +1857,7 @@
     .stick { display: flex; }
     .stick > .jump { display: none; }
     .go-bar { padding: 8px 20px; }
+    .go-count { margin-left: 0; }  /* No buttons under it to line up with */
     .wrap { padding-bottom: calc(var(--head, 60px) + 20px); }
     /* Status stays in sight above the rest, half what's running and half its log. */
     .run-card {
@@ -1978,11 +1982,14 @@
   #optionsCard .option-row > label, #optionsCard .option-line > .option-sub { flex: 0 0 6.5rem; }
   #optionsCard .option-row > select { flex: 1; min-width: 0; max-width: 13rem; }
   #optionsCard .lora-line { display: flex; flex-wrap: nowrap; gap: 6px; align-items: center; margin-top: 6px; }
-  #optionsCard .lora-line select { flex: 1; min-width: 0; width: 0; }
+  #optionsCard .lora-line select { flex: 1; min-width: 0; width: 0; margin: 0; }
   #optionsCard .lora-line .option-strength { flex: 0 0 4.5em; width: 4.5em; margin: 0; }
   /* The strength worth using for the LoRA chosen (core/lora_hints.py); the first line keeps the trash's room, so the
      strengths line up under each other. */
-  #optionsCard .lora-line .lora-range { flex: 0 0 3.4em; font-size: .62rem; color: var(--muted); white-space: nowrap; font-variant-numeric: tabular-nums; }
+  #optionsCard .lora-line .lora-range { flex: 0 0 3.4em; display: flex; flex-direction: column; justify-content: center; gap: 1px;
+    font-size: .62rem; line-height: 1.1; color: var(--muted); white-space: nowrap; font-variant-numeric: tabular-nums; }
+  #optionsCard .lora-line .lora-range-ours { color: var(--text); }
+  #optionsCard .lora-line .lora-range-author { font-size: .56rem; opacity: .8; }
   #optionsCard .lora-line .lora-gap { flex: none; width: 28px; }
   /* Off, its LoRA and strength are greyed: they do nothing. So too what a LoRA comparison sets in their place. */
   #optionsCard .lora-line:has(> .check input[type=checkbox]:not(:checked)) :is(select, .option-strength, .lora-range) { opacity: .45; }
@@ -1991,6 +1998,8 @@
   body.on-video:has(#videoLoraStyleTest:checked) #videoOptionsBox .lora-line:not(.lora-extra) select,
   body.on-video:has(#videoLoraStrengthTest:checked) #videoOptionsBox .lora-line:not(.lora-extra) :is(.option-strength, .lora-range) { opacity: .45; }
   #optionsCard .lora-line .icon-btn, #optionsCard [data-add-lora] { flex: none; width: 28px; min-width: 28px; padding: 3px; margin: 4px 0; }
+  /* The + to add one, centred under the ticks of the lines above it (16px wide). */
+  #optionsCard [data-add-lora] { display: block; width: 22px; min-width: 22px; height: 22px; margin: 6px 0 2px -3px; padding: 0; line-height: 1; }
   .audio-line { display: flex; align-items: center; gap: 8px; margin-top: 6px; }
   #optionsCard .audio-line .field-heading, #optionsCard .audio-line label { margin: 0; }
   .audio-line select { flex: 1; min-width: 0; }

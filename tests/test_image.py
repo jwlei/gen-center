@@ -77,11 +77,13 @@ class SizeTest(unittest.TestCase):
                 eta.return_value.plan.return_value = {"total": 0}
                 listed = image_panel.describe_run(state)
             self.assertEqual([image["prompt_llm"] for image in listed["images"]],
-                             ["Gemma 4 Q4_K_M-v", "Qwen3 14B", None])
+                             ["Gemma 4 U-H Q4_K_M", "Qwen3 14B", None])
             self.assertEqual([value for kind, value in listed["_facts"] if kind == "llm"],
-                             ["Gemma 4 Q4_K_M-v", "Qwen3 14B"])
+                             ["Gemma 4 U-H Q4_K_M", "Qwen3 14B"])
         self.assertEqual(image_panel.prompt_llm_pill({"llm": "local"}), "local")
         self.assertEqual(image_panel.prompt_llm_pill({"llm": "gemini", "local_model": "gemma-4-12b"}), "gemini")
+        self.assertEqual(image_panel.prompt_llm_pill({"llm": "local", "local_model": "gemma-4-12b"}),
+                         image_panel.settings.short_name("gemma-4-12b"), "no -v: as the model pickers name it")
 
     def test_a_size_off_the_grid_renders_just_larger(self):
         self.assertEqual(media.render_size(1920, 1080), (1920, 1088))
@@ -504,7 +506,7 @@ class PromptSourceTest(unittest.TestCase):
         from core import llm_tests
         from pipelines.image import main
         values = [{"llm": "gemini", "local_model": None, "label": "Gemini"},
-                  {"llm": "local", "local_model": "gemma-4-12b", "label": "Gemma 4 12B-v"},
+                  {"llm": "local", "local_model": "gemma-4-12b", "label": "Gemma 4 H Q4_K_M"},
                   {"llm": "local", "local_model": "qwen3-14b", "label": "Qwen3 14B"}]
         args = main.parse_args(["a lighthouse", "--llm", "local", "--local-model", "gemma-4-12b", "--seed", "7"])
         comfy = mock.Mock(url="http://comfy")
@@ -538,7 +540,7 @@ class PromptSourceTest(unittest.TestCase):
             state = main.plan_run(args, main.STAGES)
         self.assertEqual(asked, [("gemini", None, 1), ("local", "gemma-4-12b", 1), ("local", "qwen3-14b", 1)], "each writes one")
         self.assertEqual([(shot["title"], shot["prompt"]) for shot in state.shots],
-                         [("Gemini", "written by gemini"), ("Gemma 4 12B-v", "written by gemma-4-12b")],
+                         [("Gemini", "written by gemini"), ("Gemma 4 H Q4_K_M", "written by gemma-4-12b")],
                          "one that fails costs its own image")
         self.assertEqual({shot["seed"] for shot in state.shots}, {7}, "one seed for all")
         self.assertEqual(llm_tests.pill(state.shots), "All LLMs")

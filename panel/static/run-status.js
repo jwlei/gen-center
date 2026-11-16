@@ -80,7 +80,7 @@ function renderPlan() {
   const tokens = plan && plan.ok && plan.tokens;
   // An image set's: how many it makes, in a little badge as tall as both lines beside it.
   const count = plan && plan.ok && pipeline === 'image' && plan.images
-    ? `<span class="go-count" title="${plan.images} ${plan.images === 1 ? 'image' : 'images'}" aria-label="${plan.images} ${plan.images === 1 ? 'image' : 'images'}">${IMAGE_COUNT_ICON}${plan.images}</span>` : '';
+    ? `<span class="go-count${plan.images < 10 ? ' one-digit' : ''}" title="${plan.images} ${plan.images === 1 ? 'image' : 'images'}" aria-label="${plan.images} ${plan.images === 1 ? 'image' : 'images'}">${IMAGE_COUNT_ICON}${plan.images}</span>` : '';
   $('goBarEta').classList.toggle('with-count', !!count);
   $('goBarEta').innerHTML = plan && plan.ok
     ? `${count}<span class="go-eta-lines"><b>${fmtEta(plan.total)}</b>${tokens ? `~${fmtTokens(tokens.context)} tok` : ''}</span>`
