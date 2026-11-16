@@ -70,7 +70,6 @@ async function loadVideoWorkflows() {
     loadVideoForm(['workflow']);
   }
   syncVideoForm();
-  $('videoWorkflowOff').hidden = !!data.online;
   applyDefaultPreset('video');
 }
 $('videoWorkflow').addEventListener('focus', loadVideoWorkflows);

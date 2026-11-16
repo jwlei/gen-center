@@ -186,6 +186,8 @@ function syncStrips() {
   // Each only while its own bar on Status is out of sight: elsewhere, or on Status scrolled past it.
   for (const job of Object.keys(stripActive)) $(`${job}Strip`).hidden = !stripActive[job] || inView(`${job}Progress`);
   // Nothing to show: no box at all, pinned or not.
+  // Turned off in Settings: none at all, the Status button can say how far along instead.
+  if (SETTINGS.top_progress === false) for (const job of Object.keys(stripActive)) $(`${job}Strip`).hidden = true;
   const empty = Object.keys(stripActive).every(job => $(`${job}Strip`).hidden);
   $('headStrips').classList.toggle('empty', empty);
   $('topMain').hidden = empty;
@@ -195,7 +197,7 @@ function syncStrips() {
 // the screen; back at the top, they go back. Either way they ease from where they were to where they go.
 let pinnedOut = false;
 function syncPin() {
-  const out = !!SETTINGS.pin_progress && window.scrollY > 8;
+  const out = !!SETTINGS.pin_progress && SETTINGS.top_progress !== false && window.scrollY > 8;
   if (out === pinnedOut) return;
   pinnedOut = out;
   const box = $('headStrips'), measure = el => (el.getBoundingClientRect ? el.getBoundingClientRect() : null);
@@ -216,6 +218,20 @@ function syncPin() {
   move.onfinish = move.oncancel = done;
 }
 window.addEventListener('scroll', syncPin, { passive: true });
+// Phones: the header's icons (Finished, Private mode, the log, Settings) are on demand, in a box that grows up out of
+// the footer's last button over the page. That button again, an icon in it, Escape or a tap anywhere else puts it away.
+function showHead(on) {
+  document.body.classList.toggle('head-shown', on);
+  $('headToggle').setAttribute('aria-expanded', String(on));
+}
+$('headToggle').addEventListener('click', () => showHead(!document.body.classList.contains('head-shown')));
+// Once one of its icons has done what it does (opened Settings, switched Private mode), it goes.
+$('topIcons').addEventListener('click', e => { if (e.target.closest && e.target.closest('a, button')) showHead(false); });
+// Before the tap does what it does, so the page under it still gets it.
+document.addEventListener('pointerdown', e => {
+  if (document.body.classList.contains('head-shown') && !(e.target.closest && e.target.closest('#topIcons, #headToggle'))) showHead(false);
+}, true);
+document.addEventListener('keydown', e => { if (e.key === 'Escape' && document.body.classList.contains('head-shown')) showHead(false); });
 // A status in two lines: "Rendering clip - The Descent to Knees, 5s", then "Clip 6 of 8" left and "0:19" right.
 // The count is split off a detail such as "Clip 6 of 8: The Descent, 5s" or Shorts' "Clip 2 of 5 - scene 3, 6s".
 // What the run is making now ("Image 2 of 4: its title"): only the count when its title is hidden (hideTitle).
@@ -237,8 +253,19 @@ function statusHtml(first, count = '', time = '', timeTitle = '') {
 }
 // The footer bar says it all in one line; Status already has the stage and the time so
 // far, so its bar only adds how far along and when it ends.
+// Progress in the Status button (Settings): the run's share of the way, filled from the left, with its percentage.
+function syncStatusFill(share) {
+  const button = document.querySelector('.jump a[data-page="status"]');
+  if (!button) return;
+  const on = !!SETTINGS.status_progress && share != null;
+  button.classList.toggle('filling', on);
+  button.style.setProperty('--fill', on ? `${Math.round(share * 100)}%` : '0%');
+  button.dataset.pct = on ? `${Math.round(share * 100)}%` : '';
+}
+let runShare = null;
 function setStrip(job, show, strip, status, share) {
   stripActive[job] = show;
+  if (job === 'run') { runShare = show ? share : null; syncStatusFill(runShare); }
   $(`${job}Progress`).hidden = !show;
   if (!show) return;
   const pct = share === null ? '' : `${Math.round(share * 100)}%`;

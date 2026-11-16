@@ -14,6 +14,7 @@ import ffmpeg
 import requests
 
 from core import comfy_memory, director, h3_refiner_worker, prompt_writer_instructions
+from core.llm_reply import CutOff
 from core.paths import LOGS_DIR, PROJECT_ROOT
 from panel import settings as panel_settings
 
@@ -22,13 +23,15 @@ TIMINGS = ("off", "review", "render")
 ASPECTS = {"21:9": 21 / 9, "16:9": 16 / 9, "4:3": 4 / 3,
            "1:1": 1, "3:4": 3 / 4, "9:16": 9 / 16}
 TIMEOUT = 3600
-# The context every local model is started with: the longest request so far (a plan's prompt and its 8192-token
-# answer) is under 9k tokens. What that context costs differs by family: most of Gemma 4's layers only look back
+# The context every local model is started with: the longest request (a plan's prompt, its images, and its answer of
+# up to PLAN_TOKENS) is under 16k tokens. What that context costs differs by family: most of Gemma 4's layers only look back
 # 1024 tokens, so its cache is about 0.75 GB at 16k; every one of Qwen3 14B's keeps the whole context, 2.5 GB at 16k,
 # which with its 8.2 GB of weights is more than a 12 GB card has free. Once it overflows, the driver quietly moves part
 # of the model into system memory and writing drops from ~70 to ~10 tok/s. So Qwen's cache is kept at 8 bits: half
 # the size, and next to no change in what it writes. (Flash attention, which that needs, is on for both.)
 CONTEXT = 16384
+# A plan's longest answer: a round of up to 20 image prompts of up to about 300 words each (pipelines/image/planner.py).
+PLAN_TOKENS = 12288
 KV_CACHE = {"qwen3-14b": "q8_0"}
 
 
@@ -231,7 +234,9 @@ class Refiner:
         try:
             self.process = subprocess.Popen(args, stdout=self.log, stderr=self.log,
                                             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
-            print("🧠 Starting the local OpenH3-IR model...", flush=True)
+            # The runner OpenH3-IR and prompt writing share: named by the model it runs, not by OpenH3-IR.
+            label = next((m["label"] for m in panel_settings.local_models() if m["id"] == self.model_id), self.model_id)
+            print(f"🧠 Starting the local model ({label})...", flush=True)
             print(f"Local LLM diagnostics: {self.log.name}", flush=True)
             self._token_stop = threading.Event()
             self._token_previous = None
@@ -388,12 +393,12 @@ class Refiner:
                 self._token_event("request", kind="plan", image_count=len(images),
                                   input_sha256=hashlib.sha256(prompt.encode()).hexdigest(),
                                   schema_sha256=hashlib.sha256(json.dumps(schema, sort_keys=True).encode()).hexdigest(),
-                                  max_tokens=8192, enable_thinking=False, temperature=0.7)
+                                  max_tokens=PLAN_TOKENS, enable_thinking=False, temperature=0.7)
             response = requests.post(f"{self.url}/chat/completions", json={
                 "model": "h3-refiner", "messages": [{"role": "user", "content": content}],
                 "response_format": {"type": "json_schema", "json_schema": {
                     "name": "prompt_plan", "strict": True, "schema": schema}},
-                "max_tokens": 8192, "temperature": 0.7,
+                "max_tokens": PLAN_TOKENS, "temperature": 0.7,
                 "chat_template_kwargs": {"enable_thinking": False},
             }, timeout=TIMEOUT)
             response.raise_for_status()
@@ -401,7 +406,7 @@ class Refiner:
             self._completion_tokens(body)
             choice = body["choices"][0]
             if choice.get("finish_reason") == "length":
-                raise RuntimeError("The local model's plan was cut off. Try fewer images or a shorter video.")
+                raise CutOff("The local model's reply was cut off: it ran out of tokens.")
             result = choice["message"]["content"]
             if not isinstance(result, str) or not result.strip():
                 raise RuntimeError("The local model returned an empty plan.")

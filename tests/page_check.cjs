@@ -21,7 +21,7 @@ for (const [, id] of script.matchAll(/\$\('([A-Za-z]+)'\)/g)) assert(ids.has(id)
 
 function element(id) {
   return {
-    id, dataset: {}, style: {}, hidden: false, innerHTML: '', textContent: '', value: '', className: '', elements: [], options: [], selectedOptions: [{}], childNodes: [],
+    id, dataset: {}, style: { setProperty(name, value) { this[name] = value; } }, hidden: false, innerHTML: '', textContent: '', value: '', className: '', elements: [], options: [], selectedOptions: [{}], childNodes: [],
     classList: { toggle() {}, add() {}, remove() {}, contains: () => false },
     listeners: {}, listenersAll: {}, addEventListener(name, fn) { this.listeners[name] = fn; (this.listenersAll[name] = this.listenersAll[name] || []).push(fn); }, querySelectorAll: selector => (selector === 'input' ? [element('low'), element('high')] : []), querySelector: () => element('part'), setAttribute() {},
     reportValidity() { return true; }, dispatchEvent() {}, focus() {}, replaceChildren(...nodes) { this.childNodes = nodes; },
@@ -185,7 +185,7 @@ assert(/<div class="form-actions" id="formActions" hidden>/.test(html), 'the old
 }
 
 run(`renderStopped([{ id: 'run_test', pipeline: 'video', label: 'Film', detail: 'Stopped', clips: 1 }], [], [], false)`);
-assert(/data-continue-later="run_test"/.test(els.stoppedRuns.innerHTML), 'continuing a stopped run adds it to Pending');
+assert(/data-continue="run_test"/.test(els.stoppedRuns.innerHTML), 'a stopped run goes into the queue in one press');
 assert(/data-continue-top="run_test"/.test(els.stoppedRuns.innerHTML), 'putting a stopped run at the top remains available');
 assert(/\.stopped-run \{ position: relative; \}/.test(html) && /\.work-privacy \{ position: absolute; top: 8px; right: 10px;/.test(html),
   'run privacy icons are anchored at the top right of their cards');
@@ -405,8 +405,8 @@ els.videoWorkflow.value = 'director';
 els.start.value = 'director';
 run('syncVideoForm()');
 assert(!els.startDirector.disabled && els.startMultishot.disabled && !els.start.disabled);
-assert(html.includes('id="connectGuideLink" data-guide="clip_connection">About how clips connect</button>'),
-  'the clips-connect guide link is unchanged');
+assert(/<label for="start">How clips connect<\/label><button type="button" class="hint-toggle" id="connectGuideLink" data-guide="clip_connection"[^>]*><span class="res-info-mark" aria-hidden="true">i<\/span><\/button>/.test(html)
+  && !html.includes('About how clips connect</button>'), 'How clips connect: its guide behind an (i) by its name, as the other headings');
 assert(els.multishotOptions.hidden && !els.previewRun.disabled && !els.videoClipFixedButton.disabled);
 assert(html.indexOf('id="sizePreset"') < html.indexOf('id="duration"') &&
        html.indexOf('id="videoClipFixedHint"') < html.indexOf('id="connectionBox"'), 'resolution precedes film length and connection follows clip length');
@@ -508,9 +508,9 @@ assert(/<span id="runProgressRight"><\/span><\/div>\s*<div class="hint eta-detai
 // Shorts in YouTube red; the phone addresses are in the settings box, with copy buttons; no voice hint.
 assert(/body\.on-shorts \{ --side: var\(--c-shorts\); \}/.test(html));
 // The colours are written once, and everything else reads them.
-assert(/:root \{ --c-shorts: #ff0033; --c-video: #4c8dff; --c-image: #2fbf71; --shared: #a07cff; \}/.test(html), 'each colour once');
+assert(/:root \{ --c-shorts: #ff0033; --c-video: #4c8dff; --c-image: #2fbf71; --shared: var\(--accent\); \}/.test(html), "each colour once; the shared one is the theme's own");
 {
-  assert.strictEqual((html.match(/#ff0033|#4c8dff|#2fbf71|#a07cff/g) || []).length, 4, 'nowhere else in the page');
+  assert.strictEqual((html.match(/#ff0033|#4c8dff|#2fbf71|#a07cff/g) || []).length, 5, "nowhere else in the page: the violet only as Standard's own colour and its swatch");
   assert(!/#ff0033|#4c8dff|#2fbf71|#a07cff/.test(script) && script.includes("const SIDE_COLOURS = { shorts: 'var(--c-shorts)', video: 'var(--c-video)', image: 'var(--c-image)' };"), 'nor in its script');
 }
 assert(/#restartComfy\.pulse \{ border-color: var\(--warn\); color: var\(--warn\);/.test(html) && !/e6b800|230, 184, 0/.test(html), "Restart ComfyUI's pulse: the same yellow as Restart panel's");
@@ -1038,8 +1038,8 @@ assert(/#videos, #imageSets, #collections, #cnav \{ transition: opacity \.25s ea
   assert(/<dialog id="pillsMenu" class="panel-dialog upscale-dialog pills-menu"/.test(html) && script.includes("if (line.closest('.viewer-meta-details')) {"), 'a box, growing as Move does');
 }
 assert(script.includes("if (pick) moveViewed({ to: pick.dataset.moveTo }, pick);") && /button\.picked \{ background: var\(--panel-2\); border-color: var\(--accent\)/.test(html)
-  && /dialog#moveSheet \{ --accent: var\(--shared\); border-color: var\(--accent\); \}/.test(html)
-  && /dialog#moveSheet\.moving \.upscale-methods button:not\(\.picked\) \{ opacity: \.4;/.test(html), 'the collection tapped keeps its neutral fill with a shared-purple border, the others dimmed');
+  && /dialog#moveSheet \{ --accent: var\(--shared\); border-color: var\(--line\); \}/.test(html) && !/dialog#moveSheet \.upscale-methods button\.nsfw/.test(html)
+  && /dialog#moveSheet\.moving \.upscale-methods button:not\(\.picked\) \{ opacity: \.4;/.test(html), 'plain borders, no private red; the collection tapped keeps its neutral fill, the others dimmed');
 // A clicked button's request on its way: it pulses until the answer is back.
 {
   const classes = new Set(), attrs = {};
@@ -1223,15 +1223,30 @@ assert(/<div class="options-lora options-speed"><div class="options-subtitle">Tu
 assert(laidOut.includes('<div class="res-hint option-hint" hidden>How many times') && script.includes("const info = e.target.closest && e.target.closest('.option-info');"), 'each name drops its hint');
 assert(laidOut.includes('<button type="button" class="hint-toggle" data-style-lora-guide aria-label="About style LoRA"')
   && script.includes("openModelGuide('style_lora')"), 'style LoRA offers its guide from a heading hint icon');
+// Which model runs: last of all, under its own heading; outside Private mode an NSFW one isn't offered, and with only
+// the workflow's own left there's nothing to pick.
+const modelOption = { id: 'model_file', kind: 'choice', label: 'Diffusion model', model: true, default: 'moss_base.safetensors',
+  choices: ['moss_base.safetensors', 'Moss_SFT_NSFW.safetensors', 'moss_tuned.safetensors'], labels: { 'moss_base.safetensors': 'moss_base' } };
+run(`privateMode = true; syncOptions('testOptions', 'testOptionsBox', [{ id: 'group_x', kind: 'switch', label: 'X', default: '0' }, ${JSON.stringify(modelOption)}], 'm')`);
+const modelLaidOut = els.testOptionsBox.innerHTML;
+assert(modelLaidOut.indexOf('options-model') > modelLaidOut.indexOf('opt_group_x') && modelLaidOut.includes('<div class="options-subtitle">Model</div>') && !modelLaidOut.includes('what makes the picture')
+  && modelLaidOut.includes('name="opt_model_file"') && modelLaidOut.includes('Moss_SFT_NSFW'), 'the model picker is the last of the settings');
+const shown = run(`visibleLoraOptions([${JSON.stringify(modelOption)}])`);
+run('privateMode = false');
+const hidden = run(`visibleLoraOptions([${JSON.stringify(modelOption)}])`);
+assert.strictEqual(JSON.stringify(hidden[0].choices), '["moss_base.safetensors","moss_tuned.safetensors"]', 'no NSFW model outside Private mode');
+assert.strictEqual(run(`visibleLoraOptions([${JSON.stringify({ ...modelOption, choices: modelOption.choices.slice(0, 2) })}])`).length, 0, 'nothing left to pick, no picker');
+assert.strictEqual(shown[0].choices.length, 3);
 // The negative prompt goes to the bottom of the Prompt section, not the options; with only it, there are no options to show.
 run(`syncOptions('testOptions', 'testOptionsBox', [{ id: 'negative', kind: 'text', label: 'Negative prompt', default: 'blurry' }], 'n')`);
 assert(/<textarea id="opt_negative" name="opt_negative"[^>]*>blurry<\/textarea>/.test(els.testNegativeSlot.innerHTML) && !els.testNegativeSlot.hidden, 'the negative prompt is in the Prompt section');
 assert(!els.testOptionsBox.innerHTML.includes('opt_negative') && els.testOptions.hidden, 'not in the options, which have nothing else to show');
 run(`syncOptions('testOptions', 'testOptionsBox', [{ id: 'steps', kind: 'number', label: 'Steps', default: '8', min: 1, max: 150, step: 1 }], 'm')`);
 assert(els.testNegativeSlot.innerHTML === '' && els.testNegativeSlot.hidden && !els.testOptions.hidden, 'a workflow without one leaves the place empty');
-assert(/<div id="imageNegativeSlot" class="negative-slot"><\/div>\s*<\/details>\s*<details class="section" id="imageOptions"/.test(html)
-  && /<div id="videoNegativeSlot" class="negative-slot"><\/div>\s*<\/details>\s*<details class="section" id="videoOptions"/.test(html)
-  && /<div id="shortsNegativeSlot" class="negative-slot"><\/div>\s*<\/details>\s*<details class="section" id="shortsOptions"/.test(html), 'last in each Prompt section');
+// Under the prompt, then only what the LLM is told (Variety, Explicit) below it, at the end of the Prompt section.
+assert(/<div id="imageNegativeSlot" class="negative-slot"><\/div>\s*<div id="imageWriterExtras" class="writer-extras">[\s\S]*?<\/div>\s*<\/details>\s*<details class="section" id="imageOptions"/.test(html)
+  && /<div id="videoNegativeSlot" class="negative-slot"><\/div>\s*<div id="videoWriterExtras" class="writer-extras">[\s\S]*?<\/div>\s*<\/details>\s*<details class="section" id="videoOptions"/.test(html)
+  && /<div id="shortsNegativeSlot" class="negative-slot"><\/div>\s*<\/details>\s*<details class="section" id="shortsOptions"/.test(html), 'at the end of each Prompt section, above Variety');
 {
   const box = els.imageOptionsBox, savedQuery = box.querySelectorAll, workflow = box.dataset.workflow;
   const savedWrite = run('draftWrite');
@@ -1297,13 +1312,23 @@ assert(stoppedBox.indexOf('Wardrobe') < stoppedBox.indexOf('Image · 1 of 2 imag
 assert(stoppedBox.includes('<div class="hint">02 Nov 23:46</div>') && stoppedBox.indexOf('Image · 1 of 2 images') < stoppedBox.indexOf('02 Nov 23:46') && stoppedBox.indexOf('02 Nov 23:46') < stoppedBox.indexOf('class="stopped-actions"'), 'the date on its own line, under the details');
 assert(stoppedBox.indexOf('class="stopped-actions"') < stoppedBox.indexOf('data-continue') && stoppedBox.indexOf('data-continue') < stoppedBox.indexOf('data-shots') && stoppedBox.indexOf('data-shots') < stoppedBox.indexOf('data-config') && stoppedBox.indexOf('data-config') < stoppedBox.indexOf('data-discard'), 'continue is left of the other actions');
 assert(stoppedBox.includes(`data-shots="image_1" aria-label="Prompts" title="View prompts">${run('ICONS.enhanced')}</button>`), 'failed and stopped runs use the star for prompts');
-assert(/class="icon-btn start-item continue-item" data-continue-later="image_1"/.test(stoppedBox) && stoppedBox.includes('aria-label="Add to Pending"'),
-  'a stopped run has an accessible Add to Pending icon');
-assert(stoppedBox.includes(`aria-label="Add to Pending" title="Add to Pending: it waits until you start it">${run('ICONS.queue')}</button>`)
-  && stoppedBox.includes(`data-continue-top="image_1" aria-label="Add to the top of the queue" title="Add to the top of the queue: ahead of everything waiting">${run('ICONS.top')}</button>`)
-  && stoppedBox.indexOf('data-continue-later="image_1"') < stoppedBox.indexOf('data-continue-top="image_1"')
-  && !stoppedBox.includes('data-continue="image_1"'), 'a stopped run: Add to Pending, then the arrow to the top; no immediate retry');
-assert(script.includes("const query = d.continueTop ? '?top=1' : d.continueLater ? '?later=1' : '';") && script.includes("`/runs/${encodeURIComponent(run)}/continue${query}`") && script.includes("`/queue/run/start/${d.start}${d.top ? '?top=1' : ''}`"), 'the arrows ask for the top');
+assert(/class="icon-btn start-item continue-item" data-continue="image_1"/.test(stoppedBox) && stoppedBox.includes('aria-label="Add to the queue"'),
+  'a stopped run has an accessible Add to the queue icon');
+assert(stoppedBox.includes(`aria-label="Add to the queue" title="Add to the queue: it continues from where it got to when the queue gets to it (with nothing running, the queue waits for Resume)">${run('ICONS.queue')}</button>`)
+  && stoppedBox.includes(`data-continue-top="image_1" aria-label="Add to the top of the queue" title="Add to the top of the queue: ahead of everything waiting, and started now if nothing is running">${run('ICONS.top')}</button>`)
+  && stoppedBox.indexOf('data-continue="image_1"') < stoppedBox.indexOf('data-continue-top="image_1"')
+  && !stoppedBox.includes('data-continue-later="image_1"'), 'a stopped run: into the queue in one press (not first into Pending as a job, then the queue), then the arrow to the top');
+{
+  // Opening Pending keeps what was drawn, now open: the next poll finds nothing changed and draws nothing (no flash).
+  const opened = run(`(() => { const s = { dataset: { html: '<details class="stopped-fold"><summary>Pending (2)</summary></details>' },
+    classList: { toggle() {} }, querySelector: sel => sel === '.stopped-fold' ? {} : null, querySelectorAll: () => [] };
+    setQueueSectionOpen(s, true); const open = s.dataset.html; setQueueSectionOpen(s, false); return [open, s.dataset.html]; })()`);
+  assert.deepStrictEqual(Array.from(opened), ['<details class="stopped-fold" open><summary>Pending (2)</summary></details>',
+    '<details class="stopped-fold"><summary>Pending (2)</summary></details>'], 'Pending opens and closes without being drawn again');
+}
+// Pending's "Add to the queue" says so (?pending=1): with nothing running it waits for Resume. Retry in Finished, which
+// isn't a start-item, starts it as before; the top arrow starts it now.
+assert(script.includes("const query = d.continueTop ? '?top=1' : d.continueLater ? '?later=1' : button.classList.contains('start-item') ? '?pending=1' : '';") && script.includes("`/runs/${encodeURIComponent(run)}/continue${query}`") && script.includes("`/queue/run/start/${d.start}${d.top ? '?top=1' : ''}`"), 'the arrows ask for the top');
 assert(/\.queue \.stopped-actions \.continue-item, \.queue \.queue-item-actions \.continue-item \{ color: var\(--shared\)/.test(html) && /\.queue \.stopped-actions \.icon-btn:not\(\.continue-item\) \{ color: var\(--muted\)/.test(html), 'only continuations are purple');
 run(`renderStopped([{ id: 'image_2', pipeline: 'image', label: 'Cut', detail: 'd', clips: 1, estimate: 5, outcome: { outcome: 'stopped' } }])`);
 assert(els.stoppedRuns.innerHTML.includes('<span class="run-tag stopped">Stopped</span>') && !els.stoppedRuns.innerHTML.includes('class="why"'), 'a stopped run says Stopped, with nothing to explain');
@@ -1365,21 +1390,21 @@ run(`renderStopped([{ id: 'run_1', pipeline: 'video', label: 'A <b>plan', detail
 const box = els.stoppedRuns;
 assert.strictEqual(box.hidden, false);
 assert(box.innerHTML.includes('A &lt;b&gt;plan') && box.innerHTML.includes('~31 min'));
-assert(box.innerHTML.includes('data-shots="run_1"') && box.innerHTML.includes('data-continue-later="run_1"') && box.innerHTML.includes('aria-label="Add to Pending"'));
+assert(box.innerHTML.includes('data-shots="run_1"') && box.innerHTML.includes('data-continue="run_1"') && box.innerHTML.includes('aria-label="Add to the queue"'));
 const written = box.innerHTML;
 box.innerHTML = 'untouched';
 run(`renderStopped([{ id: 'run_1', pipeline: 'video', label: 'A <b>plan', detail: 'Plan ready, 8 shots', clips: 0, estimate: 1860 }])`);
 assert.strictEqual(box.innerHTML, 'untouched', 'a poll must not replace buttons that have not changed');
 assert(written.length > 0);
 run(`renderStopped([{ id: 'run_1', pipeline: 'video', label: 'x', detail: 'y', clips: 2, estimate: 60 }])`);
-assert(box.innerHTML.includes('data-continue-later="run_1"') && box.innerHTML.includes('aria-label="Add to Pending"'));
+assert(box.innerHTML.includes('data-continue="run_1"') && box.innerHTML.includes('aria-label="Add to the queue"'));
 run(`renderStopped([], [{ id: 7, pipeline: 'video', label: 'Continue', detail: '', resume: 'run_1', continuation: true }, { id: 8, pipeline: 'image', label: 'new', detail: '', continuation: false }, { id: 9, pipeline: 'image', label: 'upscale', detail: '', resume: 'image_1', continuation: false }])`);
 assert(box.innerHTML.includes('data-shots="run_1"') && box.innerHTML.includes('data-edit="7"') && box.innerHTML.includes('data-start="7"'), 'a parked continuation exposes prompts and its other controls');
 assert(box.innerHTML.indexOf('data-start="7"') < box.innerHTML.indexOf('data-shots="run_1"'), 'pending start is left of prompts');
 assert(box.innerHTML.includes(`data-shots="run_1" aria-label="Prompts" title="View prompts">${run('ICONS.enhanced')}</button>`), 'pending prompts use the star');
 assert(box.innerHTML.includes('class="icon-btn start-item continue-item" data-start="7"') && box.innerHTML.includes('class="icon-btn start-item" data-start="8"') && box.innerHTML.includes('class="icon-btn start-item" data-start="9"'), 'only the continued job is purple');
-assert(box.innerHTML.includes(`data-start="8" data-top="1" aria-label="Add to the top of the queue" title="Add to the top of the queue: ahead of everything waiting">${run('ICONS.top')}</button>`), 'pending: an arrow to put it first in the queue');
-assert(box.innerHTML.includes(`data-start="8" aria-label="Add to the queue" title="Add to the queue: it starts when the queue gets to it">${run('ICONS.queue')}</button>`), 'pending: the queue icon, which only queues');
+assert(box.innerHTML.includes(`data-start="8" data-top="1" aria-label="Add to the top of the queue" title="Add to the top of the queue: ahead of everything waiting, and started now if nothing is running">${run('ICONS.top')}</button>`), 'pending: an arrow to put it first in the queue');
+assert(box.innerHTML.includes(`data-start="8" aria-label="Add to the queue" title="Add to the queue: it starts when the queue gets to it (with nothing running, the queue waits for Resume)">${run('ICONS.queue')}</button>`), 'pending: the queue icon, which only queues');
 assert(!box.innerHTML.includes('data-run-now'), 'with the queue running or busy, no play: it would only queue too');
 run(`renderStopped([], [{ id: 8, pipeline: 'image', label: 'new', detail: '', continuation: false }], [], true)`);
 assert(box.innerHTML.includes(`data-run-now="8" aria-label="Run this now"`) && box.innerHTML.indexOf('data-start="8"') < box.innerHTML.indexOf('data-run-now="8"'),
@@ -1476,8 +1501,8 @@ for (const id of ['logToggle', 'finishedToggle', 'quotaToggle']) {
   context.document.getElementById('privateToggle').nextSibling = { id: 'settingsBtn' };
   wide.matches = false;
   run('placePanelControls()');
-  assert.deepStrictEqual(moved.splice(0), ['topIcons:finishedToggle:before:privateToggle', 'topIcons:logToggle:before:settingsBtn', 'settingsHead:quotaToggle'],
-    'in the header: Finished, privacy, then the log, then the gear');
+  assert.deepStrictEqual(moved.splice(0), ['topIcons:finishedToggle:before:privateToggle', 'topIcons:logToggle:before:settingsBtn', 'topIcons:openTemperatures:before:settingsBtn', 'settingsHead:quotaToggle'],
+    'in the header: Finished, privacy, then the log, the temperatures, then the gear');
   assert(!els.runActions.hidden && els.skip.hidden && els.stop.hidden, 'idle: no run controls');
   assert(/\.top-icons \.panel-icon \{ width: auto; height: auto; padding: 0; gap: 3px; color: var\(--muted\); opacity: \.7;/.test(html)
     && /\.top-icons #finishedToggle\.empty \{ display: none; \}/.test(html), "the header's icons all one quiet grey; Finished only with something in it");
@@ -1486,7 +1511,7 @@ for (const id of ['logToggle', 'finishedToggle', 'quotaToggle']) {
   moved.length = 0;
   wide.matches = true;
   run('lastStatus = null; placePanelControls()');
-  assert.deepStrictEqual(moved, ['statusToggles:logToggle', 'statusToggles:finishedToggle', 'statusToggles:quotaToggle']);
+  assert.deepStrictEqual(moved, ['statusToggles:logToggle', 'statusToggles:openTemperatures', 'statusToggles:finishedToggle', 'statusToggles:quotaToggle']);
   assert(els.runActions.hidden, 'desktop run controls remain hidden when idle');
   wide.matches = false;
   run('placePanelControls()');
@@ -1622,7 +1647,27 @@ run("tapStrip('run')");
 assert.strictEqual(context.document.body.dataset.page, 'status', 'a tap while open goes to Status');
 assert(!els.runStrip.classList.contains('open'));
 context.setTimeout = () => 0;
-assert(/\.go-bar button \{[^}]*padding: 8px 14px; font-size: \.85rem;/.test(html), 'the footer button is the smaller one');
+assert(/\.go-bar button \{[^}]*padding: 5px 12px; font-size: \.85rem;/.test(html) && /\.jump a \{[^}]*min-height: 30px;/.test(html)
+  && /\.go-bar \.go-icon \{[^}]*padding: 5px;/.test(html), 'the footer is low, leaving the page the screen');
+{
+  // The footer: how long, the tokens under it with no dot before them, and an image set's count in a badge beside both.
+  const savedPipeline = run('pipeline'), savedPlan = run('plan');
+  run(`pipeline = 'image'; plan = { ok: true, total: 360, images: 5, steps: [], tokens: { each: 290, written: 1450, rounds: 1, context: 2100 } }; renderPlan()`);
+  const footer = els.goBarEta.innerHTML;
+  assert(footer.startsWith('<span class="go-count" title="5 images" aria-label="5 images"><svg') && footer.includes('</svg>5</span>')
+    && footer.includes('<span class="go-eta-lines"><b>') && footer.includes('</b>~2.1k tok</span>') && !footer.includes(' · ~'), `the footer: an image count badge, how long, the tokens without a dot: ${footer}`);
+  run(`pipeline = 'video'; plan = { ok: true, total: 360, clips: 3, steps: [] }; renderPlan()`);
+  assert(!els.goBarEta.innerHTML.includes('go-count'), 'no image badge for a film');
+  context.savedFooterPipeline = savedPipeline; context.savedFooterPlan = savedPlan;
+  run('pipeline = savedFooterPipeline; plan = savedFooterPlan');
+}
+assert(run('fmtTokens(9640)') === '9.6k' && run('fmtTokens(800)') === '800', 'tokens in thousands');
+assert(run("tokensDetail({ each: 290, written: 8700, rounds: 2, context: 5457 })")
+  === 'Prompts: ~290 tokens each, ~8,700 written in 2 requests; largest request ~5.5k tokens of context', 'the tokens in full on hover');
+assert(/<input type="range" id="imageWords" name="words" min="40" max="400" step="10" value="200"/.test(html) && html.includes('Suggested: 120–250 words'),
+  'words per prompt is a slider, 40-400, with its suggested range marked');
+assert(/<input type="range" id="videoWords" name="words" min="30" max="500" step="10" value="30" data-auto="30"/.test(html),
+  "the video's starts on Auto, a step below 40: each model's own length");
 
 // The log: stages are sections with their outcome on the heading, routine lines fold into one, and problems stay on show.
 const logSample = [
@@ -1710,6 +1755,21 @@ assert(images.includes('Stage 1/2 · Prompts · 41s · 2,000 tokens · 80.0 tok/
 assert(images.includes('Local model wrote 2,000 tokens · 80.0 tok/s') && !images.includes('76.0 tok/s'), 'the running count is left out');
 assert(images.includes('Local model started · 10s') && images.indexOf('cleanup confirmed') > images.indexOf('Local model started'), 'starting the model is one line');
 assert(images.includes('Prompt 2 · Elven Dancer') && images.indexOf('an elf sways') > images.indexOf('Prompt 2 · Elven Dancer'), 'a prompt is one line, the prompt inside');
+{
+  // A later round of prompts: what it is given from the first, in one line with the titles and the example inside.
+  const rounds = run(`logHtml(${JSON.stringify([
+    { n: 1, t: '10:00:00', text: '▶ Stage 1/2: Prompts' },
+    { n: 2, t: '10:00:30', text: '   ✍️ 15 of 30 prompts written.' },
+    { n: 3, t: '10:00:30', text: '   The next 15 are told the 15 written so far by title: Hearth; Window' },
+    { n: 4, t: '10:00:30', text: '   and shown this one to write like:' },
+    { n: 5, t: '10:00:30', text: '      a photograph of a woman kneeling by the hearth' },
+    { n: 6, t: '10:01:00', text: 'Local LLM complete: 37.0 tok/s | 1840 total tok' },
+  ])}, false)`);
+  const head = rounds.indexOf('Next 15 prompts: given the 15 written so far');
+  assert(head > 0 && rounds.indexOf('Hearth; Window') > head && rounds.indexOf('kneeling by the hearth') > head
+    && rounds.indexOf('Local model wrote 1,840 tokens') > rounds.indexOf('kneeling by the hearth'),
+    'a later round says in one line what it was given, the titles and the example inside');
+}
 assert(images.includes('Image 1/3 · Moonlit Library · 1m 2s · on ETA'), 'on time');
 assert(images.includes('Image 2/3 · Elven Dancer · 30s · 30s sooner than its 1m ETA'), 'sooner, by how much');
 assert(images.includes('Image 3/3 · Harbour · ETA 1m'), 'the one rendering says what it should take');
@@ -1949,6 +2009,50 @@ assert.strictEqual(run("workHeading({label: 'Topic', facts: {count: 2}}, 'shorts
 assert.strictEqual(run("workHeading({label: 'Upscale: Film'}, 'video')"), 'Video: Upscale: Film');
 assert(/#stageDetail \{ text-align: left; \}/.test(html), 'the stage status lines up like every other');
 assert(/id="viewerVariations"[^>]*><\/button>\s*<button type="button" class="icon-btn" id="viewerPrompts"[^>]*><\/button>/.test(html) && script.includes("openPromptDetail(detailed, data.brief, data.direct ? 'yours' : 'detailed');"), 'More like this beside Prompts, which opens its detailed prompt (yours, made from it word for word)');
+// Variety: the same switch as LLM or Exact, and its chips, under the prompt and negative prompt on both sides, in a box
+// that goes with the LLM's (hidden for Exact prompt); saved with the form (named).
+for (const side of ['image', 'video']) {
+  const box = new RegExp(`<div id="${side}NegativeSlot" class="negative-slot"></div>\\s*<div id="${side}WriterExtras" class="writer-extras">(?:\\s*<div class="words-box" id="${side}WordsBox">[\\s\\S]*?)?\\s*<div class="variety-box" id="${side}VarietyBox">\\s*<div class="options-subtitle"><label for="${side}Variety">Variety</label><button type="button" class="hint-toggle" data-hint-target="${side}VarietyHelp"[^>]*>[\\s\\S]*?</button><span class="options-subtitle-what"> · how different they are</span></div>\\s*`
+    + `<div class="field-help variety-help" id="${side}VarietyHelp" hidden>[\\s\\S]*?</div>\\s*`
+    + `<select id="${side}Variety" name="variety" data-segmented>\\s*<option value="slight">Slight</option><option value="mixed" selected>Mixed</option><option value="wide">Wide</option>`);
+  assert(box.test(html), `${side}: Variety (Slight, Mixed, Wide) under the negative prompt`);
+  assert(html.indexOf(`id="${side}VarietyBox"`) > html.indexOf(`id="${side}PromptWriting"`), `${side}: below the prompt, no longer in the LLM's box above it`);
+  assert(script.includes(`$('${side}WriterExtras').classList.toggle('hidden', direct);`), `${side}: hidden with Exact prompt, as the LLM's box is`);
+}
+assert.strictEqual((html.match(/<select name="chip_[a-z]+" data-chip="/g) || []).length, 22, 'eleven chips on each side: no time of day or expression');
+assert(!html.includes('name="chip_time"') && !html.includes('name="chip_expression"'));
+// The most used first, in a group of their own, then the rest.
+{
+  const chips = html.slice(html.indexOf('id="imageVarietyBox"'), html.indexOf('id="imageVarietyBox"') + 6000);
+  const order = ['>Most used<', 'name="chip_pose"', 'name="chip_framing"', 'name="chip_outfit"', 'name="chip_location"', '>More<', 'name="chip_lighting"', 'name="chip_style"'].map(part => chips.indexOf(part));
+  assert(order.every((at, i) => at > 0 && (!i || at > order[i - 1])), `chips grouped, the most used first: ${order}`);
+}
+assert(['Subject', 'Action', 'Hair', 'Colour'].every(chip => html.includes(`data-chip="${chip}"`)) && !html.includes('data-chip="Colour palette"'),
+  'Subject, Action, Hair and Colour (short for its colour palette)');
+// Its hint: what Slight, Mixed and Wide mean, how a chip is tapped, and what each chip changes.
+for (const side of ['image', 'video']) {
+  const help = html.slice(html.indexOf(`id="${side}VarietyHelp"`), html.indexOf(`id="${side}Variety"`));
+  assert(['<dt>Slight</dt>', '<dt>Mixed</dt>', '<dt>Wide</dt>', 'once it varies (↻), twice it stays the same',
+    '<dt>Colour</dt><dd>the colour palette of the whole picture', '<dt>Subject</dt><dd>who or what it&#39;s of'].every(text => help.includes(text)),
+    `${side}: the Variety hint explains the levels and every chip`);
+  assert.strictEqual((help.match(/<dt>/g) || []).length, 14, `${side}: three levels and eleven chips`);
+}
+assert(/<select name="chip_pose" data-chip="Pose"[^>]*><option value="">Pose: up to the writer<\/option><option value="vary">Pose: varies<\/option><option value="keep">Pose: stays the same<\/option><\/select>/.test(html),
+  'a chip: up to the writer, varies or stays the same');
+assert(/\.variety-chip\.vary \{ color: var\(--accent\);/.test(html) && /\.variety-chip\.keep \{[^}]*background: var\(--panel-2\);/.test(html) && script.includes("const CHIP_MARKS = { '': '', vary: '↻', keep: '=' }, CHIP_SETTLE_MS = 300;"),
+  'varied chips in the accent with ↻, kept ones filled with =');
+assert(/id="imageCount"[^>]*max="30"[^>]*data-most="50" data-most-written="30"/.test(html)
+  && script.includes("const most = +(direct ? $('imageCount').dataset.most : $('imageCount').dataset.mostWritten) || 30;")
+  && script.includes("$('imageVarietyBox').hidden = count < 2 || !!imageRole();"),
+  'up to 30 images an LLM writes, 50 with your own prompt; Variety only for a set it writes');
+for (const side of ['image', 'video']) {
+  assert(new RegExp(`<div class="variety-box" id="${side}VarietyBox">[\\s\\S]*?<div class="explicit-box">\\s*<label class="check"><input type="checkbox" id="${side}Explicit" name="explicit"><span class="options-subtitle">Explicit content</span></label>\\s*</div>`).test(html),
+    `${side}: Explicit content under Variety, with no hint beside it or under it`);
+}
+assert(/\.explicit-box \{ display: none;/.test(html) && /body\.private-mode \.explicit-box \{ display: block; \}/.test(html)
+  && !html.includes('explicit-text') && !html.includes('the writer is told the prompts are meant to be explicit'), 'only in Private mode');
+assert(script.includes('if (film) sameAgainFilm(run); else sameAgain(id, null, null, position);'),
+  'More like this opens the generation the image came from (its Variety and chips too), not its prompt word for word');
 for (const id of ['promptDetail', 'promptDetailTitle', 'promptDetailText', 'promptDetailYours', 'promptDetailCopy']) context.document.getElementById(id);
 run("openPromptDetail('long version', 'my words', 'yours')");
 assert(els.promptDetailTitle.textContent === 'Your prompt' && els.promptDetailText.textContent === 'my words' && els.promptDetailYours.title === 'Detailed prompt'
@@ -2118,6 +2222,35 @@ assert(run("filmHtml({ name: 'f.mp4', model: 'wan', resolution: '864x480', durat
     context.window.scrollY = 0;
     run('syncPin()');
     assert(!run('pinnedOut'), 'back at the top: back in the header');
+    // A phone: the header's icons are on demand, in a box that grows up out of the footer's last button. It opens and
+    // closes from that button; an icon in it, Escape or a tap anywhere else puts it away. The bars stay where they were.
+    const stubClasses = context.document.body.classList, classes = new Set();
+    context.document.body.classList = { add: name => classes.add(name), remove: name => classes.delete(name), contains: name => classes.has(name),
+      toggle: (name, on = !classes.has(name)) => (on ? classes.add(name) : classes.delete(name), on) };
+    run('showHead(true)');
+    assert(classes.has('head-shown'), 'shown');
+    run('showHead(false)');
+    assert(!classes.has('head-shown'), 'away');
+    context.document.body.classList = stubClasses;
+    assert(/<a href="#videosCard" data-page="output" id="jumpResults">Output<\/a>\s*<button type="button" class="jump-more" id="headToggle" aria-expanded="false" aria-controls="topIcons"/.test(html),
+      'the button right of Output');
+    assert(/\.jump \{ display: grid; grid-template-columns: repeat\(3, minmax\(0, 1fr\)\) 34px;/.test(html) && !/\.jump::before/.test(html),
+      'the three page buttons the same width, filling the footer up to it');
+    assert(/@media \(max-width: 999px\) \{[\s\S]*?\.top-icons \{ position: fixed; right: 12px; bottom: calc\(var\(--head, 60px\) \+ 6px\);[\s\S]*?transform-origin: bottom right;/.test(html)
+      && /body\.head-shown \.top-icons \{ opacity: 1; transform: none; visibility: visible;/.test(html), 'over the page, growing up out of the footer');
+    assert(script.includes("if (document.body.classList.contains('head-shown') && !(e.target.closest && e.target.closest('#topIcons, #headToggle'))) showHead(false);")
+      && script.includes("$('headToggle').dataset.count = failed ? String(failed) : '';"), "a tap elsewhere puts it away; only what failed shows on the button");
+    // Progress at the top can be turned off; the Status button can fill instead, its percentage in the corner.
+    assert(/<input type="checkbox" id="topProgress">/.test(html) && /<input type="checkbox" id="statusProgress">/.test(html)
+      && /\.jump a\.filling::after \{ content: attr\(data-pct\);/.test(html), 'the two progress settings');
+    const status = { classList: { on: false, toggle(name, on) { this.on = on; } }, style: { setProperty(key, value) { status.fill = value; } }, dataset: {} };
+    const oldQuery = context.document.querySelector;
+    context.document.querySelector = selector => selector === '.jump a[data-page="status"]' ? status : oldQuery && oldQuery(selector);
+    run('SETTINGS.status_progress = true; syncStatusFill(0.36)');
+    assert(status.classList.on && status.fill === '36%' && status.dataset.pct === '36%', 'filled to 36%, saying so');
+    run('SETTINGS.status_progress = false; syncStatusFill(0.36)');
+    assert(!status.classList.on && status.dataset.pct === '', 'off: an ordinary button');
+    context.document.querySelector = oldQuery;
     run("SETTINGS.pin_progress = false; pinnedOut = false");
     assert(/body\.strips-out \.head-strips \{ position: fixed; top: 0; left: 0; right: 0;/.test(html) && /\.head-strips\.empty \{ opacity: 0;/.test(html), 'along the top, full width; nothing going, nothing there');
     assert(/<div class="generation-header">[\s\S]*?<div class="switch generate-switch" role="tablist" aria-label="Pipeline">/.test(html)
@@ -2212,6 +2345,23 @@ assert.strictEqual(els.viewerVideo.src, '/videos/video/a.mp4', 'swipe down opens
 els.imageViewer.listeners.touchstart({ target: els.viewerVideo, touches: [{ clientX: 20, clientY: 100 }] });
 els.imageViewer.listeners.touchend({ changedTouches: [{ clientX: 20, clientY: 20 }] });
 assert.strictEqual(els.viewerVideo.src, '/videos/video/b.mp4', 'swipe up opens the next video');
+// Del on a PC's keyboard presses the preview's Delete (arm, then delete); not held, not while typing, not while busy.
+{
+  const savedClick = els.viewerDelete.click;
+  let pressed = 0, prevented = 0;
+  els.viewerDelete.click = () => { pressed++; };
+  els.viewerDelete.hidden = false;
+  els.viewerDelete.disabled = false;
+  const key = (extra = {}) => els.imageViewer.listeners.keydown({ key: 'Delete', target: { tagName: 'DIALOG' }, preventDefault: () => { prevented++; }, ...extra });
+  key();
+  key({ repeat: true });
+  key({ target: { tagName: 'INPUT' } });
+  els.viewerDelete.disabled = true;
+  key();
+  els.viewerDelete.disabled = false;
+  assert.deepStrictEqual([pressed, prevented], [1, 1], 'Del presses Delete once: not held, typed or busy');
+  els.viewerDelete.click = savedClick;
+}
 // Only a swipe on the media turns it; down on the buttons under it closes the preview.
 els.imageViewer.listeners.touchstart({ target: { closest: () => null }, touches: [{ clientX: 20, clientY: 100 }] });
 els.imageViewer.listeners.touchend({ changedTouches: [{ clientX: 20, clientY: 20 }] });
@@ -2253,9 +2403,16 @@ assert(/#viewerImage, #viewerVideo \{ max-height:/.test(html), 'a portrait film 
 assert(/class="meta loras" role="button" tabindex="0" title="LoRA: a, b">LoRA: a, b<\/div>/.test(run("lorasLine(['a', 'b'])")));
 assert(/\.meta\.loras \{ white-space: nowrap; overflow: hidden; text-overflow: ellipsis;/.test(html) && /\.meta\.loras\.open \{ white-space: normal;/.test(html));
 
+// A chip tapped quickly moves on at each tap; the form's own work waits until the taps stop, once for them all.
+{
+  const body = script.slice(script.indexOf('function chipSelect('), script.indexOf("for (const select of document.querySelectorAll('select[data-chip]'))"));
+  assert(/select\.value = values\[[^\n]+\n\s*clearTimeout\(settle\);\n\s*settle = setTimeout\(\(\) => select\.dispatchEvent\(new Event\('change'/.test(body),
+    'a chip changes at once, and tells the form once the taps stop');
+}
 // Discarding a stopped run takes two taps, with no pop-up; deleting a whole set from Output has its own address.
 assert(!script.includes('Discard this run? Its') && /else if \(d\.discard\) \{\s*\/\/[^\n]*\n\s*if \(!secondTap\(button\)\) return;/.test(script));
-assert(script.includes("stopJob(`/image-runs/${encodeURIComponent(d.deleteSet)}/delete`)"));
+assert(script.includes("confirmedDelete(e.target, `/image-runs/${encodeURIComponent(d.deleteSet)}/delete`)"));
+assert(script.includes("confirmedDelete(e.target, `/delete/${filmFolder}/` + encodeURIComponent(d.del))"), 'a film too');
 
 // An exact size with nothing in its box falls back on 1:1 at one megapixel.
 els.imageAspect.value = 'custom';
@@ -2294,6 +2451,25 @@ run("viewing = { id: 'image_20261102_120000', position: 1 }; zoom.scale = 2");
 els.imageViewer.listeners.touchstart({ touches: [{ clientX: 20, clientY: 20 }] });
 assert.strictEqual(run('swipeFrom'), null, 'zoomed in, a finger moves the image rather than turning the page');
 run('resetZoom(); viewing = null');
+// Closing the preview brings the batch it was on to the top of Output, smoothly; not from a collection, and not when
+// Output isn't on screen.
+{
+  const scrolled = [];
+  const cell = (key, shown = true) => ({ dataset: { outputKey: key }, getClientRects: () => (shown ? [{}] : []),
+    scrollIntoView: options => scrolled.push([key, options.behavior, options.block]) });
+  const saved = els.imageSets.querySelectorAll;
+  els.imageSets.querySelectorAll = () => [cell('image:a'), cell('image:b'), cell('film:clip.mp4')];
+  run("revealViewedBatch({ id: 'b', position: 3 }, null)");
+  run("revealViewedBatch({ film: true, name: 'clip.mp4' }, null)");
+  run("revealViewedBatch({ id: 'b', position: 3 }, { id: 'col' })");
+  run("revealViewedBatch({ id: 'gone', position: 1 }, null)");
+  els.imageSets.querySelectorAll = () => [cell('image:b', false)];
+  run("revealViewedBatch({ id: 'b', position: 3 }, null)");
+  els.imageSets.querySelectorAll = saved;
+  assert.deepStrictEqual(scrolled, [['image:b', 'smooth', 'start'], ['film:clip.mp4', 'smooth', 'start']],
+    'its own batch, at the top, smoothly; nothing from a collection, for a deleted batch, or with Output hidden');
+  assert(/\.output-batch \{ scroll-margin-top: 8px; \}/.test(html) && script.includes('revealViewedBatch(viewing, viewerCollection);'));
+}
 
 // Output: images and films in one list (Both), or either alone; NSFW only in the other view, and nothing of it elsewhere.
 run(`lastVideos = { output: [], uploaded: [], video: [{ name: 'a.mp4', model: 'wan', mtime: 1 }, { name: 'b.mp4', model: 'ltx', mtime: 2 }, { name: 'c.mp4', model: 'wan', mtime: 3 }] }; folder = 'video'; pipeline = 'video'; outputKind = 'both'`);
@@ -2410,7 +2586,7 @@ assert(/<button type="button" class="start-later" id="cancelQueueEdit"[^>]*>Canc
 assert.strictEqual(run("madeOn(madeAt('image_20261108_043935'))"), '8 Nov 04:39');
 assert.strictEqual(run("clock24(new Date(2026, 10, 8, 0, 5))"), '00:05', 'a 24-hour clock, whatever the locale');
 assert.strictEqual(run("clock24(new Date(2026, 10, 8, 15, 30))"), '15:30');
-assert(/class="guide-link" id="connectGuideLink" data-guide="clip_connection"/.test(html) && /\.guide-link \{[^}]*margin: 5px auto 0[^}]*text-align: center/.test(html), 'the guide links are centred, and How clips connect has one');
+assert(/\.guide-link \{[^}]*margin: 5px auto 0[^}]*text-align: center/.test(html), 'the guide links are centred');
 assert.strictEqual(run("madeOn(Date.now() / 1000 - 5).length"), 5, 'today: the time alone, hh:mm');
 assert(run("imageSetHtml({ id: 'image_20261108_043935', label: 'L', model: 'krea', images: [] })").includes('<div class="meta">8 Nov 04:39'), 'the time first');
 assert(/\.pill\.workflow \{ border-color: color-mix\(in srgb, var\(--pill, var\(--neutral\)\)/.test(html) && /\.pills\.video \{ --pill: var\(--c-video\); \}/.test(html), 'the workflow pill by kind');
@@ -2738,6 +2914,9 @@ context.queue = queue;
 run(`renderQueue(queue, { items: [{ id: 3, label: 'a <film>', detail: 'd', estimate: 600 }], results: [], held: true, current: null }, 0)`);
 assert(queue.innerHTML.includes('<b>Queue (1)</b>'));
 assert(queue.innerHTML.includes('<span class="when">On hold</span>'), 'held queue has a concise hint');
+run(`renderQueue(queue, { items: [{ id: 3, label: 'a <film>', detail: 'd', estimate: 600 }], results: [], held: true, current: null }, 4800)`);
+assert(queue.innerHTML.includes('<span class="when">~1h 20m · On hold</span>'), 'on hold, it still says how much is waiting');
+run(`renderQueue(queue, { items: [{ id: 3, label: 'a <film>', detail: 'd', estimate: 600 }], results: [], held: true, current: null }, 0)`);
 assert(queue.innerHTML.includes('data-resume') && queue.innerHTML.includes('data-remove="3"') && queue.innerHTML.includes('a &lt;film&gt;'));
 assert(queue.innerHTML.indexOf('data-resume') > queue.innerHTML.indexOf('data-remove="3"'), 'Resume sits under what it lets go');
 assert(!queue.innerHTML.includes('selected'), 'one job alone cannot be reordered');
@@ -2764,7 +2943,9 @@ run(`renderQueue(queue, { items: [{ id: 4, label: 'b', detail: 'd' }, { id: 5, l
 assert.strictEqual(queue._selected, null, 'a departed selected entry cannot leave another selected');
 queue.dataset.lane = 'run';
 run(`renderQueue(queue, { items: [], held: false, running: true, pipeline: 'image', stopAfter: false }, 0)`);
-assert(!queue.hidden && queue.innerHTML.includes('aria-label="Pause after current"'), 'a running batch can be paused even with an empty queue');
+assert(!queue.hidden && queue.innerHTML.includes('aria-label="Hold the queue"'), 'the queue can be held while a run goes, even with nothing waiting');
+assert(script.includes("const action = state.held || state.stopAfter ? 'resume' : 'hold';") && script.includes("return (await fetch(`/queue/run/${action}`, { method: 'POST' })).json();"),
+  'Hold holds the queue only: the running image set or batch is never cut short');
 run(`renderQueue(queue, { items: [{ id: 3, label: 'a', detail: 'd' }], held: true, running: true, pipeline: 'image', stopAfter: true }, 0)`);
 assert(queue.innerHTML.includes('aria-label="Resume queue"') && !queue.innerHTML.includes('data-resume'), 'play is in the queue header, not a second Resume button');
 run(`renderQueue(queue, { items: [{ id: 4, label: 'continue', detail: 'd', pipeline: 'video', resume: 'run_1' }], held: true }, 0)`);
@@ -2915,6 +3096,9 @@ assert(queue.innerHTML.includes('aria-label="Expand queue"'), 'the chevron refle
 }
 assert(/\.connection-notice > span \{ min-width: 0; overflow-wrap: anywhere; \}/.test(html)
   && /\.connection-notice button \{ width: auto; flex: none;/.test(html), 'connection notices fit narrow screens');
+assert(/<div id="connectionNotice"[^>]*class="connection-notice" hidden style="position: fixed;/.test(html)
+  && /const connecting = setTimeout\(\(\) => \{ if \(!lastSuccess\) show\('Connecting to the panel\.\.\.'\); \}, DISCONNECTED_AFTER_MS\);/.test(script),
+  'loading, the notice is hidden and over the page (never pushing it down), and says Connecting only after 5 s without an answer');
 assert(html.includes('.queue-list, .stopped-body') && html.includes('max-height: min(var(--three-rows, 55dvh), 55dvh)'), 'queue, pending and failed scroll rather than growing past the viewport');
 assert(!/\.queue-list, \.stopped-body \{[^}]*overscroll-behavior:\s*contain/.test(html), 'scrolling at a list boundary can continue on the page');
 assert(/#queueBox \.queue-list, #queueBox \.stopped-body \{[^}]*overscroll-behavior:\s*auto/.test(html), 'the compact queue also hands boundary scrolling back to the page');
@@ -3574,6 +3758,13 @@ assert(els.comfyFacts.innerHTML.includes('Generating the image · 3/8') && els.c
   run('poll = originalPoll');
   context.confirm = () => true;
   assert.strictEqual(run(`queueDetail({detail: 'film · renders straight away', facts: {resolution: '1280x736'}})`), 'film · 1280x736');
+  assert.strictEqual(run(`queueDetail({detail: '2 images', facts: {resolution: '1568x2800', upscale: 'SeedVR2, denoise 0.1'}})`),
+    '2 images · 1568x2800 · Upscale: SeedVR2, denoise 0.1', 'a queued or waiting job says how it is upscaled');
+  assert.strictEqual(run(`queueDetail({detail: '4 images · from text · your prompt, word for word · image_Moss_T2I', facts: {resolution: '1568x2800'}})`),
+    '4 images · 1568x2800 · exact prompt · Moss_T2I', 'the size after the count; no "from text"; an exact prompt; the workflow without its side');
+  run(`renderStopped([{ id: 'image_9', pipeline: 'image', label: 'Set', detail: '2 of 4 made', size: '1024x1024', upscale: 'Latent, Fast, 1.5 MP', estimate: 60 }])`);
+  assert(els.stoppedRuns.innerHTML.includes('2 of 4 made · 1024x1024 · Upscale: Latent, Fast, 1.5 MP'), 'and a stopped run in Pending too');
+  run('renderStopped([])');
   run(`var oldViewer = openViewer, oldFilm = openFilm, oldClosePanel = closePanel, oldGoOutput = goToOutput;
     var navigated = []; openViewer = (id, position) => navigated.push(['image', id, position]);
     openFilm = name => navigated.push(['film', name]); closePanel = () => {};
@@ -3948,6 +4139,28 @@ assert(els.comfyFacts.innerHTML.includes('Generating the image · 3/8') && els.c
     assert.strictEqual(opened, 'run_history', 'collection preview opens the same saved run and its clips');
     run('openShots = savedOpenShots; viewerCollection = null');
   }
+  // Confirmed, a delete pulses until the server answers; tapped again meanwhile, nothing more is sent; no answer at
+  // all lets the button go without an error over the page.
+  {
+    const classes = new Set(), attrs = {};
+    const button = { disabled: false, classList: { contains: c => classes.has(c), add: c => classes.add(c), remove: (...cs) => cs.forEach(c => classes.delete(c)) },
+                     setAttribute: (k, v) => { attrs[k] = v; }, removeAttribute: k => { delete attrs[k]; } };
+    const savedFetch = context.fetch, savedPoll = run('poll');
+    let answer, sent = 0;
+    context.fetch = () => { sent++; return new Promise((resolve, reject) => { answer = { resolve, reject }; }); };
+    run('poll = async () => {}');
+    context.testDeleteButton = button;
+    const first = run("confirmedDelete(testDeleteButton, '/x')");
+    assert(classes.has('deleting') && button.disabled && attrs['aria-busy'] === 'true', 'pulsing while the server deletes');
+    run("confirmedDelete(testDeleteButton, '/x')");
+    assert.strictEqual(sent, 1, 'tapped again meanwhile: sent once');
+    answer.reject(new TypeError('Failed to fetch'));
+    assert.strictEqual(await first, null);
+    assert(!classes.has('deleting') && !button.disabled && !('aria-busy' in attrs), 'no answer: let go, nothing thrown');
+    context.fetch = savedFetch;
+    context.savedDeletePoll = savedPoll;
+    run('poll = savedDeletePoll');
+  }
   console.log('all page checks passed');
 })().catch(e => { console.error(e); process.exit(1); });
 
@@ -3957,6 +4170,129 @@ for (const fn of ['sameAgain', 'sameAgainFilm', 'sameAgainShorts', 'editQueued',
   const body = script.slice(script.indexOf(`async function ${fn}(`), script.indexOf('\n}\n', script.indexOf(`async function ${fn}(`)));
   assert(/reopening\(/.test(body) && body.indexOf('reopening(') < body.indexOf('Workflows()'), `${fn}: the default preset stays off it`);
   assert(/reopened\(/.test(body), `${fn}: the preset picker is checked against the form`);
+}
+
+// With a LoRA comparison on, Generate (the form's and the footer's) is in the theme's colour, not the side's.
+assert(/body\.on-image:has\(#imageLoraStrengthTest:checked:not\(:disabled\), #imageLoraStyleTest:checked:not\(:disabled\), #imageWorkflowTestT2i:checked, #imageWorkflowTestEdit:checked, #imageLlmTest:checked\) :is\(#go, #goStick\),\s*body\.on-video:has\(#videoLoraStrengthTest[^{]+\{ --accent: var\(--shared\); \}/.test(html),
+  'a LoRA or workflow comparison turns Generate the theme colour');
+assert(html.includes('name="workflow_test_t2i" id="imageWorkflowTestT2i"') && html.includes('name="workflow_test_edit" id="imageWorkflowTestEdit"'),
+  'Tests & misc: all text-to-image workflows, and all edit workflows');
+assert(html.includes('.pill.comparison { --pill: var(--shared);') && run("pillsHtml([{ kind: 'workflow', text: 'Krea2', comparison: true }])") === '<span class="pill workflow comparison">Krea2</span>',
+  "a comparison's pill is in the theme's colour");
+// Each LoRA line: the strength range worth using for its LoRA beside the strength (core/lora_hints.py); the first line
+// keeps the room of the extra lines' trash, so the strengths line up; off, the line is greyed.
+{
+  const savedRanges = run('PANEL_CONFIG.lora_ranges');
+  run(`PANEL_CONFIG.lora_ranges = { 'krea2_knpv3_1_nsfw': '0.5–1.5' }`);
+  assert.strictEqual(run(`loraRange('Krea2\\\\Krea2_KNPV3_1_NSFW.safetensors')`), '0.5–1.5', 'found by its file name, folder and case aside');
+  assert.strictEqual(run(`loraRange('other.safetensors')`), '', 'none for a LoRA it knows nothing of');
+  const out = { textContent: '', title: '' };
+  const line = { querySelector: selector => selector === 'select' ? { value: 'Krea2_KNPV3_1_NSFW.safetensors' } : selector === '.lora-range' ? out : null };
+  context.testLoraRoot = { querySelectorAll: () => [line] };
+  run('syncLoraRanges(testLoraRoot)');
+  assert.deepStrictEqual([out.textContent, out.title], ['0.5–1.5', 'Strength worth using: 0.5–1.5']);
+  context.savedLoraRanges = savedRanges;
+  run('PANEL_CONFIG.lora_ranges = savedLoraRanges');
+  const main = run(`imageOptionHtml({ id: 'lora', kind: 'switch', below: true, label: 'Use LoRA', default: '1' }, [{ id: 'lora', kind: 'switch', below: true }, { id: 'lora_name', kind: 'choice', parent: 'lora', label: 'LoRA', choices: ['a'], default: 'a' }, { id: 'lora_strength', kind: 'number', parent: 'lora', label: 'Strength', min: 0, max: 2, step: 0.1, default: '1' }])`);
+  assert(/class="option-strength"[^>]*><span class="lora-range"><\/span><span class="lora-gap" aria-hidden="true"><\/span><\/div>$/.test(main) && !main.includes("Can't be changed"),
+    `the main LoRA line: its range, then the trash's room; no "can't be changed" hint: ${main}`);
+  assert(script.includes(`+ '<span class="lora-range"></span>'\n        + \`<button`), "an extra LoRA's range sits between its strength and its trash");
+  assert(html.includes('#optionsCard .lora-line:has(> .check input[type=checkbox]:not(:checked)) :is(select, .option-strength, .lora-range) { opacity: .45; }'),
+    'a LoRA switched off: its file and strength greyed');
+  assert(html.includes('body.on-image:has(#imageLoraStyleTest:checked) #imageOptionsBox .lora-line:not(.lora-extra) select,'), 'and what a comparison sets in their place');
+}
+// The LoRA comparison: Strength test with its stepper on its own line, no "Each"; the box's edges trimmed.
+for (const side of ['image', 'video']) {
+  assert(new RegExp(`<div class="tests-line"><label class="check"><input type="checkbox" name="lora_strength_test" id="${side}LoraStrengthTest"><span>LoRA Strength test</span></label><div class="count-stepper">`).test(html)
+    && !html.includes(`<label for="${side}LoraTestStep">Each</label>`), `${side}: the stepper beside Strength test, no "Each"`);
+}
+assert(/\.tests-box \{ padding: 6px 8px 8px; \}/.test(html) && /#imageLocalModelBox, #videoLocalModelBox \{ margin-top: 5px; \}/.test(html),
+  'the comparisons box nearer its edges; a little room under the LLM before its local model');
+// A comparison on: Generate flashes.
+assert(/:is\(#go, #goStick\):not\(:disabled\) \{ animation: test-flash 1\.4s ease-in-out infinite; \}/.test(html) && html.includes('@keyframes test-flash'),
+  'a comparison makes Generate flash, so it is noticed');
+// Words per prompt: "x–y words, ~n tokens each, ~t total".
+{
+  const savedWords = [els.imageWords.value, els.imageWords.dataset];
+  els.imageWords.value = '200';
+  els.imageWords.dataset = { suggested: '120-250', spread: '0.2', perWord: '1.35', perVersion: '20' };
+  run("syncWords('image', 5)");
+  assert.strictEqual(els.imageWordsTokens.textContent, '160–240 words, ~290 tokens each, ~1,450 total');
+  run("syncWords('image', 1)");
+  assert.strictEqual(els.imageWordsTokens.textContent, '160–240 words, ~290 tokens each', 'one prompt: no total');
+  [els.imageWords.value, els.imageWords.dataset] = savedWords;
+  assert(/\.words-band \{[^}]*top: 11px; height: 9px;/.test(html) && /\.words-slider input::-webkit-slider-thumb \{[^}]*width: 13px; height: 13px;/.test(html),
+    'the suggested band close under the line, a smaller grabber');
+}
+// The local models, by family, each under a short name (panel/settings.py short_name), its whole name on hover.
+{
+  const savedModels = run('LOCAL_MODELS');
+  run(`LOCAL_MODELS = [{ id: 'gemma-4-12b:x', label: 'gemma-4-12B-it-qat-q4_0-unquantized-heretic-Q4_K_M', short: 'Gemma 4 · QAT · Q4_K_M', group: 'Gemma 4 12B · sees images', tokens_per_second: 41.2 },
+       { id: 'qwen3-14b', label: 'Qwen3 14B (text only)', short: 'Qwen3 14B · built in', group: 'Qwen3 14B · text only' }]`);
+  const options = run('localModelOptions()');
+  assert.strictEqual(options, '<optgroup label="Gemma 4 12B · sees images"><option value="gemma-4-12b:x" title="gemma-4-12B-it-qat-q4_0-unquantized-heretic-Q4_K_M">Gemma 4 · QAT · Q4_K_M · 41.2 tok/s</option></optgroup>'
+    + '<optgroup label="Qwen3 14B · text only"><option value="qwen3-14b" title="Qwen3 14B (text only)">Qwen3 14B · built in · — tok/s</option></optgroup>');
+  context.savedLocalModels = savedModels;
+  run('LOCAL_MODELS = savedLocalModels');
+}
+// Tests & misc: the comparisons in one box, grouped: LoRA, Workflows, Prompt models.
+{
+  const box = html.slice(html.indexOf('id="imageComparisons"'), html.indexOf('id="imageReviewBox"'));
+  const order = ['id="imageLoraTests"', '>LoRA<', 'id="imageWorkflowTests"', '>Workflows<', 'id="imageLlmTests"', '>Prompt models<', 'name="llm_test" id="imageLlmTest"'].map(part => box.indexOf(part));
+  assert(order.every((at, i) => at > 0 && (!i || at > order[i - 1])), `the image comparisons, grouped in one box: ${order}`);
+  assert(/class="options-box tests-box" id="videoComparisons"[\s\S]*?id="videoLoraTests"/.test(html), "the video form's LoRA comparison in its own box too");
+  assert(html.includes('#imageWorkflowTestEdit:checked, #imageLlmTest:checked) :is(#go, #goStick)'), 'an LLM comparison turns Generate the theme colour too');
+}
+// A LoRA comparison shows its own number of images in Amount, locked; switched off, Amount has yours back. Reopening a
+// set or a queued job asks for a new estimate, as the values it sets send no input event.
+{
+  const options = [{ id: 'lora_name', choices: ['a', 'b'] }, { id: 'lora_strength', step: 0.5, max: 2 }];
+  els.imageCount.disabled = false;
+  els.imageCount.value = '7';
+  els.imageLoraTestStep.value = '0.5';
+  els.imageLoraStrengthTest.checked = true;
+  els.imageLoraStyleTest.checked = true;
+  run('syncLoraTests')('imageOptionsBox', options);
+  assert(els.imageCount.disabled && String(els.imageCount.value) === '8', 'two LoRAs at four strengths: 8 images, locked');
+  // All text-to-image with it: the LoRA comparison runs on each workflow with its own style LoRAs (a: two LoRAs at
+  // four strengths), and one with none (b) runs once.
+  run(`imageWorkflowList = [{ name: 'a', min_images: 0, max_images: 0, options }, { name: 'b', min_images: 0, max_images: 0 },
+       { name: 'c', min_images: 1, max_images: 3 }]`.replace('options }', `options: ${JSON.stringify(options)} }`));
+  els.imageWorkflowTestT2i.checked = true;
+  els.imageHow.listeners.change({ target: els.imageWorkflowTestT2i });
+  assert(els.imageLoraStrengthTest.checked && els.imageLoraStyleTest.checked, 'a LoRA comparison stays on with it');
+  run('syncLoraTests')('imageOptionsBox', []);
+  assert(els.imageCount.disabled && String(els.imageCount.value) === '9' && !els.imageLoraStyleTest.disabled,
+    "8 on a, 1 on b: the form's workflow having no LoRA doesn't stop it");
+  assert(els.imageWorkflowTestHint.textContent.startsWith('9 images in one set: each of the 2 text-to-image workflows at its own default settings, with the LoRA comparison'),
+    els.imageWorkflowTestHint.textContent);
+  els.imageLoraStrengthTest.checked = els.imageLoraStyleTest.checked = false;
+  run('syncLoraTests')('imageOptionsBox', options);
+  assert(String(els.imageCount.value) === '2' && els.imageWorkflowTestHint.textContent.startsWith('2 images in one set'),
+    'without it: each workflow once');
+  els.imageWorkflowTestEdit.checked = true;
+  els.imageHow.listeners.change({ target: els.imageWorkflowTestEdit });
+  assert(!els.imageWorkflowTestT2i.checked, 'all edit instead of all text-to-image');
+  run('syncImageAmount()');
+  assert.strictEqual(els.imageWorkflowTestHint.textContent, 'Choose the image to edit first.');
+  // An LLM comparison writes its prompts: it takes the place of the others, and makes one image for each prompt model.
+  els.imageLlmTest.checked = true;
+  els.imageHow.listeners.change({ target: els.imageLlmTest });
+  assert(!els.imageWorkflowTestEdit.checked && !els.imageLoraStrengthTest.checked, 'an LLM comparison goes with neither');
+  run(`LOCAL_MODELS = [{ id: 'g', vision: true }, { id: 'q', vision: false }]`);
+  els.imageLlm.options = [{ value: 'gemini', disabled: false }, { value: 'local', disabled: false }];
+  run('syncImageAmount()');
+  assert(els.imageCount.disabled && String(els.imageCount.value) === '3', 'Gemini and both local models: 3');
+  assert(els.imageLlmTestHint.textContent.startsWith('3 images in one set: each prompt model'), els.imageLlmTestHint.textContent);
+  els.imageLlmTest.checked = false;
+  els.imageHow.listeners.change({ target: els.imageLlmTest });
+  run('syncLoraTests')('imageOptionsBox', options);
+  assert(!els.imageCount.disabled && String(els.imageCount.value) === '7', 'off: your own 7 again');
+  run('imageWorkflowList = []');
+  for (const fn of ['sameAgain', 'editQueued']) {
+    const start = script.indexOf(`async function ${fn}(`);
+    assert(script.slice(start, script.indexOf('\n}\n', start)).includes('queuePlan()'), `${fn}: the estimate is the reopened form's`);
+  }
 }
 
 // With an upscale on, the stepper sets where it ends and the size it's made at follows: a quarter of the pixels, within

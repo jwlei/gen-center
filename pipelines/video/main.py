@@ -14,7 +14,7 @@ import requests
 from dotenv import load_dotenv
 
 from core import director, h3_refiner, run_checkpoint, run_form, seeds
-from core import lora_tests, pills, titles, workflow_options
+from core import lora_tests, pills, prompt_words, titles, variety, workflow_options
 from core.audio import AudioEngine
 from core.paths import LOGS_DIR
 from core.saved_workflows import shorthand, title_words, unique_name
@@ -98,6 +98,13 @@ def parse_args(argv=None):
     parser.add_argument("--seed", type=parse_seed, help="The first clip's seed. Each clip after it gets the next one, so the film "
                                                        "can be made again. Default: a random seed for every clip.")
     parser.add_argument("--plan-only", action="store_true", help="Write the prompts and stop before rendering.")
+    parser.add_argument("--words", type=int, default=None,
+                        help=f"How long each clip's prompt is, in words ({prompt_words.LEAST}-{prompt_words.MOST['video']}; "
+                             "default: the video model's own).")
+    parser.add_argument("--variety", choices=variety.VARIETIES, default=None, help="How different the clips are: slight, mixed or wide (default: as the film needs).")
+    parser.add_argument("--vary", default="", help=f"What changes from one clip to the next, comma-separated: {', '.join(variety.NAMES)}.")
+    parser.add_argument("--keep", default="", help="What stays the same in every clip, from the same list.")
+    parser.add_argument("--explicit", action="store_true", help="Tell the prompt writer the film is meant to be explicit (Private mode).")
     parser.add_argument("--direct", action="store_true", help="Every clip gets the prompt as it is: no LLM writes them.")
     parser.add_argument("--h3-enhance", choices=h3_refiner.TIMINGS, default="off",
                         help="Use OpenH3-IR before prompt review or before each render.")
@@ -116,6 +123,14 @@ def parse_args(argv=None):
 
     if args.redo is not None and not args.resume:
         parser.error("--redo needs --resume.")
+    try:
+        args.vary, args.keep = variety.parse_names(args.vary), variety.parse_names(args.keep)
+    except ValueError as e:
+        parser.error(f"--vary and --keep: {e}")
+    if set(args.vary) & set(args.keep):
+        parser.error("Something can't both vary and stay the same.")
+    if args.words is not None and not prompt_words.LEAST <= args.words <= prompt_words.MOST["video"]:
+        parser.error(f"--words is from {prompt_words.LEAST} to {prompt_words.MOST['video']}.")
     if args.plan_only and args.resume:
         parser.error("--plan-only writes a new plan: --resume already has one.")
     if args.audio and args.narration:
@@ -351,6 +366,8 @@ def plan_run(args, stages):
           f"{width}x{height}, {shortest}-{longest}s a clip...")
     if image_2_in_words:
         print("🖼️ This workflow's clips take one image, so image 2 only reaches them through what the prompts say.")
+    varied = {"variety": getattr(args, "variety", None), "vary": getattr(args, "vary", []), "keep": getattr(args, "keep", []),
+              "explicit": getattr(args, "explicit", False), "words": getattr(args, "words", None)}
     plan_args = ([media.preview_jpeg(image) for image in images], brief, state.seconds, state.start, llm,
                  video_model, args.image_roles, media.preview_jpeg(image_2_in_words) if image_2_in_words else None,
                  state.references())
@@ -360,11 +377,11 @@ def plan_run(args, stages):
         with h3_refiner.Refiner(comfy.url, require_compiler=False, model_id=local_model, vision=sees_images) as refiner:
             title, shots = planner.plan_film(*plan_args, chosen=args.clip_seconds, refiner=refiner,
                                              first_frame=state.start == "multishot" and state.h3_first_frame,
-                                             clip_relationship=state.clip_relationship)
+                                             clip_relationship=state.clip_relationship, **varied)
     else:
         title, shots = planner.plan_film(*plan_args, chosen=args.clip_seconds,
                                          first_frame=state.start == "multishot" and state.h3_first_frame,
-                                         clip_relationship=state.clip_relationship)
+                                         clip_relationship=state.clip_relationship, **varied)
     for image, path in zip(images, state.image_paths):
         media.save_input(image, path)
     for index, shot in enumerate(shots):

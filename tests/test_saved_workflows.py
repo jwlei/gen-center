@@ -971,6 +971,56 @@ class LoraFamilyTest(unittest.TestCase):
             invalid = {"additional_loras": json.dumps([{"on": True, "name": "KNPV3_1.safetensors", "strength": strength}])}
             self.assertIn("strength", workflow_options.check(options, invalid))
 
+    def test_a_workflow_comparison_takes_each_usable_workflow_of_its_kind(self):
+        from core import workflow_tests
+        entry = lambda name, low, high, **more: {"pipeline": "image", "name": name, "label": name, "path": f"/w/{name}.json",
+                                                 "takes": {"min_images": low, "max_images": high}, **more}
+        entries = [entry("a_t2i", 0, 0), entry("b_t2i", 0, 0, problem="missing node"), entry("c_edit", 1, 1),
+                   entry("d_edit", 1, 3), entry("e_fibo", 0, 1), {**entry("v", 0, 0), "pipeline": "video"}]
+        self.assertEqual(workflow_tests.requested({"workflow_test_t2i": "on"}), "t2i")
+        self.assertEqual(workflow_tests.requested({"workflow_test_edit": "on"}), "edit")
+        self.assertIsNone(workflow_tests.requested({"workflow_test_t2i": "0"}))
+        self.assertEqual([test["label"] for test in workflow_tests.variations("t2i", entries)], ["a_t2i"],
+                         "made for text alone, and able to run")
+        self.assertEqual([test["label"] for test in workflow_tests.variations("edit", entries, 1)], ["c_edit", "d_edit"])
+        self.assertEqual([test["label"] for test in workflow_tests.variations("edit", entries, 2)], ["d_edit"], "as many images as given")
+        for kind, images in (("edit", 0), ("t2i", 1)):
+            with self.assertRaises(ValueError):
+                workflow_tests.variations(kind, entries, images)
+        tests = workflow_tests.variations("edit", entries, 1)
+        self.assertEqual(workflow_tests.in_env({workflow_tests.ENV: json.dumps(tests)}), tests)
+        with self.assertRaises(ValueError):
+            workflow_tests.in_env({workflow_tests.ENV: json.dumps([{"kind": "other"}])})
+        shots = workflow_tests.shots({"prompt": "p"}, tests, 3)
+        self.assertEqual([(shot["title"], shot["seed"], workflow_tests.shot_workflow(shot)) for shot in shots],
+                         [("c_edit", 3, "c_edit"), ("d_edit", 3, "d_edit")])
+        self.assertEqual((workflow_tests.kind_of(shots), workflow_tests.pill(shots)), ("edit", "All edit workflows"))
+        self.assertIsNone(workflow_tests.pill([{"prompt": "p"}]))
+
+    def test_a_workflow_comparison_runs_the_lora_comparison_on_each_workflow_with_its_own_loras(self):
+        from core import workflow_tests
+        krea = workflow_options.lora_options("0", "krea_a.safetensors", 0.7, ["krea_a.safetensors", "krea_b.safetensors"])
+        moss = workflow_options.lora_options("0", "moss_a.safetensors", 1, ["moss_a.safetensors"])
+        entry = lambda name, options: {"pipeline": "image", "name": name, "label": name, "path": f"/w/image_{name}.json",
+                                       "takes": {"min_images": 0, "max_images": 0, "options": options}}
+        entries = [entry("Krea2", krea), entry("Moss", moss), entry("Plain", [])]
+        # The form's own LoRA and strength are the form workflow's: each workflow starts from its own.
+        form = {"lora_style_test": "on", "lora_strength_test": "on", "lora_test_step": "1",
+                "opt_lora_name": "other.safetensors", "opt_lora_strength": "0.3"}
+        tests = workflow_tests.variations("t2i", entries, 0, form)
+        said = lambda test: (test["label"], (test.get("lora_test") or {}).get("lora_name"), (test.get("lora_test") or {}).get("lora_strength"))
+        self.assertEqual([said(test) for test in tests],
+                         [("Krea2", "krea_a.safetensors", "1"), ("Krea2", "krea_a.safetensors", "2"),
+                          ("Krea2", "krea_b.safetensors", "1"), ("Krea2", "krea_b.safetensors", "2"),
+                          ("Moss", "moss_a.safetensors", "1"), ("Moss", "moss_a.safetensors", "2"),
+                          ("Plain", None, None)], "a workflow with no style LoRA runs once, at its defaults")
+        self.assertEqual(workflow_tests.in_env({workflow_tests.ENV: json.dumps(tests)}), tests)
+        shots = workflow_tests.shots({"prompt": "p"}, tests, 3)
+        self.assertEqual(shots[0]["title"], "Krea2 · a · 1", "its workflow, LoRA and strength")
+        self.assertEqual((shots[0]["lora_test"]["lora_name"], "lora_test" in shots[-1]), ("krea_a.safetensors", False))
+        self.assertEqual(shots[0]["workflow_test"], {"kind": "t2i", "workflow": "/w/image_Krea2.json", "label": "Krea2"})
+        self.assertEqual(len(workflow_tests.variations("t2i", entries, 0, {})), 3, "no LoRA comparison: each once")
+
     def test_lora_comparison_matrix_uses_legal_increments_and_private_visibility(self):
         from core import lora_tests
         options = workflow_options.lora_options("0", "krea_a.safetensors", 0.7,
@@ -989,6 +1039,15 @@ class LoraFamilyTest(unittest.TestCase):
         for step in ("0", "NaN", "0.03", "2.1"):
             with self.assertRaises(ValueError):
                 lora_tests.variations({**form, "lora_test_step": step}, options)
+        # A LoRA the workflow can't take is refused in Generate, not discovered as every image of the set failing.
+        unusable = [{**option, "problem": "There's no one place in this workflow to put a LoRA."} for option in options]
+        with self.assertRaisesRegex(ValueError, "no one place"):
+            lora_tests.variations(form, unusable)
+
+    def test_a_listing_keeps_the_node_a_style_lora_is_spliced_in_with(self):
+        # Without it, the page offered the LoRA (from ComfyUI's full node list) but the run, rebuilt from the
+        # listing's copy, found no place for it: Moss's LoRA comparison failed every image.
+        self.assertIn("LoraLoaderModelOnly", workflow_options.SPLICED_NODES)
 
     def test_additional_loras_chain_after_the_primary_model_lora(self):
         api = {"base": {"class_type": "UNETLoader", "inputs": {}},
@@ -1009,7 +1068,7 @@ class LoraFamilyTest(unittest.TestCase):
         os.makedirs(os.path.join(folder, "models", "loras"))
         self.make(folder, "old.safetensors", ["transformer_blocks.0.img_mlp.net.0.proj.lora_down.weight"])
         self.make(folder, "new.safetensors", ["diffusion_model.transformer_blocks.0.img_mlp.gate_up.lora_A.weight"])
-        self.make(folder, "other.safetensors", ["lora_unet_down_blocks_0.weight"])
+        self.make(folder, "other.safetensors", ["lora_unet_down_blocks_0_attentions_0.lora_down.weight"])
         with mock.patch.dict(os.environ, {"COMFYUI_DIR": folder, "COMFYUI_LAUNCHER": ""}):
             self.assertIn("earlier Qwen-Image", lora_check.problem("old.safetensors", "qwen_image_21"))
             self.assertIn("earlier Qwen-Image", lora_check.problem("old.safetensors", "qwen_image_21_edit"))
@@ -1017,6 +1076,72 @@ class LoraFamilyTest(unittest.TestCase):
             self.assertIsNone(lora_check.problem("other.safetensors", "qwen_image_21"), "not telling, so not refused")
             self.assertIn("not krea", lora_check.problem("old.safetensors", "krea2"))
             self.assertIsNone(lora_check.problem("gone.safetensors", "qwen_image_21"))
+
+    def test_a_lora_is_known_by_its_file_not_its_name(self):
+        # Dropped into ComfyUI's loras folder under any name, a LoRA is offered for the model it was made for: its
+        # metadata, or the layout of its tensors, says which. A name that says otherwise doesn't count.
+        import json
+        import struct
+        from unittest import mock
+        from core import lora_check
+        folder = tempfile.mkdtemp()
+        os.makedirs(os.path.join(folder, "models", "loras", "styles"))
+        self.make(folder, "styles/darkbrush.safetensors", ["diffusion_model.txtfusion.refiner_blocks.0.attn.lora_A.weight"])
+        self.make(folder, "Moss_skin.safetensors", ["diffusion_model.layers.0.proj.qkv.lora_A.weight"])
+        self.make(folder, "Moss_checkpoint.safetensors", ["model.diffusion_model.input_blocks.0.0.weight"])
+        self.make(folder, "h3_turbo.safetensors", ["diffusion_model.blocks.0.attn.out_proj.alpha"])
+        self.make(folder, "plain.safetensors", ["lora_unet_blocks_0.lora_down.weight"])
+        header = json.dumps({"__metadata__": {"ss_base_model_version": "krea2"},
+                             "lora_unet_blocks_0.lora_down.weight": {"dtype": "F16", "shape": [1], "data_offsets": [0, 2]}}).encode()
+        with open(os.path.join(folder, "models", "loras", "tagged.safetensors"), "wb") as f:
+            f.write(struct.pack("<Q", len(header)) + header + bytes(2))
+        with mock.patch.dict(os.environ, {"COMFYUI_DIR": folder, "COMFYUI_LAUNCHER": ""}):
+            self.assertEqual(lora_check.lora_families("styles/darkbrush.safetensors"), {"krea"}, "by its tensors")
+            self.assertEqual(lora_check.lora_families("tagged.safetensors"), {"krea"}, "by its metadata")
+            self.assertTrue(workflow_options._compatible_lora("styles/darkbrush.safetensors", "krea2_turbo.safetensors", []))
+            self.assertTrue(workflow_options._compatible_lora("Moss_skin.safetensors", "moss_image_base.safetensors", []))
+            # A whole model in the loras folder is never offered, whatever its name says.
+            self.assertTrue(lora_check.not_a_lora("Moss_checkpoint.safetensors"))
+            self.assertFalse(workflow_options._compatible_lora("Moss_checkpoint.safetensors", "moss_image_base.safetensors", []))
+            self.assertIn("whole model", lora_check.problem("Moss_checkpoint.safetensors", "moss_image_base.safetensors"))
+            # A turbo LoRA with only alphas is still a LoRA; one whose file says nothing falls back to its name.
+            self.assertFalse(lora_check.not_a_lora("h3_turbo.safetensors"))
+            self.assertEqual(lora_check.lora_families("plain.safetensors"), set())
+            self.assertEqual(lora_check.lora_families("gone_krea.safetensors"), {"krea"}, "not installed: its name")
+            self.assertEqual(lora_check.lora_families(None), set(), "a workflow with no LoRA chosen yet")
+
+    def test_the_model_can_be_picked_from_others_of_its_kind(self):
+        # A fine-tune put in diffusion_models, named anything, is offered for the workflow whose model it can replace;
+        # one of another family, or another variant of it (H3's reference-to-video for its first/last-frame), isn't.
+        from unittest import mock
+        folder = tempfile.mkdtemp()
+        os.makedirs(os.path.join(folder, "models", "diffusion_models"))
+        os.makedirs(os.path.join(folder, "models", "loras"))
+        def model(name, keys):
+            self.make(folder, "../diffusion_models/" + name, keys)
+        model("moss_image_base.safetensors", ["model.diffusion_model.layers.0.proj.qkv.weight"])
+        model("PornMaster_SFT.safetensors", ["model.diffusion_model.layers.0.proj.qkv.weight"])
+        model("krea2_turbo.safetensors", ["diffusion_model.txtfusion.refiner_blocks.0.attn.weight"])
+        info = {"UNETLoader": {"input": {"required": {"unet_name": [[
+            "moss_image_base.safetensors", "PornMaster_SFT.safetensors", "krea2_turbo.safetensors"]]}}}}
+        api = {"1": {"class_type": "UNETLoader", "inputs": {"unet_name": "moss_image_base.safetensors"}},
+               "2": {"class_type": "KSampler", "inputs": {"model": ["1", 0], "positive": ["3", 0]}}}
+        with mock.patch.dict(os.environ, {"COMFYUI_DIR": folder, "COMFYUI_LAUNCHER": ""}):
+            option, = workflow_options._model_choice(api, info, {})
+            self.assertEqual((option["id"], option["label"], option["default"]),
+                             ("model_file", "Diffusion model", "moss_image_base.safetensors"))
+            self.assertEqual(option["choices"], ["moss_image_base.safetensors", "PornMaster_SFT.safetensors"], "not Krea's")
+            self.assertTrue(option["model"], "drawn last, under Model")
+            self.assertIsNone(workflow_options.check([option], {"model_file": "PornMaster_SFT.safetensors"}))
+            workflow_options._model_choice(api, info, {"model_file": "PornMaster_SFT.safetensors"})
+            self.assertEqual(api["1"]["inputs"]["unet_name"], "PornMaster_SFT.safetensors")
+            self.assertIn("one of", workflow_options.check([option], {"model_file": "krea2_turbo.safetensors"}))
+        self.assertFalse(workflow_options._same_kind("minimax_h3_ref2va.safetensors", "minimax_h3_fl2va.safetensors"))
+        self.assertFalse(workflow_options._same_kind("minimax_h3_image.safetensors", "minimax_h3_fl2va.safetensors"))
+        self.assertFalse(workflow_options._same_kind("minimax_h3_fastvideo_4step.safetensors", "minimax_h3_fl2va.safetensors"),
+                         "FastVideo has its own setting")
+        self.assertFalse(workflow_options._same_kind("qwen_image_edit_2511.safetensors", "qwen_image_21.safetensors"))
+        self.assertTrue(workflow_options._same_kind("krea2_turbo_fp8.safetensors", "krea2_turbo_int8.safetensors"))
 
     def test_family_keywords_can_match_more_than_one_model_and_only_affect_labels(self):
         from core import lora_check

@@ -35,16 +35,16 @@ function renderQueue(el, q, doneIn, moving = false, idle = false) {
   const heading = `<b>${el.dataset.title} (${waiting.length})</b>`;
   const expanded = el._open !== false;
   const head = (el.dataset.lane === 'run' ? `<button type="button" class="queue-fold-toggle queue-fold-title" data-fold-queue="1" aria-expanded="${expanded}">${heading}</button>` : heading) + (q.held
-    ? `<span class="when">On hold</span>`
+    ? `<span class="when">${doneIn ? `${fmtEta(doneIn)} · ` : ''}On hold</span>`
     : doneIn ? `<span class="when">All done around ${clockIn(doneIn)}</span>` : '')
-    + (el.dataset.lane === 'run' ? `<button type="button" class="icon-btn" data-queue-toggle="1" aria-label="${q.held || q.stopAfter ? 'Resume queue' : 'Pause after current'}" title="${q.held || q.stopAfter ? 'Resume queue' : 'Stop after the current image or video'}">${q.held || q.stopAfter ? ICONS.play : '❚❚'}</button>`
-      + `<button type="button" class="icon-btn" data-sort-queue aria-label="Sort by shortest ETA" title="Sort by shortest ETA"${waiting.length < 2 ? ' disabled' : ''}><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M4 5h14M4 10h10M4 15h6M19 10v10m-3-3 3 3 3-3"/></svg></button>`
+    + (el.dataset.lane === 'run' ? `<button type="button" class="icon-btn" data-queue-toggle="1" aria-label="${q.held || q.stopAfter ? 'Resume queue' : 'Hold the queue'}" title="${q.held || q.stopAfter ? 'Resume queue' : 'Hold the queue: what is running now finishes, and nothing else starts until you resume'}">${q.held || q.stopAfter ? ICONS.play : '❚❚'}</button>`
+      + `<button type="button" class="icon-btn" data-sort-queue aria-label="Sort by shortest ETA" title="Sort by shortest ETA"${waiting.length < 2 ? ' disabled' : ''}><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path transform="matrix(1 0 0 -1 0 24)" d="M4 5h14M4 10h10M4 15h6M19 10v10m-3-3 3 3 3-3"/></svg></button>`
       + `<button type="button" class="queue-fold-toggle queue-fold-arrow" data-fold-queue="1" aria-expanded="${expanded}" aria-label="${expanded ? 'Collapse queue' : 'Expand queue'}"><span class="chev" aria-hidden="true"></span></button>` : '');
   const canRunNow = el.dataset.lane === 'run' && idle;
   const items = waiting.map((item, i) => `
     <div class="queue-item${el.dataset.lane === 'run' ? ' run-card' : ''}${String(item.id) === el._selected ? ' selected' : ''}" data-id="${esc(String(item.id))}" data-motion-key="queue-${esc(String(item.id))}">
       ${el.dataset.lane === 'run' ? workPrivacy(item, 'job', item.id) : ''}
-      ${el.dataset.lane === 'run' ? '<div class="queue-item-top">' : ''}<div class="what"${waiting.length > 1 ? ` role="button" tabindex="0" aria-pressed="${String(item.id) === el._selected}" aria-label="Select ${esc(hideTitle(item) ? PLAIN_TITLE : item.label)} to drag or use arrow keys to reorder"` : ''}>${queueTitle(`queue-${item.id}`, el.dataset.lane === 'run' ? workHeading(item, item.pipeline) : item.label, i + 1)}<div class="hint">${el.dataset.lane === 'run' ? `${SIDE_NAMES[item.pipeline] || 'Shorts'} · ` : ''}${esc(queueDetail(item))}</div></div>${el.dataset.lane === 'run' ? '</div><div class="queue-item-actions">' : ''}
+      ${el.dataset.lane === 'run' ? '<div class="queue-item-top">' : ''}<div class="what"${waiting.length > 1 ? ` role="button" tabindex="0" aria-pressed="${String(item.id) === el._selected}" aria-label="Select ${esc(hideTitle(item) ? PLAIN_TITLE : item.label)} to drag or use arrow keys to reorder"` : ''}>${queueTitle(`queue-${item.id}`, el.dataset.lane === 'run' ? workHeading(item, item.pipeline) : item.label, i + 1)}<div class="hint">${esc(queueDetail(item))}</div></div>${el.dataset.lane === 'run' ? '</div><div class="queue-item-actions">' : ''}
       ${el.dataset.lane === 'run' ? `<span class="acts-side"><button type="button" class="icon-btn" data-pause="${item.id}" aria-label="Pause: move to Pending" title="Pause: take it out of the queue and make it pending">${ICONS.later}</button>`
         // Nothing running: any of them can start first. Running: the first is next already, and the others can go ahead of the rest.
         + (canRunNow ? `<button type="button" class="run-item${item.continuation ? ' continue-item' : ''}" data-run="${item.id}" aria-label="Run this generation now" title="Run this now">
@@ -100,10 +100,21 @@ function setupQueueScroll(section, selector, rowSelector, top = 0) {
 }
 // Every run and upload that has ended, in one list, newest first.
 const FINISHED_SHOWN = 20;  // The last twenty, kept over a restart until Clear
+// Older jobs said it longer: what a prompt is and the workflow's own side, which the card already shows.
+const DETAIL_SAID = { 'your prompt, word for word': 'exact prompt', 'your prompt, every clip': 'exact prompt' };
+const DETAIL_DROPPED = new Set(['renders straight away', 'renders at once', 'from text', 'Continue']);
+const WORKFLOW_SIDE = /^(image|video|shorts)_(?=\S)/i;
 function queueDetail(item) {
-  const detail = (item.detail || '').split(' · ').filter(part => part !== 'renders straight away' && part !== 'renders at once');
+  const detail = (item.detail || '').split(' · ').filter(part => part && !DETAIL_DROPPED.has(part))
+    .map(part => DETAIL_SAID[part] || (WORKFLOW_SIDE.test(part) && !part.includes(' ') ? part.replace(WORKFLOW_SIDE, '') : part));
+  // The size goes right after how many it makes.
   const size = item.facts && item.facts.resolution;
-  if (size && !detail.includes(size)) detail.push(size);
+  if (size) {
+    if (detail.includes(size)) detail.splice(detail.indexOf(size), 1);
+    detail.splice(detail.length ? 1 : 0, 0, size);
+  }
+  // The upscale it renders with, when it has one (Upscale or Latent upscale in its settings).
+  if (item.facts && item.facts.upscale) detail.push(`Upscale: ${item.facts.upscale}`);
   return detail.join(' · ');
 }
 // Kept over a restart, so one from another day says which.
@@ -184,6 +195,8 @@ function renderFinished(runs, uploads, madeNow = []) {
   $('finishedLabel').innerHTML = all.length ? `Finished (${all.length})${failed ? ` · <span class="failed">${failed} failed</span>` : ''}` : 'Finished';
   $('finishedCount').textContent = all.length ? String(all.length) : '';
   $('finishedCount').classList.toggle('failed', failed > 0);
+  // On a phone the icon is tucked away behind the footer's last button: that shows only what failed.
+  $('headToggle').dataset.count = failed ? String(failed) : '';
   $('finishedFoot').hidden = !all.length;
   if (!all.length) {
     $('finishedList').innerHTML = '';
@@ -234,11 +247,12 @@ const DESK = window.matchMedia('(min-width: 1280px)');
 let lastStatus = null;
 function placePanelControls() {
   if (DESK.matches) {
-    for (const id of ['logToggle', 'finishedToggle', 'quotaToggle']) $('statusToggles').appendChild($(id));
+    for (const id of ['logToggle', 'openTemperatures', 'finishedToggle', 'quotaToggle']) $('statusToggles').appendChild($(id));
   } else {
-    // The header: Finished, privacy, the log, then the gear.
+    // The header: Finished, privacy, the log, the temperatures, then the gear.
     $('topIcons').insertBefore($('finishedToggle'), $('privateToggle'));
     $('topIcons').insertBefore($('logToggle'), $('settingsBtn'));
+    $('topIcons').insertBefore($('openTemperatures'), $('settingsBtn'));
     $('settingsHead').appendChild($('quotaToggle'));
   }
   const running = !!(lastStatus && lastStatus.running);
@@ -529,15 +543,15 @@ function renderStopped(runs, parked = [], results = [], canRunNow = false, check
     <div class="stopped-run" data-run-id="${esc(run.id)}" data-motion-key="run-${esc(run.id)}">
       ${workPrivacy(run, run.pipeline, run.id)}
       <div class="run-head"><div class="what">${queueTitle(`run-${run.id}`, hideTitle(run) ? PLAIN_TITLE : run.label)}</div>${tag(run)}</div>
-      <div class="hint">${SIDE_NAMES[run.pipeline] || 'Shorts'} · ${esc(run.detail)}${run.size && !String(run.detail).includes(run.size) ? ` · ${esc(run.size)}` : ''}</div>
+      <div class="hint">${SIDE_NAMES[run.pipeline] || 'Shorts'} · ${esc(run.detail)}${run.size && !String(run.detail).includes(run.size) ? ` · ${esc(run.size)}` : ''}${run.upscale ? ` · Upscale: ${esc(run.upscale)}` : ''}</div>
       ${warningText(run)}
       ${run.when ? `<div class="hint">${esc(run.when)}</div>` : ''}
       ${run.outcome && run.outcome.why ? whyHtml(run.outcome) : ''}
       <div class="stopped-actions">
         <span class="acts-side">${isFailed ? `<button type="button" class="icon-btn" data-continue="${esc(run.id)}" aria-label="Retry" title="Retry from where it got to">${ICONS.again}</button>`
             + `<button type="button" class="icon-btn" data-continue-later="${esc(run.id)}" aria-label="Back to Pending" title="Back to Pending: it waits there until you start it">${ICONS.later}</button>`
-          : `<button type="button" class="icon-btn start-item continue-item" data-continue-later="${esc(run.id)}" aria-label="Add to Pending" title="Add to Pending: it waits until you start it">${ICONS.queue}</button>`
-            + `<button type="button" class="icon-btn start-item continue-item" data-continue-top="${esc(run.id)}" aria-label="Add to the top of the queue" title="Add to the top of the queue: ahead of everything waiting">${ICONS.top}</button>`}</span>
+          : `<button type="button" class="icon-btn start-item continue-item" data-continue="${esc(run.id)}" aria-label="Add to the queue" title="Add to the queue: it continues from where it got to when the queue gets to it (with nothing running, the queue waits for Resume)">${ICONS.queue}</button>`
+            + `<button type="button" class="icon-btn start-item continue-item" data-continue-top="${esc(run.id)}" aria-label="Add to the top of the queue" title="Add to the top of the queue: ahead of everything waiting, and started now if nothing is running">${ICONS.top}</button>`}</span>
         <span class="when">${fmtEta(run.estimate)}</span>
         <span class="acts-side acts-end">${run.pipeline !== 'shorts' ? `<button type="button" class="icon-btn${run.prompt_warnings && run.prompt_warnings.length ? ' prompt-warning' : ''}" data-shots="${esc(run.id)}" aria-label="Prompts" title="View prompts">${ICONS.enhanced}</button>` : ''}<button type="button" class="icon-btn" data-config="${esc(run.id)}" data-pipeline="${esc(run.pipeline)}" aria-label="Change settings" title="Back to Generate with its settings, to change them">${ICONS.config}</button><button type="button" class="icon-btn" data-discard="${esc(run.id)}" data-pipeline="${esc(run.pipeline)}" data-clips="${run.clips}" aria-label="Discard this run" title="Discard what it has still to do: anything it made stays (tap twice)">${ICONS.trash}</button></span>
       </div>
@@ -547,11 +561,11 @@ function renderStopped(runs, parked = [], results = [], canRunNow = false, check
     <div class="stopped-run" data-motion-key="queue-${esc(String(item.id))}">
       ${workPrivacy(item, 'job', item.id)}
       <div class="run-head"><div class="what">${queueTitle(`queue-${item.id}`, workHeading(item, item.pipeline))}</div></div>
-      <div class="hint">${SIDE_NAMES[item.pipeline] || 'Shorts'} · ${esc(queueDetail(item))}</div>
+      <div class="hint">${esc(queueDetail(item))}</div>
       ${warningText(item)}
       <div class="stopped-actions">
-        <span class="acts-side">${item.editing ? '<span class="when">Editing</span>' : `<button type="button" class="icon-btn start-item${item.continuation ? ' continue-item' : ''}" data-start="${item.id}" aria-label="Add to the queue" title="Add to the queue: it starts when the queue gets to it">${ICONS.queue}</button>`
-          + `<button type="button" class="icon-btn start-item${item.continuation ? ' continue-item' : ''}" data-start="${item.id}" data-top="1" aria-label="Add to the top of the queue" title="Add to the top of the queue: ahead of everything waiting">${ICONS.top}</button>`
+        <span class="acts-side">${item.editing ? '<span class="when">Editing</span>' : `<button type="button" class="icon-btn start-item${item.continuation ? ' continue-item' : ''}" data-start="${item.id}" aria-label="Add to the queue" title="Add to the queue: it starts when the queue gets to it (with nothing running, the queue waits for Resume)">${ICONS.queue}</button>`
+          + `<button type="button" class="icon-btn start-item${item.continuation ? ' continue-item' : ''}" data-start="${item.id}" data-top="1" aria-label="Add to the top of the queue" title="Add to the top of the queue: ahead of everything waiting, and started now if nothing is running">${ICONS.top}</button>`
           + (canRunNow ? `<button type="button" class="icon-btn start-item${item.continuation ? ' continue-item' : ''}" data-run-now="${item.id}" aria-label="Run this now" title="Run this now: the rest of the queue stays on hold">${ICONS.play}</button>` : '')}</span>
         <span class="when">${item.estimate ? fmtEta(item.estimate) : ''}</span>
         <span class="acts-side acts-end">${item.resume && item.pipeline !== 'shorts' ? `<button type="button" class="icon-btn${item.prompt_warnings && item.prompt_warnings.length ? ' prompt-warning' : ''}" data-shots="${esc(item.resume)}" aria-label="Prompts" title="View prompts">${ICONS.enhanced}</button>` : ''}<button type="button" class="icon-btn" data-edit="${item.id}" aria-label="Go to setup" title="Edit this pending job">${ICONS.config}</button><button type="button" class="icon-btn" data-remove="${item.id}" aria-label="Remove it" title="Remove it (tap twice)">${ICONS.trash}</button></span>
@@ -628,7 +642,8 @@ for (const id of ['warningRuns', 'stoppedRuns', 'failedRuns']) {
       return;
     } else if (d.continue || d.continueTop || d.continueLater) {
       const run = d.continue || d.continueTop || d.continueLater;
-      const query = d.continueTop ? '?top=1' : d.continueLater ? '?later=1' : '';
+      // Pending's "Add to the queue" (start-item, not Retry in Finished): with nothing running it waits for Resume.
+      const query = d.continueTop ? '?top=1' : d.continueLater ? '?later=1' : button.classList.contains('start-item') ? '?pending=1' : '';
       const data = await queueRequest(button, async () => (await fetch(`/runs/${encodeURIComponent(run)}/continue${query}`, { method: 'POST' })).json(), d.continueLater ? 'Pending' : undefined, d.continueLater ? 'Moving…' : undefined);
       if (data) poll();
       return;
@@ -839,6 +854,10 @@ function setQueueSectionOpen(section, open) {
       .replace(/aria-expanded="(?:true|false)"/g, `aria-expanded="${open}"`)
       .replace(/aria-label="(?:Collapse|Expand) queue"/, `aria-label="${open ? 'Collapse' : 'Expand'} queue"`)
       .replace(/class="queue-list" tabindex="0"(?: hidden)?/, `class="queue-list" tabindex="0"${open ? '' : ' hidden'}`);
+  } else if (details && section.dataset.html) {
+    // Warning, Pending and Failed: what was drawn now says open or shut as the fold does. Forgotten instead, the next
+    // poll drew every row again just after it opened, and they flashed.
+    section.dataset.html = section.dataset.html.replace(/^<details class="stopped-fold"(?: open)?>/, `<details class="stopped-fold"${open ? ' open' : ''}>`);
   } else delete section.dataset.html;
   section.classList.toggle('queue-open', open && !section.hidden);
 }
@@ -880,9 +899,11 @@ for (const id of ['runQueue', 'uploadQueue']) {
           if (!result.ok) return result;
           if (!state.held) return result;
         }
-        const action = state.held || state.stopAfter ? 'resume' : state.running && state.pipeline !== 'video' ? null : 'hold';
-        return (await fetch(action ? `/queue/run/${action}` : '/stop-after', { method: 'POST' })).json();
-      }, state.held || state.stopAfter ? 'Resumed' : 'Paused', 'Updating…');
+        // Hold only keeps the next one from starting: what is running now finishes as it would. (It used to stop an
+        // image set or Shorts batch after its current item, which cut the run short.)
+        const action = state.held || state.stopAfter ? 'resume' : 'hold';
+        return (await fetch(`/queue/run/${action}`, { method: 'POST' })).json();
+      }, state.held || state.stopAfter ? 'Resumed' : 'On hold', 'Updating…');
       if (!data) return;
     }
     else if (d.run || d.pause) {

@@ -4,9 +4,6 @@ import os
 import re
 import time
 
-from google import genai
-from google.genai import types
-
 from core.api_log import is_daily_quota, is_exhausted, log_api_call, log_api_error, mark_exhausted
 from core.gemini_models import get_text_models
 
@@ -19,7 +16,23 @@ RETRYABLE_STATUSES = (429, 500, 502, 503, 504)
 MAX_RETRY_WAIT = 90
 
 
+def __getattr__(name):
+    """
+    google.genai and its types, loaded the first time they are used rather than with this module: slow to load, and a
+    run that never asks Gemini (most image and video runs) need not wait for them.
+    """
+    if name == "genai":
+        from google import genai
+        return genai
+    if name == "types":
+        from google.genai import types
+        return types
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
 def _get_client(timeout):
+    from google import genai
+    from google.genai import types
     api_key = os.getenv("GEMINI_API_KEY")
     if not api_key:
         raise RuntimeError("GEMINI_API_KEY is not set. Create a .env file or set the environment variable before running.")

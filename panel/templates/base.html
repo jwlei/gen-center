@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en" data-theme="{{ settings.theme if settings is defined else 'standard' }}">
+<html lang="en" data-theme="{{ settings.theme if settings is defined else 'standard' }}"{% if settings is defined and settings.theme_boxes == false %} data-boxes="off"{% endif %}>
 <head>
 <meta charset="utf-8">
 <!-- No zooming: zoomed in, the page slides under the fixed footer and the footer under the browser's own bar. -->
@@ -14,7 +14,7 @@
     --line: #2a2e3c;
     --text: #e8eaf0;
     --muted: #969cae;
-    --accent: #f2622e;
+    --accent: #a07cff;
     --ok: #3ecf8e;
     --err: #ff6b6b;
     --warn: #e8b84a;
@@ -49,6 +49,8 @@
     padding: 16px;
     margin-bottom: 16px;
   }
+  /* Without boxes (Settings, under Theme): each section straight on the background, what was in it as it was. */
+  :root[data-boxes="off"] .card { background: transparent; border-color: transparent; padding-left: 2px; padding-right: 2px; }
   label { display: block; font-size: .8rem; color: var(--muted); margin: 12px 0 6px; text-transform: uppercase; letter-spacing: .04em; }
   input, select, textarea {
     width: 100%;

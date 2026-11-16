@@ -62,6 +62,48 @@ def model_family(model_id):
     return family
 
 
+# A local model's name in a list, short enough to read: its family, the model's own name if it has one (Fable5), what
+# was done to it in letters (QAT, U for uncensored, H for heretic, A for abliterated), and its quantisation:
+# "Gemma 4 Fable5-U-H Q5_K_M". The built-in Gemma is named from its file; the built-in Qwen3 is just that.
+FAMILY_NAMES = {"gemma-4-12b": "Gemma 4", "qwen3-14b": "Qwen3 14B"}
+FAMILY_GROUPS = {"gemma-4-12b": "Gemma 4 12B · sees images", "qwen3-14b": "Qwen3 14B · text only"}
+_QUANT = re.compile(r"[-_.](I?Q\d(?:_[A-Za-z0-9]+)+|BF16|F16)$", re.I)
+_TAGS = (("qat", "QAT"), ("uncensored", "U"), ("heretic", "H"), ("abliterated", "A"))
+
+
+def _model_file_stem(folder):
+    """The name of a model folder's model file, without .gguf: what it is, where the folder's own name doesn't say."""
+    try:
+        with os.scandir(os.path.join(PROJECT_ROOT, "models", folder)) as entries:
+            names = sorted(entry.name for entry in entries if entry.is_file() and entry.name.lower().endswith(".gguf")
+                           and "mmproj" not in entry.name.lower())
+    except OSError:
+        return ""
+    return names[0][:-len(".gguf")] if names else ""
+
+
+def short_name(model_id, file_stem=None):
+    """
+    "gemma-4-12b:gemma-4-12B-it-qat-q4_0-unquantized-heretic-Q4_K_M" -> "Gemma 4 QAT-H Q4_K_M". file_stem: the built-in
+    Gemma's model file name, found on disk when not given.
+    """
+    family, separator, folder = model_id.partition(":")
+    name = FAMILY_NAMES.get(family, family)
+    if not separator:
+        if family != "gemma-4-12b":
+            return name
+        folder = file_stem if file_stem is not None else _model_file_stem(MODEL_FOLDERS[family])
+        if not folder:
+            return name
+    quant = _QUANT.search(folder)
+    words = [word.lower() for word in re.split(r"-+", folder[:quant.start()] if quant else folder) if word]
+    # Its own name: the first word with a number in it that isn't a size, version or quantisation (fable5).
+    own = next((word for word in words if re.search(r"[a-z]", word) and re.search(r"\d", word) and "." not in word
+                and not re.fullmatch(r"\d+b|v\d+|q\d(_\w+)?|gemma|qwen\d*", word)), None)
+    parts = ([own[:1].upper() + own[1:]] if own else []) + [tag for word, tag in _TAGS if word in words]
+    return " ".join(part for part in [name, "-".join(parts), quant.group(1).upper() if quant else ""] if part)
+
+
 def local_models():
     models = [{"id": "gemma-4-12b", "label": "Gemma 4 12B (vision)"},
               {"id": "qwen3-14b", "label": "Qwen3 14B (text only)"}]
@@ -88,6 +130,8 @@ def local_models():
     for model in models:
         model["tokens_per_second"] = rates.get(model["id"])
         model["vision"] = model_family(model["id"]) == "gemma-4-12b"
+        model["short"] = short_name(model["id"])
+        model["group"] = FAMILY_GROUPS.get(model_family(model["id"]), "")
     return models
 
 
@@ -180,7 +224,7 @@ def model_folder(model_id):
 TITLE_SOURCES = ("off", "gemini", "gemini_sfw", "local")
 # Name and the background, panel, raised panel, border, text, muted text and accent colours.
 THEMES = {
-    "standard": ("Standard", "#0e0f13", "#171922", "#1e212c", "#2a2e3c", "#e8eaf0", "#969cae", "#f2622e"),
+    "standard": ("Standard", "#0e0f13", "#171922", "#1e212c", "#2a2e3c", "#e8eaf0", "#969cae", "#a07cff"),
     "nord": ("Nord", "#242933", "#2e3440", "#3b4252", "#4c566a", "#eceff4", "#a9b5c7", "#5e81ac"),
     "amoled": ("AMOLED Black", "#000000", "#0b0b0b", "#181818", "#303030", "#f3f3f3", "#a5a5a5", "#b94c29"),
     "solarized": ("Solarized Dark", "#00212b", "#002b36", "#073642", "#28515a", "#eee8d5", "#93a1a1", "#b06a08"),
@@ -202,7 +246,8 @@ THEMES = {
 # Free RAM ComfyUI keeps, in GB: 3 unless set (0, from before, meant ComfyUI's own, which had no floor).
 DEFAULT_RESERVE_GB = 3
 DEFAULTS = {"low_priority": False, "reserve_ram_gb": DEFAULT_RESERVE_GB, "h3_model": H3_MODELS[0], "local_llm_model": H3_MODELS[0],
-            "default_workflow": {side: "" for side in SIDES}, "title_source": "off", "pin_progress": False, "theme": "standard"}
+            "default_workflow": {side: "" for side in SIDES}, "title_source": "off", "pin_progress": False,
+            "top_progress": True, "status_progress": False, "theme": "standard", "theme_boxes": True}
 _lock = threading.Lock()
 # GPU heat guard (panel/gpu_guard.py): MSI Afterburner restarted above gpu_restart_above C, with profile gpu_profile,
 # and again only once the GPU has cooled to gpu_rearm_at C.
@@ -274,6 +319,12 @@ def load():
             "title_source": saved["title_source"] if saved.get("title_source") in TITLE_SOURCES else "gemini" if saved.get("gemini_titles") else "off",
             # Pin the progress bar: scrolled away from the top, the header's progress bar stays, along the top of the screen.
             "pin_progress": bool(saved.get("pin_progress")),
+            # The progress bar in the header at the top (on unless turned off), and the footer's Status button filling
+            # as the run goes, with its percentage in the corner.
+            "top_progress": bool(saved.get("top_progress", True)),
+            "status_progress": bool(saved.get("status_progress")),
+            # Each section in a box of its own (the theme's panel colour), or straight on the background.
+            "theme_boxes": bool(saved.get("theme_boxes", True)),
             "output_order": saved.get("output_order", []),
             **_gpu_guard(saved),
             "theme": theme if isinstance(theme, str) and theme in THEMES else DEFAULTS["theme"]}
@@ -301,8 +352,9 @@ def update(changes):
             if changes["title_source"] not in TITLE_SOURCES:
                 raise ValueError("Unknown title source.")
             current["title_source"] = changes["title_source"]
-        if "pin_progress" in changes:
-            current["pin_progress"] = bool(changes["pin_progress"])
+        for key in ("pin_progress", "top_progress", "status_progress", "theme_boxes"):
+            if key in changes:
+                current[key] = bool(changes[key])
         if "output_order" in changes:
             ids = changes["output_order"]
             if (not isinstance(ids, list) or any(not isinstance(key, str) or not key.startswith(("image:", "film:"))

@@ -32,9 +32,12 @@ const panelConnection = (() => {
     document.getElementById('connectionMessage').textContent = message;
     document.body.classList.remove('page-loading');
   }
+  // Loading, the same: "Connecting to the panel..." only if the first answer takes over 5 s.
+  const connecting = setTimeout(() => { if (!lastSuccess) show('Connecting to the panel...'); }, DISCONNECTED_AFTER_MS);
   return {
     success() {
       lastSuccess = new Date();
+      clearTimeout(connecting);
       clearTimeout(disconnectTimer);
       disconnectTimer = null;
       document.getElementById('connectionNotice').hidden = true;
@@ -59,5 +62,18 @@ window.addEventListener('error', event => {
     return;
   }
   panelConnection.renderFailure(event.error || new Error(event.message));
+  reportUncaught(event.error || new Error(event.message));
 });
-window.addEventListener('unhandledrejection', event => panelConnection.renderFailure(event.reason || new Error('Unexpected page error.')));
+window.addEventListener('unhandledrejection', event => {
+  panelConnection.renderFailure(event.reason || new Error('Unexpected page error.'));
+  reportUncaught(event.reason || new Error('Unexpected page error.'));
+});
+// An error no part of the page caught (a tap's handler, say) goes to the panel's page error log too, once each, as
+// polling.js's safely() sends what a redraw threw: from a phone, there's no console to read it in.
+const uncaughtSent = new Set();
+function reportUncaught(e) {
+  const text = ['uncaught', e && e.message, ...String(e && e.stack || '').split('\n').slice(0, 4)].join(' | ');
+  if (uncaughtSent.has(text)) return;
+  uncaughtSent.add(text);
+  try { fetch('/api/page-error', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ error: text }) }).catch(() => {}); } catch (_) {}
+}

@@ -35,6 +35,18 @@ class PillsTest(unittest.TestCase):
         self.assertNotIn("_sibling", latent, "the prompt stays on the server")
         self.assertNotIn("_facts", latent)
 
+    def test_a_lora_comparisons_workflow_pill_says_so(self):
+        compared = {**item("An elf", workflow="Krea2", direct=True), "_comparison": True}
+        usual = item("An elf", workflow="Krea2", direct=True)
+        pills.with_pills([compared, usual])
+        self.assertEqual([p.get("comparison", False) for p in compared["pills"]], [True, False], "its workflow pill alone")
+        self.assertFalse(any(p.get("comparison") for p in usual["pills"]))
+        self.assertNotIn("_comparison", compared)
+        # An LLM comparison: its prompt pill ("All LLMs") is what it compares.
+        llms = {**item("An elf", workflow="Krea2", prompt_writer="All LLMs"), "_comparison": ["prompt"]}
+        pills.with_pills([llms])
+        self.assertEqual([(p["text"], p.get("comparison", False)) for p in llms["pills"]], [("Krea2", False), ("All LLMs", True)])
+
     def test_a_sides_prompt_is_its_own(self):
         self.assertNotEqual(pills.sibling_key("video", "x"), pills.sibling_key("image", "x"))
         self.assertIsNone(pills.sibling_key("video", "  "))
@@ -57,7 +69,7 @@ class PillsTest(unittest.TestCase):
                           ("openh3", "OpenH3-IR: Bold"), ("prompt", "LLM"), ("llm", "local")])
 
     def test_image_workflow_prompt_writer_is_not_exact_prompt(self):
-        state = types.SimpleNamespace(workflow=None, options={"prompt_enhancer": "1"}, llm=None, direct=True,
+        state = types.SimpleNamespace(workflow=None, options={"prompt_enhancer": "1"}, llm=None, direct=True, shots=[],
                                       form={"prompt_mode": ["llm"], "llm": ["prompt_enhancer"]})
         self.assertIn(("prompt", "Prompt enhancer"), pills.run_facts(state, "image", "Text"))
         self.assertNotIn(("prompt", "Exact prompt"), pills.run_facts(state, "image", "Text"))

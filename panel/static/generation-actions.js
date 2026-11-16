@@ -193,6 +193,8 @@ async function editQueued(id, button) {
     showFormError('');
     reopened(pipeline);
     queueEditLabel();
+    // Set in code, the form sends no input event: the footer's estimate is the job's, not the form's before it.
+    queuePlan();
     if (WIDE.matches) $('optionsCard').scrollIntoView({ behavior: 'smooth' }); else showPage('generate');
   } catch (error) {
     if (queueEdit !== edit) return;

@@ -2,8 +2,11 @@ const fs = require('fs');
 const assert = require('assert');
 const vm = require('vm');
 
+// The page as Flask rendered it, which loads settings.js; the theme picker's part of that script runs on a stub DOM.
 const html = fs.readFileSync(process.argv[2], 'utf8');
-const script = html.slice(html.indexOf("const settingsDialog = $('settingsDialog');"), html.indexOf('function formatBytes(n)'));
+assert(/<script(?: defer)? src="\/static\/settings\.js/.test(html), 'the page loads settings.js');
+const source = fs.readFileSync(require('path').join(__dirname, '..', 'panel', 'static', 'settings.js'), 'utf8');
+const script = source.slice(source.indexOf("const settingsDialog = $('settingsDialog');"), source.indexOf('function formatBytes(n)'));
 assert(script.includes('function syncTheme()'));
 function element() {
   return {

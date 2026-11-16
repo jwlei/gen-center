@@ -49,6 +49,8 @@ function formatBytes(n) {
   return gb >= 100 ? `${Math.round(gb)} GB` : gb >= 1 ? `${gb.toFixed(1)} GB` : `${Math.round(n / 2 ** 20)} MB`;
 }
 function compactLocalModel(model) {
+  // The panel's own short name (panel/settings.py short_name): family, what sets it apart, quantisation.
+  if (model.short) return model.short;
   let name = model.label.replace(/\s*\(vision\)/i, '').replace(/(?:[-_ ]uncensored|[-_ ]heretic)/gi, '')
     .replace(/^gemma[-_]?4[-_]?12b[-_]?it/i, 'Gemma 4')
     .replace(/^gemma[-_]?4[-_]?12b/i, 'Gemma 4')
@@ -65,12 +67,23 @@ function localModelLabel(model) {
   const speed = Number.isFinite(model.tokens_per_second) ? model.tokens_per_second.toFixed(1) : '—';
   return `${compactLocalModel(model)} · ${speed} tok/s`;
 }
+// The local models as a select's options, in a group for each family (one sees images, one doesn't); the full folder
+// name is each one's tooltip.
+function localModelOptions() {
+  const groups = new Map();
+  for (const model of LOCAL_MODELS) {
+    const group = model.group || '';
+    if (!groups.has(group)) groups.set(group, []);
+    groups.get(group).push(`<option value="${esc(model.id)}" title="${esc(model.label)}">${esc(localModelLabel(model))}</option>`);
+  }
+  return [...groups].map(([group, options]) => group ? `<optgroup label="${esc(group)}">${options.join('')}</optgroup>` : options.join('')).join('');
+}
 function renderLocalModels() {
   for (const [id, fallback] of [['h3Model', SETTINGS.h3_model], ['localLlmModel', SETTINGS.local_llm_model || SETTINGS.h3_model],
                                  ['videoLocalModel', SETTINGS.local_llm_model || SETTINGS.h3_model],
                                  ['imageLocalModel', SETTINGS.local_llm_model || SETTINGS.h3_model]]) {
     const select = $(id), selected = select.value || fallback;
-    select.innerHTML = LOCAL_MODELS.map(model => `<option value="${esc(model.id)}" title="${esc(model.label)}">${esc(localModelLabel(model))}</option>`).join('');
+    select.innerHTML = localModelOptions();
     select.value = selected;
     if (select.value !== selected) select.add(new Option(`${selected} (missing)`, selected, false, true));
   }
@@ -87,6 +100,10 @@ async function fillSettings() {
   $('lowPriority').checked = !!SETTINGS.low_priority;
   $('titleSource').value = SETTINGS.title_source || 'off';
   $('pinProgress').checked = !!SETTINGS.pin_progress;
+  $('topProgress').checked = SETTINGS.top_progress !== false;
+  $('pinProgress').disabled = SETTINGS.top_progress === false;
+  $('statusProgress').checked = !!SETTINGS.status_progress;
+  $('themeBoxes').checked = SETTINGS.theme_boxes !== false;
   showGpuGuard();
   $('h3Model').value = SETTINGS.h3_model;
   $('localLlmModel').value = SETTINGS.local_llm_model || SETTINGS.h3_model;
@@ -133,6 +150,18 @@ settingsDialog.addEventListener('click', e => { if (e.target === settingsDialog)
 $('lowPriority').addEventListener('change', () => saveSettings({ low_priority: $('lowPriority').checked }));
 $('titleSource').addEventListener('change', () => saveSettings({ title_source: $('titleSource').value }));
 $('pinProgress').addEventListener('change', async () => { await saveSettings({ pin_progress: $('pinProgress').checked }); syncPin(); });
+$('topProgress').addEventListener('change', async () => {
+  await saveSettings({ top_progress: $('topProgress').checked });
+  $('pinProgress').disabled = !$('topProgress').checked;
+  syncStrips();
+  syncPin();
+});
+$('themeBoxes').addEventListener('change', async () => {
+  if (await saveSettings({ theme_boxes: $('themeBoxes').checked })) {
+    if (SETTINGS.theme_boxes === false) document.documentElement.dataset.boxes = 'off'; else delete document.documentElement.dataset.boxes;
+  }
+});
+$('statusProgress').addEventListener('change', async () => { await saveSettings({ status_progress: $('statusProgress').checked }); syncStatusFill(runShare); });
 // GPU heat guard: restart MSI Afterburner above one temperature, again only once cooled to the other (panel/gpu_guard.py).
 // A page from before a panel restart has none of these: the rest of Settings must still work.
 function showGpuGuard() {

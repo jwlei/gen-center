@@ -4,12 +4,12 @@ import os
 import re
 from difflib import SequenceMatcher
 
-import anthropic
-from google.genai import types
 from pydantic import BaseModel, ValidationError
 
 from core.api_log import log_api_call
+from core import explicit as explicit_rules, prompt_words, variety as variety_rules
 from core.gemini import _generate
+from core.llm_reply import CutOff
 from pipelines.video import h3_prompt, roles, wan_prompt
 
 # Who can write the plan: (name, what the panel calls it).
@@ -104,12 +104,6 @@ class Plan(BaseModel):
     shots: list[Shot]
 
 
-class Metadata(BaseModel):
-    title: str
-    description: str
-    tags: list[str]
-
-
 # Claude's structured output needs every object closed and every field required.
 PLAN_SCHEMA = {
     "type": "object",
@@ -126,13 +120,6 @@ PLAN_SCHEMA = {
         },
     },
     "required": ["title", "shots"],
-    "additionalProperties": False,
-}
-METADATA_SCHEMA = {
-    "type": "object",
-    "properties": {"title": {"type": "string"}, "description": {"type": "string"},
-                   "tags": {"type": "array", "items": {"type": "string"}}},
-    "required": ["title", "description", "tags"],
     "additionalProperties": False,
 }
 
@@ -291,13 +278,16 @@ def _more_images(image_roles, video_model):
 
 
 def _instructions(brief, seconds, start, images=1, video_model=None, image_2_role=EXTRA_CONTEXT, image_2_in_words=False,
-                  references=None, chosen=None, first_frame=False, clip_relationship="progressive"):
-    """references: the reference videos and audio the clips get, as h3_prompt.References."""
+                  references=None, chosen=None, first_frame=False, clip_relationship="progressive", words=None):
+    """
+    references: the reference videos and audio the clips get, as h3_prompt.References. words: how long each clip's
+    prompt is (the form's number), else each model's own length.
+    """
     if clip_relationship not in CLIP_RELATIONSHIPS:
         raise ValueError(f"Unknown clip relationship: {clip_relationship}")
     second_image = _second_image(images, image_2_role, image_2_in_words, start, video_model)
     guide = _guide(brief, seconds, start, images, video_model, image_2_role, second_image, references, chosen, first_frame,
-                   clip_relationship)
+                   clip_relationship, words)
     # Every guide speaks of one attached image, and now there are two.
     return guide.replace("attached image", "first attached image") if image_2_in_words else guide
 
@@ -315,13 +305,13 @@ def _relationship_guidance(clip_relationship, count, start):
 
 
 def _guide(brief, seconds, start, images, video_model, image_2_role, second_image, references=None, chosen=None, first_frame=False,
-           clip_relationship="progressive"):
+           clip_relationship="progressive", words=None):
     count = shot_count(seconds, video_model, chosen)
     shortest, longest, _ = clip_seconds(video_model, chosen)
     if video_model == h3_prompt.MODEL:
         return h3_prompt.instructions(brief, seconds, count, images, shortest, longest,
                                       second_image, roles.image_roles(image_2_role, images), references, start, first_frame,
-                                      clip_relationship)
+                                      clip_relationship, words)
     clips = "one clip" if count == 1 else f"{count} consecutive clips"
     shots = "one shot" if count == 1 else f"{count} shots in order"
     shape = ("Show one clear moment that feels complete." if count == 1 else
@@ -336,9 +326,10 @@ def _guide(brief, seconds, start, images, video_model, image_2_role, second_imag
     relation = _relationship_guidance(clip_relationship, count, start)
     if video_model == wan_prompt.MODEL:
         return wan_prompt.instructions(brief, seconds, count, images, continuity, shortest, longest, second_image,
-                                       relation, clip_relationship)
+                                       relation, clip_relationship, words)
     in_keeping = "the brief and\n    the image, and never contradicting them" if images else "the brief, and never contradicting it"
     sees = "one prompt and one start frame" if images == 1 else "one prompt and its images" if images else "one prompt"
+    length = "{}-{}".format(*prompt_words.word_range(words)) if words else "60-120"
     return f"""
     You are directing a {seconds}-second film made of {clips} from an AI video
     model (LTX-2). {_what_it_opens_on(images)}
@@ -360,7 +351,7 @@ def _guide(brief, seconds, start, images, video_model, image_2_role, second_imag
     - prompt: the text the video model gets, following the rules below.
 
     The video model sees {sees} at a time, and knows nothing about the film:
-    - One flowing paragraph in the present tense, 60-120 words.
+    - One flowing paragraph in the present tense, {length} words.
     - Describe what happens in order, as it can really happen in that shot's seconds. One clear main
       action per shot: a crowded prompt comes out as a blur.
     - Name one camera move, and describe the light and the sound.
@@ -380,9 +371,15 @@ def _image_list(image_jpeg):
 
 
 def _ask_gemini(prompt, model, image_jpeg=None):
+    from google.genai import types  # Here, not at the top: slow to load, and most runs never ask Gemini
     config = types.GenerateContentConfig(response_mime_type="application/json", response_schema=model)
     contents = [types.Part.from_bytes(data=image, mime_type="image/jpeg") for image in _image_list(image_jpeg)] + [prompt]
-    return _generate(contents, config=config, timeout=int(os.getenv("GEMINI_TIMEOUT") or PLAN_TIMEOUT)).text or ""
+    response = _generate(contents, config=config, timeout=int(os.getenv("GEMINI_TIMEOUT") or PLAN_TIMEOUT))
+    candidate = (getattr(response, "candidates", None) or [None])[0]
+    reason = getattr(candidate, "finish_reason", None)
+    if reason is not None and str(getattr(reason, "name", reason)).endswith("MAX_TOKENS"):
+        raise CutOff("Gemini's reply was cut off.")
+    return response.text or ""
 
 
 # --- Claude ---
@@ -395,6 +392,7 @@ def _ask_claude(prompt, schema, image_jpeg=None):
     content = [{"type": "image", "source": {"type": "base64", "media_type": "image/jpeg",
                                             "data": base64.standard_b64encode(image).decode("utf-8")}}
                for image in _image_list(image_jpeg)] + [{"type": "text", "text": prompt}]
+    import anthropic  # Here, not at the top: two seconds to load, and most runs never ask Claude
     try:
         with anthropic.Anthropic().beta.messages.stream(
             model=os.getenv("CLAUDE_MODEL") or DEFAULT_CLAUDE_MODEL,
@@ -421,6 +419,8 @@ def _ask_claude(prompt, schema, image_jpeg=None):
     log_api_call("Claude", response.model)
     if response.stop_reason == "refusal":
         raise RuntimeError("Claude declined this image or prompt. Try Gemini, or change the prompt.")
+    if response.stop_reason == "max_tokens":
+        raise CutOff("Claude's reply was cut off.")
     # After a fallback the reply can hold the declined model's partial text first: the last block is the answer.
     texts = [block.text for block in response.content if block.type == "text"]
     return texts[-1] if texts else ""
@@ -439,7 +439,8 @@ def _ask(llm, prompt, model, schema, image_jpeg=None, refiner=None):
 # --- What the pipeline asks for ---
 
 def plan_film(image_jpeg, brief, seconds, start, llm="gemini", video_model=None, image_2_role=EXTRA_CONTEXT, image_2_in_words=None,
-              references=None, chosen=None, refiner=None, first_frame=False, clip_relationship="progressive"):
+              references=None, chosen=None, refiner=None, first_frame=False, clip_relationship="progressive",
+              variety=None, vary=(), keep=(), explicit=False, words=None):
     """
     Turns the image (several in a list, or none) and the short brief into a film's shot list. One request for the
     whole film rather than one per clip: the prompts have to know each other, and a
@@ -451,7 +452,12 @@ def plan_film(image_jpeg, brief, seconds, start, llm="gemini", video_model=None,
     images = len(_image_list(image_jpeg))
     shortest, longest, _ = clip_seconds(video_model, chosen)
     instructions = _instructions(brief, seconds, start, images, video_model, image_2_role, bool(image_2_in_words), references,
-                                 chosen, first_frame, clip_relationship)
+                                 chosen, first_frame, clip_relationship, words)
+    # How different the clips are, and what changes or stays (core.variety): only when the form chose it.
+    if variety and shot_count(seconds, video_model, chosen) > 1:
+        instructions += variety_rules.film_rule(variety, vary, keep)
+    if explicit:
+        instructions += explicit_rules.paragraph()
     attached = _image_list(image_jpeg) + _image_list(image_2_in_words)
     image_roles = roles.image_roles(image_2_role, images)
     is_h3 = video_model == h3_prompt.MODEL
@@ -459,10 +465,15 @@ def plan_film(image_jpeg, brief, seconds, start, llm="gemini", video_model=None,
     problem = None
     for attempt in range(1, PLAN_ATTEMPTS + 1):
         correction = f"\n\n    Your last reply came back with {problem}. Fix that." if problem else ""
-        if llm == "local":
-            reply = _ask(llm, instructions + correction, Plan, PLAN_SCHEMA, attached, refiner=refiner)
-        else:
-            reply = _ask(llm, instructions + correction, Plan, PLAN_SCHEMA, attached)
+        try:
+            if llm == "local":
+                reply = _ask(llm, instructions + correction, Plan, PLAN_SCHEMA, attached, refiner=refiner)
+            else:
+                reply = _ask(llm, instructions + correction, Plan, PLAN_SCHEMA, attached)
+        except CutOff as e:
+            if llm == "local":  # Its whole budget spent: asking again the same way only spends it again
+                raise CutOff(f"{e} Try fewer images or a shorter video.") from e
+            reply = ""  # Asked again, as an unreadable reply is: a film's shots can't be split into rounds
         try:
             plan = Plan.model_validate_json(reply)
         except ValidationError as e:
@@ -474,7 +485,7 @@ def plan_film(image_jpeg, brief, seconds, start, llm="gemini", video_model=None,
                 for shot, prompt in zip(shots, h3_prompt.tidy([shot.prompt for shot in shots], images, image_roles, references)):
                     shot.prompt = prompt
             wrong_prompts = is_h3 and shots and h3_prompt.film_problem([shot.prompt for shot in shots], images, references)
-            thin = is_h3 and shots and not wrong_prompts and h3_prompt.too_thin([shot.prompt for shot in shots], images)
+            thin = is_h3 and shots and not wrong_prompts and h3_prompt.too_thin([shot.prompt for shot in shots], images, words)
             seen = {}
             duplicate = None
             for number, shot in enumerate(shots, 1):
@@ -502,30 +513,3 @@ def plan_film(image_jpeg, brief, seconds, start, llm="gemini", video_model=None,
         print(f"   ⚠️ The plan came back with {problem} (attempt {attempt}/{PLAN_ATTEMPTS}).")
 
     raise RuntimeError(f"Could not get a usable plan: {problem}.")
-
-
-def write_metadata(title, brief, shots, llm="gemini"):
-    """The upload's title, description and tags. A weak title is better than a failed upload, so this can't fail."""
-    outline = "\n".join(f"- {shot['title']}" for shot in shots or [])
-    prompt = f"""
-    Write YouTube metadata for this short AI-generated film.
-
-    Film: {title}
-    What it was asked to show: {brief}
-    Its shots:
-    {outline}
-
-    - title: under 80 characters, true to the film, no clickbait punctuation.
-    - description: 2-3 sentences about the film, with no hashtags.
-    - tags: 8-12 lowercase search keywords, no "#".
-    """
-    fallback = {"title": title[:80], "description": brief, "tags": []}
-    try:
-        metadata = Metadata.model_validate_json(_ask(llm, prompt, Metadata, METADATA_SCHEMA))
-    except (RuntimeError, ValidationError) as e:
-        print(f"   ⚠️ Could not write the metadata ({e}). Using the film's title.")
-        return fallback
-    if not metadata.title.strip():
-        return fallback
-    return {"title": metadata.title.strip(), "description": metadata.description.strip() or brief,
-            "tags": [tag.strip() for tag in metadata.tags if tag.strip()]}

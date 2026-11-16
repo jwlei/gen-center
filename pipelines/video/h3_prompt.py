@@ -9,6 +9,7 @@ answer questions, there is no source video, and a film is many separate renders.
 import re
 import statistics
 
+from core import prompt_words
 from pipelines.video import roles as image_role
 
 MODEL = "minimax_h3"
@@ -41,8 +42,13 @@ def _lengths(shortest, longest):
     return ", ".join(f"{seconds} = {clip_frames(seconds) / FPS:.2f} s" for seconds in range(shortest, longest + 1))
 
 
-def _detail_words(count):
-    """How long a clip's description can be. A long film can't fit the full amount for every clip in one reply."""
+def _detail_words(count, words=None):
+    """
+    How long a clip's description can be: the form's words per prompt as a range (core.prompt_words), else as much as
+    fits. A long film can't fit the full amount for every clip in one reply.
+    """
+    if words:
+        return prompt_words.word_range(words)
     most = min(MOST_DETAIL_WORDS, max(LEAST_DETAIL_WORDS, FILM_WORDS // count - SECTION_WORDS))
     return most * 7 // 10, most
 
@@ -197,11 +203,11 @@ def _format(images, low, high, roles=()):
 
 
 def instructions(brief, seconds, count, images, shortest, longest, second_image="", roles=(), references=None, start="image",
-                 first_frame=False, clip_relationship="progressive"):
+                 first_frame=False, clip_relationship="progressive", words=None):
     clips = "one clip" if count == 1 else f"{count} clips"
     shots = "one shot" if count == 1 else f"{count} shots in order"
     together = f"Use {seconds}." if count == 1 else f"All of them together add up to {seconds}."
-    low, high = _detail_words(count)
+    low, high = _detail_words(count, words)
     shape = ("Show one clear moment that feels complete." if count == 1 else
              "Make every clip a distinct, self-contained moment in the same world." if clip_relationship == "related" else
              f"Give the film a beginning, a development and a real ending, rather than {count} versions of the same moment.")
@@ -412,10 +418,10 @@ def film_problem(prompts, images, references=None):
     return next(filter(None, (problem(prompt, images, references) for prompt in prompts)), None)
 
 
-def too_thin(prompts, images):
+def too_thin(prompts, images, words=None):
     """If the film's prompts run far short of the detail H3 does best with, saying so. They would still render."""
-    words = statistics.median(len(_description(prompt, images).split()) for prompt in prompts)
-    low = _detail_words(len(prompts))[0]
-    if words < low // TOO_SHORT_SHARE:
-        return f"prompts describing their shots in about {words:.0f} words, when they need {low} or more"
+    written = statistics.median(len(_description(prompt, images).split()) for prompt in prompts)
+    low = _detail_words(len(prompts), words)[0]
+    if written < low // TOO_SHORT_SHARE:
+        return f"prompts describing their shots in about {written:.0f} words, when they need {low} or more"
     return None

@@ -1,6 +1,6 @@
 import re
 import time
-from core import lora_tests
+from core import llm_tests, lora_tests, workflow_tests
 
 from core.eta_keys import SEPARATOR, LocalModelTimer, Timings, llm_keys, options_in, render_keys
 from pipelines.image.media import FROM_IMAGE, PIXELS_PER_MEGAPIXEL, parse_size
@@ -64,7 +64,7 @@ class RunEta:
         self.options = options_in(argv)
         self.size = _size_label(argv)
         self.workflow = (env or {}).get("COMFYUI_WORKFLOW")
-        tests = lora_tests.in_env(env or {})
+        tests = lora_tests.in_env(env or {}) or workflow_tests.in_env(env or {}) or llm_tests.in_env(env or {})
         try:
             self.images = int(_option(argv, "--count", 1))
             if tests:

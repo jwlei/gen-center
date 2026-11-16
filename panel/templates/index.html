@@ -1,15 +1,52 @@
 {% extends "base.html" %}
 {% block body %}
 {# Loading from the first paint, until the first answer is drawn (pollOnce): before the script at the end has run. #}
+{# The connection notice starts hidden, and fixed over the page even before its styles below have loaded: unstyled, it
+   pushed the page down. It shows only after 5 s without an answer (status.js). #}
 <script src="{{ url_for('static', filename='bootstrap.js') }}"></script>
 <div class="page-loader" aria-hidden="true"></div>
-<div id="connectionNotice" role="status" aria-live="polite" class="connection-notice">
+<div id="connectionNotice" role="status" aria-live="polite" class="connection-notice" hidden style="position: fixed; top: 3px; left: 0; right: 0; z-index: 999;">
   <span id="connectionMessage">Connecting to the panel...</span>
   <button type="button" class="ghost" id="connectionRetry">Retry now</button>
 </div>
 {# A dropdown's list is drawn by the system and shows only text: a shape mark stands in for the drawn box. #}
 {% macro shape_mark(w, h) %}{{ '□' if w == h else ('▭' if w > h else '▯') }}{% endmacro %}
 {% macro trash_icon() %}<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7h16"/><path d="M10 11v6M14 11v6"/><path d="M6 7l1 13h10l1-13"/><path d="M9 7V4h6v3"/></svg>{% endmacro %}
+{# Variety and its chips: how different the prompts the LLM writes are (a set's images, a film's clips), and what
+   changes or stays (core.variety). Each chip is a select drawn as a chip (chipSelect): saved with the form, and with
+   the run, so it comes back for the next generation and with More like this. #}
+{% macro variety_box(side, things) %}<div class="variety-box" id="{{ side }}VarietyBox">
+  <div class="options-subtitle"><label for="{{ side }}Variety">Variety</label>{{ hint_button(side ~ 'VarietyHelp', 'variety') }}<span class="options-subtitle-what"> · how different they are</span></div>
+  <div class="field-help variety-help" id="{{ side }}VarietyHelp" hidden>
+    <div class="hint">How different the prompts the writer makes are from one {{ things }} to the next.</div>
+    <dl class="variety-terms">{% for name, what in variety_levels %}<dt>{{ name }}</dt><dd>{{ what }}</dd>{% endfor %}</dl>
+    <div class="hint">Each chip, tapped: once it varies (↻), twice it stays the same in every {{ things }} (=), a third time it's left to the writer. Kept ones are described in the same words each time.</div>
+    <dl class="variety-terms">{% for label, what in variety_hints %}<dt>{{ label|capitalize }}</dt><dd>{{ what }}</dd>{% endfor %}</dl>
+  </div>
+  <select id="{{ side }}Variety" name="variety" data-segmented>
+    <option value="slight">Slight</option><option value="mixed" selected>Mixed</option><option value="wide">Wide</option>
+  </select>
+  {% for heading, chips in variety_chip_groups %}<div class="variety-chips" role="group" aria-label="{{ heading }}: what changes and what stays from one {{ things }} to the next">
+    <span class="variety-chips-heading">{{ heading }}</span>{% for name, words in chips %}<select name="chip_{{ name }}" data-chip="{{ words|capitalize }}" aria-label="{{ words|capitalize }}"><option value="">{{ words|capitalize }}: up to the writer</option><option value="vary">{{ words|capitalize }}: varies</option><option value="keep">{{ words|capitalize }}: stays the same</option></select>{% endfor %}
+  </div>{% endfor %}
+</div>{% endmacro %}
+{# Private mode only (body.private-mode): the writer is told the prompts are meant to be explicit (core/explicit.py). #}
+{#
+   Words per prompt (core.prompt_words): the number the LLM is given a range around, with what it comes to in tokens
+   (syncWords, shared.js). The image form starts at its usual; the video form is blank for each model's own length.
+#}
+{% macro words_box(side, w) %}<div class="words-box" id="{{ side }}WordsBox">
+  <div class="options-subtitle"><label for="{{ side }}Words">Words per prompt</label>{{ hint_button(side ~ 'WordsHelp', 'words per prompt') }}<span class="options-subtitle-what"> · <span id="{{ side }}WordsValue">{{ w.usual }}</span></span></div>
+  <div class="field-help" id="{{ side }}WordsHelp" hidden><div class="hint">{% if side == 'image' %}How long the LLM writes each prompt for a new picture, or one made from references: it is asked for a range of 20% either side of this number. Suggested: {{ w.suggested[0] }}–{{ w.suggested[1] }} words, about what the workflows' own prompt enhancers write; shorter leaves the model to guess, and much longer is mostly ignored. Edit instructions keep their own 20–60. Longer prompts are written in more, smaller rounds.{% else %}How long the LLM writes each clip's prompt: it is asked for a range of 20% either side of this number. All the way left (Auto) is the video model's own: LTX-2 60–120 words, Wan 80–120, H3 150–500 as the film allows. Suggested: {{ w.suggested[0] }}–{{ w.suggested[1] }}; a clip's few seconds hold one main action, so much longer is mostly ignored, though H3 does best with more. A long film's prompts all come in one reply, so very long ones can run out of room.{% endif %}</div></div>
+  <div class="words-slider" style="--lo: {{ '%.1f' % ((w.suggested[0] - w.least) * 100 / (w.most - w.least)) }}%; --hi: {{ '%.1f' % ((w.suggested[1] - w.least) * 100 / (w.most - w.least)) }}%">
+    <input type="range" id="{{ side }}Words" name="words" min="{{ w.least }}" max="{{ w.most }}" step="10" value="{{ w.usual }}"{% if side == 'video' %} data-auto="{{ w.least }}"{% endif %} data-per-word="{{ w.per_word }}" data-per-version="{{ w.per_version }}" data-spread="{{ w.spread }}" data-suggested="{{ w.suggested[0] }}-{{ w.suggested[1] }}" aria-label="Words per prompt">
+    <div class="words-band" aria-hidden="true"><span>suggested</span></div>
+  </div>
+  <div class="hint words-tokens" id="{{ side }}WordsTokens"></div>
+</div>{% endmacro %}
+{% macro explicit_box(side) %}<div class="explicit-box">
+  <label class="check"><input type="checkbox" id="{{ side }}Explicit" name="explicit"><span class="options-subtitle">Explicit content</span></label>
+</div>{% endmacro %}
 {% macro hint_button(target, label) %}<button type="button" class="hint-toggle" data-hint-target="{{ target }}" aria-controls="{{ target }}" aria-expanded="false" aria-label="About {{ label }}"><span class="res-info-mark" aria-hidden="true">i</span></button>{% endmacro %}
 {% macro field_heading(field, label, target) %}<div class="field-heading"><label for="{{ field }}">{{ label }}</label>{{ hint_button(target, label) }}</div>{% endmacro %}
 {% macro workflow_hint(side) %}<button type="button" class="hint-toggle" id="{{ side }}GuideLink" data-hint-target="{{ side }}WorkflowHelp" aria-controls="{{ side }}WorkflowHelp" aria-expanded="false" aria-label="About workflow"><span class="res-info-mark" aria-hidden="true">i</span></button>{% endmacro %}
@@ -334,6 +371,15 @@
   /* Steps, Sampler, Scheduler and CFG, and Use LoRA: each set apart in a dark box, as Resolution is. */
   .options-box { margin: 4px 0 12px; padding: 8px 12px 10px; border: 1px solid var(--line); border-radius: 12px; background: var(--bg); }
   .options-box > .check:first-child, .options-box > .option-row:first-child { margin-top: 0; }
+  /* Tests & misc's comparisons, in one box: LoRA, Workflows and Prompt models, each under its heading, a line between. */
+  .tests-box { padding: 6px 8px 8px; }
+  #imageLocalModelBox, #videoLocalModelBox { margin-top: 5px; }
+  .tests-group + .tests-group { margin-top: 8px; padding-top: 6px; border-top: 1px solid var(--line); }
+  .tests-line { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 4px; }
+  .tests-line > .check { margin: 0; flex: 1; min-width: 0; }
+  .tests-line > .count-stepper { flex: none; margin: 0; }
+  .tests-group > .options-subtitle + .check, .tests-group > .options-subtitle + .tests-line { margin-top: 4px; }
+  .tests-group > .hint:empty { display: none; }
   /* Sampling: under its heading, no box. Names in one column, settings lined up in the next, each the same width (a
      picker doesn't take the whole line); a hint drops across both. */
   .options-section { margin: 4px 0 10px; }
@@ -445,7 +491,7 @@
   dialog#viewerUpscaleBar, dialog#moveSheet, dialog#pillsMenu, dialog#editMenu { padding: 5px; gap: 4px; transform-origin: bottom center; animation: menu-in .2s ease; box-shadow: 0 8px 24px rgba(0, 0, 0, .45); }
   dialog#viewerUpscaleBar::backdrop, dialog#moveSheet::backdrop, dialog#pillsMenu::backdrop, dialog#editMenu::backdrop { background: transparent; }
   dialog#viewerUpscaleBar.closing, dialog#moveSheet.closing, dialog#pillsMenu.closing, dialog#editMenu.closing { animation: menu-out .15s ease forwards; pointer-events: none; }
-  dialog#moveSheet { --accent: var(--shared); border-color: var(--accent); }
+  dialog#moveSheet { --accent: var(--shared); border-color: var(--line); }
   /* Its options' text in the middle, + New's icon with it. */
   dialog#moveSheet .upscale-methods button { text-align: center; }
   dialog#moveSheet .upscale-methods button.move-new-pick { display: inline-flex; align-items: center; justify-content: center; gap: 6px; color: var(--accent); }
@@ -457,15 +503,13 @@
   /* Its heading, quiet: the pills are what it shows. */
   dialog#pillsMenu .pills-menu-head { justify-content: center; font-size: .68rem; font-weight: 500; color: var(--muted); opacity: .8; letter-spacing: .02em; }
   dialog#pillsMenu #pillsMenuBody { justify-content: center; padding: 4px 2px 6px; margin: 0; }
-  /* The one tapped keeps its neutral fill; its purple border flashes once it has moved. */
-  dialog#moveSheet .upscale-methods button { border-color: var(--accent); transition: opacity .15s, border-color .15s, transform .1s; }
+  /* Plain borders, the box's and each collection's; the one tapped keeps its neutral fill, and its border flashes once it has moved. */
+  dialog#moveSheet .upscale-methods button { border: 1px solid var(--line); transition: opacity .15s, border-color .15s, transform .1s; }
   dialog#moveSheet .upscale-methods button.picked { background: var(--panel-2); border-color: var(--accent); color: var(--accent); transform: scale(.98); }
   dialog#moveSheet .upscale-methods button.moved { animation: move-flash .38s ease; }
   @keyframes move-flash { 0%, 100% { box-shadow: 0 0 0 0 transparent; } 40% { box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 70%, transparent); } }
   @media (prefers-reduced-motion: reduce) { dialog#moveSheet .upscale-methods button.moved { animation: none; } }
   dialog#moveSheet.moving .upscale-methods button:not(.picked) { opacity: .4; pointer-events: none; }
-  /* A collection with private items: a dark red border, so it is never chosen by mistake. */
-  dialog#moveSheet .upscale-methods button.nsfw { border: 1px solid #8b1a1a; }
   .upscale-methods { display: flex; flex-direction: column; gap: 4px; }
   .upscale-dialog .upscale-methods button { width: 100%; padding: 9px 14px; font-size: .85rem; text-align: left; border-radius: 9px; background: var(--panel-2); }
   .upscale-dialog .upscale-methods button:disabled { opacity: .4; cursor: not-allowed; }
@@ -590,7 +634,7 @@
   .gpu-temp { display: flex; align-items: center; gap: 6px; }
   .gpu-temp input { width: 5.5em; margin: 0; font-variant-numeric: tabular-nums; }
   .gpu-temp span { color: var(--muted); }
-  /* Restart and Temperatures: small and quiet, side by side under the guard's settings. */
+  /* Restart Afterburner: small and quiet, under the guard's settings. */
   .gpu-guard-actions { gap: 8px; }
   .gpu-guard-actions button { width: auto; margin: 0; padding: 5px 12px; font-size: .78rem; font-weight: 500; background: transparent;
     border: 1px solid var(--line); color: var(--muted); }
@@ -682,6 +726,43 @@
   /* A select shown as the same sliding pill: equal-width choices, so the lit one's place is plain CSS (--i of --n) and
      needs no measuring while its section is folded. The select stays, hidden, as the value the rest reads. */
   select[data-segmented] { display: none; }
+  /* Variety's chips: what changes (accent, ↻) and what stays (filled, =) from one image or clip to the next. */
+  .variety-box { margin-top: 8px; }
+  .words-box { margin-top: 8px; }
+  .words-box > .options-subtitle { margin: 0 0 4px; }
+  .words-box > .options-subtitle label { display: inline; margin: 0; font: inherit; color: inherit; letter-spacing: inherit; }
+  .words-slider { position: relative; padding-bottom: 9px; }
+  .words-slider input[type=range] { display: block; width: 100%; height: 16px; margin: 0; padding: 0; border: 0; background: none; -webkit-appearance: none; appearance: none; }
+  .words-slider input::-webkit-slider-runnable-track { height: 4px; border-radius: 2px; background: var(--line); }
+  .words-slider input::-moz-range-track { height: 4px; border-radius: 2px; background: var(--line); }
+  .words-slider input::-webkit-slider-thumb { -webkit-appearance: none; width: 13px; height: 13px; margin-top: -4.5px; border-radius: 50%; background: var(--accent); border: 2px solid var(--panel); cursor: pointer; }
+  .words-slider input::-moz-range-thumb { box-sizing: border-box; width: 13px; height: 13px; border-radius: 50%; background: var(--accent); border: 2px solid var(--panel); cursor: pointer; }
+  .words-slider input:focus-visible::-webkit-slider-thumb { outline: 2px solid var(--text); }
+  .words-band { position: absolute; left: var(--lo); width: calc(var(--hi) - var(--lo)); top: 11px; height: 9px; border-top: 2px solid var(--accent); opacity: .7; }
+  .words-band span { display: block; text-align: center; font-size: .56rem; line-height: 8px; color: var(--muted); }
+  .words-tokens { margin: 0; }
+  .words-box.off-band [id$="WordsValue"] { color: var(--warn); }
+  /* Its name is a label, in a sub-heading's line: inline, with what it does after it. */
+  .variety-box > .options-subtitle { margin: 0 0 6px; }
+  /* Its hint: the levels and each chip, a name and what it changes on each line. */
+  .variety-help { margin: 0 0 8px; }
+  .variety-terms { display: grid; grid-template-columns: max-content 1fr; gap: 2px 10px; margin: 4px 0 8px; font-size: .72rem; }
+  .variety-terms dt { color: var(--text); font-weight: 600; }
+  .variety-terms dd { margin: 0; color: var(--muted); }
+  .variety-box > .options-subtitle label { display: inline; margin: 0; font: inherit; color: inherit; letter-spacing: inherit; }
+  .variety-box[hidden] { display: none; }
+  select[data-chip] { display: none; }
+  .variety-chips { display: flex; flex-wrap: wrap; align-items: center; gap: 5px; margin-top: 8px; }
+  .variety-chips + .variety-chips { margin-top: 6px; }
+  .variety-chips-heading { flex: 0 0 100%; font-size: .6rem; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
+  .variety-chip { width: auto; margin: 0; padding: 3px 10px; font-size: .72rem; font-weight: 500; line-height: 1.4; border-radius: 999px;
+    border: 1px solid var(--line); background: transparent; color: var(--muted); cursor: pointer; }
+  .variety-chip.vary { color: var(--accent); border-color: var(--accent); }
+  .variety-chip.keep { color: var(--text); border-color: var(--muted); background: var(--panel-2); }
+  .variety-chip .chip-mark { display: inline-block; min-width: .9em; margin-right: 2px; text-align: center; }
+  /* Explicit content: only in Private mode, and its text only while it is ticked. */
+  .explicit-box { display: none; margin-top: 8px; }
+  body.private-mode .explicit-box { display: block; }
   .switch.segmented { position: relative; display: grid; grid-auto-flow: column; grid-auto-columns: 1fr; gap: 0; width: 100%; margin: 4px 0 10px; --kind: var(--side, var(--shared)); }
   .switch.segmented button { position: relative; z-index: 1; padding: 6px 12px; transition: color .3s ease; }
   .switch.segmented button.active { background: transparent; border-color: transparent; color: var(--kind); }
@@ -730,6 +811,20 @@
   /* Private mode's key: lit in the accent while it is on. */
   .top-icons a#privateToggle.on { opacity: 1; color: #9864bd; }
   .top .sub { margin-bottom: 6px; }
+  /* Phones (below 1000px, where the footer's page buttons are): the header's icons are on demand (showHead), in a box
+     that grows up out of the footer's last button over the page. The header keeps only the progress bars, and no room
+     at all while there are none. */
+  @media (max-width: 999px) {
+    .top:has(> .top-main[hidden]) { margin: 0; }
+    .top-icons { position: fixed; right: 12px; bottom: calc(var(--head, 60px) + 6px); z-index: 12; gap: 20px;
+      padding: 10px 16px; background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
+      box-shadow: 0 -8px 24px rgba(0, 0, 0, .4); transform-origin: bottom right;
+      opacity: 0; transform: translateY(8px) scale(.6); visibility: hidden; pointer-events: none;
+      transition: opacity .18s ease, transform .22s cubic-bezier(.2, .8, .2, 1), visibility 0s .22s; }
+    body.head-shown .top-icons { opacity: 1; transform: none; visibility: visible; pointer-events: auto; transition-delay: 0s; }
+    .top-icons a, .top-icons button { opacity: .85; }
+  }
+  @media (max-width: 999px) and (prefers-reduced-motion: reduce) { .top-icons { transition: none; } }
   details summary { cursor: pointer; font-size: .95rem; font-weight: 600; }
   .hidden { display: none !important; }
   .dashboard { display: flex; flex-direction: column; }
@@ -780,14 +875,23 @@
   /* One theme: Output, Status and the rest are violet; Generate is its side's colour (Shorts red, Video blue, Image
      green). --side is the side's colour; --page-accent, for what sits above every page (the side switch, the key,
      the loading bar), is the side's while you are in Generate and violet elsewhere. */
-  /* The colours, once: each side's, and the violet the rest shares. Everything else reads these. */
-  :root { --c-shorts: #ff0033; --c-video: #4c8dff; --c-image: #2fbf71; --shared: #a07cff; }
+  /* The colours, once: each side's, and the theme's own colour (violet in Standard) that the rest shares. Everything else reads these. */
+  :root { --c-shorts: #ff0033; --c-video: #4c8dff; --c-image: #2fbf71; --shared: var(--accent); }
   body { --accent: var(--shared); --page-accent: var(--shared); }
   body.on-shorts { --side: var(--c-shorts); }
   body.on-video { --side: var(--c-video); }
   body.on-image { --side: var(--c-image); }
   body.in-generate { --page-accent: var(--side); }
   #optionsCard, #goBar, .jump a[data-page="generate"] { --accent: var(--side); }
+  /* A LoRA, workflow or LLM comparison on: Generate in the theme's own colour, not the side's, so it isn't mistaken for a usual set. */
+  body.on-image:has(#imageLoraStrengthTest:checked:not(:disabled), #imageLoraStyleTest:checked:not(:disabled), #imageWorkflowTestT2i:checked, #imageWorkflowTestEdit:checked, #imageLlmTest:checked) :is(#go, #goStick),
+  body.on-video:has(#videoLoraStrengthTest:checked:not(:disabled), #videoLoraStyleTest:checked:not(:disabled)) :is(#go, #goStick) { --accent: var(--shared); }
+  /* And it flashes, a glow coming and going, so a comparison isn't started for a usual set by mistake. */
+  body.on-image:has(#imageLoraStrengthTest:checked:not(:disabled), #imageLoraStyleTest:checked:not(:disabled), #imageWorkflowTestT2i:checked, #imageWorkflowTestEdit:checked, #imageLlmTest:checked) :is(#go, #goStick):not(:disabled),
+  body.on-video:has(#videoLoraStrengthTest:checked:not(:disabled), #videoLoraStyleTest:checked:not(:disabled)) :is(#go, #goStick):not(:disabled) { animation: test-flash 1.4s ease-in-out infinite; }
+  @keyframes test-flash { 0%, 100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--shared) 0%, transparent); filter: none; }
+    50% { box-shadow: 0 0 0 4px color-mix(in srgb, var(--shared) 45%, transparent); filter: brightness(1.18); } }
+  @media (prefers-reduced-motion: reduce) { #go, #goStick { animation: none !important; } }
   /* The preview and what opens over it (Upscale, its settings, Edit) in the colour of what it shows, as its pills. */
   body[data-viewing="image"] { --item: var(--c-image); }
   body[data-viewing="video"] { --item: var(--c-video); }
@@ -1142,8 +1246,8 @@
     -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
   /* A button whose request is on its way: it pulses, and can't be pressed again, until the answer is back. */
   .is-busy { animation: busy-pulse .9s ease-in-out infinite; pointer-events: none; }
-  #viewerDelete.deleting { color: var(--warn); opacity: 1; animation: busy-pulse .9s ease-in-out infinite; }
-  @media (prefers-reduced-motion: reduce) { #viewerDelete.deleting { animation: none; } }
+  #viewerDelete.deleting, .icon-btn.deleting { color: var(--warn); opacity: 1; animation: busy-pulse .9s ease-in-out infinite; }
+  @media (prefers-reduced-motion: reduce) { #viewerDelete.deleting, .icon-btn.deleting { animation: none; } }
   @keyframes busy-pulse { 0%, 100% { opacity: 1; } 50% { opacity: .4; } }
   @media (prefers-reduced-motion: reduce) { .is-busy { animation: none; opacity: .6; } }
   /* Until drawn from a fresh answer (holdOutput), Output's lists keep their place but show nothing: gone at once, and
@@ -1395,6 +1499,9 @@
   /* The workflow in its kind's colour, always (image green, video blue): what made it, before what sets it apart. */
   .pill.workflow { border-color: color-mix(in srgb, var(--pill, var(--neutral)) 75%, var(--panel)); background: color-mix(in srgb, var(--pill, var(--neutral)) 30%, var(--panel));
     color: color-mix(in srgb, var(--pill, var(--neutral)) 25%, var(--text)); font-weight: 600; }
+  /* What a comparison compares (its workflow, or "All LLMs"): the theme's colour, as Generate is while one is set up. */
+  .pill.comparison { --pill: var(--shared); border-color: color-mix(in srgb, var(--pill) 75%, var(--panel)); background: color-mix(in srgb, var(--pill) 30%, var(--panel));
+    color: color-mix(in srgb, var(--pill) 25%, var(--text)); font-weight: 600; }
   /* The preview: one line, 90% of the box, growing out from the middle; the rest behind a tap. */
   .viewer-meta-details .pills { width: 96%; max-height: 18px; margin: 2px auto 0; justify-content: center; }
   .viewer-meta-details .pills.open { max-height: none; }
@@ -1520,13 +1627,27 @@
   .strip-sub span:last-child { flex: none; white-space: nowrap; font-variant-numeric: tabular-nums; }
   .wrap { padding-bottom: calc(var(--head, 130px) + 16px); }
   .stick { transition: opacity .2s ease, transform .2s ease; }
-  .jump { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 5px; padding: 6px 16px; }
+  /* Low, to leave the page as much of the screen as it can. */
+  .jump { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)) 34px; gap: 5px; padding: 4px 12px; }
+  .jump-more { position: relative; display: flex; align-items: center; justify-content: center; width: 34px; min-height: 30px;
+    margin: 0; padding: 0; background: var(--panel-2); border: 1px solid var(--line); border-radius: 9px; color: var(--muted); }
+  .jump-more[aria-expanded="true"] { color: var(--text); border-color: var(--accent); }
+  /* How many in Finished failed, while its icon is tucked away: nothing when none did. */
+  .jump-more::after { content: attr(data-count); position: absolute; top: -5px; right: -5px; min-width: 15px; height: 15px; padding: 0 3px;
+    border-radius: 8px; background: var(--err, #d9534f); color: #fff; font-size: .62rem; font-weight: 700; line-height: 15px; text-align: center; }
+  .jump-more:not([data-count])::after, .jump-more[data-count=""]::after { display: none; }
   .jump a {
-    display: flex; align-items: center; justify-content: center; gap: 6px; min-height: 36px;
+    display: flex; align-items: center; justify-content: center; gap: 6px; min-height: 30px;
     background: var(--panel-2); border: 1px solid var(--line); border-radius: 9px; overflow: hidden;
     color: var(--muted); font-size: .76rem; font-weight: 600; text-decoration: none; white-space: nowrap;
   }
   .jump a.active { background: var(--panel); color: var(--text); border-color: var(--accent); }
+  /* Progress in the Status button (Settings): it fills from the left as the run goes, its percentage small in the corner. */
+  .jump a.filling { position: relative; background: linear-gradient(to right,
+    color-mix(in srgb, var(--ok) 30%, transparent) var(--fill, 0%), transparent var(--fill, 0%)) var(--panel-2); }
+  .jump a.filling.active { background-color: var(--panel); }
+  .jump a.filling::after { content: attr(data-pct); position: absolute; right: 5px; bottom: 1px;
+    color: var(--muted); font-size: .55rem; font-weight: 600; line-height: 1; }
   /* Tap the page you're on again: the same page on the other sides, growing up out of its button. */
   .side-menu { position: absolute; z-index: 11; display: flex; flex-direction: column; gap: 4px; padding: 5px;
     background: var(--panel); border: 1px solid var(--line); border-radius: 12px; box-shadow: 0 8px 24px rgba(0, 0, 0, .45);
@@ -1570,6 +1691,8 @@
     #runProgressBar::after, #runStripBar::after, #comfyBar::after, #uploadProgressBar::after, #uploadStripBar::after,
     #queuePendingBar::after, .step.now::before, .prompt-progress::after { animation: none; display: none; } }
   .dashboard .card { scroll-margin-top: 8px; }
+  /* Brought to the top when the preview closes (revealViewedBatch): a little room above it. */
+  .output-batch { scroll-margin-top: 8px; }
   .options-col { min-width: 0; }
   .form-actions { margin-top: 16px; }
   .form-actions[hidden] { display: none; }
@@ -1712,10 +1835,15 @@
   .go-error { flex: 1; min-width: 0; font-size: .78rem; line-height: 1.3; color: var(--err); overflow-wrap: anywhere; }
   .go-error:not([hidden]) + .go-eta { display: none; }
   .go-eta b { display: block; color: var(--text); }
-  .go-bar button { width: auto; flex: none; margin: 0; padding: 8px 14px; font-size: .85rem; }
+  .go-eta.with-count { display: flex; align-items: stretch; gap: 7px; }
+  .go-count { flex: none; display: inline-flex; flex-direction: column; align-items: center; justify-content: center; gap: 1px; min-width: 30px; padding: 2px 5px;
+    border: 1px solid var(--line); border-radius: 7px; background: var(--panel-2); color: var(--text); font-size: .72rem; font-weight: 600; line-height: 1; font-variant-numeric: tabular-nums; }
+  .go-count svg { width: 13px; height: 13px; color: var(--muted); }
+  .go-eta-lines { min-width: 0; }
+  .go-bar button { width: auto; flex: none; margin: 0; padding: 5px 12px; font-size: .85rem; }
   /* Add to top of queue and Add to pending, as symbols beside the main button; they go as the form's own do. */
   .go-bar #goStick { width: 9.5em; white-space: nowrap; text-align: center; }
-  .go-bar .go-icon { display: inline-flex; align-items: center; justify-content: center; padding: 8px; background: var(--panel-2); border: 1px solid var(--line); color: var(--muted); }
+  .go-bar .go-icon { display: inline-flex; align-items: center; justify-content: center; padding: 5px; background: var(--panel-2); border: 1px solid var(--line); color: var(--muted); }
   .go-bar .go-icon[hidden] { display: none; }
   .go-bar .go-icon:hover, .go-bar .go-icon:focus-visible { color: var(--text); }
   .go-bar .go-icon:disabled { opacity: .5; }
@@ -1852,6 +1980,16 @@
   #optionsCard .lora-line { display: flex; flex-wrap: nowrap; gap: 6px; align-items: center; margin-top: 6px; }
   #optionsCard .lora-line select { flex: 1; min-width: 0; width: 0; }
   #optionsCard .lora-line .option-strength { flex: 0 0 4.5em; width: 4.5em; margin: 0; }
+  /* The strength worth using for the LoRA chosen (core/lora_hints.py); the first line keeps the trash's room, so the
+     strengths line up under each other. */
+  #optionsCard .lora-line .lora-range { flex: 0 0 3.4em; font-size: .62rem; color: var(--muted); white-space: nowrap; font-variant-numeric: tabular-nums; }
+  #optionsCard .lora-line .lora-gap { flex: none; width: 28px; }
+  /* Off, its LoRA and strength are greyed: they do nothing. So too what a LoRA comparison sets in their place. */
+  #optionsCard .lora-line:has(> .check input[type=checkbox]:not(:checked)) :is(select, .option-strength, .lora-range) { opacity: .45; }
+  body.on-image:has(#imageLoraStyleTest:checked) #imageOptionsBox .lora-line:not(.lora-extra) select,
+  body.on-image:has(#imageLoraStrengthTest:checked) #imageOptionsBox .lora-line:not(.lora-extra) :is(.option-strength, .lora-range),
+  body.on-video:has(#videoLoraStyleTest:checked) #videoOptionsBox .lora-line:not(.lora-extra) select,
+  body.on-video:has(#videoLoraStrengthTest:checked) #videoOptionsBox .lora-line:not(.lora-extra) :is(.option-strength, .lora-range) { opacity: .45; }
   #optionsCard .lora-line .icon-btn, #optionsCard [data-add-lora] { flex: none; width: 28px; min-width: 28px; padding: 3px; margin: 4px 0; }
   .audio-line { display: flex; align-items: center; gap: 8px; margin-top: 6px; }
   #optionsCard .audio-line .field-heading, #optionsCard .audio-line label { margin: 0; }
@@ -1907,6 +2045,7 @@
     <a href="#runCard" data-page="status" class="run">Status</a>
     <a href="#optionsCard" data-page="generate">Generate</a>
     <a href="#videosCard" data-page="output" id="jumpResults">Output</a>
+    <button type="button" class="jump-more" id="headToggle" aria-expanded="false" aria-controls="topIcons" aria-label="Finished, Private mode, log, temperatures and settings" title="Finished, Private mode, log, temperatures and settings"><svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor" aria-hidden="true"><circle cx="5" cy="12" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="19" cy="12" r="1.8"/></svg></button>
   </nav>
   <div class="go-bar" id="goBar" hidden>
     <div class="go-error" id="goError" role="alert" hidden></div>
@@ -1993,6 +2132,7 @@
   <div class="status-toggles" id="statusToggles">
     <button type="button" class="status-toggle" id="queueToggle">Queue</button>
     <button type="button" class="status-toggle panel-icon" id="logToggle" aria-haspopup="dialog" aria-label="Log" title="Log"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 4h14v16H5zM8 8h8M8 12h8M8 16h5"/></svg><span class="icon-label">Log</span></button>
+    <button type="button" class="status-toggle panel-icon" id="openTemperatures" aria-haspopup="dialog" aria-label="Temperatures" title="GPU and CPU temperatures over time: lowest, average and highest"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 14.8V5a2 2 0 0 0-4 0v9.8a4 4 0 1 0 4 0z"/><path d="M12 10v7"/></svg><span class="icon-label">Temps</span></button>
     <button type="button" class="status-toggle panel-icon empty" id="finishedToggle" aria-haspopup="dialog" aria-label="Finished" title="Finished" disabled><span id="finishedCount" aria-hidden="true"></span><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m5 12 5 5 9-10"/></svg><span class="icon-label" id="finishedLabel">Finished</span></button>
     <button type="button" class="status-toggle panel-icon" id="quotaToggle" aria-haspopup="dialog" aria-label="Quota" title="Quota"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 20h16M6 17v-5M12 17V7M18 17V4"/></svg><span class="icon-label">Quota</span></button>
   </div>
@@ -2165,7 +2305,6 @@
       <select id="videoWorkflow" name="workflow">
         <option value="">LTX23_I2V_T2V</option>
       </select>
-      <div class="hint centred-hint" id="videoWorkflowOff" hidden>ComfyUI is off: this is the last list.</div>
     </div>
 
   <details class="section" id="videoGeneration" open>
@@ -2273,7 +2412,7 @@
         <option value="progressive">One story: each clip moves it forward</option>
         <option value="related">Related scenes: distinct moments in the same world</option>
       </select>
-      <label for="start">How clips connect</label>
+      <div class="field-heading"><label for="start">How clips connect</label><button type="button" class="hint-toggle" id="connectGuideLink" data-guide="clip_connection" aria-haspopup="dialog" aria-controls="modelGuide" aria-label="About how clips connect" title="About how clips connect"><span class="res-info-mark" aria-hidden="true">i</span></button></div>
       <select id="start" name="start">
         <option id="startChain" value="chain">One continuous take: each clip starts on the last frame of the one before</option>
         <option value="image">Separate moments: each clip starts on your image, with a fade between</option>
@@ -2284,7 +2423,6 @@
       <select id="startUnavailable" aria-label="How clips connect" disabled hidden>
         <option>Separate moments: clips are generated independently, with a fade between</option>
       </select>
-      <button type="button" class="guide-link" id="connectGuideLink" data-guide="clip_connection">About how clips connect</button>
       <div id="multishotOptions" hidden>
         <label class="check"><input type="checkbox" name="h3_first_frame" id="h3FirstFrame"><span>Use image 1 as the first frame as well as a subject reference</span></label>
         {{ field_heading('h3MultishotSteps', 'Multishot sampling steps', 'multishotHelp') }}
@@ -2338,6 +2476,11 @@
       </div>
     </div>
     <div id="videoNegativeSlot" class="negative-slot"></div>
+    <div id="videoWriterExtras" class="writer-extras">
+      {{ words_box('video', video_words) }}
+      {{ variety_box('video', 'clip') }}
+      {{ explicit_box('video') }}
+    </div>
   </details>
 
   <details class="section" id="videoOptions" hidden>
@@ -2347,15 +2490,17 @@
 
   <details class="section" id="videoHow">
     <summary class="section-title">Tests &amp; misc</summary>
-    <div class="options-section" id="videoLoraTests">
-      <label class="check"><input type="checkbox" name="lora_strength_test" id="videoLoraStrengthTest"><span>LoRA Strength test</span></label>
-      <div class="option-row"><label for="videoLoraTestStep">Each</label><div class="count-stepper">
-        <button type="button" data-lora-step="videoLoraTestStep" data-step="-1" aria-label="Smaller strength increment">−</button>
-        <input type="number" name="lora_test_step" id="videoLoraTestStep" min="0.05" max="2" step="0.05" value="0.1" aria-label="LoRA strength increment">
-        <button type="button" data-lora-step="videoLoraTestStep" data-step="1" aria-label="Larger strength increment">+</button>
-      </div></div>
-      <label class="check"><input type="checkbox" name="lora_style_test" id="videoLoraStyleTest"><span>LoRA Style test</span></label>
-      <div class="hint" data-lora-test-hint></div>
+    <div class="options-box tests-box" id="videoComparisons" aria-label="Comparisons">
+      <div class="tests-group" id="videoLoraTests">
+        <div class="options-subtitle">LoRA</div>
+        <div class="tests-line"><label class="check"><input type="checkbox" name="lora_strength_test" id="videoLoraStrengthTest"><span>LoRA Strength test</span></label><div class="count-stepper">
+          <button type="button" data-lora-step="videoLoraTestStep" data-step="-1" aria-label="Smaller strength increment">−</button>
+          <input type="number" name="lora_test_step" id="videoLoraTestStep" min="0.05" max="2" step="0.05" value="0.1" aria-label="LoRA strength increment">
+          <button type="button" data-lora-step="videoLoraTestStep" data-step="1" aria-label="Larger strength increment">+</button>
+        </div></div>
+        <label class="check"><input type="checkbox" name="lora_style_test" id="videoLoraStyleTest"><span>LoRA Style test</span></label>
+        <div class="hint" data-lora-test-hint></div>
+      </div>
     </div>
     <label class="check" id="videoReviewBox"><input type="checkbox" name="review" id="review"><span>Let me read the prompts before rendering</span></label>
     <label class="check not-shorts" id="previewRunLabel"><input type="checkbox" name="try_first" id="previewRun"><span>Preview run</span></label>
@@ -2378,7 +2523,6 @@
       <select id="imageWorkflow" name="workflow">
         <option value="">Automatic: edits if you give it an image, otherwise from text</option>
       </select>
-      <div class="hint centred-hint" id="imageWorkflowOff" hidden>ComfyUI is off: this is the last list.</div>
     </div>
 
   <details class="section" id="imageGeneration" open>
@@ -2471,7 +2615,7 @@
     <label for="imageCount">Amount</label>
     <div class="count-stepper">
       <button type="button" id="imageCountDown" aria-label="Fewer images">−</button>
-      <input id="imageCount" name="count" type="number" min="1" max="{{ image_most }}" value="1" inputmode="numeric">
+      <input id="imageCount" name="count" type="number" min="1" max="{{ image_most_written }}" value="1" inputmode="numeric" data-most="{{ image_most }}" data-most-written="{{ image_most_written }}">
       <button type="button" id="imageCountUp" aria-label="More images">+</button>
     </div>
   </details>
@@ -2503,6 +2647,11 @@
     <div class="err" id="imagePromptWriteError" role="alert" hidden></div>
     <button type="button" class="generated-prompts" data-generated-prompts hidden></button>
     <div id="imageNegativeSlot" class="negative-slot"></div>
+    <div id="imageWriterExtras" class="writer-extras">
+      {{ words_box('image', image_words) }}
+      {{ variety_box('image', 'image') }}
+      {{ explicit_box('image') }}
+    </div>
   </details>
 
 
@@ -2513,15 +2662,28 @@
 
   <details class="section" id="imageHow">
     <summary class="section-title">Tests &amp; misc</summary>
-    <div class="options-section" id="imageLoraTests">
-      <label class="check"><input type="checkbox" name="lora_strength_test" id="imageLoraStrengthTest"><span>LoRA Strength test</span></label>
-      <div class="option-row"><label for="imageLoraTestStep">Each</label><div class="count-stepper">
-        <button type="button" data-lora-step="imageLoraTestStep" data-step="-1" aria-label="Smaller strength increment">−</button>
-        <input type="number" name="lora_test_step" id="imageLoraTestStep" min="0.05" max="2" step="0.05" value="0.1" aria-label="LoRA strength increment">
-        <button type="button" data-lora-step="imageLoraTestStep" data-step="1" aria-label="Larger strength increment">+</button>
-      </div></div>
-      <label class="check"><input type="checkbox" name="lora_style_test" id="imageLoraStyleTest"><span>LoRA Style test</span></label>
-      <div class="hint" data-lora-test-hint></div>
+    <div class="options-box tests-box" id="imageComparisons" aria-label="Comparisons">
+      <div class="tests-group" id="imageLoraTests">
+        <div class="options-subtitle">LoRA</div>
+        <div class="tests-line"><label class="check"><input type="checkbox" name="lora_strength_test" id="imageLoraStrengthTest"><span>LoRA Strength test</span></label><div class="count-stepper">
+          <button type="button" data-lora-step="imageLoraTestStep" data-step="-1" aria-label="Smaller strength increment">−</button>
+          <input type="number" name="lora_test_step" id="imageLoraTestStep" min="0.05" max="2" step="0.05" value="0.1" aria-label="LoRA strength increment">
+          <button type="button" data-lora-step="imageLoraTestStep" data-step="1" aria-label="Larger strength increment">+</button>
+        </div></div>
+        <label class="check"><input type="checkbox" name="lora_style_test" id="imageLoraStyleTest"><span>LoRA Style test</span></label>
+        <div class="hint" data-lora-test-hint></div>
+      </div>
+      <div class="tests-group" id="imageWorkflowTests">
+        <div class="options-subtitle">Workflows</div>
+        <label class="check"><input type="checkbox" name="workflow_test_t2i" id="imageWorkflowTestT2i"><span>All text-to-image workflows</span></label>
+        <label class="check"><input type="checkbox" name="workflow_test_edit" id="imageWorkflowTestEdit"><span>All edit workflows</span></label>
+        <div class="hint" id="imageWorkflowTestHint"></div>
+      </div>
+      <div class="tests-group" id="imageLlmTests">
+        <div class="options-subtitle">Prompt models</div>
+        <label class="check"><input type="checkbox" name="llm_test" id="imageLlmTest"><span>All LLMs</span></label>
+        <div class="hint" id="imageLlmTestHint"></div>
+      </div>
     </div>
     <label class="check" id="imageReviewBox"><input type="checkbox" name="review" id="imageReview"><span>Let me read the prompts before rendering</span></label>
     <label for="imageSeed">Seed</label>
@@ -2637,8 +2799,11 @@
   <div class="hint settings-note" id="settingsNote" hidden></div>
   <div class="settings-group" id="themeSettingTitle">Theme</div>
   <button type="button" class="theme-picker" id="themePicker" aria-haspopup="dialog" aria-labelledby="themeSettingTitle themePicker"></button>
+  <label class="settings-check"><input type="checkbox" id="themeBoxes"><span>A box around each section<small>Off: the sections sit straight on the background, with no box of their own.</small></span></label>
   <label class="settings-check"><input type="checkbox" id="privateMode"><span>Private mode<small>What you make is tagged private, and Output opens on the private filter. Stays on until you turn it off.</small></span></label>
+  <label class="settings-check"><input type="checkbox" id="topProgress"><span>Progress bar at the top<small>While something runs, a progress bar at the top of every page.</small></span></label>
   <label class="settings-check"><input type="checkbox" id="pinProgress"><span>Pin the progress bar<small>Scrolled away from the top, the progress bar stays in sight, stretched along the top of the screen.</small></span></label>
+  <label class="settings-check"><input type="checkbox" id="statusProgress"><span>Progress in the Status button<small>On a phone, the footer's Status button fills as the run goes, with its percentage in the corner.</small></span></label>
   <div class="settings-group"><span id="titlesTitle">Titles</span>{{ hint_button('titleSourceHint', 'titles') }}</div>
   <div class="hint" id="titleSourceHint" hidden>Each new film and image set gets a short descriptive title from its prompt; its files are named by it too. With titles enabled, a local model selected for generation or used in the prompt editor also supplies the title. Without one, the choice below applies. Gemini uses one call per run; if it rejects the prompt, the local model titles it instead. Gemini, the local model for private runs asks Gemini only for what isn't made in Private mode, so private prompts never leave the PC for titling. Local model only never sends a prompt to Gemini. Either way the local model first frees ComfyUI's models and takes a little longer. If every one asked fails, it keeps its usual title.</div>
   <div class="settings-row"><select id="titleSource" aria-labelledby="titlesTitle"><option value="off">Off: keep its usual title</option><option value="gemini">Gemini, the local model as fallback</option><option value="gemini_sfw">Gemini, the local model for private runs</option><option value="local">Local model only</option></select></div>
@@ -2670,7 +2835,7 @@
     <label for="gpuRearmAt">Cool down to</label><span class="gpu-temp"><input type="number" id="gpuRearmAt" min="40" max="95" step="1" inputmode="numeric"><span>°C</span></span>
     <label for="gpuProfile">Profile</label><select id="gpuProfile">{% for n in range(1, 6) %}<option value="{{ n }}">Profile {{ n }}</option>{% endfor %}</select>
   </div>
-  <div class="settings-row gpu-guard-actions"><button type="button" id="restartAfterburner" title="Close MSI Afterburner and start it again now with the chosen profile, whatever the temperature. Tap twice.">Restart Afterburner</button><button type="button" id="openTemperatures" aria-haspopup="dialog" title="GPU and CPU temperatures over time: lowest, average and highest.">Temperatures</button></div>
+  <div class="settings-row gpu-guard-actions"><button type="button" id="restartAfterburner" title="Close MSI Afterburner and start it again now with the chosen profile, whatever the temperature. Tap twice.">Restart Afterburner</button></div>
   <div class="settings-group">Storage</div>
   <div class="disk" id="diskBox"><div class="hint">Checking…</div></div>
   <div class="settings-group">URL's</div>
@@ -2937,6 +3102,7 @@
 {{ {
   'settings': settings,
   'local_models': local_models,
+  'lora_ranges': lora_ranges,
   'avatar_clips': defaults.avatar_clips,
   'avatar_clips_min': defaults.avatar_clips_min,
   'avatar_clips_max': defaults.avatar_clips_max,

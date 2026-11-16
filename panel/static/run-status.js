@@ -73,10 +73,26 @@ $('runProgressRight').addEventListener('click', () => {
 let plan = null, planRequest = 0, planTimer = 0;
 // Seconds of work ahead of a new run; null while the queue is on hold, when nobody can say.
 let queueAhead = 0;
+const IMAGE_COUNT_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="9" cy="10" r="2"/><path d="m21 17-5-5-9 8"/></svg>';
 function renderPlan() {
   showPlan();
-  $('goBarEta').innerHTML = $('estimateTotal').innerHTML;
+  // The footer: just how long, without "Estimate:" (the form's own line keeps it); a problem as the form says it.
+  const tokens = plan && plan.ok && plan.tokens;
+  // An image set's: how many it makes, in a little badge as tall as both lines beside it.
+  const count = plan && plan.ok && pipeline === 'image' && plan.images
+    ? `<span class="go-count" title="${plan.images} ${plan.images === 1 ? 'image' : 'images'}" aria-label="${plan.images} ${plan.images === 1 ? 'image' : 'images'}">${IMAGE_COUNT_ICON}${plan.images}</span>` : '';
+  $('goBarEta').classList.toggle('with-count', !!count);
+  $('goBarEta').innerHTML = plan && plan.ok
+    ? `${count}<span class="go-eta-lines"><b>${fmtEta(plan.total)}</b>${tokens ? `~${fmtTokens(tokens.context)} tok` : ''}</span>`
+    : $('estimateTotal').innerHTML;
   $('goBarEta').title = [$('estimateDetail').textContent, $('estimateDetail').title].filter(Boolean).join('\n');
+}
+// An LLM writing the prompts, in tokens (pipelines/image/planner.py token_estimate): the footer gives the largest
+// request's context, which is what has to fit the local model's 16k.
+function fmtTokens(n) { return n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n); }
+function tokensDetail(t) {
+  return `Prompts: ~${t.each} tokens each, ~${t.written.toLocaleString('en-US')} written`
+    + `${t.rounds > 1 ? ` in ${t.rounds} requests` : ''}; largest request ~${fmtTokens(t.context)} tokens of context`;
 }
 function showPlan() {
   if (!plan) return;
@@ -92,8 +108,10 @@ function showPlan() {
   $('estimateTotal').innerHTML = `Estimate: <b>${fmtEta(plan.total)}</b>`;
   if (pipeline === 'image') {
     const images = `${plan.images} ${plan.images === 1 ? 'image' : 'images'}, ${fmtEta(plan.image_render)} each`;
-    $('estimateDetail').textContent = review ? 'only the prompts now' : images;
-    $('estimateDetail').title = plan.steps.map(s => `${s.name}: ${fmtEta(s.seconds)}`).join('\n');
+    $('estimateDetail').textContent = (review ? 'only the prompts now' : images)
+      + (plan.tokens ? ` · ~${fmtTokens(plan.tokens.context)} tokens of context` : '');
+    $('estimateDetail').title = [...plan.steps.map(s => `${s.name}: ${fmtEta(s.seconds)}`),
+      ...(plan.tokens ? [tokensDetail(plan.tokens)] : [])].join('\n');
     return;
   }
   if (pipeline === 'video') {
@@ -274,6 +292,8 @@ const LOG_STAGE = /^▶ Stage (\d+)\/(\d+): (.+)$/;
 const LOG_CLIP = /^🎬 Clip (\d+)\/(\d+) · (.+)$/;
 const LOG_IMAGE = /^(?:🖼️?\s*)?Image (\d+)\/(\d+) · (.+)$/u;
 const LOG_PROMPT = /^(\d+)\. (.+)$/;
+// A later round of prompts being given what the ones before it wrote (pipelines/image/planner.py).
+const LOG_HANDOVER = /^The next (\d+) are told the (\d+) written so far/u;
 const LOG_PROMPT_TITLE = 70;
 const LOG_TELEMETRY = /^Local LLM: (?:[\d.]+ tok\/s|idle|telemetry unavailable)/;
 const LOG_WRITTEN = /^Local LLM complete: (?:([\d.]+) tok\/s \| )?(\d+) total tok/;
@@ -344,7 +364,7 @@ function logStockTitle(g) {
 // Turns the lines into stages, each with its entries: a line, or a group that stands for several.
 function buildLog(lines, detailed) {
   const blocks = [];
-  let stage = null, current = null, inClip = false, stock = null, held = null, scenes = 0, prompt = null, model = null;
+  let stage = null, current = null, inClip = false, stock = null, held = null, scenes = 0, prompt = null, model = null, handover = null;
   const emit = entry => {
     (stage ? stage.entries : blocks).push(entry);
     if (stage && entry.k === 'err') stage.err++;
@@ -434,6 +454,18 @@ function buildLog(lines, detailed) {
       }
       continue;
     }
+    // A later round's hand-over: the titles and the prompt it is to write like, inside.
+    const handoverLine = !problem ? LOG_HANDOVER.exec(trimmed) : null;
+    if (handoverLine) {
+      flush();
+      handover = emit(group(entry, [entry], `Next ${handoverLine[1]} prompts: given the ${handoverLine[2]} written so far`));
+      continue;
+    }
+    if (handover && /^\s/.test(text) && !problem) {
+      handover.children.push(entry);
+      continue;
+    }
+    handover = null;
     // A written prompt: its number and title on the line, the prompt itself inside.
     const promptLine = stage && /prompt|plan/i.test(stage.name) && !problem && !/^\s/.test(text) ? LOG_PROMPT.exec(trimmed) : null;
     if (promptLine) {

@@ -1,4 +1,8 @@
-"""LoRA family keywords and the Qwen-Image 2.1 tensor-architecture guard."""
+"""
+Which model a LoRA is for, from the file itself: its metadata, else the layout of its tensors, else (only when the file
+says nothing) a family word in its name or folder. So a LoRA is found however it's named, and dropping one into
+ComfyUI's loras folder is all it takes. Also the Qwen-Image 2.1 tensor-architecture guard.
+"""
 import json
 import os
 import re
@@ -15,6 +19,23 @@ FAMILY_TOKENS = {
     "fibo": {"fibo", "fibo2"},
 }
 _found = {}
+# Each family's own tensor names, as trainers save them: "diffusion_model.blocks.0..." or kohya's "lora_unet_blocks_0_...".
+SIGNATURES = {
+    "krea": re.compile(r"(?:^|[._])txtfusion[._]", re.I),
+    "minimax_h3": re.compile(r"(?:^|[._])token_refiner[._]", re.I),
+    "fibo": re.compile(r"(?:^|[._])(?:perceiver[._]|layers[._]\d+[._]cross_attention[._]to_kv)", re.I),
+    "moss": re.compile(r"(?:^|[._])layers[._]\d+[._]proj[._](?:qkv|ffn_down|ffn_up_gate)(?:[._]|$)", re.I),
+    "qwen": re.compile(r"(?:^|[._])transformer_blocks[._]\d+[._](?:img|txt)_mlp[._]", re.I),
+    # Not ones the workflows here run: named, so a LoRA for them is told apart rather than taken by its filename.
+    "sdxl": re.compile(r"(?:^|[._])(?:input_blocks|output_blocks|middle_block|conditioner[._]embedders)[._]", re.I),
+    "flux": re.compile(r"(?:^|[._])(?:double_blocks|single_blocks|single_transformer_blocks)[._]", re.I),
+}
+# Metadata trainers write that names the base model (kohya, modelspec, ComfyUI's own).
+FAMILY_METADATA = ("ss_base_model_version", "modelspec.architecture", "base_model", "ss_sd_model_name")
+# What only a LoRA (or LoKr, LoHa, DoRA) holds: a file with none of these is a whole model.
+LORA_TENSOR = re.compile(r"lora_(?:a|b|down|up)(?:[._]|$)|[._]alpha$|lokr_|hada_|[._]diff(?:_b)?$|dora_scale", re.I)
+WHOLE_MODEL = ("It's a whole model, not a LoRA: it goes in ComfyUI's diffusion_models or checkpoints folder, "
+               "and as a LoRA it can't run.")
 _QWEN_21 = re.compile(r"(?:^|[._])img_mlp\.(?:gate_up|gate_layer)(?:[._]|$)", re.I)
 _QWEN_EARLIER = re.compile(r"(?:^|[._])img_mlp\.net\.(?:0\.proj|2)(?:[._]|$)", re.I)
 
@@ -31,12 +52,18 @@ def comfyui_folders():
     return [folder for folder in folders if os.path.isdir(os.path.join(folder, "models"))]
 
 
-def lora_path(name):
-    """The LoRA file ComfyUI lists by this name, or None."""
+LORA_FOLDERS = ("loras",)
+# Where ComfyUI's model loaders look: UNETLoader in diffusion_models (unet, as it was called), CheckpointLoader in checkpoints.
+MODEL_FOLDERS = ("diffusion_models", "unet", "checkpoints")
+
+
+def lora_path(name, kinds=LORA_FOLDERS):
+    """The file ComfyUI lists by this name in one of these models folders (its LoRAs, unless told), or None."""
     for folder in comfyui_folders():
-        path = os.path.join(folder, "models", "loras", name.replace("\\", os.sep).replace("/", os.sep))
-        if os.path.isfile(path):
-            return path
+        for kind in kinds:
+            path = os.path.join(folder, "models", kind, name.replace("\\", os.sep).replace("/", os.sep))
+            if os.path.isfile(path):
+                return path
     return None
 
 
@@ -50,13 +77,33 @@ def _families(value):
 
 
 def model_families(model):
-    """Family keywords in an actual diffusion model filename or loader class name."""
-    return _families(model) if model else set()
+    """
+    The families of a diffusion model or checkpoint: what its file says (metadata, else its tensors), else the family
+    words in its filename or loader class name. So a model is known however it's named.
+    """
+    if not model:
+        return set()
+    found = inspected(model, MODEL_FOLDERS)
+    if found and found["families"]:
+        return set(found["families"])
+    return _families(model)
 
 
 def lora_families(name):
-    """The model-family keywords in a LoRA's filename or folder, possibly more than one."""
+    """
+    The model families a LoRA is for: what the file says (metadata, else its tensors), else the family words in its
+    filename or folder. Possibly more than one; empty when nothing tells.
+    """
+    found = inspected(name)
+    if found and found["families"]:
+        return set(found["families"])
     return _families(name)
+
+
+def not_a_lora(name):
+    """Whether the file in the loras folder is really a whole model (a checkpoint or diffusion model)."""
+    found = inspected(name)
+    return bool(found and not found["lora"])
 
 
 def private_lora(name):
@@ -75,11 +122,20 @@ def _header(path):
         return None
 
 
-def _qwen_version(path):
+def _inspect(path):
+    """What a LoRA file says about itself: {"families", "lora", "qwen"}, or None when its header can't be read."""
     header = _header(path)
     if not isinstance(header, dict):
         return None
     names = [name for name in header if name != "__metadata__"]
+    meta = header.get("__metadata__") if isinstance(header.get("__metadata__"), dict) else {}
+    families = {family for family, pattern in SIGNATURES.items() if any(pattern.search(name) for name in names)}
+    if not families:
+        families = set().union(*(_families(meta.get(key)) for key in FAMILY_METADATA if meta.get(key)))
+    return {"families": families, "lora": any(LORA_TENSOR.search(name) for name in names), "qwen": _qwen_version(names)}
+
+
+def _qwen_version(names):
     versions = set()
     for name in names:
         if _QWEN_21.search(name):
@@ -89,9 +145,9 @@ def _qwen_version(path):
     return versions.pop() if len(versions) == 1 else None
 
 
-def family(name):
-    """The exact Qwen generation from tensor names, if identifiable."""
-    path = lora_path(name)
+def inspected(name, kinds=LORA_FOLDERS):
+    """_inspect for the file ComfyUI lists by this name, read once per version of the file; None when it isn't here."""
+    path = lora_path(name, kinds) if isinstance(name, str) and name else None
     if not path:
         return None
     try:
@@ -100,8 +156,14 @@ def family(name):
         return None
     key = (path, stat.st_mtime_ns, stat.st_size)
     if key not in _found:
-        _found[key] = _qwen_version(path)
+        _found[key] = _inspect(path)
     return _found[key]
+
+
+def family(name):
+    """The exact Qwen generation from tensor names, if identifiable."""
+    found = inspected(name)
+    return found["qwen"] if found else None
 
 
 def display_label(name):
@@ -119,6 +181,8 @@ def display_label(name):
 
 def problem(name, model):
     """Why this LoRA does nothing on, or cannot be verified for, this model; None when compatible."""
+    if not_a_lora(name):
+        return WHOLE_MODEL
     found = lora_families(name)
     if family(name) in (QWEN_21, QWEN_EARLIER):
         found.add("qwen")

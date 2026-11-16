@@ -17,7 +17,7 @@ function h3Description(item) {
 // made besides come first, in its side's colour. A tap shows them all when they don't fit.
 function pillsHtml(pills) {
   // The workflow first and always in colour; the others in colour when they tell it apart from its siblings.
-  return (pills || []).map(p => `<span class="pill${p.kind === 'workflow' ? ' workflow' : ''}${p.diff ? ' diff' : ''}">${esc(p.text)}</span>`).join('');
+  return (pills || []).map(p => `<span class="pill${p.kind === 'workflow' ? ' workflow' : ''}${p.comparison ? ' comparison' : ''}${p.diff ? ' diff' : ''}">${esc(p.text)}</span>`).join('');
 }
 function pillsLine(pills, side, lines = 2) {
   return pills && pills.length ? `<div class="pills ${side}" data-lines="${lines}" role="button" tabindex="0" title="Tap to show all">${pillsHtml(pills)}</div>` : '';

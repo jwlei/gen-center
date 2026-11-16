@@ -3,7 +3,6 @@ import re
 import time
 import base64
 import asyncio
-import edge_tts
 import ffmpeg
 import mutagen
 import requests
@@ -364,6 +363,7 @@ class AudioEngine:
         """
         Generates an MP3 with edge-tts, with retry logic to handle connection drops.
         """
+        import edge_tts  # Here, not at the top: slow to load, and only a narrated Short uses it
         for attempt in range(retries):
             try:
                 # Rate +10% for engagement

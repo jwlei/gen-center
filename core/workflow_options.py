@@ -451,6 +451,7 @@ H3_SAMPLING = ("BasicGuider", "CFGGuider", "KSampler", "KSamplerAdvanced", "Samp
 # models/loras is offered at once, on any workflow. The one the workflow has is the one to start from: most LoRAs are
 # made for one model. Speed LoRAs (turbo, lightning, n-step) have switches of their own, and aren't listed.
 LORA, LORA_NAME, LORA_STRENGTH = "lora", "lora_name", "lora_strength"
+MODEL = "model_file"  # The diffusion model or checkpoint picked (_model_choice)
 ADDITIONAL_LORAS = "additional_loras"
 LORA_LOADERS = ("LoraLoaderModelOnly", "LoraLoader")
 SPEED_LORA = re.compile(r"turbo|lightning|lightx2v|\d+.?steps?|distill", re.I)
@@ -561,6 +562,55 @@ def _model_feeds(api):
 
 
 MODEL_LOADERS = {"UNETLoader", "UNETLoaderGGUF", "CheckpointLoader", "CheckpointLoaderSimple", "DiffusionModelLoader"}
+# The loaders whose file can be picked: each one's file input, and what the picker is called.
+MODEL_PICKERS = {"UNETLoader": ("unet_name", "Diffusion model"), "UNETLoaderGGUF": ("unet_name", "Diffusion model"),
+                 "CheckpointLoaderSimple": ("ckpt_name", "Checkpoint"), "CheckpointLoader": ("ckpt_name", "Checkpoint")}
+def _variant(name, family):
+    """
+    Within a family, what can't stand in for the other, told by its name: MiniMax H3's image model, its reference-to-
+    video one and its first/last-frame one take different inputs; Qwen's edit model isn't its words-to-picture one.
+    """
+    tokens = lora_check._tokens(name)
+    if "minimax_h3" in family:
+        return "image" if "image" in tokens else "ref2v" if any(token.startswith("ref2v") for token in tokens) else "fl2v"
+    if "qwen" in family:
+        return "edit" in tokens
+    return None
+
+
+def _same_kind(name, model):
+    """Whether this model file can take the place of the workflow's: the same family, and the same variant of it."""
+    family = lora_check.model_families(model)
+    if not family or not (lora_check.model_families(name) & family):
+        return False
+    # FastVideo has its own setting (H3 model), which also takes the turbo LoRA out.
+    return FASTVIDEO not in name.lower() and _variant(name, family) == _variant(model, family)
+
+
+def _model_choice(api, info, chosen):
+    """
+    The model the workflow runs, to pick from the others of its kind installed in ComfyUI (a fine-tune, another
+    quantization): a choice of its loader's file, last in the workflow's settings. Applied here. [] with nothing to pick.
+    """
+    model = _workflow_model(api)
+    loaders = [(node_id, MODEL_PICKERS[node["class_type"]]) for node_id, node in api.items()
+               if node["class_type"] in MODEL_PICKERS and node["inputs"].get(MODEL_PICKERS[node["class_type"]][0]) == model]
+    if not model or not loaders:
+        return []
+    kinds = {api[node_id]["class_type"] for node_id, _ in loaders}
+    if len(kinds) != 1:
+        return []
+    (key, label), = {picker for _, picker in loaders}
+    files = _combo(info, kinds.pop(), key)
+    choices = [name for name in files if name == model or _same_kind(name, model)]
+    if model not in choices or len(choices) < 2:
+        return []
+    picked = chosen.get(MODEL)
+    if picked and picked != model and picked in choices:
+        for node_id, _ in loaders:
+            api[node_id]["inputs"][key] = picked
+    return [{"id": MODEL, "kind": "choice", "label": label, "default": model, "choices": choices, "model": True,
+             "labels": {name: os.path.splitext(os.path.basename(name.replace("\\", "/")))[0] for name in choices}}]
 
 
 def _workflow_model(api):
@@ -633,6 +683,8 @@ def _is_native_lora(name, native):
 
 
 def _compatible_lora(name, model, native):
+    if lora_check.not_a_lora(name):
+        return False
     family = lora_check.lora_families(name)
     if lora_check.family(name) in (lora_check.QWEN_21, lora_check.QWEN_EARLIER):
         family.add("qwen")
@@ -967,7 +1019,7 @@ SPLICED_NODES = ("MinimaxH3LatentUpscaler3D", "LTXVSeparateAVLatent", "LTXVConca
                  "UNETLoader", "UpscaleModelLoader", "ImageUpscaleWithModel", "ImageScaleBy", "VAEEncode", "VAEDecode",
                  "LatentUpscaleBy", "SplitSigmasDenoise", "UltimateSDUpscale", "UltimateSDUpscaleCustomSample",
                  "UltimateSDUpscaleGuider", "ImageScale", "FreeMemoryImage", "SeedVR2LoadDiTModel", "SeedVR2LoadVAEModel",
-                 "SeedVR2VideoUpscaler")
+                 "SeedVR2VideoUpscaler", "LoraLoaderModelOnly")  # The style LoRA and those stacked after it, without a loader of its own
 
 
 # In Generate, each image upscaled as it is made (pipelines/image/refine_upscale.py): Ultimate SD Upscale's tiles with
@@ -1157,6 +1209,8 @@ def convert(ui, info, chosen=None, pipeline="image"):
     # References that grow, such as Fibo 2.0's 16 or MiniMax H3's: a saved workflow wires one or two. Shorts gives one.
     if pipeline != "shorts":
         sw._grow_references(api, info)
+    # Before the LoRAs are matched to it: they go with the model picked, not the one the workflow was saved with.
+    picker = _model_choice(api, info, chosen)
     model = _workflow_model(api)
     native = _native_loras(ui)
     _filter_lora_options(options, model, native)
@@ -1181,6 +1235,7 @@ def convert(ui, info, chosen=None, pipeline="image"):
             for option in options:
                 if "seedvr2" in option["id"].lower() and option["id"] != "image_upscale":
                     option["moved"] = "Upscale"
+    options += picker
     _drop_idle_loras(api)
     _validate_loras(api, model, native)
     if pipeline == "image":
@@ -1200,8 +1255,13 @@ def offered(ui, info, pipeline="image"):
     for option in options:
         problem = lora_problem(option, info, model)
         if not problem and option["kind"] == "switch":
+            flip = {option["id"]: ON if option["default"] == OFF else OFF}
+            # The LoRA switch, turned on, takes a LoRA that is installed: the one the workflow was saved with may not be.
+            name = next((other for other in options if other["id"] == LORA_NAME), None)
+            if option["id"] == LORA and flip[LORA] == ON and name and name.get("choices"):
+                flip[LORA_NAME] = name["default"] if name["default"] in name["choices"] else name["choices"][0]
             try:
-                _, fields, model, flipped = convert(ui, info, {option["id"]: ON if option["default"] == OFF else OFF}, pipeline)
+                _, fields, model, flipped = convert(ui, info, flip, pipeline)
                 flips[option["id"]] = flipped
                 if option.get("role"):
                     found = sw.image_takes(fields, model) if pipeline == "image" else sw.takes(fields)

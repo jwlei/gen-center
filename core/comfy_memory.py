@@ -3,6 +3,10 @@ import math
 
 import requests
 
+# What an emptied ComfyUI still keeps: PyTorch's caching allocator holds a block or two (measured: 256 KB allocated,
+# 32 MB reserved of 12 GB), which is not a model left behind. Anything that size is; a model is gigabytes.
+LEFTOVER_BYTES = 512 * 2**20
+
 
 def release(url):
     try:
@@ -26,8 +30,9 @@ def release(url):
                     raise RuntimeError(f"ComfyUI returned an invalid {field} measurement.")
             if device["vram_total"] <= 0 or device["vram_free"] > device["vram_total"]:
                 raise RuntimeError("ComfyUI returned invalid available memory.")
-            if device["type"] == "cuda" and (device["torch_allocated"] or device["torch_reserved"]):
-                raise RuntimeError("ComfyUI still holds GPU tensors or cached GPU allocations after cleanup.")
+            if device["type"] == "cuda" and max(device["torch_allocated"], device["torch_reserved"]) > LEFTOVER_BYTES:
+                held = max(device["torch_allocated"], device["torch_reserved"]) / 2**20
+                raise RuntimeError(f"ComfyUI still holds {held:.0f} MB of GPU memory after cleanup.")
         return devices
     except (requests.RequestException, ValueError, OverflowError) as error:
         raise RuntimeError(f"Could not verify ComfyUI memory cleanup: {error}") from error

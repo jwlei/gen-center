@@ -753,7 +753,9 @@ function upscaleProblem(method, width, height) {
 function pictureMetadata(set, picture) {
   const ownWriter = Object.prototype.hasOwnProperty.call(picture, 'prompt_llm');
   const ownLora = Object.prototype.hasOwnProperty.call(picture, 'lora');
-  const pills = set.pills && [...set.pills.filter(p => p.kind !== 'upscale' && (!ownWriter || p.kind !== 'llm') && (!ownLora || p.kind !== 'lora')),
+  // In a workflow comparison, the one it ran through, still marked as a comparison's.
+  const pills = set.pills && [...set.pills.map(p => p.kind === 'workflow' && picture.workflow ? { ...p, text: picture.workflow } : p)
+    .filter(p => p.kind !== 'upscale' && (!ownWriter || p.kind !== 'llm') && (!ownLora || p.kind !== 'lora')),
     ...(ownWriter && picture.prompt_llm ? [{ text: picture.prompt_llm, kind: 'llm',
       diff: set.pills.some(p => p.kind === 'llm' && p.text === picture.prompt_llm && p.diff) }] : []),
     ...(ownLora && picture.lora ? [{ text: `LoRA: ${picture.lora}`, kind: 'lora', diff: true }] : []),
@@ -899,7 +901,7 @@ function openViewer(id, position) {
   viewing = { id, position };
   document.body.dataset.viewing = 'image';
   showViewerMedia(false);
-  $('viewerVariations').title = 'More like this one: its prompt and settings in Generate, on new seeds';
+  $('viewerVariations').title = 'More like this: the generation it came from, back in Generate with its Variety and chips';
   $('viewerVariations').setAttribute('aria-label', 'More like this');
   resetZoom();
   const url = `/image-runs/${encodeURIComponent(id)}/files/${position}?v=${picture.version}`;
@@ -1191,13 +1193,30 @@ $('imageViewer').addEventListener('keydown', e => {
   else if (e.key === 'ArrowLeft' && stepViewer(-1)) e.preventDefault();
   else if (e.key === 'ArrowDown' && stepSet(1)) e.preventDefault();
   else if (e.key === 'ArrowUp' && stepSet(-1)) e.preventDefault();
+  // Del on a keyboard is the Delete button: once to arm it, again to delete, as two taps are. Held down, it doesn't
+  // repeat into the second; typed in a box of the viewer's, it is the box's.
+  else if (e.key === 'Delete' && !e.repeat && !/^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName || '')
+           && !$('viewerDelete').hidden && !$('viewerDelete').disabled) {
+    e.preventDefault();
+    $('viewerDelete').click();
+  }
 });
 function closeViewer() {
   if ($('imageViewer').open) $('imageViewer').close();
 }
+// Closed, Output shows the batch it was on at the top: swiped through to another set, that one. Only from Output itself
+// (not a collection, Finished or the queue), and only when it's on screen; already there, nothing moves.
+function revealViewedBatch(was, collection) {
+  if (!was || collection) return;
+  const key = was.film ? `film:${was.name}` : `image:${was.id}`;
+  const batch = [...$('imageSets').querySelectorAll('.output-batch[data-output-key]')].find(cell => cell.dataset.outputKey === key);
+  if (!batch || !batch.getClientRects().length) return;
+  batch.scrollIntoView({ behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth', block: 'start' });
+}
 $('imageViewer').addEventListener('close', () => {
   clearViewerTransition();
   for (const id of ['viewerUpscaleBar', 'upscaleSettings', 'moveSheet', 'pillsMenu', 'editMenu']) if ($(id).open) $(id).close();
+  revealViewedBatch(viewing, viewerCollection);
   viewing = null;
   viewerCollection = null;
   $('viewerMetaDetails').hidden = true;
@@ -1321,8 +1340,8 @@ $('imageSets').addEventListener('click', async e => {
   } else if (d.nsfwImage) await tagOutput('image', d.nsfwImage, !nsfwView, e.target);
   else if (d.shots) openShots(d.shots);
   else if (d.deleteSet) {
-    if (!secondTap(e.target)) return;
-    await stopJob(`/image-runs/${encodeURIComponent(d.deleteSet)}/delete`);
+    if (e.target.classList.contains('deleting') || !secondTap(e.target)) return;
+    await confirmedDelete(e.target, `/image-runs/${encodeURIComponent(d.deleteSet)}/delete`);
   }
 });
 

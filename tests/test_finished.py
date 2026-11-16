@@ -126,6 +126,26 @@ class FinishedTest(unittest.TestCase):
             self.assertTrue(restored.held)
             self.assertEqual(restored.results, [])
 
+    def test_generate_on_a_held_idle_queue_starts_as_soon_as_nothing_holds_it_up(self):
+        busy = [True]  # ComfyUI still being cleared after the last run
+        job = mock.Mock(closed=False, idle=True, running=False, batches=0)
+        with tempfile.TemporaryDirectory() as folder:
+            queue = server.JobQueue(job, lambda item: None, blocked=lambda: busy[0], path=os.path.join(folder, "queue_runs.json"))
+            started = []
+            with mock.patch.object(queue, "_ensure_watcher"), mock.patch.object(queue, "_activate", return_value=True), \
+                    mock.patch.object(queue, "_start", side_effect=lambda item: started.append(item["label"])):
+                queue.items, queue.held = [{"id": 90, "label": "Waiting", "argv": ["python", "render.py"]}], True
+                self.assertTrue(queue.add({"label": "New", "argv": ["python", "render.py"]}), "held up for a moment: it waits first in line")
+                queue._advance()
+                self.assertEqual(started, [], "not while ComfyUI is being cleared")
+                busy[0] = False
+                queue._advance()
+                self.assertEqual(started, ["New"], "then it starts, as Generate said it would")
+                self.assertTrue(queue.held, "what was already waiting stays on hold")
+                self.assertEqual([item["label"] for item in queue.items], ["Waiting"])
+                self.assertFalse(queue.add({"label": "Next", "argv": ["python", "render.py"]}), "with nothing holding it up, it starts at once")
+                self.assertEqual(started, ["New", "Next"])
+
     def test_queue_does_not_start_a_job_without_process_ownership(self):
         job = mock.Mock(closed=False)
         queue = server.JobQueue(job, lambda item: None)
@@ -326,4 +346,16 @@ class AimdoRetryTest(unittest.TestCase):
                 queue.current = {"id": 4, "label": "B", "pipeline": "video", "argv": []}
                 queue._finish_current()
                 restart.assert_not_called()
+                self.assertEqual([r["outcome"] for r in queue.results], ["failed"])
+
+    def test_a_failed_generation_lets_the_next_one_go(self):
+        with tempfile.TemporaryDirectory() as folder:
+            job = mock.Mock(closed=False, progress={}, returncode=2, stopped=False, batches=0, first_line=0,
+                            lines=[{"n": 1, "text": "❌ Something broke"}])
+            queue = server.JobQueue(job, lambda item: None, path=os.path.join(folder, "queue_runs.json"))
+            with mock.patch.object(server, "run_queue", queue):
+                queue.items = [{"id": 5, "label": "Next", "pipeline": "image", "argv": ["python", "render.py"]}]
+                queue.current = {"id": 4, "label": "B", "pipeline": "video", "argv": ["python", "render.py"]}
+                queue._finish_current()
+                self.assertFalse(queue.held, "the queue goes on")
                 self.assertEqual([r["outcome"] for r in queue.results], ["failed"])

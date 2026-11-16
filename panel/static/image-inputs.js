@@ -55,7 +55,6 @@ async function loadImageWorkflows() {
   if (!data.workflows.length) notes.push('Save one in ComfyUI with a name starting image_ and it appears here.');
   $('imageWorkflowHint').hidden = !notes.length;
   $('imageWorkflowHint').textContent = notes.join(' ');
-  $('imageWorkflowOff').hidden = !!data.online;
   syncImageForm();
   queuePlan();
   applyDefaultPreset('image');

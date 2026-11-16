@@ -32,8 +32,8 @@ class H3RefinerTest(unittest.TestCase):
         device = {"type": "cuda", "vram_total": 12 * 2**30, "vram_free": 11 * 2**30,
                   "torch_allocated": 0, "torch_reserved": 0}
         bodies = [{}, {"version": 1, "completed": False, "devices": [device]},
-                  {"version": 1, "completed": True, "devices": [{**device, "torch_allocated": 2**20}]},
-                  {"version": 1, "completed": True, "devices": [{**device, "torch_reserved": 2**20}]},
+                  {"version": 1, "completed": True, "devices": [{**device, "torch_allocated": 2**30}]},
+                  {"version": 1, "completed": True, "devices": [{**device, "torch_reserved": 2**30}]},
                   {"version": 1, "completed": True, "devices": [{**device, "vram_free": float("nan")}]}]
         for body in bodies:
             with self.subTest(body=body):
@@ -45,11 +45,28 @@ class H3RefinerTest(unittest.TestCase):
                     with self.assertRaises(RuntimeError):
                         refiner.__enter__()
                     launch.assert_not_called()
+        # What an emptied ComfyUI really keeps (PyTorch's cache, measured on the RTX card) is not a model left behind.
+        leftovers = {"version": 1, "completed": True, "devices": [{**device, "torch_allocated": 262144, "torch_reserved": 33554432}]}
+        with mock.patch.object(comfy_memory.requests, "post", return_value=mock.Mock(status_code=200, json=lambda: leftovers)):
+            self.assertEqual(comfy_memory.release(refiner.comfy_url), leftovers["devices"])
         response = mock.Mock(status_code=500)
         response.raise_for_status.side_effect = h3_refiner.requests.HTTPError("cleanup failed")
         with mock.patch.object(comfy_memory.requests, "post", return_value=response):
             with self.assertRaisesRegex(RuntimeError, "cleanup failed"):
                 comfy_memory.release(refiner.comfy_url)
+
+    def test_each_local_model_has_a_short_name_to_tell_it_by(self):
+        from panel import settings
+        named = {
+            "qwen3-14b": "Qwen3 14B",
+            "gemma-4-12b:gemma-4-12B-agentic-fable5-composer2.5-v2-3.5x-tau2-uncensored-heretic-Q5_K_M": "Gemma 4 Fable5-U-H Q5_K_M",
+            "gemma-4-12b:gemma-4-12B-it-qat-q4_0-unquantized-heretic-Q4_0": "Gemma 4 QAT-H Q4_0",
+            "gemma-4-12b:gemma-4-12B-it-qat-q4_0-unquantized-heretic-Q4_K_M": "Gemma 4 QAT-H Q4_K_M",
+            "gemma-4-12b:gemma-4-12B-it-uncensored-heretic-Q5_K_M": "Gemma 4 U-H Q5_K_M",
+        }
+        # The built-in Gemma, named from its model file.
+        self.assertEqual(settings.short_name("gemma-4-12b", "gemma-4-12B-it-heretic-Q4_K_M"), "Gemma 4 H Q4_K_M")
+        self.assertEqual({model_id: settings.short_name(model_id) for model_id in named}, named)
 
     def test_local_model_rates_use_completed_tokens_and_current_model_file(self):
         from panel import settings

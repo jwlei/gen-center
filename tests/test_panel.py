@@ -36,6 +36,8 @@ from pipelines.shorts.paths import OUTPUT_DIR as SHORTS_READY, UPLOADED_DIR as S
 from pipelines.shorts import topic_history
 from pipelines.video import h3_prompt, media, paths
 from pipelines.video import output_metadata, upscale as video_upscale
+from pipelines.video import main as video_main
+from core import variety
 from pipelines.video.run_state import RunState, list_runs
 
 
@@ -59,6 +61,11 @@ class RestartReasonTest(unittest.TestCase):
 
     def test_exit_one_from_a_crash_restarts_comfyui(self):
         self.assertEqual(webapp.restart_reason(self.job("   🖼️ Image 5/24", "Traceback (most recent call last):"), 1), "exit code 1")
+
+    def test_a_failure_before_comfyui_does_not_restart_it(self):
+        planning = self.job("▶ Stage 1/3: Prompts", "🧠 claude is writing 4 prompts...", "❌ Set ANTHROPIC_API_KEY in .env")
+        self.assertIsNone(webapp.restart_reason(planning, 1), "a fresh ComfyUI can't fix a missing key")
+        self.assertEqual(webapp.restart_reason(self.job("🎛️ ComfyUI · started a workflow of 35 nodes", "Traceback"), 1), "exit code 1")
 
     def test_settings_comfyui_refuses_do_not_restart_it(self):
         refused = self.job("   🖼️ Image 5/24", "      ❌ Can't use the LoRA Krea2\\KNPV3_1.safetensors: LoRA is one of a, b.")
@@ -92,6 +99,15 @@ class QueueTopTest(unittest.TestCase):
         self.assertEqual([json.loads(call.args[2]["COMFYUI_OPTIONS"])["lora_strength"]
                           for call in eta.call_args_list], ["1", "2"])
 
+    def test_a_page_error_is_kept_in_a_log_file(self):
+        with tempfile.TemporaryDirectory() as folder, mock.patch.object(webapp, "LOGS_DIR", folder):
+            client = webapp.app.test_client()
+            with mock.patch.object(webapp, "password_ok", return_value=True, create=True):
+                reply = client.post("/api/page-error", json={"error": "uncaught | x is not defined"})
+            self.assertEqual(reply.status_code, 200)
+            with open(os.path.join(folder, "page_errors.log"), encoding="utf-8") as log:
+                self.assertIn("uncaught | x is not defined", log.read())
+
     def test_lora_image_comparisons_queue_one_set_and_ignore_amount(self):
         from core import lora_tests, workflow_options
         options = workflow_options.lora_options("0", "krea_a.safetensors", 1, ["krea_a.safetensors", "krea_b.safetensors"])
@@ -113,6 +129,72 @@ class QueueTopTest(unittest.TestCase):
         self.assertEqual(item["argv"][item["argv"].index("--count") + 1], "1")
         self.assertEqual(item["argv"][item["argv"].index("--seed") + 1], "0")
         self.assertIn("--direct", item["argv"])
+        # Named as what it is in the queue, not "exact prompt"; one queued before it was, the same once read.
+        self.assertIn(" · LoRA comparison", item["detail"])
+        self.assertNotIn("exact prompt", item["detail"])
+        older = {**item, "detail": item["detail"].replace("LoRA comparison", "exact prompt")}
+        webapp.named_comparison(older)
+        self.assertEqual(older["detail"], item["detail"])
+
+    def test_a_workflow_comparison_queues_one_set_through_every_text_to_image_workflow(self):
+        from core import workflow_tests
+        entry = lambda name, low, high: {"pipeline": "image", "name": name, "label": name, "path": f"/w/{name}.json",
+                                         "takes": {"min_images": low, "max_images": high, "size": True, "options": []}}
+        entries = [entry("Krea2_T2I", 0, 0), entry("Moss_T2I", 0, 0), entry("Qwen_Edit", 1, 1)]
+        form = {"prompt": "same prompt", "count": "15", "prompt_mode": "llm", "llm": "gemini", "workflow_test_t2i": "on",
+                "lora_strength_test": "on", "opt_steps": "4", "start_later": "1"}
+        with webapp.app.test_request_context("/generate/image", method="POST", data=form), \
+             mock.patch.object(image_panel, "saved_workflows", return_value=entries), \
+             mock.patch.object(image_panel, "run_queue", self.queue), mock.patch.object(webapp, "run_queue", self.queue), \
+             mock.patch.object(image_panel, "private_mode", return_value=False), mock.patch.object(webapp, "private_mode", return_value=False), \
+             mock.patch.object(image_panel, "clean_inputs"), mock.patch.object(image_panel, "RunEta") as eta:
+            eta.return_value.plan.return_value = {"total": 10}
+            result = image_panel.generate.__wrapped__()
+        self.assertTrue(result["ok"], result)
+        item = self.queue.items[0]
+        self.assertTrue(item["label"].startswith("2 images"))
+        self.assertEqual([test["label"] for test in workflow_tests.in_env(item["env"])], ["Krea2_T2I", "Moss_T2I"])
+        self.assertEqual(item["env"]["COMFYUI_WORKFLOW"], "/w/Krea2_T2I.json")
+        self.assertNotIn("GEN_CENTER_LORA_TEST", item["env"], "workflows compared, not LoRAs")
+        self.assertEqual(item["argv"][item["argv"].index("--count") + 1], "1")
+        self.assertIn("--direct", item["argv"], "your prompt as written")
+        self.assertIn("--seed", item["argv"], "one seed for all")
+        self.assertNotIn("--option", item["argv"], "each at its own defaults")
+        self.assertIn("workflow comparison · All T2I workflows", item["detail"])
+
+    def test_an_llm_comparison_queues_one_image_for_each_prompt_model(self):
+        from core import llm_tests
+        takes = {"min_images": 0, "max_images": 0, "size": True, "options": []}
+        models = [{"id": "gemma-4-12b", "label": "Gemma 4 12B (vision)", "vision": True},
+                  {"id": "qwen3-14b", "label": "Qwen3 14B (text only)", "vision": False}]
+        form = {"prompt": "a lighthouse", "count": "15", "prompt_mode": "direct", "llm": "prompt_enhancer", "review": "1",
+                "llm_test": "on", "local_model": "gemma-4-12b", "start_later": "1"}
+        with webapp.app.test_request_context("/generate/image", method="POST", data=form), \
+             mock.patch.object(image_panel, "chosen_workflow", return_value=({"COMFYUI_WORKFLOW": "/w/image_Krea2.json"}, takes, None)), \
+             mock.patch.object(image_panel.settings, "local_models", return_value=models), \
+             mock.patch.object(image_panel.planner, "llm_configured", return_value=True), \
+             mock.patch.object(image_panel, "run_queue", self.queue), mock.patch.object(webapp, "run_queue", self.queue), \
+             mock.patch.object(image_panel, "private_mode", return_value=False), mock.patch.object(webapp, "private_mode", return_value=False), \
+             mock.patch.object(image_panel, "clean_inputs"), mock.patch.object(image_panel, "RunEta") as eta:
+            eta.return_value.plan.return_value = {"total": 10}
+            result = image_panel.generate.__wrapped__()
+        self.assertTrue(result["ok"], result)
+        item = self.queue.items[0]
+        self.assertEqual([(test["llm"], test["label"]) for test in llm_tests.in_env(item["env"])],
+                         [("gemini", "Gemini"), ("local", "Gemma 4 12B-v"), ("local", "Qwen3 14B")])
+        argv = item["argv"]
+        self.assertEqual(argv[argv.index("--count") + 1], "1")
+        self.assertNotIn("--direct", argv, "written, whatever the prompt mode said")
+        self.assertNotIn("--plan-only", argv, "nothing to read first")
+        self.assertIn("--seed", argv, "one seed for all")
+        self.assertTrue(item["label"].startswith("3 images"))
+        self.assertIn("LLM comparison", item["detail"])
+        # With an image, only those that can see it; and never beside a comparison that uses your prompt as written.
+        with webapp.app.test_request_context("/", method="POST", data={"llm_test": "on"}), \
+             mock.patch.object(image_panel.settings, "local_models", return_value=models), \
+             mock.patch.object(image_panel.planner, "llm_configured", return_value=False):
+            self.assertEqual([test["label"] for test in image_panel.compared_llms(webapp.request.form, 1)[0]], ["Gemma 4 12B-v"])
+        self.assertIn("can't go with", image_panel.compared_llms({"llm_test": "on", "workflow_test_t2i": "on"}, 0)[1])
 
     def test_lora_image_comparison_pills_name_the_loras_tested(self):
         from types import SimpleNamespace
@@ -642,7 +724,9 @@ class PanelTest(unittest.TestCase):
     def wait_idle(self):
         def idle():
             webapp.run_queue.pending()
-            return webapp.job.idle and not webapp.run_queue.current
+            # A job waiting its turn counts too (an automatic retry while ComfyUI is cleared), unless the queue is held.
+            waiting = not webapp.run_queue.held and any(not item.get("later") for item in webapp.run_queue.items)
+            return webapp.job.idle and not webapp.run_queue.current and not waiting
         self.wait_until(idle, "the job to end")
 
     def generate(self, **fields):
@@ -653,7 +737,10 @@ class PanelTest(unittest.TestCase):
 
     def status(self):
         webapp._runs_cache["at"] = 0.0
-        return self.client.get("/api/status").get_json()
+        reply = self.client.get("/api/status")
+        # A status the panel couldn't build says so here, rather than as "None is not subscriptable" further on.
+        self.assertEqual(reply.status_code, 200, reply.get_data(as_text=True)[-1500:])
+        return reply.get_json()
 
     def only_run(self):
         runs = list_runs()
@@ -678,6 +765,23 @@ class PanelTest(unittest.TestCase):
             gone = self.client.get("/api/status?log_after=3").get_json()
             self.assertFalse(gone["log_delta"])
             self.assertEqual(len(gone["lines"]), 5)
+
+    def test_a_queued_job_says_how_it_is_upscaled(self):
+        upscale = webapp.item_upscale
+        image = {"pipeline": "image", "argv": ["--count", "2", "--option", "image_upscale=SeedVR2", "--option", "image_upscale_denoise=0.1"]}
+        self.assertEqual(upscale(image), "SeedVR2, denoise 0.1")
+        self.assertEqual(webapp.run_facts(image)["upscale"], "SeedVR2, denoise 0.1", "in the facts the queue and Pending show")
+        self.assertIsNone(upscale({"pipeline": "image", "argv": ["--option", "image_upscale=" + webapp.workflow_options.NO_IMAGE_UPSCALE]}))
+        film = {"pipeline": "video", "argv": [], "env": {"COMFYUI_OPTIONS": json.dumps({"latent_upscale": "Fast", "latent_upscale_mp": "1.5"})}}
+        self.assertEqual(upscale(film), "Latent, Fast, 1.5 MP")
+        self.assertIsNone(upscale({"pipeline": "video", "env": {"COMFYUI_OPTIONS": json.dumps({"latent_upscale": "Off"})}}))
+        self.assertNotIn("upscale", webapp.run_facts({"pipeline": "shorts", "argv": []}))
+        # A continuation carries no options of its own: its saved run's.
+        state = types.SimpleNamespace(options={"image_upscale": "UltraSharp"})
+        with mock.patch.object(webapp.PIPELINES["image"], "load_run", return_value=state):
+            self.assertEqual(upscale({"pipeline": "image", "argv": ["--resume", "image_1"], "resume": "image_1"}), "UltraSharp")
+        self.assertIsNone(upscale({"pipeline": "image", "argv": ["-m", "pipelines.image.upscale", "--scale", "2"]}),
+                          "an upscale job says so itself")
 
     def test_the_next_job_in_the_queue_starts_the_log_as_a_new_run(self):
         line = webapp.new_run_line
@@ -742,6 +846,33 @@ class PanelTest(unittest.TestCase):
         self.assertIsNone(error)
         self.assertEqual(flags[flags.index("--clip-relationship") + 1], "related")
         self.assertEqual(video_panel.build_options({"clip_relationship": "unknown"})[1], "Unknown clip relationship.")
+
+    def test_a_films_words_per_prompt_reach_each_models_rules(self):
+        flags, error = video_panel.build_options({"llm": "gemini", "words": "150"})
+        self.assertIsNone(error)
+        self.assertEqual(flags[flags.index("--words") + 1], "150")
+        self.assertNotIn("--words", video_panel.build_options({"llm": "gemini", "words": "30"})[0], "Auto: the model's own")
+        self.assertIn("Words per prompt", video_panel.build_options({"llm": "gemini", "words": "600"})[1])
+        from pipelines.video import h3_prompt, planner as film, wan_prompt
+        self.assertIn("120-180 words", film._instructions("x", 10, "image", 1, words=150), "LTX-2")
+        self.assertIn("120-180 words", film._instructions("x", 10, "chain", 1, wan_prompt.MODEL, words=150), "Wan")
+        self.assertIn("Write 120-180 words", film._instructions("x", 10, "image", 1, h3_prompt.MODEL, words=150), "H3")
+        self.assertIn("60-120 words", film._instructions("x", 10, "image", 1), "blank keeps LTX-2's own")
+
+    def test_a_films_variety_and_chips_reach_the_writer(self):
+        flags, error = video_panel.build_options({"llm": "gemini", "variety": "wide", "chip_location": "keep"})
+        self.assertIsNone(error)
+        start = flags.index("--variety")
+        self.assertEqual(flags[start:start + 4], ["--variety", "wide", "--keep", "location"])
+        direct, error = video_panel.build_options({"prompt_mode": "direct", "variety": "wide"})
+        self.assertIsNone(error)
+        self.assertNotIn("--variety", direct, "every clip gets your prompt as it is")
+        rule = variety.film_rule("slight", ["lighting"], ["outfit"])
+        self.assertIn("Keep the clips close together", rule)
+        self.assertIn("change only the lighting, a little", rule)
+        self.assertIn("Keep the outfit the same in every one of the clips", rule)
+        with self.assertRaises(SystemExit), mock.patch("sys.stderr", io.StringIO()):
+            video_main.parse_args(["a storm", "--vary", "pose", "--keep", "pose"])
 
     def test_fixed_clip_only_continues_matching_plan(self):
         state = types.SimpleNamespace(id="old", shots=[{"seconds": 8}] * 4, final=None, inputs="same", brief="idea",
@@ -1353,7 +1484,8 @@ class PanelTest(unittest.TestCase):
         waiting_items = self.status()["queue"]["items"]
         self.assertEqual([(item["resume"], item.get("later")) for item in waiting_items], [(skipped, True)], "back in Pending, not started")
         self.assertNotIn(skipped, [run["id"] for run in self.status()["stopped_runs"]])
-        self.assertTrue(self.client.post(f"/queue/run/start/{waiting_items[0]['id']}").get_json()["ok"])
+        # The top-of-queue arrow: with nothing running, the one that starts it now.
+        self.assertTrue(self.client.post(f"/queue/run/start/{waiting_items[0]['id']}?top=1").get_json()["ok"])
         self.wait_idle()
         self.assertEqual(self.status()["returncode"], 0)
         self.assertEqual(len(self.comfy.prompts), 9, "only the cut-off clip and those after it were rendered")
@@ -1447,10 +1579,15 @@ class PanelTest(unittest.TestCase):
         self.assertTrue(self.generate(prompt="busy", review="1").get_json() is not None)
         self.wait_idle()
         self.assertEqual([item["label"] for item in self.status()["queue"]["items"]], [waiting[0]["label"]], "the one added after went first")
-        # Held again by something running, a new one goes ahead of it, and it stays last.
+        # Added to the queue with nothing running, it doesn't start: the queue goes on hold, and it waits for Resume.
         self.assertTrue(self.client.post(f"/queue/run/start/{waiting[0]['id']}").get_json()["ok"])
+        queue = self.status()["queue"]
+        self.assertTrue(queue["held"] and not webapp.job.running, "not started")
+        self.assertEqual([(item["id"], item.get("later")) for item in queue["items"]], [(waiting[0]["id"], None)], "in the queue, no longer Pending")
+        # Its top-of-queue arrow is what starts it with nothing running.
+        self.assertTrue(self.client.post(f"/queue/run/start/{waiting[0]['id']}?top=1").get_json()["ok"])
+        self.wait_until(lambda: self.status()["queue"]["items"] == [], "started, it left the queue")
         self.wait_idle()
-        self.assertEqual(self.status()["queue"]["items"], [], "started, it ran")
 
     def test_add_to_top_of_queue_goes_ahead_of_everything_waiting(self):
         with mock.patch.object(webapp.run_queue, "blocked", return_value=True):
@@ -2065,7 +2202,9 @@ class PanelTest(unittest.TestCase):
             page = client.get("/login").get_data(as_text=True)
             self.assertIn(":root { --accent: var(--neutral); }", page, "the way in is Status's silver")
             self.assertIn('<span class="spinner" aria-hidden="true"></span><span id="loginLabel">Sign in</span>', page)
-            self.assertIn("form.classList.add('busy');", page, "sent, it shows it is signing in")
+            self.assertIn('<script defer src="/static/login.js"></script>', page)
+            with open(os.path.join(ROOT, "panel", "static", "login.js"), encoding="utf-8") as f:
+                self.assertIn("form.classList.add('busy');", f.read(), "sent, it shows it is signing in")
             self.assertNotIn('class="card wrong"', page)
             wrong = client.post("/login", data={"password": "nope"}).get_data(as_text=True)
             self.assertIn("Wrong password", wrong)
@@ -2120,6 +2259,10 @@ class PanelTest(unittest.TestCase):
             self.assertFalse(saved["settings"]["pin_progress"], "the progress bar is not pinned until asked")
             self.assertTrue(self.client.post("/api/settings", json={"pin_progress": True}).get_json()["settings"]["pin_progress"])
             self.assertTrue(webapp.settings.load()["pin_progress"], "kept")
+            self.assertTrue(saved["settings"]["top_progress"], "the progress bar at the top is on until turned off")
+            self.assertFalse(saved["settings"]["status_progress"])
+            both = self.client.post("/api/settings", json={"top_progress": False, "status_progress": True}).get_json()["settings"]
+            self.assertEqual((both["top_progress"], both["status_progress"]), (False, True))
             self.assertTrue(webapp.settings.load()["low_priority"], "kept in the file")
             self.assertEqual(self.client.post("/api/settings", json={"h3_model": "qwen3-14b"}).get_json()["settings"]["h3_model"], "qwen3-14b")
             self.assertEqual(self.client.post("/api/settings", json={"h3_model": "unknown"}).status_code, 400)
@@ -2228,7 +2371,8 @@ class PanelTest(unittest.TestCase):
         self.addCleanup(patch.stop)
         log = temperatures.TemperatureLog(os.path.join(self.temp, "temperatures.jsonl"))
         log.add(gpu=70, cpu=60)
-        with mock.patch.object(webapp, "_temperature_log", log):
+        from panel import heat
+        with mock.patch.object(heat, "_temperature_log", log):
             body = self.client.get("/api/temperatures?hours=24").get_json()
             self.assertTrue(body["ok"], body)
             self.assertEqual(body["summary"]["gpu"]["now"], 70)

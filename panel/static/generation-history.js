@@ -1,14 +1,16 @@
 // --- The same again: a set's settings back in Generate, its images too, to change before pressing it ---
 // With position: more like that one image: its own prompt, word for word, four times on new seeds.
-async function sameAgain(id, position = null, exact = null) {
+// With from: the generation that one image came from (More like this in the viewer): its brief, prompt writer, Variety
+// and chips as it was queued, its seed a tap away.
+async function sameAgain(id, position = null, exact = null, from = null) {
   const epoch = workspaceEpoch;
   let data;
   try { data = await (await fetch(`/image-runs/${encodeURIComponent(id)}`)).json(); } catch (e) { data = { error: 'Could not reach the panel. Try again.' }; }
   if (epoch !== workspaceEpoch) return false;
   if (!data.ok) { alert(data.error || 'Could not open that set.'); return false; }
-  const shot = position && data.shots[position - 1];
+  const shot = position && data.shots[position - 1], picked = shot || (from && data.shots[from - 1]);
   // One image's own setup where it kept one; else the set's.
-  const s = { ...((shot && shot.settings) || data.settings) };
+  const s = { ...((picked && picked.settings) || data.settings) };
   if (shot) Object.assign(s, { prompt: shot.prompt, direct: true, count: VARIATIONS });
   // Created again from a set's prompts: that one image, its prompt word for word, on its own seed.
   if (exact) Object.assign(s, { prompt: exact.prompt, direct: true, count: exact.count || 1 });
@@ -50,13 +52,14 @@ async function sameAgain(id, position = null, exact = null) {
   syncImageForm();
   if (exact) $('imageSeed').value = exact.seed || '';
   // From one picture: its seed, a tap away, to make it again with other settings.
-  offerSameSeed('imageSeed', shot ? shot.used_seed ?? shot.seed : null);
+  offerSameSeed('imageSeed', picked ? picked.used_seed ?? picked.seed : null);
   saveImageForm();
   reopened('image');
   showFormError('');
   $('imageGeneration').open = $('imagePromptSection').open = true;
   $('imageOptions').open = !$('imageOptions').hidden;
   if (WIDE.matches) $('optionsCard').scrollIntoView({ behavior: 'smooth' }); else showPage('generate');
+  queuePlan();
   return true;
 }
 // A file a run was given, back as a file for a form's box.
@@ -215,7 +218,8 @@ $('viewerVariations').addEventListener('click', () => {
   const { id, position, film, run } = viewing;
   if (film && !run) return;
   closeViewer();
-  if (film) sameAgainFilm(run); else sameAgain(id, position);
+  // The generation it came from, as it was queued: Variety and its chips too.
+  if (film) sameAgainFilm(run); else sameAgain(id, null, null, position);
 });
 // A cut title shows whole on a click, and is cut again on the next click, or for the next picture or film (setViewerTitle).
 $('viewerTitle').addEventListener('click', () => $('viewerTitle').classList.toggle('full'));

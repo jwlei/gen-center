@@ -8,7 +8,7 @@ from types import SimpleNamespace
 
 from flask import abort, request, send_file
 
-from core import director, h3_refiner, lora_tests, pills, run_form, seeds, workflow_options
+from core import director, h3_refiner, lora_tests, pills, prompt_words, run_form, seeds, variety, workflow_options
 from core.upscale_eta import UpscaleEta
 from panel import settings
 from panel.server import (OUTCOME_FILE, read_outcome, form_options, PIPELINES, VIDEO_TIMINGS, _runs_cache, active_runs, app, busy_runs, item_images, job,
@@ -84,6 +84,8 @@ def describe_run(state):
             "clips": len(state.clips), "finished": bool(state.final), "outcome": read_outcome(state.folder),
             "prompt_warnings": state.prompt_warnings if state.prompt_warning_pending else [],
             "size": f"{state.width}x{state.height}",
+            # The upscale it renders with, for Pending to show.
+            "upscale": pills.latent_description(state.options),
             "estimate": RunEta(resume_argv(state), VIDEO_TIMINGS).plan()["total"]}
 
 
@@ -155,6 +157,18 @@ def build_options(form):
             if model not in {item["id"] for item in settings.local_models()}:
                 return None, "Choose an available local model."
             flags += ["--local-model", model]
+        varied, error = variety.flags_from_form(form)
+        if error:
+            return None, error
+        flags += varied
+        # How long each clip's prompt is: blank for the video model's own.
+        worded, error = prompt_words.flags_from_form(form, "video")
+        if error:
+            return None, error
+        flags += worded
+        # Private mode's Explicit content: the writer is told the film is meant to be explicit.
+        if form.get("explicit") and private_mode():
+            flags.append("--explicit")
 
     size = (form.get("size") or "").strip().lower()
     if size:
@@ -227,6 +241,30 @@ def estimate():
 def queue_label(text):
     text = " ".join(text.split())
     return text if len(text) <= 80 else text[:77] + "..."
+
+
+def workflow_name(path):
+    """A saved workflow as a queued job names it: "image_Moss_T2I.json" is "Moss_T2I"."""
+    name = os.path.splitext(os.path.basename(path))[0]
+    return re.sub(r"^(image|video|shorts)_", "", name, flags=re.I) or name
+
+
+def seed_fixed(form):
+    """Whether a Generate form (as sent, or as a run kept it: lists) had its seed typed in rather than random."""
+    value = (form or {}).get("seed")
+    if isinstance(value, list):
+        value = value[0] if value else ""
+    return bool(str(value or "").strip())
+
+
+def continued_detail(state, redo=None):
+    """A saved film queued to continue, said as a new one is: its button already says it continues."""
+    length = f"{state.seconds}s" if state.seconds < 60 else f"{state.seconds // 60}:{state.seconds % 60:02d}"
+    return " · ".join(["film as long as its audio" if state.has_audio else f"{length} film",
+                       "exact prompt" if state.direct else state.llm or "LLM",
+                       *(["fixed seed"] if state.seed is not None else []),
+                       *([workflow_name(state.workflow)] if state.workflow else []),
+                       *([f"redo from shot {redo}"] if redo else [])])
 
 
 def form_uploads(files, takes):
@@ -418,11 +456,12 @@ def generate():
     plan_only = "--plan-only" in flags
     seconds = int(flags[flags.index("--duration") + 1])
     length = f"{seconds}s" if seconds < 60 else f"{seconds // 60}:{seconds % 60:02d}"
-    detail = ["film as long as its audio" if audio else f"{length} film", llm or "your prompt, every clip",
+    detail = ["film as long as its audio" if audio else f"{length} film", llm or "exact prompt",
+              *(["fixed seed"] if seed_fixed(request.form) else []),
               *(["OpenH3-IR " + option(flags, "--h3-creativity", "balanced")] if "--h3-enhance" in flags else []),
               *(["review the prompts first"] if plan_only else [])]
     if request.form.get("workflow"):
-        detail.append(request.form["workflow"].removesuffix(".json"))
+        detail.append(workflow_name(request.form["workflow"]))
     chosen_size = size or "x".join(str(side) for side in media.render_size(
         *(images[0].size if images else media.DEFAULT_SHAPE),
         media.default_area(workflow_model(env.get("COMFYUI_WORKFLOW")))))
@@ -514,8 +553,7 @@ def queue_saved_run(state, redo=None):
     if state.prompt_warning_pending and not request.args.get("later"):
         state.approve_prompts()
     argv = resume_argv(state, redo)
-    what = f"Redo from shot {redo}" if redo else "Continue"
-    item = {"pipeline": "video", "label": queue_label(state.title or state.brief), "detail": what, "argv": argv, "env": {},
+    item = {"pipeline": "video", "label": queue_label(state.title or state.brief), "detail": continued_detail(state, redo), "argv": argv, "env": {},
             "resume": state.id, "estimate": RunEta(argv, VIDEO_TIMINGS).plan()["total"]}
     queued = run_queue.add(item)
     _runs_cache["at"] = 0.0
@@ -956,5 +994,5 @@ def context():
 PIPELINES["video"] = SimpleNamespace(
     load_run=RunState.load, describe_runs=lambda: [describe_run(state) for state in list_runs() if state.shots], continue_run=continue_run,
     discard_run=discard_run, delete_video=delete_video, captions=captions, context=context,
-    resume_argv=resume_argv, edit_continuation=edit_continuation,
+    resume_argv=resume_argv, edit_continuation=edit_continuation, continued_detail=continued_detail,
     estimate=lambda argv, env: RunEta(argv, VIDEO_TIMINGS, env).plan()["total"])

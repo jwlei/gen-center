@@ -3,6 +3,8 @@ What the LLM is told when a film renders on Wan. Wan reads plain prose, makes no
 sound, and has a negative prompt of its own saved in the workflow, so none of the
 fields, labels or sound that H3 needs belong in its prompts.
 """
+from core import prompt_words
+
 MODEL = "wan"
 # Nodes of Wan's own start with this, and the text encoder's loader says so otherwise.
 NODE_PREFIX = "Wan"
@@ -29,8 +31,11 @@ def _what_to_write(images):
       the place. Describe the subject, the place and the light in the same words every time, or the clips won't match."""
 
 
-def instructions(brief, seconds, count, images, continuity, shortest, longest, second_image="", relationship="", clip_relationship="progressive"):
+def instructions(brief, seconds, count, images, continuity, shortest, longest, second_image="", relationship="", clip_relationship="progressive",
+                 words=None):
     clips = "one clip" if count == 1 else f"{count} consecutive clips"
+    # The form's words per prompt, as a range (core.prompt_words), else Wan's own.
+    length = "{}-{}".format(*prompt_words.word_range(words)) if words else "80-120"
     shots = "one shot" if count == 1 else f"{count} shots in order"
     together = f"Use {seconds}." if count == 1 else f"All of them together add up to {seconds}."
     shape = ("Show one clear moment that feels complete." if count == 1 else
@@ -57,7 +62,7 @@ def instructions(brief, seconds, count, images, continuity, shortest, longest, s
     - prompt: the text Wan gets, following the rules below.
 
     Wan sees one prompt at a time, and knows nothing about the film:
-    - One flowing paragraph of plain sentences in the present tense, 80-120 words. No labels, headings or lists.
+    - One flowing paragraph of plain sentences in the present tense, {length} words. No labels, headings or lists.
     - Lead with what matters most in the clip, because the start of a prompt counts for more than the end.
     {_what_to_write(images)}
     - One clear main action per shot, sized to really happen in that shot's seconds. Too much comes out as a blur, and too

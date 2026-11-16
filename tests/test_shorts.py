@@ -591,7 +591,7 @@ class ProgressActionTest(unittest.TestCase):
         job.pipeline, job.eta = "image", mock.Mock()
         job._track("▶ Stage 1/2: Prompts")
         job._track("🧠 Local model is writing 15 prompts...")
-        job._track("🧠 Starting the local OpenH3-IR model...")
+        job._track("🧠 Starting the local model (Gemma 4 12B (vision))...")  # Older runs named OpenH3-IR: below
         self.assertEqual(job.progress["action"], "Starting local model")
         job._track("   llama.cpp: loading weights")
         job._track("🧠 Local model ready.")
@@ -976,7 +976,10 @@ class SwitchTest(unittest.TestCase):
             page = self.client.get(address).get_data(as_text=True)
             self.assertIn('id="switchShorts"', page)
             self.assertIn('id="switchVideo"', page)
-            self.assertIn(f'let side = "{side}";', page)
+            # The side reaches the page's script in its configuration (startup.js reads initial_pipeline).
+            config = page[page.index('<script id="panelConfig" type="application/json">'):]
+            config = json.loads(config[config.index(">") + 1:config.index("</script>")])
+            self.assertEqual(config["initial_pipeline"], side)
 
     def test_upload_is_only_on_shorts(self):
         page = self.client.get("/").get_data(as_text=True)

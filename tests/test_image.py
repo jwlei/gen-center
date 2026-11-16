@@ -4,6 +4,7 @@ which talks to a fake ComfyUI and a fake Claude. Nothing costs anything.
 """
 import io
 import json
+import re
 import os
 import shutil
 import sys
@@ -24,6 +25,8 @@ from PIL import Image, ImageDraw
 from panel import app as _all_pipelines  # noqa: F401
 from panel import image as image_panel
 from panel import server as webapp
+from core import explicit, variety
+from core.llm_reply import CutOff
 from pipelines.image import fibo2_prompt, media, models, paths, planner
 from pipelines.image.run_eta import RunEta
 from pipelines.image.run_state import RunState, list_runs
@@ -196,6 +199,61 @@ class PlannerTest(unittest.TestCase):
     def test_what_it_did_write_beats_paying_for_nothing(self):
         (_, versions), call = self.write(self.reply(2), self.reply(1), "not json")
         self.assertEqual((len(versions), call.call_count), (2, 3))
+
+    def test_more_than_twenty_are_written_in_even_rounds_in_the_manner_of_the_first(self):
+        (title, versions), call = self.write(self.reply(13, "First"), self.reply(12, "Second").replace('"Prompt ', '"Later prompt '), count=25)
+        self.assertEqual([re.search(r"exactly (\d+) versions", c.args[1]).group(1) for c in call.call_args_list], ["13", "12"])
+        self.assertIn("already has 13 versions", call.call_args_list[1].args[1])
+        self.assertIn("same level of detail, as this earlier one:\n    Prompt 0", call.call_args_list[1].args[1])
+        self.assertEqual(title, "First")
+        self.assertEqual(len({v["prompt"] for v in versions}), 25)
+
+    def test_a_reply_cut_off_is_written_in_rounds_each_told_what_came_before(self):
+        replies = {15: CutOff("cut off"), 8: self.reply(8, "First"), 6: self.reply(6)}
+        asked = []
+
+        def ask(llm, prompt, *args, **kwargs):
+            want = int(re.search(r"exactly (\d+) versions", prompt).group(1))
+            asked.append(want)
+            reply = replies[want]
+            if isinstance(reply, Exception):
+                raise reply
+            # Each round numbers its own from 0: the later one's prompts must still be new.
+            return reply.replace('"Prompt ', f'"Round {len(asked)} prompt ')
+
+        with mock.patch.object(planner.llm, "_ask", side_effect=ask) as call:
+            title, versions = planner.write_prompts([], "a brief", 30, "local", refiner=object())
+        self.assertEqual(asked, [15, 8, 8, 8, 6], "30 in even rounds of 15; halved when cut off anyway, then rounds of that size")
+        self.assertEqual((title, len(versions), len({v["prompt"] for v in versions})), ("First", 30, 30))
+        self.assertIn("already has 8 versions, written before these: V0; V1", call.call_args_list[2].args[1])
+        self.assertIn("already has 24 versions", call.call_args_list[4].args[1])
+        with mock.patch.object(planner.llm, "_ask", side_effect=CutOff("cut off")), self.assertRaisesRegex(RuntimeError, "single prompt"):
+            planner.write_prompts([], "a brief", 2, "gemini")
+
+    def test_the_words_per_prompt_set_the_length_and_the_rounds(self):
+        self.assertIn("120-180 words", planner._instructions("a fox", 3, 0, words=150))
+        self.assertIn("320-480 words", planner._instructions("a fox", 3, 2, compose=True, words=400))
+        self.assertEqual(planner.word_range(200), (160, 240))
+        self.assertIn("20-60 words", planner._instructions("a fox", 3, 1, words=400), "an edit keeps its own length")
+        self.assertEqual([planner.round_size(words) for words in (40, 200, 300, 400)], [20, 20, 15, 11])
+        (_, versions), call = self.write(*[self.reply(15, f"R{n}").replace('"Prompt ', f'"R{n} prompt ') for n in range(2)],
+                                         count=30)
+        self.assertEqual(call.call_count, 2, "200 words: 30 as 15 and 15")
+        with mock.patch.object(planner.llm, "_ask", side_effect=[self.reply(10).replace('"Prompt ', f'"R{n} prompt ')
+                                                                 for n in range(3)]) as call:
+            planner.write_prompts([], "a brief", 30, "gemini", words=400)
+        self.assertEqual(call.call_count, 3, "400 words: 30 as three rounds of 10 (11 at most each)")
+        # Edits are short whatever the slider says: one request for 20.
+        self.assertEqual(planner.token_estimate(20, images=1, words=400)["rounds"], 1)
+
+    def test_the_token_estimate_counts_each_prompt_the_set_and_the_largest_request(self):
+        one = planner.token_estimate(15, words=200)
+        self.assertEqual((one["each"], one["written"], one["rounds"]), (290, 4350, 1))
+        two = planner.token_estimate(30, words=200, explicit=True)
+        self.assertEqual((two["written"], two["rounds"]), (8700, 2))
+        self.assertGreater(two["context"], one["context"], "the later round is told the titles and shown a prompt")
+        self.assertLess(two["context"], 16384, "it fits the local model's context")
+        self.assertGreaterEqual(planner.token_estimate(1, images=2, compose=True)["context"] - planner.token_estimate(1, images=1, compose=True)["context"], planner.IMAGE_TOKENS)
 
     def test_nothing_usable_says_so(self):
         with self.assertRaisesRegex(RuntimeError, "usable prompts"):
@@ -422,6 +480,95 @@ class PromptSourceTest(unittest.TestCase):
         self.assertEqual({shot["seed"] for shot in state.shots}, {7})
         self.assertEqual(state.options["additional_loras"], stack)
 
+    def test_a_workflow_comparison_plans_one_prompt_through_each_workflow(self):
+        from core import workflow_tests
+        from pipelines.image import main
+        values = [{"kind": "t2i", "workflow": f"/w/image_{name}.json", "label": name} for name in ("Krea2", "Moss")]
+        args = main.parse_args(["same prompt", "--direct", "--seed", "7"])
+        comfy = mock.Mock()
+        comfy.model.return_value = None
+        comfy.takes.return_value = {"min_images": 0, "max_images": 0}
+        with tempfile.TemporaryDirectory() as folder, \
+             mock.patch.object(paths, "RUNS_DIR", folder), mock.patch.object(paths, "OUTPUT_DIR", folder), \
+             mock.patch.dict(os.environ, {workflow_tests.ENV: json.dumps(values), "COMFYUI_WORKFLOW": "/w/image_Krea2.json"}), \
+             mock.patch.object(main, "ImageClient", return_value=comfy), \
+             mock.patch.object(main.titles, "titled", return_value="Comparison"):
+            state = main.plan_run(args, main.STAGES)
+        self.assertEqual(state.count, 2)
+        self.assertEqual([shot["title"] for shot in state.shots], ["Krea2", "Moss"])
+        self.assertEqual({(shot["prompt"], shot["seed"]) for shot in state.shots}, {("same prompt", 7)})
+        self.assertIn("_all_t2i", state.output_name, "named for what it compares")
+        self.assertEqual(workflow_tests.pill(state.shots), "All T2I workflows")
+
+    def test_an_llm_comparison_has_each_model_write_the_brief_on_one_seed(self):
+        from core import llm_tests
+        from pipelines.image import main
+        values = [{"llm": "gemini", "local_model": None, "label": "Gemini"},
+                  {"llm": "local", "local_model": "gemma-4-12b", "label": "Gemma 4 12B-v"},
+                  {"llm": "local", "local_model": "qwen3-14b", "label": "Qwen3 14B"}]
+        args = main.parse_args(["a lighthouse", "--llm", "local", "--local-model", "gemma-4-12b", "--seed", "7"])
+        comfy = mock.Mock(url="http://comfy")
+        comfy.model.return_value = None
+        comfy.takes.return_value = {"min_images": 0, "max_images": 0}
+        asked = []
+
+        def write(images, brief, count, llm, model, refiner=None, **rest):
+            asked.append((llm, refiner.model_id if refiner else None, count))
+            if refiner and refiner.model_id == "qwen3-14b":
+                raise RuntimeError("it ran out of tokens")
+            return "Lighthouse", [{"title": "Version 1", "prompt": f"written by {refiner.model_id if refiner else llm}"}]
+
+        class Refiner:
+            def __init__(self, url, require_compiler=False, model_id=None, vision=False):
+                self.model_id = model_id
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_):
+                return False
+        with tempfile.TemporaryDirectory() as folder, \
+             mock.patch.object(paths, "RUNS_DIR", folder), mock.patch.object(paths, "OUTPUT_DIR", folder), \
+             mock.patch.dict(os.environ, {llm_tests.ENV: json.dumps(values), "COMFYUI_WORKFLOW": ""}), \
+             mock.patch.object(main, "ImageClient", return_value=comfy), \
+             mock.patch.object(main.h3_refiner, "Refiner", Refiner), \
+             mock.patch.object(main.planner, "llm_configured", return_value=True), \
+             mock.patch.object(main.image_planner, "write_prompts", side_effect=write), \
+             mock.patch.object(main.titles, "titled", return_value="Lighthouse"):
+            state = main.plan_run(args, main.STAGES)
+        self.assertEqual(asked, [("gemini", None, 1), ("local", "gemma-4-12b", 1), ("local", "qwen3-14b", 1)], "each writes one")
+        self.assertEqual([(shot["title"], shot["prompt"]) for shot in state.shots],
+                         [("Gemini", "written by gemini"), ("Gemma 4 12B-v", "written by gemma-4-12b")],
+                         "one that fails costs its own image")
+        self.assertEqual({shot["seed"] for shot in state.shots}, {7}, "one seed for all")
+        self.assertEqual(llm_tests.pill(state.shots), "All LLMs")
+
+    def test_each_image_of_a_workflow_comparison_renders_through_its_own_workflow(self):
+        from pipelines.image import main
+        state = RunState.new("same prompt", 2, True, 512, 512, workflow="/w/image_Krea2.json")
+        lora = {"lora": "1", "lora_name": "krea_a.safetensors", "lora_strength": "1"}
+        state.shots = [{"number": number, "title": label, "prompt": "same prompt", "seed": 7, "file": None,
+                        "workflow_test": {"kind": "t2i", "workflow": f"/w/image_{label}.json", "label": label}}
+                       for number, label in ((1, "Krea2"), (2, "Moss"))]
+        state.shots[0]["lora_test"] = lora
+        clients = {}
+
+        def client(options, workflow_path=None):
+            clients[workflow_path] = options
+            if workflow_path.endswith("Moss.json"):
+                raise RuntimeError("its map is missing")
+            return mock.Mock(name=workflow_path)
+        with tempfile.TemporaryDirectory() as folder, mock.patch.object(paths, "RUNS_DIR", folder), \
+             mock.patch.object(main, "ImageClient", side_effect=client), \
+             mock.patch.object(main, "upload_images", return_value=[]), \
+             mock.patch.object(main, "render_image", return_value=os.path.join(folder, "a.png")) as render:
+            failed = main.render_images(state, mock.Mock())
+        self.assertEqual(clients, {"/w/image_Krea2.json": {}, "/w/image_Moss.json": {}}, "each at its own defaults")
+        self.assertEqual(failed, 1, "a workflow that can't load costs its own image")
+        self.assertEqual(render.call_count, 1)
+        self.assertEqual(state.shots[0]["setup"]["workflow"], "/w/image_Krea2.json", "it knows the workflow that made it")
+        self.assertEqual(state.shots[0]["setup"]["options"], lora, "and the LoRA it compared")
+
     def test_comparison_retry_keeps_its_seed_and_applies_only_first_lora_override(self):
         from pipelines.image import main
         variation = {"lora": "1", "lora_name": "krea_test.safetensors", "lora_strength": "0.5"}
@@ -519,7 +666,9 @@ class PanelTest(unittest.TestCase):
         deadline = time.time() + 90
         while time.time() < deadline:
             webapp.run_queue.pending()
-            if webapp.job.idle and not webapp.run_queue.current:
+            # A job waiting its turn counts too (an automatic retry while ComfyUI is cleared), unless the queue is held.
+            waiting = not webapp.run_queue.held and any(not item.get("later") for item in webapp.run_queue.items)
+            if webapp.job.idle and not webapp.run_queue.current and not waiting:
                 return
             time.sleep(0.05)
         self.fail(f"Timed out. Log: {[l['text'] for l in webapp.job.lines][-15:]}")
@@ -662,6 +811,21 @@ class PanelTest(unittest.TestCase):
         self.assertTrue(self.only_run().finished)
         self.assertEqual(len(self.claude.requests), 1)
 
+    def test_a_continuation_queued_before_its_box_said_more_is_described_from_its_run(self):
+        self.make(review="1")
+        run = self.only_run()
+        for old, end in (("Continue", ""), ("Redo image 1", " · redo image 1")):
+            item = {"id": self.queue_id(), "pipeline": "image", "label": "Old", "detail": old, "resume": run.id, "argv": ["x"], "later": True}
+            with webapp.run_queue.lock:
+                webapp.run_queue.items.append(item)
+            try:
+                shown = next(i for i in webapp.run_queue.snapshot()["items"] if i["id"] == item["id"])
+            finally:
+                with webapp.run_queue.lock:
+                    webapp.run_queue.items.remove(item)
+            self.assertTrue(shown["detail"].startswith(f"{len(run.shots)} image"), shown["detail"])
+            self.assertTrue(shown["detail"].endswith(end) and "Continue" not in shown["detail"], shown["detail"])
+
     def test_pending_continuation_can_edit_prompts_without_duplicate_jobs(self):
         self.make(review="1")
         run = self.only_run()
@@ -743,10 +907,82 @@ class PanelTest(unittest.TestCase):
             self.assertEqual(source.size, (800, 1200), "the original is kept whole")
 
     def test_bad_options_are_refused(self):
-        for fields in ({"count": "0"}, {"count": "101"}, {"count": "many"}, {"aspect": "wide"}, {"megapixels": "99"}, {"aspect": "custom", "size": "big"},
+        for fields in ({"count": "0"}, {"count": "51"}, {"count": "many"}, {"aspect": "wide"}, {"megapixels": "99"}, {"aspect": "custom", "size": "big"},
                        {"prompt_mode": "other"}, {"llm": "nobody"}, {"prompt": " "}):
             self.assertEqual(self.generate(**fields).status_code, 400, fields)
         self.assertEqual(webapp.run_queue.pending(), [])
+
+    def test_an_llm_writes_up_to_30_and_an_exact_prompt_goes_to_50(self):
+        written, error = image_panel.build_options({"count": "30", "llm": "gemini", "prompt_mode": "llm"})
+        self.assertIsNone(error)
+        self.assertIn("--variety", written)
+        self.assertIn("An LLM writes up to 30", image_panel.build_options({"count": "31", "llm": "gemini"})[1])
+        exact, error = image_panel.build_options({"count": "50", "prompt_mode": "direct"})
+        self.assertIsNone(error)
+        self.assertNotIn("--variety", exact, "nothing to vary in your own prompt")
+        self.assertIsNotNone(image_panel.build_options({"count": "51", "prompt_mode": "direct"})[1])
+
+    def test_words_per_prompt_reach_the_writer_unless_at_the_usual(self):
+        flags, error = image_panel.build_options({"count": "5", "llm": "gemini", "words": "300"})
+        self.assertIsNone(error)
+        self.assertEqual(flags[flags.index("--words") + 1], "300")
+        self.assertNotIn("--words", image_panel.build_options({"count": "5", "llm": "gemini", "words": "200"})[0])
+        for words in ("30", "500", "many"):
+            self.assertIn("Words per prompt", image_panel.build_options({"count": "5", "llm": "gemini", "words": words})[1])
+        self.assertNotIn("--words", image_panel.build_options({"count": "5", "prompt_mode": "direct", "words": "300"})[0])
+
+    def test_variety_and_its_chips_reach_the_writer(self):
+        flags, error = image_panel.build_options({"count": "5", "llm": "gemini", "variety": "slight", "chip_pose": "vary",
+                                                  "chip_outfit": "keep", "chip_style": ""})
+        self.assertIsNone(error)
+        start = flags.index("--variety")
+        self.assertEqual(flags[start:start + 6], ["--variety", "slight", "--vary", "pose", "--keep", "outfit"])
+        self.assertEqual(image_panel.build_options({"count": "5", "llm": "gemini", "variety": "huge"})[1], "Unknown variety.")
+        self.assertEqual(image_panel.build_options({"count": "5", "llm": "gemini", "chip_pose": "maybe"})[1], "Unknown choice for pose.")
+        slight = planner._instructions("a red coat", 5, 0, variety="slight", vary=["pose"], keep=["outfit"])
+        self.assertIn("one shoot", slight)
+        self.assertIn("change only the pose, a little", slight)
+        self.assertIn("Keep the outfit the same in every one", slight)
+        self.assertIn("clearly different", planner._instructions("a red coat", 5, 0, variety="wide"))
+        self.assertNotIn("one shoot", planner._instructions("a red coat", 1, 0, variety="slight"), "one image has nothing to vary")
+        # The chips added later: the writer is told the colour palette, though its chip just says Colour.
+        flags = image_panel.build_options({"count": "5", "llm": "gemini", "chip_subject": "keep", "chip_hair": "keep",
+                                           "chip_action": "vary", "chip_colour": "keep"})[0]
+        self.assertEqual(flags[flags.index("--keep") + 1], "subject,hair,colour")
+        kept = planner._instructions("a red coat", 5, 0, vary=["action"], keep=["subject", "hair", "colour"])
+        self.assertIn("Keep the subject, hair and colour palette the same in every one", kept)
+        self.assertIn("Make the action differ from one to the next", kept)
+        self.assertIn(("colour", "colour"), variety.chip_labels())
+
+    def test_the_chips_come_grouped_the_most_used_first_without_time_or_expression(self):
+        groups = variety.chip_groups()
+        self.assertEqual([heading for heading, _ in groups], ["Most used", "More"])
+        self.assertEqual([name for name, _ in groups[0][1]], ["pose", "framing", "outfit", "location", "subject", "hair", "action"])
+        self.assertEqual([name for name, _ in groups[1][1]], ["lighting", "colour", "camera", "style"])
+        self.assertNotIn("time", variety.NAMES)
+        self.assertNotIn("expression", variety.NAMES)
+        # A form saved before still sends them: they're let go, not refused.
+        self.assertEqual(variety.flags_from_form({"chip_time": "keep", "chip_pose": "vary"})[1], None)
+
+    def test_each_style_lora_has_a_strength_range_worth_using(self):
+        from core import lora_hints
+        self.assertEqual(lora_hints.range_of("Krea2\\Krea2_PornMaster_Uncensored_V1_NSFW.safetensors"), "0.5–1")
+        self.assertEqual(lora_hints.range_of("krea2_ultra_real_v2_pro_SFW.safetensors"), "0.4–0.8")
+        self.assertIsNone(lora_hints.range_of("someone_else.safetensors"))
+
+    def test_explicit_content_is_told_to_the_writer_only_in_private_mode(self):
+        form = {"count": "3", "llm": "gemini", "explicit": "on"}
+        with mock.patch.object(image_panel, "private_mode", return_value=True):
+            self.assertIn("--explicit", image_panel.build_options(form)[0])
+            self.assertNotIn("--explicit", image_panel.build_options({**form, "prompt_mode": "direct"})[0], "no writer to tell")
+        with mock.patch.object(image_panel, "private_mode", return_value=False):
+            self.assertNotIn("--explicit", image_panel.build_options(form)[0], "outside Private mode the box does nothing")
+        reply = json.dumps({"title": "Set", "versions": [{"title": "One", "prompt": "One"}]})
+        with mock.patch.object(planner.llm, "_ask", return_value=reply) as ask:
+            planner.write_prompts([], "a red coat", 1, "gemini", explicit=True)
+            planner.write_prompts([], "a red coat", 1, "gemini")
+        self.assertTrue(ask.call_args_list[0].args[1].endswith(explicit.RULE), "the paragraph shown under the box, word for word")
+        self.assertNotIn(explicit.RULE, ask.call_args_list[1].args[1])
 
     # --- Never making anything twice ---
 
@@ -1130,7 +1366,8 @@ class PanelTest(unittest.TestCase):
             self.assertIn("Fibo 2.0 makes images up to 1.1 megapixels", reply.get_json()["error"])
         reply = self.fibo(count="31")
         self.assertEqual(reply.status_code, 400)
-        self.assertIn("at most 30", reply.get_json()["error"])
+        # Every LLM writes at most 30 now (Fibo 2.0's own limit is the same), so the general limit answers first.
+        self.assertIn("writes up to 30", reply.get_json()["error"])
         self.assertEqual(self.claude.requests, [], "refused before anything is paid for")
         self.assertIn("1.1 megapixels", self.client.post("/api/estimate/image", data={"workflow": "Fibo2_test.json", "aspect": "3840x2160"}).get_json()["error"],
                       "and the form hears it before Generate")
@@ -1221,6 +1458,9 @@ class PanelTest(unittest.TestCase):
         self.assertEqual((settings["prompt"], settings["direct"], settings["count"], settings["workflow"], settings["options"]),
                          ("a lighthouse", False, 2, "image_text.json", {"prompt_enhancer": "1"}))
         self.assertEqual(settings["llm"], "prompt_enhancer")
+        # A set that came out short, or lost some since, opens with the number asked for.
+        run.shots = run.shots[:1]
+        self.assertEqual(image_panel.settings_of(run)["count"], 2)
         listed = image_panel.describe_run(run)
         self.assertIn(("prompt", "Prompt enhancer"), listed["_facts"])
         self.assertNotIn(("prompt", "Exact prompt"), listed["_facts"])
@@ -1270,6 +1510,13 @@ class PanelTest(unittest.TestCase):
         self.assertGreater(many["total"], one["total"])
         self.assertFalse(self.client.post("/api/estimate/image", data={"count": "0"}).get_json()["ok"])
         self.assertEqual(self.comfy.prompts, [])
+
+    def test_the_estimate_says_what_writing_the_prompts_takes_in_tokens(self):
+        written = self.client.post("/api/estimate/image", data={"count": "30", "image_count": "0", "llm": "gemini",
+                                                                "prompt_mode": "llm", "words": "300"}).get_json()
+        self.assertEqual((written["tokens"]["each"], written["tokens"]["rounds"]), (425, 2))
+        exact = self.client.post("/api/estimate/image", data={"count": "30", "prompt_mode": "direct"}).get_json()
+        self.assertNotIn("tokens", exact, "nothing is written")
 
     def test_progress_is_read_from_the_log(self):
         self.make(count="2")

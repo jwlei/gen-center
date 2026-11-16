@@ -1131,11 +1131,6 @@ class PlanTest(unittest.TestCase):
         self.assertEqual(call.call_count, 1)
         self.assertEqual(planned[0]["prompt"], "A woman walks into the rain.")
 
-    def test_metadata_failure_falls_back_to_the_title(self):
-        with mock.patch.object(planner, "_ask", side_effect=RuntimeError("no quota")):
-            metadata = planner.write_metadata("My Film", "brief", [{"title": "S"}])
-        self.assertEqual(metadata, {"title": "My Film", "description": "brief", "tags": []})
-
 
 class ClaudeTest(unittest.TestCase):
     """The real SDK, speaking its real streaming protocol to a fake server."""
@@ -1198,12 +1193,6 @@ class ClaudeTest(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "usable plan"):
             self.plan()
         self.assertEqual(len(self.server.requests), planner.PLAN_ATTEMPTS)
-
-    def test_metadata(self):
-        self.server.reply = [json.dumps({"title": "Upload title", "description": "About it.", "tags": ["a", " "]})]
-        metadata = planner.write_metadata("Film", "brief", [{"title": "S"}], "claude")
-        self.assertEqual(metadata, {"title": "Upload title", "description": "About it.", "tags": ["a"]})
-        self.assertEqual(self.server.requests[0]["body"]["output_config"]["format"]["schema"], planner.METADATA_SCHEMA)
 
     def test_credentials_are_noticed(self):
         self.assertTrue(planner.llm_configured("claude"))

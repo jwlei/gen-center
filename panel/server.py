@@ -44,13 +44,17 @@ from flask import (Flask, Response, abort, has_request_context, redirect, render
 from werkzeug.exceptions import NotFound
 from werkzeug.datastructures import MultiDict
 
-from core import batch_stop, eta_keys, model_guide, pills, run_form, workflow_options
+from core import batch_stop, eta_keys, explicit, lora_hints, model_guide, pills, run_form, variety, workflow_options
 from core.run_checkpoint import CheckpointError, catalogue_errors
+from core.lora_tests import ENV as LORA_TEST_ENV
 from core.upscale_eta import UpscaleEta, is_upscale
 from core.paths import LOGS_DIR, PROJECT_ROOT, SAVED_WORKFLOWS_DIR, comfyui_client_id
 from core.quota import quota_summary
 from core.saved_workflows import display_label, list_saved, pipeline_of
-from panel import settings, tailscale, temperatures
+from panel import settings, tailscale
+from panel.failures import (  # noqa: F401, also reached as server.<name> by the panel's tests
+    AIMDO_ERROR, EXIT_ONE_ERROR, FAILURES, MOST_WHY_LINES, REACHED_COMFYUI, REFUSED, SETTINGS_REFUSED,
+    TROUBLE, explain_failure, hit_aimdo, live_crash_reason, restart_reason, why_it_failed)
 from panel.catalogue import CatalogueCache
 from pipelines.image.paths import OUTPUT_DIR as IMAGE_OUTPUT
 from pipelines.image.run_eta import RunEta as ImageEta
@@ -375,7 +379,7 @@ class Job:
         "Upload": "Uploading",
     }
     ACTIONS = [
-        (re.compile(r"Starting the local OpenH3-IR model"), "Starting local model"),
+        (re.compile(r"Starting the local (?:OpenH3-IR )?model"), "Starting local model"),
         (re.compile(r"OpenH3-IR: writing a brief"), "Enhancing prompt"),
         (re.compile(r"prompt enhancer is writing"), "Enhancing prompts"),
         (re.compile(r"is writing \d+ prompts?\b"), "Generating prompts"),
@@ -398,7 +402,7 @@ class Job:
 
     # Lines that start or end something the ETA times on its own (core/eta_keys.py LocalModelTimer).
     EVENTS = [
-        ("model_start", re.compile(r"Starting the local OpenH3-IR model")),
+        ("model_start", re.compile(r"Starting the local (?:OpenH3-IR )?model")),
         ("model_ready", re.compile(r"Local model ready")),
         ("enhance", re.compile(r"OpenH3-IR: writing a brief")),
         ("enhanced", re.compile(r"OpenH3-IR prompt:")),
@@ -859,6 +863,9 @@ class JobQueue:
         # Generate's "Add to top of queue", or Pending's arrow on a stopped run: ahead of everything already waiting.
         asked_top = has_request_context() and ((generating and request.form.get("queue_top")) or request.args.get("top"))
         to_top = not item.get("later") and bool(asked_top)
+        # A stopped run sent on from Pending (?pending=1): only its top-of-queue arrow starts it with nothing running.
+        # Retry in Finished and Make them after a review start it as before.
+        from_pending = has_request_context() and bool(request.args.get("pending"))
         # New creations only: an upscale or continuation of something made before keeps that one's tag.
         if self is run_queue and private_mode() and item.get("pipeline") in ("image", "video") and (not item.get("resume") or item.get("new_run")):
             item["private"] = True
@@ -888,12 +895,25 @@ class JobQueue:
             hold_top = generating and to_top and not self.job.running
             if hold_top:
                 self.held = True
+            idle = self.job.idle and not self.current
+            if from_pending and not to_top and idle and not item.get("later"):
+                # Into the queue, not started: it waits there for Resume.
+                self.held = True
             # On hold and nothing running: this one starts now, and what was waiting stays on hold.
-            if self.held and not hold_top and self.job.idle and not self.current and not item.get("later") and not self.blocked():
-                self.held = bool(self.items)
-                item["waited"] = False
-                self._start(item)
-                return False
+            elif self.held and not hold_top and idle and not item.get("later"):
+                if not self.blocked():
+                    self.held = bool(self.items)
+                    item["waited"] = False
+                    self._start(item)
+                    return False
+                # Something holds up starting for a moment (ComfyUI being cleared after the last run, or restarted, or
+                # the prompt writer busy): first in line, started as soon as it's free (_advance). Before, it joined the
+                # held queue and never started, though Generate had said it would.
+                item["start_next"] = True
+                self.items.insert(0, item)
+                item["waited"] = True
+                self._save()
+                return True
             # Ahead of those waiting to be started, which stay at the end.
             at = len(self.items) if item.get("later") else 0 if to_top else next((i for i, waiting in enumerate(self.items) if waiting.get("later")), len(self.items))
             self.items.insert(at, item)
@@ -926,6 +946,14 @@ class JobQueue:
             self._finish_current()
         if not self.items:
             self.held = False
+        elif self.job.idle and self.held and self.items[0].get("start_next"):
+            # Generated while the queue was held and idle, but something held up starting it: now it goes, on its own.
+            if self.blocked():
+                return
+            item = self.items.pop(0)
+            item.pop("start_next", None)
+            self.held = bool(self.items)
+            self._start(item)
         elif self.job.idle and not self.held:
             # The first that may start: one waiting to be started lets those behind it go first.
             ready = next((i for i, waiting in enumerate(self.items) if not waiting.get("later")), None)
@@ -1163,7 +1191,8 @@ class JobQueue:
     def start(self, item_id, top=False):
         """
         Puts a pending job in the queue, at its end (the top: ahead of what waits there): it starts when the queue gets
-        to it, and waits while the queue is on hold. Starting it right away is run_now's.
+        to it, and waits while the queue is on hold. With nothing running, only the top starts it, now, and what else
+        is waiting keeps its hold; put at the end, it waits for Resume, as the queue goes on hold.
         """
         with self.lock:
             item = next((item for item in self.items if item["id"] == item_id), None)
@@ -1174,6 +1203,16 @@ class JobQueue:
             self._approve_prompt_warning(item)
             item.pop("later", None)
             self.items.remove(item)
+            idle = self.job.idle and not self.current
+            if top and idle and self.held:
+                if not self.blocked():
+                    self.held = any(not waiting.get("later") for waiting in self.items)
+                    self._start(item)
+                    self._save()
+                    return True
+                item["start_next"] = True  # Started as soon as what holds it up is done (_advance)
+            elif not top and idle:
+                self.held = True
             # Ahead of those still pending, which stay at the end.
             at = 0 if top else next((i for i, waiting in enumerate(self.items) if waiting.get("later")), len(self.items))
             self.items.insert(at, item)
@@ -1273,6 +1312,9 @@ class JobQueue:
     def snapshot(self):
         with self.lock:
             self._advance()
+            for item in ([self.current] if self.current else []) + list(self.items):
+                described_continuation(item)
+                named_comparison(item)
             argv_flag = lambda item, name: (item.get("argv") or [])[(item.get("argv") or []).index(name) + 1] \
                 if name in (item.get("argv") or [])[:-1] else None
             public = lambda item: {**{key: item.get(key) for key in ("id", "label", "detail", "estimate", "videos", "pipeline", "later", "resume", "prompt_warnings")},
@@ -1289,6 +1331,60 @@ class JobQueue:
                     "current": public(self.current) if self.current else None,
                     "results": [shown(result) for result in self.results],
                     "held": self.held}
+
+
+def named_comparison(item):
+    """An image LoRA comparison queued while its box said "exact prompt", said now as a new one is: "LoRA comparison"."""
+    if item.get("pipeline") == "image" and LORA_TEST_ENV in (item.get("env") or {}) and " · exact prompt" in str(item.get("detail") or ""):
+        item["detail"] = item["detail"].replace(" · exact prompt", " · LoRA comparison", 1)
+
+
+OLD_CONTINUATION = re.compile(r"^(Continue|Redo image (\d+)|Redo from shot (\d+))$")
+
+
+def described_continuation(item):
+    """
+    A saved run queued to continue before its queue box said what it makes ("Continue", "Redo image 3"), said now as
+    a new one is, from the run: once, then kept with the job.
+    """
+    old = OLD_CONTINUATION.match(str(item.get("detail") or ""))
+    describe = getattr(PIPELINES.get(item.get("pipeline")), "continued_detail", None)
+    if not old or not item.get("resume") or not describe:
+        return
+    try:
+        state = PIPELINES[item["pipeline"]].load_run(item["resume"])
+    except Exception:  # The queue is drawn every poll: one unreadable run must not stop it
+        state = None
+    if state:
+        redo = old.group(2) or old.group(3)
+        item["detail"] = describe(state, int(redo) if redo else None)
+
+
+def item_upscale(item):
+    """
+    The upscale a queued job renders with, as Output's pill says it ("SeedVR2, denoise 0.1", "Latent, Fast, 1.5 MP"),
+    or None: an image set's from its --option flags, a film's from COMFYUI_OPTIONS, a continuation's from its saved run.
+    An upscale job (Upscale in the viewer) is one already, and says so itself.
+    """
+    pipeline, argv, env = item.get("pipeline"), item.get("argv") or [], item.get("env") or {}
+    if pipeline not in ("image", "video") or upscale_queue_settings(item):
+        return None
+    if pipeline == "image":
+        options = dict(argv[i + 1].split("=", 1) for i, value in enumerate(argv[:-1]) if value == "--option" and "=" in argv[i + 1])
+    else:
+        try:
+            options = json.loads(env.get("COMFYUI_OPTIONS") or "{}")
+        except ValueError:
+            options = {}
+    if not options and item.get("resume"):
+        try:
+            state = PIPELINES[pipeline].load_run(item["resume"])
+        except Exception:  # The queue is drawn every poll: one unreadable run must not stop it
+            state = None
+        options = getattr(state, "options", None) or {}
+    if not isinstance(options, dict):
+        return None
+    return pills.image_upscale_description(options) if pipeline == "image" else pills.latent_description(options)
 
 
 def run_facts(item):
@@ -1309,9 +1405,11 @@ def run_facts(item):
         size = f"{'Source aspect' if aspect == 'image' else aspect}" + (f" at {megapixels} MP" if megapixels != "image" else " · source size")
     if not size and item.get("pipeline", "shorts") == "shorts":
         size = (os.getenv("AVATAR_SIZE") or "736x1280").lower()
+    upscale = item_upscale(item)
     return {"workflow": display_label(os.path.basename(workflow)) if workflow else "Built-in",
             "resolution": size or ("As the run was set up" if "--resume" in argv else "The workflow's own"),
             **({"count": int(count)} if count and count.isdigit() and int(count) > 0 else {}),
+            **({"upscale": upscale} if upscale else {}),
             **({"prompt": item["prompt"]} if item.get("prompt") else {})}
 
 
@@ -1916,46 +2014,6 @@ def _read_gpu():
     return _gpu_cache["value"]
 
 
-def monitor_gpu_heat():
-    from panel.gpu_guard import GPUHeatGuard
-
-    guard = GPUHeatGuard(job.log, settings.load)
-    while not job.closed:
-        reading = gpu_stats()
-        gpu = reading["temp"] if reading else None
-        guard.check(gpu)
-        # Settings' temperature graph: logged every reading, kept a minute at a time.
-        try:
-            temperature_log().add(gpu=gpu, cpu=temperatures.cpu_temperature())
-        except Exception as e:  # The graph must never stop the heat guard
-            app.logger.warning("Could not log temperatures: %s", e)
-        time.sleep(3)
-
-
-_temperature_log = None
-
-
-def temperature_log():
-    global _temperature_log
-    if _temperature_log is None:
-        _temperature_log = temperatures.TemperatureLog()
-    return _temperature_log
-
-
-@app.route("/api/temperatures")
-@password_required
-def api_temperatures():
-    try:
-        hours = int(request.args.get("hours", 6))
-    except ValueError:
-        hours = 0
-    if hours not in temperatures.RANGES_HOURS:
-        return {"ok": False, "error": f"hours is one of {', '.join(map(str, temperatures.RANGES_HOURS))}."}, 400
-    guard = settings.load()
-    return {"ok": True, **temperature_log().query(hours),
-            "guard": {"on": guard["gpu_guard"], "restart_above": guard["gpu_restart_above"], "rearm_at": guard["gpu_rearm_at"]}}
-
-
 def comfyui_launcher():
     path = os.getenv("COMFYUI_LAUNCHER")
     return path if path and os.path.exists(path) else None
@@ -2407,49 +2465,6 @@ FIRST_ONLY = {"outcome": "first one made",
 NOT_RENDERED = {"outcome": "not rendered",
                 "why": "You asked to read the prompts first (Let me read the prompts before rendering), so it stopped once "
                        "they were written. Open Prompts to change them, then render it."}
-# The lines that say what went wrong, as the pipelines print them.
-TROUBLE = re.compile(r"❌|⚠️|Error|Exception|Traceback|failed|refused|can't|could not", re.I)
-MOST_WHY_LINES = 4
-# ComfyUI's memory compiler (comfy-aimdo) failing: a fresh ComfyUI clears it, so it is restarted and tried once more.
-AIMDO_ERROR = re.compile(r"aimdo memory compile error", re.I)
-SETTINGS_REFUSED = re.compile(r"Can't use the LoRA|\bis one of\b|Value not in list|isn't installed|"
-                              r"prompt_outputs_failed_validation|Prompt outputs failed validation|ComfyUI rejected the workflow|"
-                              r"options need it listed again|the workflow can't run", re.I)
-EXIT_ONE_ERROR = re.compile(r"\b(?:exit(?:ed)? (?:with )?(?:(?:exit )?code |status )?1|returned non-zero exit status 1)\b", re.I)
-
-
-def hit_aimdo(job):
-    """Whether the job that just ended stopped on ComfyUI's aimdo memory compile error."""
-    return any(AIMDO_ERROR.search(line["text"]) for line in job.lines if line["n"] > getattr(job, "first_line", 0))
-
-
-def live_crash_reason(job):
-    if hit_aimdo(job):
-        return "ComfyUI's aimdo memory compile error"
-    if any(EXIT_ONE_ERROR.search(line["text"]) for line in job.lines if line["n"] > getattr(job, "first_line", 0)):
-        return "exit code 1"
-    return None
-
-
-def restart_reason(job, code):
-    """
-    Why ComfyUI is restarted, and the run tried once more, after this failure, said as it reads in the log; None for a
-    failure it isn't restarted for. ComfyUI's aimdo error needs a fresh ComfyUI. Exit 1 is the run's own failure code,
-    and one of the ways a ComfyUI that has died or hung shows.
-    """
-    if hit_aimdo(job):
-        return "ComfyUI's aimdo memory compile error"
-    # Refused for what it asked for (a file ComfyUI doesn't have, an option out of its list): a fresh ComfyUI refuses it too.
-    if any(SETTINGS_REFUSED.search(line["text"]) for line in job.lines if line["n"] > getattr(job, "first_line", 0)):
-        return None
-    reason = live_crash_reason(job)
-    if reason:
-        return reason
-    if code == 1:
-        return "exit code 1"
-    return None
-
-
 def restart_comfyui_in_background(force=False):
     """
     Force-restarts ComfyUI on a thread. The run queue waits while it does. Returns False when it can't: already
@@ -2468,61 +2483,6 @@ def restart_comfyui_in_background(force=False):
             _comfy_restarting = False
     threading.Thread(target=restart, daemon=True).start()
     return True
-
-
-# The failures that come up, in plain words with what to do: the first whose pattern is in the run's log.
-FAILURES = (
-    (r"Masked AV requires a current ComfyUI build",
-     "H3 Infinite continuation could not confirm ComfyUI's MiniMax H3 masks. Update ComfyUI and restart it; another "
-     "H3 node pack wrapping MiniMax H3 can also hide them from the suite's check. Then continue: clip 1 is kept."),
-    (r"out of memory|OutOfMemoryError|CUDA error: out of memory|not enough (GPU )?memory|allocation on device",
-     "Out of GPU memory. Try a smaller size (1 MP), fewer references, or turn off SeedVR2 or the 2nd pass under Workflow options."),
-    (r"Needs the node [^,]+, which isn't installed|missing_node_type|node type .* not found|does not exist in the node",
-     "A node this workflow needs isn't installed in ComfyUI. Install it with ComfyUI Manager, or turn off the option that uses it."),
-    (r"Can't use the LoRA",
-     "A LoRA this run saved isn't one ComfyUI has any more (renamed or moved): its images failed, the rest were made. "
-     "To test it, start a new comparison and pick it from the list."),
-    (r"is not installed|Value not in list: (ckpt|unet|vae|lora|clip|model)_name|No such file or directory: .*models",
-     "A model file this workflow needs isn't in ComfyUI's models folder. Download it there, then continue."),
-    (r"ComfyUI isn't running|Connection refused|Max retries exceeded|Failed to establish a new connection|ConnectionError",
-     "ComfyUI wasn't running, or stopped answering. Start it (Generate starts it when COMFYUI_LAUNCHER is set), then continue."),
-    (r"ComfyUI rejected the workflow|prompt_outputs_failed_validation|Prompt outputs failed validation",
-     "ComfyUI refused the workflow as sent: something it expects is missing or out of range. The lines below say what."),
-    (r"\b429\b|RESOURCE_EXHAUSTED|exceeded your current quota|rate limit",
-     "The LLM's quota is used up for now (Gemini's free tier allows 20 a day per model). Choose another available provider, or try again later."),
-    (r"\b503\b|UNAVAILABLE|overloaded|high demand",
-     "The LLM was too busy to answer. Continue to try again: what was done is kept."),
-    (r"has no credentials|invalid api.?key|Unauthorized|\b401\b",
-     "The LLM has no working API key. Set it in .env (see .env.example)."),
-    (r"rejected on all \d+ tries|failed on all \d+ tries",
-     "Every try was rejected by the check (a broken frame, or lip-sync that didn't match). Try another seed, or a shorter line."),
-    (r"No space left on device|disk is full",
-     "The disk is full. Delete old output, or clear finished runs, then continue."),
-    (r"timed out|Timeout|took longer than",
-     "It took longer than allowed (COMFYUI_TIMEOUT in .env). A bigger size or more steps take longer: continue, or raise the limit."),
-)
-
-
-def explain_failure(job, code):
-    """
-    (In plain words, or None) and the run's own lines that say what went wrong. The plain words are for the failures
-    that come up again and again; anything else shows only its lines.
-    """
-    said = why_it_failed(job, code)
-    # The run's last lines that say what went wrong: a warning it got past earlier isn't why it stopped.
-    plain = next((say for pattern, say in FAILURES if re.search(pattern, said, re.I)), None)
-    return plain, said
-
-
-def why_it_failed(job, code):
-    """The run's own last lines that say what went wrong, or that it didn't say."""
-    lines = [line["text"].strip() for line in job.lines if line["n"] > getattr(job, "first_line", 0)]
-    # A Generate turned down meanwhile is about another job, not this one.
-    said = [line for line in lines if TROUBLE.search(line) and not line.startswith(("=====", REFUSED))]
-    if said:
-        return "\n".join(dict.fromkeys(said[-MOST_WHY_LINES:]))
-    last = lines[-1] if lines else "nothing"
-    return f"It ended (exit {code}) without saying why. Its last line: {last}"
 
 
 def note_outcome(job, item, outcome):
@@ -2725,9 +2685,14 @@ def index():
         tailscale_problem=tailscale_problem,
         settings=settings.load(),
         local_models=settings.local_models(),
+        lora_ranges=lora_hints.RANGES,
         themes=settings.THEMES,
         can_open_folders=can_open_folders(),
         nudges=nudges(),
+        # What a set's images or a film's clips may vary or keep: the chips under Variety.
+        variety_chips=variety.chip_labels(), variety_chip_groups=variety.chip_groups(), variety_hints=variety.chip_hints(), variety_levels=variety.LEVELS,
+        # Private mode's Explicit content: what the writer is told, shown under the box word for word.
+        explicit_rule=explicit.RULE,
         # The page you asked for by address, or else the one it last showed.
         initial_pipeline=request.path.strip("/"),
         **context,
@@ -3674,23 +3639,6 @@ def restart_comfyui_now():
         job.log(f"⚠️ {e}")
 
 
-@app.route("/restart/afterburner", methods=["POST"])
-@password_required
-def restart_afterburner():
-    """Settings' GPU heat guard: MSI Afterburner closed and started again now, with the chosen profile, whatever the heat."""
-    from panel import gpu_guard
-
-    profile = settings.load()["gpu_profile"]
-    try:
-        gpu_guard.restart_afterburner(profile)
-    except gpu_guard.Busy as e:
-        return {"ok": False, "error": str(e)}, 409
-    except (OSError, RuntimeError, gpu_guard.psutil.Error) as e:
-        job.log(f"Could not restart MSI Afterburner: {e}")
-        return {"ok": False, "error": f"Could not restart MSI Afterburner: {e}"}, 500
-    job.log(f"MSI Afterburner restarted from Settings with profile {profile}.")
-    return {"ok": True, "profile": profile}
-
 
 @app.route("/restart/comfyui", methods=["POST"])
 @password_required
@@ -3890,7 +3838,7 @@ def _only_new_log_lines(payload, log_after):
     disconnected. That line is sent again because its ETA can be added just after it is logged. Without it (a new job
     started a new log, or the page has none yet), the whole log is sent, and log_delta is False.
     """
-    lines = payload["lines"]
+    lines = payload.setdefault("lines", [])
     payload["log_first"] = lines[0]["n"] if lines else None
     payload["log_delta"] = log_after is not None and any(line["n"] == log_after for line in lines)
     if payload["log_delta"]:
@@ -3988,6 +3936,12 @@ def page_error():
     """A part of the page that threw while updating, from a phone's browser: into the panel's own log, to be found."""
     error = str((request.get_json(silent=True) or {}).get("error") or "")[:1500]
     logging.getLogger("werkzeug").warning("Page error from %s: %s", request.remote_addr, error)
+    # Kept on disk too: the panel runs without a console, so the log above is read by no one.
+    try:
+        with open(os.path.join(LOGS_DIR, "page_errors.log"), "a", encoding="utf-8") as log:
+            log.write(f"{datetime.now():%Y-%m-%d %H:%M:%S} {request.remote_addr} {error}\n")
+    except OSError:
+        pass
     return {"ok": True}
 
 
@@ -4164,9 +4118,6 @@ def never_cache_status(response):
     return response
 
 
-REFUSED = "🚫"
-
-
 @app.after_request
 def log_refused_generate(response):
     """A Generate the panel turned down says why in the log, where it can still be read once the page has moved on."""
@@ -4230,8 +4181,6 @@ def main():
 
     global comfy_monitor
     comfy_monitor = ComfyMonitor()
-    if os.name == "nt" and (not args.debug or os.environ.get("WERKZEUG_RUN_MAIN") == "true"):
-        threading.Thread(target=monitor_gpu_heat, daemon=True).start()
 
     print(f"🌐 This PC:    http://127.0.0.1:{args.port}")
     if args.host == "0.0.0.0":

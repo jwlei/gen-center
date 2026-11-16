@@ -192,7 +192,9 @@ function applyStatus(data, askedAt, editAtRequest, upscaleAtRequest) {
   busy = uploadRunning || uploadsQueued > 0 || (running && (data.progress.stage || [])[2] === 'Upload');
   safely(() => renderUpload(data.upload));
   safely(() => renderRunSections(() => {
-    safely(() => renderQueue($('runQueue'), { ...queue, items: ready, running, pipeline: data.pipeline, stopAfter: data.stop_after }, queue.held ? 0 : queueAhead, nextUp, !running && !queue.current));
+    // On hold: how much is waiting, as it has no time to end by until it's resumed.
+    const heldFor = ready.reduce((sum, item) => sum + (item.estimate || 0), 0);
+    safely(() => renderQueue($('runQueue'), { ...queue, items: ready, running, pipeline: data.pipeline, stopAfter: data.stop_after }, queue.held ? heldFor : queueAhead, nextUp, !running && !queue.current));
     safely(() => renderStopped(data.stopped_runs, parked, queue.results, queue.held && !running && !queue.current, data.checkpoint_errors || []));
   }));
   safely(() => renderFinished(data.finished_results || queue.results, upq.results, data.made_now || []));

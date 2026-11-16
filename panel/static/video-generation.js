@@ -307,6 +307,8 @@ function syncVideoForm() {
   $('audioMode').disabled = infinite;
   syncH3Controls('video', !multishot && !infinite && !!workflowH3[$('videoWorkflow').value]);
   $('videoLlmBox').classList.toggle('hidden', direct);
+  $('videoWriterExtras').classList.toggle('hidden', direct);  // Words, Variety and Explicit, under the prompts: for the LLM
+  syncWords('video');
   $('videoLocalModelBox').hidden = direct || $('llm').value !== 'local';
   $('videoLocalModel').disabled = $('videoLocalModelBox').hidden;
   $('videoPromptHint').textContent = direct ? (multishot ? 'Every shot gets it as you wrote it.' : 'Every clip gets it as you wrote it, each on its own seed.') : 'A sentence or two is enough.';
@@ -339,3 +341,4 @@ $('addImage').addEventListener('click', () => {
   imagesShown++;
   syncImageInput();
 });
+$('videoWords').addEventListener('input', () => syncWords('video'));

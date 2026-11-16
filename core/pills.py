@@ -8,7 +8,7 @@ takes the differing ones when it is made (fixed_tag), in place of a bare _2, _3.
 """
 import re
 
-from core import lora_tests, workflow_options
+from core import llm_tests, lora_tests, workflow_options, workflow_tests
 
 # How a film's clips connect, in short: the long names are Generate's "How clips connect".
 CONNECTIONS = {"chain": "Continuous take", "image": "Separate moments", "director": "H3 Motion Director",
@@ -55,10 +55,12 @@ def run_facts(state, pipeline, workflow_name):
                      state.llm, state.direct, workflow_options.sampling_used(state.workflow, state.options, "video"),
                      workflow_options.cfg_used(state.workflow, state.options, "video"))
     writer = workflow_options.prompt_writer_used(state.workflow, state.options, state.form)
-    return facts(workflow_name, image_upscale_description(state.options),
+    # A workflow comparison's workflow pill says what it compares ("All T2I workflows").
+    return facts(workflow_tests.pill(state.shots) or workflow_name, image_upscale_description(state.options),
                  loras=image_loras(state), llm=state.llm, direct=state.direct,
                  sampling=workflow_options.sampling_used(state.workflow, state.options, "image"),
-                 cfg=workflow_options.cfg_used(state.workflow, state.options, "image"), prompt_writer=writer[1] if writer else None)
+                 cfg=workflow_options.cfg_used(state.workflow, state.options, "image"),
+                 prompt_writer=llm_tests.pill(state.shots) or (writer[1] if writer else None))
 
 
 def run_stamp(run_id):
@@ -134,6 +136,13 @@ def with_pills(items):
     for item in items:
         item.pop("_sibling", None)
         item.pop("_facts", None)
+        # What a comparison compares says so, in the theme's colour: the workflow pill of a LoRA or workflow
+        # comparison, the prompt pill ("All LLMs") of an LLM one. True: the workflow's.
+        marked = item.pop("_comparison", None)
+        marked = ("workflow",) if marked is True else marked or ()
+        for pill in item["pills"]:
+            if pill["kind"] in marked:
+                pill["comparison"] = True
     return items
 
 

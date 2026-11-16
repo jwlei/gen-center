@@ -8,6 +8,11 @@ function visibleLoraOptions(options) {
   const privateName = name => /nsfw|uncensor/i.test(String(name));
   const blocked = new Set();
   const visible = options.map(option => {
+    // A model to pick: the workflow's own stays; with nothing else left to pick, there's no picker.
+    if (option.model) {
+      const choices = option.choices.filter(value => value === option.default || !privateName(value));
+      return choices.length > 1 ? { ...option, choices } : null;
+    }
     if (option.kind === 'strength' && option.id.startsWith('lora_')
       && (option.private_only || privateName(option.id + ' ' + option.label))) {
       return { ...option, private_only: true, default: '0' };
@@ -19,7 +24,7 @@ function visibleLoraOptions(options) {
     return { ...option, choices, default: option.kind === 'lora_stack' ? option.default : choices.includes(option.default) ? option.default : choices[0] || '',
       ...(!choices.length ? { problem: 'These LoRAs require Private mode.' } : {}) };
   });
-  return visible.map(option => blocked.has(option.id)
+  return visible.filter(Boolean).map(option => blocked.has(option.id)
     ? { ...option, default: '0', problem: 'These LoRAs require Private mode.' } : option);
 }
 function loraStackRows(box) {
@@ -44,13 +49,34 @@ function renderLoraStack(box) {
       return `<div class="lora-line lora-extra" data-lora-index="${index}"><label class="check"><input type="checkbox" data-lora-on${row.on && available ? ' checked' : ''}${available ? '' : ' disabled'} aria-label="Enable additional LoRA"></label>`
         + `<select data-lora-name aria-label="Additional LoRA">${available ? '' : '<option value="">Unavailable in this mode</option>'}${choiceOptions({...option, default: row.name})}</select>`
         + `<input type="number" class="option-strength" data-lora-strength min="${option.min}" max="${option.max}" step="${option.step}" value="${esc(row.strength)}" aria-label="Additional LoRA strength">`
+        + '<span class="lora-range"></span>'
         + `<button type="button" class="icon-btn" data-remove-lora="${index}" aria-label="Remove additional LoRA">${ICONS.trash}</button></div>`;
     }).join('');
     if (rows.some(row => !option.choices.includes(row.name))) {
       stack.querySelector('[data-lora-rows]').insertAdjacentHTML('beforeend', '<div class="hint">A saved LoRA is unavailable in this mode. Choose another or remove it.</div>');
     }
+    syncLoraRanges(box);
   } catch (error) { showFormError(error.message); }
 }
+// The strength range worth using for a LoRA (core/lora_hints.py), by its file's name: '' for one it doesn't know.
+function loraRange(name) {
+  const key = String(name || '').replace(/\\/g, '/').split('/').pop().replace(/\.safetensors$/i, '').toLowerCase();
+  return (PANEL_CONFIG.lora_ranges || {})[key] || '';
+}
+// Beside each LoRA line's strength, the range worth using for the LoRA chosen on it.
+function syncLoraRanges(root) {
+  for (const line of root && root.querySelectorAll ? root.querySelectorAll('.lora-line') : []) {
+    const select = line.querySelector('select'), out = line.querySelector('.lora-range');
+    if (!out) continue;
+    const range = select ? loraRange(select.value) : '';
+    out.textContent = range;
+    out.title = range ? `Strength worth using: ${range}` : '';
+  }
+}
+document.addEventListener('change', e => {
+  const line = e.target && e.target.closest && e.target.tagName === 'SELECT' && e.target.closest('.lora-line');
+  if (line) syncLoraRanges(line.parentNode);
+});
 function rememberLoraStack(box) {
   const stack = box.querySelector('[data-lora-stack]');
   if (!stack) return;
@@ -59,6 +85,10 @@ function rememberLoraStack(box) {
     strength: row.querySelector('[data-lora-strength]').value,
   })));
 }
+// The image form's comparisons: the LoRA one's last count (syncLoraTests), and the switches of each.
+let imageLoraTest = { on: false, count: 0 };
+const IMAGE_LORA_TESTS = ['imageLoraStrengthTest', 'imageLoraStyleTest'], IMAGE_WORKFLOW_TESTS = ['imageWorkflowTestT2i', 'imageWorkflowTestEdit'];
+const IMAGE_TESTS = [...IMAGE_LORA_TESTS, ...IMAGE_WORKFLOW_TESTS, 'imageLlmTest'];
 function syncLoraTests(boxId, options) {
   const side = boxId === 'imageOptionsBox' ? 'image' : boxId === 'videoOptionsBox' ? 'video' : null;
   if (!side) return;
@@ -66,24 +96,105 @@ function syncLoraTests(boxId, options) {
   const names = options.find(option => option.id === 'lora_name');
   const limit = options.find(option => option.id === 'lora_strength');
   const available = !!names?.choices.length;
-  strength.disabled = style.disabled = !available || (side === 'video' && !!queueEdit);
-  const enabled = available && (strength.checked || style.checked);
+  // With a workflow comparison, a LoRA comparison runs on each workflow, with its own style LoRAs: the form's
+  // workflow having none doesn't stop it.
+  const comparing = side === 'image' && !!imageWorkflowTest();
+  strength.disabled = style.disabled = !(available || comparing) || (side === 'video' && !!queueEdit);
+  const enabled = (available || comparing) && (strength.checked || style.checked);
   const step = $(side + 'LoraTestStep');
   step.min = step.step = String(limit?.step || 0.05);
   step.max = String(Math.min(2, limit?.max || 2));
   step.disabled = !available || !strength.checked;
   for (const button of box.querySelectorAll('[data-lora-step]')) button.disabled = step.disabled;
   $(side === 'image' ? 'imageReview' : 'review').disabled = enabled;
-  if (side === 'image') $('imageCount').disabled = enabled;
   const increment = Number(step.value), units = increment / Number(step.step);
   const valid = Number.isFinite(increment) && increment > 0 && increment <= Number(step.max)
     && Math.abs(units - Math.round(units)) < 1e-8;
   const count = (style.checked ? names?.choices.length || 0 : 1) * (strength.checked && valid ? Math.floor(Number(step.max) / increment + 1e-9) : 1);
-  box.querySelector('[data-lora-test-hint]').textContent = !available ? 'No style LoRAs are available for this workflow in this mode.'
+  if (side === 'image') {
+    imageLoraTest = { on: enabled, count };
+    syncImageAmount();
+  }
+  box.querySelector('[data-lora-test-hint]').textContent = comparing
+    ? (enabled ? 'On each compared workflow, with its own style LoRAs and strengths; one with none runs once.' : 'Add a LoRA comparison to each compared workflow.')
+    : !available ? 'No style LoRAs are available for this workflow in this mode.'
     : enabled && strength.checked && !valid ? `Choose a strength increment in multiples of ${step.step}, up to ${step.max}.`
     : enabled ? `${count} ${side === 'image' ? 'images in one set' : 'separate complete videos'}. Same seed and current prompt as written; added LoRAs stay fixed. Strength tests start at the increment and stop at 2.0.`
     : 'Compare the first style LoRA using the same seed and prompt. Added LoRAs stay fixed.';
 }
+// The image form's comparisons: the LoRA one (syncLoraTests) and the workflow ones, all text to image or all edit.
+// A workflow comparison: each usable workflow of its kind, as the server picks them (core/workflow_tests.py).
+function imageWorkflowTest() {
+  const kind = $('imageWorkflowTestT2i').checked ? 't2i' : $('imageWorkflowTestEdit').checked ? 'edit' : null;
+  if (!kind) return null;
+  const images = chosenSources();
+  const workflows = imageWorkflowList.filter(t => kind === 't2i' ? t.max_images === 0
+    : 1 <= t.min_images && t.min_images <= images && images <= t.max_images);
+  return { kind, images, workflows: workflows.length, count: workflows.reduce((sum, t) => sum + loraImagesOn(t), 0) };
+}
+// How many images a LoRA comparison makes on one compared workflow, with its own style LoRAs, as the server counts
+// them (core/workflow_tests.py): 1 when none is asked for, or it has none to compare at that increment.
+function loraImagesOn(takes) {
+  const style = $('imageLoraStyleTest').checked, strength = $('imageLoraStrengthTest').checked;
+  if (!style && !strength) return 1;
+  const options = visibleLoraOptions((takes.options || []).filter(option => !option.role));
+  const names = options.find(option => option.id === 'lora_name'), limit = options.find(option => option.id === 'lora_strength');
+  if (!names || names.problem || !names.choices.length || !limit) return 1;
+  let strengths = 1;
+  if (strength) {
+    const step = Number($('imageLoraTestStep').value), top = Math.min(2, limit.max || 2), units = step / (limit.step || 0.05);
+    if (!(step > 0 && step <= top && Math.abs(units - Math.round(units)) < 1e-8)) return 1;
+    strengths = Math.floor(top / step + 1e-9);
+  }
+  return (style ? names.choices.length : 1) * strengths;
+}
+// An LLM comparison: Gemini when it has a key, and each local model, those that can't see an image left out when there
+// are images, as the server picks them (panel/image.py compared_llms).
+function imageLlmTest() {
+  if (!$('imageLlmTest').checked) return null;
+  const images = chosenSources();
+  const gemini = [...$('imageLlm').options].some(option => option.value === 'gemini' && !option.disabled);
+  return { images, count: (gemini ? 1 : 0) + (LOCAL_MODELS || []).filter(model => !images || model.vision).length };
+}
+// A comparison makes its own number of images: Amount shows it, locked, and gets your own back when none is on (the
+// change listener below). It can't wait to read the prompts first either.
+function syncImageAmount() {
+  const llms = imageLlmTest(), test = imageWorkflowTest();
+  const on = !!llms || !!test || imageLoraTest.on, count = llms ? llms.count : test ? test.count : imageLoraTest.count;
+  const amount = $('imageCount');
+  if (on) {
+    if (!('own' in amount.dataset)) amount.dataset.own = amount.disabled ? '1' : amount.value;
+    if (count) amount.value = count;
+  } else delete amount.dataset.own;
+  amount.disabled = on;
+  $('imageReview').disabled = on;
+  $('imageLlmTestHint').textContent = !llms
+    ? 'Your prompt written by Gemini and each local model, one image each, on one seed and this workflow.'
+    : !llms.count ? 'No prompt model can write it: add a Gemini key or a local model.'
+    : `${llms.count} images in one set: each prompt model writes one prompt from yours${llms.images ? ' (those that can see the image)' : ''}, on one seed and this workflow.`;
+  const what = test && (test.kind === 't2i' ? 'text-to-image' : 'edit');
+  $('imageWorkflowTestHint').textContent = !test
+    ? 'Your prompt as written, on one seed, through every text-to-image or every edit workflow at its own default settings.'
+    : test.kind === 'edit' && !test.images ? 'Choose the image to edit first.'
+    : test.kind === 't2i' && test.images ? 'Text to image takes no image: remove it.'
+    : !test.count ? `No ${what} workflow can run.`
+    : `${test.count} images in one set: each of the ${test.workflows} ${what} workflows at its own default settings${test.count > test.workflows ? ', with the LoRA comparison on each that has a style LoRA' : ''}, the same seed and your prompt as written.`;
+}
+// One workflow comparison at a time, a LoRA comparison with it if you like; an LLM comparison writes its prompts, so
+// it goes with neither (they use yours as written). All of them off, Amount has your own number back (before the
+// form's change handler syncs).
+$('imageHow').addEventListener('change', e => {
+  const id = e.target && e.target.id;
+  if (e.target.checked && IMAGE_WORKFLOW_TESTS.includes(id)) {
+    for (const other of [...IMAGE_WORKFLOW_TESTS, 'imageLlmTest']) if (other !== id) $(other).checked = false;
+  } else if (e.target.checked && IMAGE_LORA_TESTS.includes(id)) {
+    $('imageLlmTest').checked = false;
+  } else if (e.target.checked && id === 'imageLlmTest') {
+    for (const other of [...IMAGE_WORKFLOW_TESTS, ...IMAGE_LORA_TESTS]) $(other).checked = false;
+  }
+  const amount = $('imageCount');
+  if (!IMAGE_TESTS.some(other => $(other).checked) && 'own' in amount.dataset) amount.value = amount.dataset.own;
+});
 // What a switch has under it shows while it's on.
 function syncBelow(box) {
   for (const under of box.querySelectorAll ? box.querySelectorAll('[data-below]') : []) {
@@ -132,7 +243,8 @@ function imageOptionHtml(option, all) {
     const under = all.filter(other => other.parent === option.id).map(child => child.kind === 'choice'
       ? `<select name="opt_${esc(child.id)}" aria-label="${esc(child.label)}" title="${esc(child.label)}" class="option-choice"${locked}>${choiceOptions(child)}</select>`
       : `<input type="number" class="option-strength" name="opt_${esc(child.id)}" aria-label="${esc(child.label)}" title="${esc(child.label)}" min="${child.min}" max="${child.max}" step="${child.step}" value="${esc(child.default)}"${locked}>`).join('');
-    return `<div class="lora-line"><label class="check"><input type="hidden" name="${esc(name)}" value="0"><input type="checkbox" name="${esc(name)}" aria-label="${esc(option.label)}" value="1"${option.default === '1' ? ' checked' : ''}${locked}></label>${under}</div>${problem}`;
+    // Its range worth using beside the strength, and the room the extra LoRAs' trash takes, so the strengths line up.
+    return `<div class="lora-line"><label class="check"><input type="hidden" name="${esc(name)}" value="0"><input type="checkbox" name="${esc(name)}" aria-label="${esc(option.label)}" value="1"${option.default === '1' ? ' checked' : ''}${locked}></label>${under}<span class="lora-range"></span><span class="lora-gap" aria-hidden="true"></span></div>`;
   }
   if (option.kind === 'switch') {
     // What goes with it, such as a LoRA's file and strength with Enable LoRA, beside it.
@@ -233,7 +345,9 @@ function syncOptions(section, box, options, workflow = '') {
   const sampling = SAMPLING_OPTIONS.map(id => options.find(option => option.id === id)).filter(Boolean);
   const lora = options.filter(option => option.id === 'lora' || option.parent === 'lora' || option.kind === 'lora_stack');
   const speed = options.filter(option => option.speed);
-  const rest = options.filter(option => !sampling.includes(option) && !lora.includes(option) && !speed.includes(option) && option !== negative);
+  // Last of all: which model runs (another of its kind installed in ComfyUI, such as a fine-tune).
+  const models = options.filter(option => option.model);
+  const rest = options.filter(option => !sampling.includes(option) && !lora.includes(option) && !speed.includes(option) && !models.includes(option) && option !== negative);
   // Two kinds of LoRA, each under a word on what it does: a turbo one (lightning, n-step) makes it in fewer steps, and
   // comes first, as it sets the steps; a style one changes the look.
   const heading = (text, what, hint = '') => `<div class="options-subtitle">${text}${hint}<span class="options-subtitle-what"> · ${what}</span></div>`;
@@ -241,10 +355,12 @@ function syncOptions(section, box, options, workflow = '') {
   $(box).innerHTML = (sampling.length ? `<div class="options-section">${heading('Sampling', 'how each picture is worked')}<div class="options-sampling">${sampling.map(samplingHtml).join('')}</div></div>` : '')
     + (speed.length ? `<div class="options-lora options-speed">${heading('Turbo LoRA', 'fewer steps, faster')}${draw(speed)}</div>` : '')
     + (lora.length ? `<div class="options-lora">${heading('Style LoRA', 'changes the look', loraHint)}${draw(lora)}</div>` : '')
-    + draw(rest.filter(option => !option.advanced)) + draw(rest.filter(option => option.advanced));
+    + draw(rest.filter(option => !option.advanced)) + draw(rest.filter(option => option.advanced))
+    + (models.length ? `<div class="options-section options-model"><div class="options-subtitle">Model</div>${draw(models)}</div>` : '');
   $(box).optionList = options;
   restoreOptions($(box));
   renderLoraStack($(box));
+  syncLoraRanges($(box));
   syncBelow($(box));
   const reset = document.querySelector && document.querySelector(`[data-defaults="${box}"]`);
   if (reset) reset.hidden = !options.length;

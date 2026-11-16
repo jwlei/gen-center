@@ -101,6 +101,7 @@ function syncImageLlm() {
   else if (ROLE_LABELS[wanted]) select.value = IMAGE_DEFAULTS.llm;
 }
 function imageRole() { return ROLE_LABELS[$('imageLlm').value] && $('imagePromptMode').value === 'llm' ? $('imageLlm').value : null; }
+$('imageWords').addEventListener('input', () => syncWords('image', +$('imageCount').value || 1));
 function syncImageForm() {
   syncGuideLink('image');
   syncImageLlm();
@@ -111,11 +112,14 @@ function syncImageForm() {
   syncImageMode();
   syncImageSources();
   syncImageOptions();
+  syncImageAmount();
   syncImageSize();
   const direct = $('imagePromptMode').value === 'direct';
   const editing = !!chosenSources();
   const mode = imageMode();
   $('imageLlmBox').classList.toggle('hidden', direct);
+  // Variety and Explicit, under the prompt and negative prompt: for the LLM, so with it.
+  $('imageWriterExtras').classList.toggle('hidden', direct);
   const local = !direct && $('imageLlm').value === 'local' && mode !== 'areas' && mode !== 'expand';
   $('imageLocalModelBox').hidden = !local;
   $('imageLocalModel').disabled = !local;
@@ -126,7 +130,17 @@ function syncImageForm() {
   $('imagePrompt').placeholder = direct
     ? (editing ? 'e.g. Change her coat to a red wool trench coat. Keep her face, pose and the background the same.' : 'e.g. Photo of a lighthouse at dusk, long exposure, wet rocks in the foreground.')
     : (editing ? 'e.g. Recreate this with different outfits and hairstyles' : 'e.g. A lighthouse in every season');
+  // Written by an LLM, all in one reply: up to 30. Your prompt as it is: up to 50.
+  const most = +(direct ? $('imageCount').dataset.most : $('imageCount').dataset.mostWritten) || 30;
+  $('imageCount').max = most;
+  // A LoRA comparison's own number, shown while it locks Amount, isn't held to that.
+  if (!$('imageCount').disabled && +$('imageCount').value > most) $('imageCount').value = most;
   const count = +$('imageCount').value || 1;
+  // Variety and its chips: how different the prompts are, so only for a set an LLM writes.
+  $('imageVarietyBox').hidden = count < 2 || !!imageRole();
+  // Words per prompt: for the pictures an LLM describes in prose. Edit instructions and Fibo 2.0's captions keep their own.
+  $('imageWordsBox').hidden = !!imageRole() || imageTakes().model === 'fibo2' || (editing && mode !== 'compose');
+  syncWords('image', count);
   const written = (imageModel() || {}).most_written;
   const tooMany = !direct && written && count > written ? ` ${imageModel().label}'s prompts are long, so the LLM writes at most ${written} at a time.` : '';
   $('imagePromptHint').textContent = direct
@@ -136,6 +150,7 @@ function syncImageForm() {
   $('imagePromptSection').hidden = mode === 'areas';
   if (mode === 'expand') {
     $('imageLlmBox').classList.add('hidden');
+    $('imageWriterExtras').classList.add('hidden');
     $('imageHowDirect').hidden = true;
     $('imagePromptMode').disabled = true;
     $('imagePromptLabel').textContent = 'What the new parts show (optional)';

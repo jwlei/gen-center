@@ -121,3 +121,24 @@ function loadForm() {
   }
 }
 // The footer stays on the screen whatever is focused: long text is typed in the prompt editor, over it.
+
+// Words per prompt (core.prompt_words), on the image and video forms' sliders: the range the LLM is asked for around the
+// number, and what it comes to in tokens, each prompt and, for a set, all of them. The video slider's first step
+// (data-auto) is Auto: each video model's own length.
+function syncWords(side, count = 1) {
+  const input = $(`${side}Words`), box = $(`${side}WordsBox`), out = $(`${side}WordsTokens`);
+  const words = Math.round(+input.value);
+  if (input.dataset.auto && words <= +input.dataset.auto) {
+    $(`${side}WordsValue`).textContent = 'Auto';
+    box.classList.remove('off-band');
+    out.textContent = "the video model's own length";
+    return;
+  }
+  const [lo, hi] = (input.dataset.suggested || '').split('-').map(Number);
+  box.classList.toggle('off-band', words < lo || words > hi);
+  const spread = +input.dataset.spread || .2, round5 = n => 5 * Math.round(n / 5);
+  const each = Math.round(words * +input.dataset.perWord + +input.dataset.perVersion);
+  $(`${side}WordsValue`).textContent = `${words} words`;
+  out.textContent = `${round5(words * (1 - spread))}–${round5(words * (1 + spread))} words, ~${each} tokens each`
+    + (count > 1 ? `, ~${(each * count).toLocaleString('en-US')} total` : '');
+}

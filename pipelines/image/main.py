@@ -11,7 +11,7 @@ import time
 
 from dotenv import load_dotenv
 
-from core import batch_stop, h3_refiner, lora_tests, pills, run_form, seeds, titles
+from core import batch_stop, h3_refiner, llm_tests, lora_tests, pills, run_form, seeds, titles, variety, workflow_tests
 from core.saved_workflows import shorthand, title_words, unique_name
 from panel import settings as panel_settings
 from pipelines.image import media, models, paths, regions
@@ -67,6 +67,13 @@ def parse_args(argv=None):
     parser.add_argument("--count", type=parse_count, default=1, help=f"How many images, 1-{image_planner.MAX_IMAGES} (default 1).")
     parser.add_argument("--direct", action="store_true", help="Use the prompt word for word. No LLM: each image only gets a new seed.")
     parser.add_argument("--llm", choices=[name for name, _ in planner.LLMS], default=None, help="Who writes the prompts (default: LLM_PROVIDER in .env, else local).")
+    parser.add_argument("--words", type=int, default=image_planner.WORDS,
+                        help=f"How long each written prompt for a new or composed picture is, in words "
+                             f"({image_planner.LEAST_WORDS}-{image_planner.MOST_WORDS}).")
+    parser.add_argument("--variety", choices=variety.VARIETIES, default=variety.DEFAULT, help="How different the written prompts are: slight (one shoot), mixed or wide.")
+    parser.add_argument("--vary", default="", help=f"What changes from one image to the next, comma-separated: {', '.join(variety.NAMES)}.")
+    parser.add_argument("--keep", default="", help="What stays the same in every image, from the same list.")
+    parser.add_argument("--explicit", action="store_true", help="Tell the prompt writer the images are meant to be explicit (Private mode).")
     parser.add_argument("--local-model", help="Local model for this run (default: Settings).")
     parser.add_argument("--aspect", type=parse_aspect, default=media.FROM_IMAGE, help=f"Aspect ratio such as 16:9, or '{media.FROM_IMAGE}' for the source image's (the default, square without one).")
     parser.add_argument("--megapixels", type=parse_megapixels, default=media.FROM_IMAGE, help=f"Pixel count, such as 1.5, or '{media.FROM_IMAGE}' (the default) for the source image's, within what the model makes well. With no image, {media.DEFAULT_MEGAPIXELS:g}.")
@@ -99,6 +106,17 @@ def parse_args(argv=None):
 
     if args.redo is not None and not args.resume:
         parser.error("--redo needs --resume.")
+    try:
+        args.vary, args.keep = variety.parse_names(args.vary), variety.parse_names(args.keep)
+    except ValueError as e:
+        parser.error(f"--vary and --keep: {e}")
+    if set(args.vary) & set(args.keep):
+        parser.error("Something can't both vary and stay the same.")
+    # Painted areas and expanding write their prompt from what's painted: no LLM writes a set of them.
+    if not (args.direct or args.areas or args.expand or args.resume) and args.count > image_planner.MAX_WRITTEN:
+        parser.error(f"An LLM writes up to {image_planner.MAX_WRITTEN} prompts at a time; with --direct a set has up to {image_planner.MAX_IMAGES}.")
+    if not image_planner.LEAST_WORDS <= args.words <= image_planner.MOST_WORDS:
+        parser.error(f"--words is from {image_planner.LEAST_WORDS} to {image_planner.MOST_WORDS}.")
     if args.plan_only and (args.resume or args.direct):
         parser.error("--plan-only stops after writing prompts: with --resume or --direct none get written.")
     if (args.areas or args.expand) and not args.image:
@@ -215,22 +233,36 @@ def plan_run(args, stages):
     state.source_seeds = sorted(taken) or None
     print_stage("Prompts", stages)
     print(f"🗂️ Run folder: {state.id}")
+    try:
+        llm_compared = llm_tests.in_env()
+    except ValueError as error:
+        raise RuntimeError(str(error)) from error
     if region_edit:
         title, versions = plan_region(state, args, model)
+    elif llm_compared:
+        title, versions = write_with_each(llm_compared, args, images, model, comfy)
     elif args.direct:
         title = " ".join(args.prompt.split()[:6])
         versions = [{"title": f"Version {number}", "prompt": args.prompt} for number in range(1, args.count + 1)]
     else:
         print(f"🧠 {llm} is writing {args.count} {'prompt' if args.count == 1 else 'prompts'}...")
         plan_args = ([video_media.preview_jpeg(image) for image in images], args.prompt, args.count, llm, model)
+        varied = {"variety": args.variety, "vary": args.vary, "keep": args.keep, "explicit": args.explicit,
+                  "words": args.words}
         if llm == "local":
             with h3_refiner.Refiner(comfy.url, require_compiler=False, model_id=local_model, vision=bool(plan_args[0])) as refiner:
                 title, versions = image_planner.write_prompts(*plan_args, compose=args.compose,
-                                                              transparent=args.transparent, refiner=refiner)
+                                                              transparent=args.transparent, refiner=refiner, **varied)
         else:
-            title, versions = image_planner.write_prompts(*plan_args, compose=args.compose, transparent=args.transparent)
+            title, versions = image_planner.write_prompts(*plan_args, compose=args.compose, transparent=args.transparent,
+                                                          **varied)
     shots = [{"number": number, "file": None, "seed": seeds.nth(args.seed, number - 1), **version}
              for number, version in enumerate(versions, 1)]
+    if llm_compared:
+        # An LLM comparison: its prompts differ by who wrote them, on one seed, so that is all that differs.
+        one = seeds.avoid(seeds.pick(args.seed), taken)
+        for shot in shots:
+            shot["seed"] = one
     try:
         tests = lora_tests.in_env()
     except ValueError as error:
@@ -238,12 +270,21 @@ def plan_run(args, stages):
     if tests:
         shots = lora_tests.shots(shots[0], tests, seeds.avoid(seeds.pick(args.seed), taken))
         state.count = len(shots)
+    # A workflow comparison: the one prompt through each workflow of its kind, at their own defaults.
+    try:
+        compared = workflow_tests.in_env()
+    except ValueError as error:
+        raise RuntimeError(str(error)) from error
+    if compared:
+        shots = workflow_tests.shots(shots[0], compared, seeds.avoid(seeds.pick(args.seed), taken))
+        state.count = len(shots)
     # Before the name: the set's folder and files take it too.
     title = titles.titled(title, args.prompt, "a set of images", comfy.url, None if args.direct else llm,
                           model_id=local_model)
     # At once: the prompts are what was paid for.
     workflow = shorthand(state.workflow, "image")
-    name = f"{title_words(title, 'images')}_{workflow}"
+    # A workflow comparison is named for what it compares, not the first workflow in it.
+    name = f"{title_words(title, 'images')}_{'all_' + compared[0]['kind'] if compared else workflow}"
     # Its shots first: a LoRA comparison's name tells it apart by the LoRAs it tests (pills.image_loras).
     state.shots = shots
     tag = set_tag(state, workflow)
@@ -256,6 +297,34 @@ def plan_run(args, stages):
     for shot in shots:
         print(f"\n{shot['number']}. {shot['title']}\n   {shot['prompt']}")
     return state
+
+
+def write_with_each(tests, args, images, model, comfy):
+    """
+    An LLM comparison's prompts: the brief written into one prompt by each prompt model in turn, each a version named
+    after it. One that fails costs its own image, not the rest.
+    """
+    jpegs = [video_media.preview_jpeg(image) for image in images]
+    varied = {"explicit": args.explicit, "words": args.words}
+    title, versions = None, []
+    for test in tests:
+        print(f"🧠 {test['label']} is writing its prompt...")
+        plan_args = (jpegs, args.prompt, 1, test["llm"], model)
+        try:
+            if test["llm"] == "local":
+                with h3_refiner.Refiner(comfy.url, require_compiler=False, model_id=test["local_model"], vision=bool(jpegs)) as refiner:
+                    written, made = image_planner.write_prompts(*plan_args, compose=args.compose, transparent=args.transparent,
+                                                                refiner=refiner, **varied)
+            else:
+                written, made = image_planner.write_prompts(*plan_args, compose=args.compose, transparent=args.transparent, **varied)
+        except Exception as e:  # noqa: BLE001 - whatever stops one model, the others still write theirs
+            print(f"   ❌ {test['label']} couldn't write it: {e}")
+            continue
+        title = title or written
+        versions.append({**made[0], "title": test["label"], "llm_test": dict(test)})
+    if not versions:
+        raise RuntimeError("No prompt model could write it.")
+    return title, versions
 
 
 def set_tag(state, workflow):
@@ -416,7 +485,25 @@ def render_images(state, comfy, most=None):
         tried += 1
         started = time.time()
         print(f"   🖼️ Image {position}/{total} · {shot['title']}")
-        path = render_image(state, comfy, shot, images)
+        client, given, setup = comfy, images, state.setup()
+        if shot.get("llm_test"):
+            # Written by its own model: what made it says so, and its pill in the viewer.
+            setup = {**setup, "llm": shot["llm_test"]["llm"], "local_model": shot["llm_test"].get("local_model")}
+        test = shot.get("workflow_test")
+        if test:
+            # Its own workflow at its own defaults, its images uploaded as that one takes them. One that can't load
+            # costs this image, not the whole comparison.
+            try:
+                client = ImageClient({}, workflow_path=test["workflow"])
+                given = upload_images(state, client)
+            except (RuntimeError, OSError, ValueError) as e:
+                print(f"      ❌ Can't use the workflow {test['label']}: {e}")
+                state.save()
+                failed += 1
+                continue
+            # Its defaults, and the LoRA it compares, if it does (render_image sets that on its client).
+            setup = {**setup, "workflow": test["workflow"], "options": dict(shot["lora_test"]) if shot.get("lora_test") else None}
+        path = render_image(state, client, shot, given)
         redone = shot.pop("redo", None)
         if not path:
             print(f"   ❌ Image {position} failed{', so the one before stays' if redone and shot.get('file') else ''}.")
@@ -425,7 +512,7 @@ def render_images(state, comfy, most=None):
             continue
         shot["file"] = os.path.basename(path)
         # What made it, kept with it: the set continued another way later, or the image moved, it still knows.
-        shot["setup"] = state.setup()
+        shot["setup"] = setup
         state.save()
         time_spent += time.time() - started
         made += 1

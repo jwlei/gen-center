@@ -19,6 +19,9 @@ def variations(form, options, private=False):
     strength = next((option for option in options if option["id"] == workflow_options.LORA_STRENGTH), None)
     if not name or not strength:
         raise ValueError("This workflow has no style LoRA to test.")
+    # Refused here, in Generate, rather than as every image of the comparison failing once it's run.
+    if name.get("problem"):
+        raise ValueError(f"This workflow can't take a style LoRA: {name['problem']}")
     choices = [value for value in name["choices"] if private or not lora_check.private_lora(value)]
     if not choices:
         raise ValueError("No style LoRAs are available in this mode.")

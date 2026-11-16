@@ -209,7 +209,7 @@ ENHANCE_SECONDS = 120
 class LocalModelTimer:
     """
     The local model's own costs, timed apart from the step they happen in: starting it (the "Starting the local
-    OpenH3-IR model" line until "Local model ready"), and OpenH3-IR writing one prompt ("writing a brief" until the
+    model" line until "Local model ready"), and OpenH3-IR writing one prompt ("writing a brief" until the
     next line). `spent` is what they took, for a step that holds them to leave them out of its own time.
     """
 

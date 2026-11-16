@@ -124,6 +124,37 @@ function segmentSelect(select) {
   paint();
 }
 for (const select of document.querySelectorAll('select[data-segmented]')) segmentSelect(select);
+// A Variety chip: a <select> of '' (up to the writer), vary and keep, drawn as one chip that a tap moves on to the next.
+// As with segmentSelect, its value set by code (a saved form, More like this) shows on the chip.
+const CHIP_MARKS = { '': '', vary: '↻', keep: '=' }, CHIP_SETTLE_MS = 300;
+function chipSelect(select) {
+  select.insertAdjacentHTML('afterend', `<button type="button" class="variety-chip"><span class="chip-mark" aria-hidden="true"></span>${esc(select.dataset.chip)}</button>`);
+  const chip = select.nextElementSibling;
+  const paint = () => {
+    const value = select.value;
+    chip.classList.toggle('vary', value === 'vary');
+    chip.classList.toggle('keep', value === 'keep');
+    chip.querySelector('.chip-mark').textContent = CHIP_MARKS[value] || '';
+    chip.querySelector('.chip-mark').hidden = !value;
+    chip.title = select.selectedOptions[0] ? select.selectedOptions[0].textContent : '';
+    chip.setAttribute('aria-label', chip.title);
+  };
+  // A tap moves the chip on at once; what the form does with it (redrawn, saved, a new estimate) waits until the taps
+  // stop, once for all of them, so tapping through keep, vary and back is never held up by it.
+  let settle = 0;
+  chip.addEventListener('click', () => {
+    const values = [...select.options].map(o => o.value);
+    select.value = values[(values.indexOf(select.value) + 1) % values.length];
+    clearTimeout(settle);
+    settle = setTimeout(() => select.dispatchEvent(new Event('change', { bubbles: true })), CHIP_SETTLE_MS);
+  });
+  const own = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value');
+  Object.defineProperty(select, 'value', { configurable: true, get() { return own.get.call(this); }, set(v) { own.set.call(this, v); paint(); } });
+  select.addEventListener('change', paint);
+  if (select.form) select.form.addEventListener('reset', () => setTimeout(paint));
+  paint();
+}
+for (const select of document.querySelectorAll('select[data-chip]')) chipSelect(select);
 // All that the kind and the view decide: Output, its collections, and Finished (NSFW only in the NSFW view).
 function redrawFiltered() {
   $('videos').dataset.key = $('imageSets').dataset.key = '';
@@ -226,6 +257,32 @@ function disarm(button) {
   button.innerHTML = button.dataset.label;
   button.style.width = button.style.height = '';
 }
+// A delete confirmed (the second tap): the button pulses, held, until the server has answered and the page is redrawn
+// without what it deleted. Only the server's own refusal or warning is said; an answer that doesn't come lets the
+// button go, to be tapped again, rather than ending as an error over the page.
+async function confirmedDelete(button, url) {
+  if (button.classList.contains('deleting')) return null;
+  button.disabled = true;
+  button.classList.add('deleting');
+  button.setAttribute('aria-busy', 'true');
+  try {
+    let body = null;
+    try {
+      const response = await fetch(url, { method: 'POST' });
+      body = await response.json().catch(() => ({ ok: response.ok }));
+    } catch (e) {
+      console.warn('Delete got no answer:', e);
+    }
+    if (body && body.warning) alert(body.warning);
+    if (body && !body.ok && body.error) alert(body.error);
+    try { await poll(); } catch (e) { console.warn(e); }
+    return body;
+  } finally {
+    button.disabled = false;
+    button.classList.remove('deleting');
+    button.removeAttribute('aria-busy');
+  }
+}
 function secondTap(button) {
   if (button.classList.contains('armed')) {
     disarm(button);
@@ -259,11 +316,8 @@ const onFilmClick = async e => {
   } else if (d.againFilm) {
     await sameAgainFilm(d.againFilm);
   } else if (d.del) {
-    if (!secondTap(e.target)) return;
-    const body = await (await fetch(`/delete/${filmFolder}/` + encodeURIComponent(d.del), { method: 'POST' })).json();
-    if (body.warning) alert(body.warning);
-    if (!body.ok) alert(body.error || 'Could not delete it.');
-    poll();
+    if (e.target.classList.contains('deleting') || !secondTap(e.target)) return;
+    await confirmedDelete(e.target, `/delete/${filmFolder}/` + encodeURIComponent(d.del));
   } else if (d.shots) {
     openShots(d.shots);
   } else if (d.up) {
