@@ -23,6 +23,9 @@ TIMINGS = ("off", "review", "render")
 ASPECTS = {"21:9": 21 / 9, "16:9": 16 / 9, "4:3": 4 / 3,
            "1:1": 1, "3:4": 3 / 4, "9:16": 9 / 16}
 TIMEOUT = 3600
+# How long ComfyUI still finishing a prompt is waited for before the local model starts: one stopped or paused
+# mid-image takes a few seconds to end once interrupted.
+COMFY_BUSY_WAIT = 60
 # The context every local model is started with: the longest request (a plan's prompt, its images, and its answer of
 # up to PLAN_TOKENS) is under 16k tokens. What that context costs differs by family: most of Gemma 4's layers only look back
 # 1024 tokens, so its cache is about 0.75 GB at 16k; every one of Qwen3 14B's keeps the whole context, 2.5 GB at 16k,
@@ -192,12 +195,19 @@ class Refiner:
                     if remaining <= 0:
                         raise
                     time.sleep(min(5, remaining))
-            queue.raise_for_status()
-            state = queue.json()
-            if not isinstance(state, dict) or not all(isinstance(state.get(key), list) for key in ("queue_running", "queue_pending")):
-                raise RuntimeError("ComfyUI returned an invalid queue status; cannot safely release its models.")
-            if state.get("queue_running") or state.get("queue_pending"):
-                raise RuntimeError("ComfyUI has work running or queued; wait for it before using the local model.")
+            busy_until = time.monotonic() + COMFY_BUSY_WAIT
+            while True:
+                queue.raise_for_status()
+                state = queue.json()
+                if not isinstance(state, dict) or not all(isinstance(state.get(key), list) for key in ("queue_running", "queue_pending")):
+                    raise RuntimeError("ComfyUI returned an invalid queue status; cannot safely release its models.")
+                if not (state.get("queue_running") or state.get("queue_pending")):
+                    break
+                # Still at work: given a while to end (a stopped run's last image), then it's someone else's.
+                if time.monotonic() >= busy_until:
+                    raise RuntimeError("ComfyUI has work running or queued; wait for it before using the local model.")
+                time.sleep(1)
+                queue = requests.get(f"{self.comfy_url}/queue", timeout=10)
             print("Waiting for ComfyUI to finish clearing its models and caches...", flush=True)
             self.comfy_memory = comfy_memory.release(self.comfy_url)
             for device in self.comfy_memory:

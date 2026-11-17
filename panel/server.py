@@ -976,9 +976,11 @@ class JobQueue:
         code = self.job.returncode
         # Noted before _record: its hooks can start the next job, whose progress would replace this run's id.
         if self.job.stopped:
+            # Read now: recording it can start the next job, whose progress replaces this run's id.
+            run_id, alone = (self.job.progress or {}).get("run_id") or item.get("resume"), not self.ready_waiting()
             note_outcome(self.job, item, STOPPED)
             self._record(item, "stopped", save=False)
-            self._keep_unsaved_stop(item, save=False)
+            self._rejoin_stopped(item, run_id, alone, save=False)
             self._save()
         elif code == 0:
             if self is run_queue and item.get("pipeline") == "video":
@@ -1013,18 +1015,40 @@ class JobQueue:
             if self.items:
                 self.job.log(f"❌ {item['label']} failed (exit {code}).")
 
-    def _keep_unsaved_stop(self, item, save=True):
-        """A run stopped before it saved anything has no stopped run to continue: its settings go back to Pending instead."""
-        if self is not run_queue or not self.results or self.results[-1].get("run_id") or self.results[-1].get("job_id") != item.get("id"):
+    def _rejoin_stopped(self, item, run_id, alone, save=True):
+        """
+        A job stopped or paused rejoins the queue at the bottom, after what waits to run and before Pending: to
+        continue its saved run where it got to, or, having saved nothing yet, to start over with its settings. One that
+        only wrote prompts to read first stays under Stopped runs: going on would make them without your reading them.
+        run_id: the run it saved, if any; alone: nothing else was waiting to run when it stopped.
+        """
+        if self is not run_queue:
             return
-        self.results.pop()
-        item_id = self.next_id
+        again = {**{key: value for key, value in item.items() if key not in self.TRANSIENT_KEYS}, "waited": True}
+        if run_id:
+            pipeline = PIPELINES.get(item.get("pipeline"))
+            state = pipeline.load_run(run_id) if pipeline and hasattr(pipeline, "resume_argv") else None
+            if not state or item.get("plan_only"):
+                return
+            argv = pipeline.resume_argv(state)
+            # A preview run stays one: continuing would otherwise make every clip.
+            again["argv"] = argv + ["--first-only"] if "--first-only" in (item.get("argv") or []) else argv
+            again["resume"] = run_id
+        elif self.results and not self.results[-1].get("run_id") and self.results[-1].get("job_id") == item.get("id"):
+            self.results.pop()  # Nothing made: no Stopped line for it, as it is in the queue again
+        again["id"] = self.next_id
         self.next_id += 1
-        self.items.append({**{key: value for key, value in item.items() if key not in self.TRANSIENT_KEYS},
-                           "id": item_id, "later": True, "waited": True})
+        # Nothing else waiting to run: held, or it would start straight away again.
+        if alone:
+            self.held = True
+        self.items.insert(next((i for i, waiting in enumerate(self.items) if waiting.get("later")), len(self.items)), again)
         if save:
             self._save()
         _runs_cache["at"] = 0.0
+
+    def ready_waiting(self):
+        """Whether a job waits to run (not one in Pending)."""
+        return any(not waiting.get("later") for waiting in self.items)
 
     def _retry_after_restart(self, item, reason):
         """
@@ -2795,9 +2819,13 @@ def run_saved():
 
 
 def cancel_now():
-    """Stops the running job; the next in the queue starts if the queue is going, and a held queue stays held."""
+    """
+    Stops the running job; the next in the queue starts if the queue is going, and a held queue stays held. With
+    nothing else waiting, the queue holds: the job rejoins it at the bottom (_rejoin_stopped), and would otherwise
+    start straight away again.
+    """
     _cancelling["started_at"] = None
-    return stop_run(start_next=not run_queue.held)
+    return stop_run(start_next=not run_queue.held and run_queue.ready_waiting())
 
 
 def _cancel_when_saved(started_at):
@@ -2815,8 +2843,8 @@ def _cancel_when_saved(started_at):
 @password_required
 def skip():
     """
-    Cancels the running job: it stops, and waits under Stopped runs until you continue it, and the next in the queue
-    starts if the queue is going. One with nothing saved yet to continue from stops as soon as it has.
+    Cancels the running job: it stops and rejoins the queue at the bottom, and the next in the queue starts if the
+    queue is going. One with nothing saved yet to continue from stops as soon as it has.
     """
     _runs_cache["at"] = 0.0
     if not job.running:

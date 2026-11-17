@@ -348,7 +348,7 @@ class H3RefinerTest(unittest.TestCase):
         refiner.comfy_url = "http://127.0.0.1:8188"
         queue = mock.Mock()
         queue.json.return_value = {"queue_running": [[1]], "queue_pending": []}
-        with mock.patch.dict(os.environ, {"COMFYUI_STARTUP_WAIT": "180"}), \
+        with mock.patch.dict(os.environ, {"COMFYUI_STARTUP_WAIT": "180"}), mock.patch.object(h3_refiner, "COMFY_BUSY_WAIT", 0), \
              mock.patch.object(h3_refiner.requests, "get", side_effect=[h3_refiner.requests.ConnectionError("starting"), queue]) as get, \
              mock.patch.object(h3_refiner.requests, "post") as post, \
              mock.patch.object(h3_refiner.time, "sleep") as sleep:
@@ -753,11 +753,34 @@ class H3RefinerTest(unittest.TestCase):
         refiner.process = None
         response = mock.Mock()
         response.json.return_value = {"queue_running": [[1]], "queue_pending": []}
-        with mock.patch.object(h3_refiner.requests, "get", return_value=response), \
+        with mock.patch.object(h3_refiner.requests, "get", return_value=response), mock.patch.object(h3_refiner, "COMFY_BUSY_WAIT", 0), \
              mock.patch.object(h3_refiner.requests, "post") as post:
             with self.assertRaisesRegex(RuntimeError, "running or queued"):
                 refiner.__enter__()
         post.assert_not_called()
+
+    def test_comfy_finishing_a_stopped_image_is_waited_for_before_the_local_model(self):
+        # Paused mid-image: ComfyUI ends the interrupted prompt a moment later, then cleans up (refusing while busy).
+        from core import comfy_memory
+        refiner = object.__new__(h3_refiner.Refiner)
+        refiner.comfy_url = "http://127.0.0.1:8188"
+        busy, idle = mock.Mock(), mock.Mock()
+        busy.json.return_value = {"queue_running": [[1]], "queue_pending": []}
+        idle.json.return_value = {"queue_running": [], "queue_pending": []}
+        refused, freed = mock.Mock(status_code=409), mock.Mock(status_code=200)
+        freed.json.return_value = {"version": 1, "completed": True, "devices": [
+            {"type": "cuda", "vram_total": 12e9, "vram_free": 11e9, "torch_allocated": 0, "torch_reserved": 0}]}
+        with mock.patch.object(h3_refiner.requests, "get", side_effect=[busy, busy, idle]) as get, \
+             mock.patch.object(comfy_memory.requests, "post", side_effect=[refused, freed]) as post, \
+             mock.patch.object(h3_refiner.time, "sleep") as sleep:
+            refiner._release_comfy_models()
+        self.assertEqual((get.call_count, post.call_count), (3, 2), "asked again until it was idle, and freed")
+        self.assertEqual(sleep.call_count, 3, "twice for the queue, once for the cleanup")
+        self.assertEqual(refiner.comfy_memory[0]["vram_free"], 11e9)
+        # Busy past the wait, cleanup says so rather than an HTTP error.
+        with mock.patch.object(comfy_memory.requests, "post", return_value=refused), \
+             self.assertRaisesRegex(RuntimeError, "still busy after 0 s"):
+            comfy_memory.release("http://127.0.0.1:8188", busy_wait=0)
 
     def test_shorts_enhanced_render_removes_all_extra_reference_links(self):
         avatar = object.__new__(AvatarGenerator)

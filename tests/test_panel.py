@@ -696,6 +696,7 @@ class PanelTest(unittest.TestCase):
         self.addCleanup(self.clear_everything)
 
     def clear_everything(self):
+        webapp.run_queue.hold()
         webapp.stop_run()
         self.wait_idle()
         errors = {lane: queue.persistence_error for lane, queue in webapp.QUEUES.items() if queue.persistence_error}
@@ -1267,14 +1268,17 @@ class PanelTest(unittest.TestCase):
         self.assertTrue(status["stopped"])
         self.assertTrue(status["queue"]["held"], "nothing starts by itself after a Stop")
         self.assertEqual(len(self.comfy.prompts), 3)
-        waiting = status["stopped_runs"][0]
-        self.assertIn("2 of 8 clips kept", waiting["detail"])
-        self.assertEqual(waiting["clips"], 2)
+        # Stopped, it rejoins the queue at the bottom, to continue where it got to: not to Pending, nor Stopped runs.
+        self.assertEqual([(item["label"], item.get("resume"), item.get("later")) for item in status["queue"]["items"]],
+                         [("1 video: a second film", None, None), (status["queue"]["items"][1]["label"], run_id, None)])
+        self.assertNotIn(run_id, [run["id"] for run in status["stopped_runs"]])
 
-        # Take the second film out, and continue the first.
+        # Take the second film out, and let the queue go on: the first continues.
         item = status["queue"]["items"][0]["id"]
         self.assertTrue(self.client.post(f"/queue/run/remove/{item}").get_json()["ok"])
-        self.assertTrue(self.client.post(f"/runs/{run_id}/continue").get_json()["ok"])
+        self.assertTrue(self.client.post("/queue/run/resume").get_json()["ok"])
+        # Started by the queue a moment later: the stopped job's own progress is read until then.
+        self.wait_until(lambda: webapp.job.running and webapp.job.eta.kept_stages, "the continued film to start")
         self.wait_until(lambda: webapp.job.progress.get("stage"), "the stage to show")
         self.wait_until(lambda: webapp.job.eta.number, "the ETA to see the stage")
         self.assertIn("Plan", webapp.job.eta.kept_stages)
@@ -1474,22 +1478,24 @@ class PanelTest(unittest.TestCase):
         self.wait_idle()
         status = self.status()
         self.assertFalse(status["queue"]["held"])
-        self.assertEqual([result["outcome"] for result in status["queue"]["results"]], ["stopped", "done"])
-        waiting = next(run for run in status["stopped_runs"] if run["id"] == skipped)
-        self.assertIn("1 of 8 clips kept", waiting["detail"])
-        self.assertEqual(waiting["outcome"]["outcome"], "stopped", "marked Stopped in Pending")
-
-        parked = self.client.post(f"/runs/{skipped}/continue?later=1").get_json()
-        self.assertTrue(parked["ok"] and parked["queued"])
-        waiting_items = self.status()["queue"]["items"]
-        self.assertEqual([(item["resume"], item.get("later")) for item in waiting_items], [(skipped, True)], "back in Pending, not started")
-        self.assertNotIn(skipped, [run["id"] for run in self.status()["stopped_runs"]])
-        # The top-of-queue arrow: with nothing running, the one that starts it now.
-        self.assertTrue(self.client.post(f"/queue/run/start/{waiting_items[0]['id']}?top=1").get_json()["ok"])
-        self.wait_idle()
-        self.assertEqual(self.status()["returncode"], 0)
+        # The next film went first; the paused one rejoined the queue behind it and continued from its kept clip.
+        self.assertEqual([result["outcome"] for result in status["queue"]["results"]], ["stopped", "done", "done"])
+        self.assertEqual(status["returncode"], 0)
         self.assertEqual(len(self.comfy.prompts), 9, "only the cut-off clip and those after it were rendered")
-        self.assertFalse(any(run.get("outcome") for run in self.status()["stopped_runs"] if run["id"] == skipped), "finished, the mark is gone")
+        self.assertNotIn(skipped, [run["id"] for run in status["stopped_runs"]])
+
+    def test_a_paused_job_with_nothing_after_it_rejoins_a_held_queue(self):
+        # Alone in the queue, a pause doesn't start it again at once: it waits at the bottom, the queue on hold.
+        self.comfy.script = ["ok", "hang"]
+        self.assertTrue(self.generate().get_json()["ok"])
+        self.wait_until(lambda: self.comfy.hanging, "the second clip to start")
+        self.wait_until(lambda: webapp.job.progress.get("detail", "").startswith("Clip 2"), "the panel to see it")
+        paused = webapp.job.progress["run_id"]
+        self.assertTrue(self.client.post("/skip").get_json()["ok"])
+        self.wait_idle()
+        queue = self.status()["queue"]
+        self.assertTrue(queue["held"])
+        self.assertEqual([(item.get("resume"), item.get("later")) for item in queue["items"]], [(paused, None)])
 
     def test_cancel_before_anything_is_saved_waits_for_it_then_goes_on(self):
         self.comfy.script = ["hang"]
