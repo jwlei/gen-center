@@ -1558,6 +1558,24 @@ class PanelTest(unittest.TestCase):
         self.assertEqual(webapp.run_facts(shorts), {"workflow": "avatar_lipsync", "resolution": "576x1024", "count": 3})
         self.assertEqual(webapp.run_facts({"pipeline": "video", "argv": ["--resume", "r1"], "env": {}})["resolution"], "As the run was set up")
 
+    def test_a_queued_jobs_facts_say_its_loras_and_explicit(self):
+        # Its LoRAs at the strengths it renders with, as its workflow and options give them; Explicit when asked.
+        with tempfile.TemporaryDirectory() as folder:
+            workflow = os.path.join(folder, "image_Krea2_T2I.json")
+            open(workflow, "w").close()
+            image = {"pipeline": "image", "argv": ["--option", "lora_strength=0.7", "--explicit"], "env": {"COMFYUI_WORKFLOW": workflow}}
+            with mock.patch.object(webapp.workflow_options, "loras_used", return_value=["realism_v2 (0.7)"]) as used:
+                facts = webapp.run_facts(image)
+                webapp.run_facts(image)
+            self.assertEqual((facts["loras"], facts["explicit"]), (["realism_v2 (0.7)"], True))
+            used.assert_called_once_with(workflow, {"lora_strength": "0.7"}, "image")  # Worked out once: the queue is drawn every poll
+        # A LoRA comparison: each LoRA with the strengths it tries.
+        tried = [{"lora": "1", "lora_name": "Krea2_realism-V2.safetensors", "lora_strength": strength} for strength in ("0.5", "1.5")]
+        compared = {"pipeline": "image", "argv": [], "env": {webapp.LORA_TEST_ENV: json.dumps(tried)}}
+        self.assertEqual(len(webapp.run_facts(compared)["loras"]), 1)
+        self.assertTrue(webapp.run_facts(compared)["loras"][0].endswith("(0.5-1.5)"))
+        self.assertNotIn("explicit", webapp.run_facts(compared))
+
     def test_a_side_has_one_default_preset_at_most(self):
         if os.path.exists(webapp.PRESETS_PATH):
             os.remove(webapp.PRESETS_PATH)
@@ -2269,6 +2287,13 @@ class PanelTest(unittest.TestCase):
             self.assertFalse(saved["settings"]["status_progress"])
             both = self.client.post("/api/settings", json={"top_progress": False, "status_progress": True}).get_json()["settings"]
             self.assertEqual((both["top_progress"], both["status_progress"]), (False, True))
+            # Swiping between pages: on, coming in with a push at normal speed, until chosen; only the kinds and speeds there are.
+            self.assertEqual((saved["settings"]["page_swipe"], saved["settings"]["page_animation"], saved["settings"]["page_speed"]), (True, "push", "normal"))
+            self.assertFalse(self.client.post("/api/settings", json={"page_swipe": False}).get_json()["settings"]["page_swipe"])
+            turned = self.client.post("/api/settings", json={"page_animation": "flip", "page_speed": "fast"}).get_json()["settings"]
+            self.assertEqual((turned["page_animation"], turned["page_speed"]), ("flip", "fast"))
+            self.assertEqual(self.client.post("/api/settings", json={"page_animation": "spin"}).status_code, 400)
+            self.assertEqual(self.client.post("/api/settings", json={"page_speed": "ludicrous"}).status_code, 400)
             self.assertTrue(webapp.settings.load()["low_priority"], "kept in the file")
             self.assertEqual(self.client.post("/api/settings", json={"h3_model": "qwen3-14b"}).get_json()["settings"]["h3_model"], "qwen3-14b")
             self.assertEqual(self.client.post("/api/settings", json={"h3_model": "unknown"}).status_code, 400)
@@ -2411,20 +2436,100 @@ class PanelTest(unittest.TestCase):
         other = mock.Mock(info={"name": "MSIAfterburner.exe", "username": "other", "exe": r"C:\Other\MSIAfterburner.exe"})
         process = mock.Mock()
         process.wait.side_effect = subprocess.TimeoutExpired("Afterburner", 1)
+        mine.is_running.return_value = False
+        clock = iter(range(0, 1000, 3))
         with mock.patch.object(psutil, "Process") as current, \
                 mock.patch.object(psutil, "process_iter", return_value=[mine, other]), \
-                mock.patch.object(psutil, "wait_procs", return_value=([mine], [])) as wait, \
+                mock.patch.object(gpu_guard.time, "sleep"), mock.patch.object(gpu_guard.time, "monotonic", side_effect=lambda: next(clock)), \
                 mock.patch.object(gpu_guard.subprocess, "Popen", return_value=process) as launch:
             current.return_value.username.return_value = "mine"
             gpu_guard.restart_afterburner()
             mine.terminate.assert_called_once()
             other.terminate.assert_not_called()
-            wait.assert_called_once_with([mine], timeout=5)
             self.assertEqual(launch.call_args.args[0], [mine.info["exe"], "-Profile3"])
-            wait.return_value = ([], [mine])
+            # Afterburner lets the panel close it but not wait on it: asked whether it's there instead, it starts again.
+            mine.is_running.side_effect = psutil.AccessDenied(9324)
+            with mock.patch.object(psutil, "pid_exists", return_value=False):
+                gpu_guard.restart_afterburner()
+            self.assertEqual(launch.call_count, 2, "closed, so started again")
+            mine.is_running.side_effect = None
+            mine.is_running.return_value = True
+            mine.status.return_value = psutil.STATUS_RUNNING
             with self.assertRaisesRegex(RuntimeError, "did not exit"):
                 gpu_guard.restart_afterburner()
-            self.assertEqual(launch.call_count, 1, "no duplicate instance if the old one is still alive")
+            self.assertEqual(launch.call_count, 2, "no duplicate instance if the old one is still alive")
+
+    def test_the_guard_starts_afterburner_when_it_isnt_running(self):
+        from panel import gpu_guard
+
+        notes, config = [], {"gpu_guard": True, "gpu_restart_above": 78, "gpu_rearm_at": 75, "gpu_profile": 2}
+        guard = gpu_guard.GPUHeatGuard(notes.append, lambda: config, keep=True)
+        clock = [0]
+        with mock.patch.object(gpu_guard, "afterburner_running", return_value=False), \
+                mock.patch.object(gpu_guard, "start_afterburner", return_value=True) as start, \
+                mock.patch.object(gpu_guard.time, "monotonic", side_effect=lambda: clock[0]):
+            guard.check(60)
+            start.assert_called_once_with(2)
+            self.assertIn("wasn't running", notes[-1])
+            self.assertTrue(gpu_guard.state["running"], "Settings shows it running")
+            clock[0] = 30
+            guard.check(60)
+            self.assertEqual(start.call_count, 1, "not tried again within the minute")
+            clock[0] = 100
+            config["gpu_guard"] = False
+            guard.check(60)
+            self.assertEqual(start.call_count, 1, "the guard off: left as it is")
+            self.assertFalse(gpu_guard.state["running"])
+        # A guard without keep (as the tests make them) never looks.
+        with mock.patch.object(gpu_guard, "afterburner_running") as looked:
+            gpu_guard.GPUHeatGuard(notes.append, lambda: config).check(60)
+            looked.assert_not_called()
+
+    def test_a_stopped_clip_comfyui_keeps_on_with_restarts_comfyui(self):
+        running = {"queue_running": [[0, "p1", {}, {"client_id": "me"}]], "queue_pending": []}
+        answer = mock.Mock()
+        answer.json.side_effect = lambda: running
+        with mock.patch.object(webapp, "STOP_GRACE", 0.1), mock.patch.object(webapp, "STOP_CHECK_EVERY", 0.01), \
+                mock.patch.object(webapp.requests, "get", return_value=answer), \
+                mock.patch.object(webapp.requests, "post") as post, \
+                mock.patch.object(webapp, "restart_comfyui_in_background") as restart:
+            webapp.make_sure_stopped("http://comfy", "me", ["p1"])
+            self.assertTrue(all(call.args[0] == "http://comfy/interrupt" for call in post.call_args_list) and post.call_count >= 2,
+                            "asked again and again to interrupt it")
+            restart.assert_called_once_with(force=True)
+            # It lets go: nothing restarted.
+            restart.reset_mock()
+            running["queue_running"] = []
+            webapp.make_sure_stopped("http://comfy", "me", ["p1"])
+            restart.assert_not_called()
+            # Someone else's render, or a new run's clip, is left alone.
+            running["queue_running"] = [[0, "p2", {}, {"client_id": "me"}]]
+            webapp.make_sure_stopped("http://comfy", "me", ["p1"])
+            restart.assert_not_called()
+
+    def test_start_afterburner_starts_it_only_when_it_isnt_running(self):
+        from panel import gpu_guard
+
+        with mock.patch.object(gpu_guard, "afterburner_running", return_value=False), \
+                mock.patch.object(gpu_guard, "_restart") as restart:
+            body = self.client.post("/start/afterburner").get_json()
+            self.assertEqual((body["ok"], body["started"]), (True, True))
+            restart.assert_called_once_with("-Profile3", ask=False)
+        with mock.patch.object(gpu_guard, "afterburner_running", return_value=True), \
+                mock.patch.object(gpu_guard, "_restart") as restart:
+            self.assertFalse(self.client.post("/start/afterburner").get_json()["started"], "already running: left alone")
+            restart.assert_not_called()
+        # Needing administrator rights, it's started by its start-at-logon task, never with a prompt on the PC.
+        needs_admin = OSError(740, "The requested operation requires elevation")
+        needs_admin.winerror = 740
+        with mock.patch.object(gpu_guard, "_afterburners", return_value=[]), \
+                mock.patch.object(gpu_guard.os.path, "isfile", return_value=True), \
+                mock.patch.object(gpu_guard.subprocess, "Popen", side_effect=needs_admin), \
+                mock.patch.object(gpu_guard, "_start_task", return_value=True) as task, \
+                mock.patch("ctypes.windll", create=True) as windll:
+            self.assertTrue(self.client.post("/start/afterburner").get_json()["ok"])
+            task.assert_called_once()
+            windll.shell32.ShellExecuteW.assert_not_called()
 
     def test_afterburner_restart_asks_for_elevation_when_it_requires_it(self):
         from panel import gpu_guard
@@ -2436,7 +2541,7 @@ class PanelTest(unittest.TestCase):
         needs_admin.winerror = 740
         with mock.patch.object(psutil, "Process") as current, \
                 mock.patch.object(psutil, "process_iter", return_value=[mine]), \
-                mock.patch.object(psutil, "wait_procs", return_value=([mine], [])), \
+                mock.patch.object(mine, "is_running", return_value=False), \
                 mock.patch.object(gpu_guard.subprocess, "Popen", side_effect=needs_admin), \
                 mock.patch("ctypes.windll", create=True) as windll:
             current.return_value.username.return_value = "mine"
@@ -2549,6 +2654,13 @@ class PanelTest(unittest.TestCase):
                 mock.patch.object(webapp, "restart_comfyui_in_background") as restart:
             self.assertTrue(self.client.post("/restart/comfyui", json={"force": True}).get_json()["ok"], "forced, it goes ahead of the run")
             restart.assert_called_once_with(force=True)
+        # Force restart panel: the stuck run stopped first, the queue on hold, then the panel started again.
+        with mock.patch.object(webapp, "respawn_command", return_value=([sys.executable, "-c", "pass"], 0)) as respawn, \
+                mock.patch.object(webapp.threading, "Timer") as timer, mock.patch.object(webapp, "_panel_closing", False):
+            self.assertTrue(self.client.post("/restart/panel", json={"force": True}).get_json()["ok"])
+            self.assertFalse(webapp.job.running, "the run stopped before the restart")
+            respawn.assert_called_once()
+            timer.assert_called()
 
     def test_pending_continuation_can_edit_prompts_without_duplicate_jobs(self):
         self.assertTrue(self.generate(review="1").get_json()["ok"])
@@ -2769,6 +2881,36 @@ class PanelTest(unittest.TestCase):
                 with mock.patch.object(webapp.run_queue, "held", True):
                     self.assertEqual(self.client.post("/launcher/refresh", data=newer).get_json(), {"restarting": True})
             timer.assert_called_once()
+
+
+class SavedWorkflowsCacheTest(unittest.TestCase):
+    def test_an_old_list_is_answered_at_once_and_refreshed_behind(self):
+        # Listing them takes seconds: once there's a list, opening a set's prompts or settings never waits on it again.
+        cache = webapp._saved_workflows_cache
+        saved = dict(cache)
+        self.addCleanup(lambda: (cache.clear(), cache.update(saved)))
+        cache.update(at=0.0, online=None, value=[], refreshing=False)
+        release = threading.Event()
+        lists = iter([["first"], ["second"]])
+
+        def listing():
+            value = next(lists)
+            if value == ["second"]:
+                release.wait(5)
+            return value
+        with mock.patch.object(webapp, "comfyui_online", return_value=True),              mock.patch.object(webapp, "_list_saved_workflows", side_effect=listing) as listed:
+            self.assertEqual(webapp.saved_workflows(), ["first"], "the first is worked out there and then")
+            cache["at"] -= webapp.SAVED_WORKFLOWS_FRESH + 1
+            started = time.monotonic()
+            self.assertEqual(webapp.saved_workflows(), ["first"], "old: the one kept, at once")
+            self.assertEqual(webapp.saved_workflows(), ["first"], "and only one refresh at a time")
+            self.assertLess(time.monotonic() - started, 1)
+            release.set()
+            deadline = time.monotonic() + 5
+            while cache["refreshing"] and time.monotonic() < deadline:
+                time.sleep(0.01)
+            self.assertEqual(webapp.saved_workflows(), ["second"], "then the new one")
+            self.assertEqual(listed.call_count, 2)
 
 
 class ComfyFreshStartTest(unittest.TestCase):

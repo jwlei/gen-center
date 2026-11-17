@@ -9,7 +9,7 @@ function comfyState(c) {
 function renderComfy(c) {
   const rows = [['State', comfyState(c)]];
   if (c.online) {
-    const step = c.active ? `${c.label || 'Working'}${c.max ? ` · ${c.value || 0}/${c.max}` : ''}${c.elapsed ? ` · ${fmt(c.elapsed)}` : ''}` : 'Idle';
+    const step = c.active ? `${c.stopping ? 'Stopping · ' : ''}${c.label || 'Working'}${c.max ? ` · ${c.value || 0}/${c.max}` : ''}${c.elapsed ? ` · ${fmt(c.elapsed)}` : ''}` : 'Idle';
     rows.push(['Now', step], ['In its queue', String(c.queue || 0)]);
   }
   const g = c.gpu;
@@ -51,7 +51,7 @@ function runFactRows() {
   if (p.eta && d.running && p.eta.total_left != null) rows.push(['Estimate', `${fmtEta(p.eta.total_left)} left, done around ${clockIn(p.eta.total_left)}`]);
   if (c.connected) {
     const steps = c.max && c.value != null ? ` · Step ${c.value} of ${c.max}` : '';
-    rows.push(['ComfyUI', `${c.active ? c.label || 'Working' : 'Idle'}${steps}${c.queue > 1 ? ` · ${c.queue - 1} more queued` : ''}`]);
+    rows.push(['ComfyUI', `${c.active ? `${c.stopping ? 'Stopping · ' : ''}${c.label || 'Working'}` : 'Idle'}${steps}${c.queue > 1 ? ` · ${c.queue - 1} more queued` : ''}`]);
   }
   if (d.command) rows.push(['Command', d.command]);
   return rows;

@@ -118,8 +118,6 @@ async function editQueued(id, button) {
     fresh.ready = true;
     showFormError('');
     queueEditLabel();
-    $('formNote').hidden = false;
-    $('formNote').textContent = `Editing ${data.continued.title} as a new run: change anything, then add it to the queue, the top of it or Pending. The paused run stays as it was.`;
     return;
   }
   queueEdit = { id: data.id, token: data.token, pipeline: data.pipeline, ready: false, continued: null };

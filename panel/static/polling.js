@@ -243,6 +243,7 @@ function applyStatus(data, askedAt, editAtRequest, upscaleAtRequest) {
   if (c.online !== workflowsFor) { workflowsFor = c.online; loadWorkflows(); loadVideoWorkflows(); loadImageWorkflows(); }
   syncComfyButton(c);
   lastComfy = { ...c, gpu: data.gpu };
+  if ('afterburner' in data) safely(() => renderAfterburner(data.afterburner));
   safely(() => renderPoweroff(data.poweroff));
   safely(() => renderPrivate(data.private));
   $('comfyDot').className = 'dot ' + (c.online ? 'ok' : c.starting || c.listening ? 'warn' : 'fail');

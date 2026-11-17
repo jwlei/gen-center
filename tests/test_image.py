@@ -1634,6 +1634,14 @@ class QwenImage21Test(unittest.TestCase):
         self.assertIn("marked in red: a sleeping cat", sent)
         self.assertIn("marked in blue: a brass lamp", sent)
 
+    def test_painted_areas_and_expanding_can_be_estimated(self):
+        # No size on the form for these (they come out the image's own size): it once failed with a 500.
+        for mode in ("areas", "expand"):
+            reply = self.client.post("/api/estimate/image", data={"count": "5", "image_count": "1", "workflow": "image_q21_edit.json",
+                                                                  "image_mode": mode, "prompt_mode": "direct"})
+            self.assertEqual(reply.status_code, 200, mode)
+            self.assertTrue(reply.get_json()["ok"], (mode, reply.get_json()))
+
     def test_painted_areas_need_words(self):
         reply = self.client.post("/generate/image", data=self.form(prompt="", image=(self.png(), "a.png"), image_mode="areas",
                                                                    areas_mask=(self.painted((800, 600), [10, 10, 50, 50]), "a.png"),

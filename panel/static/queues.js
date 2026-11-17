@@ -44,7 +44,7 @@ function renderQueue(el, q, doneIn, moving = false, idle = false) {
   const items = waiting.map((item, i) => `
     <div class="queue-item${el.dataset.lane === 'run' ? ' run-card' : ''}${String(item.id) === el._selected ? ' selected' : ''}" data-id="${esc(String(item.id))}" data-motion-key="queue-${esc(String(item.id))}">
       ${el.dataset.lane === 'run' ? workPrivacy(item, 'job', item.id) : ''}
-      ${el.dataset.lane === 'run' ? '<div class="queue-item-top">' : ''}<div class="what"${waiting.length > 1 ? ` role="button" tabindex="0" aria-pressed="${String(item.id) === el._selected}" aria-label="Select ${esc(hideTitle(item) ? PLAIN_TITLE : item.label)} to drag or use arrow keys to reorder"` : ''}>${queueTitle(`queue-${item.id}`, el.dataset.lane === 'run' ? workHeading(item, item.pipeline) : item.label, i + 1)}<div class="hint">${esc(queueDetail(item))}</div></div>${el.dataset.lane === 'run' ? '</div><div class="queue-item-actions">' : ''}
+      ${el.dataset.lane === 'run' ? '<div class="queue-item-top">' : ''}<div class="what"${waiting.length > 1 ? ` role="button" tabindex="0" aria-pressed="${String(item.id) === el._selected}" aria-label="Select ${esc(hideTitle(item) ? PLAIN_TITLE : item.label)} to drag or use arrow keys to reorder"` : ''}>${queueTitle(`queue-${item.id}`, el.dataset.lane === 'run' ? workHeading(item, item.pipeline) : item.label, i + 1)}<div class="hint">${queueDetail(item)}</div></div>${el.dataset.lane === 'run' ? '</div><div class="queue-item-actions">' : ''}
       ${el.dataset.lane === 'run' ? `<span class="acts-side"><button type="button" class="icon-btn" data-pause="${item.id}" aria-label="Pause: move to Pending" title="Pause: take it out of the queue and make it pending">${ICONS.later}</button>`
         // Nothing running: any of them can start first. Running: the first is next already, and the others can go ahead of the rest.
         + (canRunNow ? `<button type="button" class="run-item${item.continuation ? ' continue-item' : ''}" data-run="${item.id}" aria-label="Run this generation now" title="Run this now">
@@ -104,18 +104,43 @@ const FINISHED_SHOWN = 20;  // The last twenty, kept over a restart until Clear
 const DETAIL_SAID = { 'your prompt, word for word': 'exact prompt', 'your prompt, every clip': 'exact prompt' };
 const DETAIL_DROPPED = new Set(['renders straight away', 'renders at once', 'from text', 'Continue']);
 const WORKFLOW_SIDE = /^(image|video|shorts)_(?=\S)/i;
+// A workflow by its family alone, as the queue says it: "Krea2_T2I_SFW_NSFW" is Krea2, "Minimax_H3_edit" MinimaxH3,
+// "Qwen21_T2I_turbo" Qwen2.1. What it does (T2I, edit...) and how it's built (turbo, int8...) are left off.
+const WORKFLOW_KIND = /^(t2i|i2i|edit|t2v|i2v|r2v|v2v|sfw|nsfw|turbo|int8|int4|fp8|fp16|bf16|gguf|\d{3,})$/i;
+function workflowFamily(name) {
+  const kept = [];
+  for (const word of String(name).split('_')) {
+    if (kept.length && WORKFLOW_KIND.test(word)) break;
+    kept.push(word);
+  }
+  return kept.join('').replace(/^([A-Za-z]+\d)(\d)$/, '$1.$2') || name;
+}
+// A comparison as an icon before what it compares, in the theme's colour, rather than the word.
+const COMPARISON_ICON = '<svg class="detail-icon" viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 4v16M8 20h8M5 7h14"/><path d="m5 7-3 6a3 3 0 0 0 6 0zM19 7l-3 6a3 3 0 0 0 6 0z"/></svg>';
+const COMPARISONS = { 'LLM comparison': 'LLM', 'LoRA comparison': 'LoRA', 'workflow comparison': 'Workflow', 'workflow and LoRA comparison': 'Workflow + LoRA' };
+// The line under a queued or pending job's title, as HTML: how many, the size, how its prompts are written, the
+// workflow by its family, its LoRAs at their strengths, Explicit, and the upscale.
 function queueDetail(item) {
+  const facts = item.facts || {};
+  const side = item.pipeline === 'image' || item.pipeline === 'video';
   const detail = (item.detail || '').split(' · ').filter(part => part && !DETAIL_DROPPED.has(part))
-    .map(part => DETAIL_SAID[part] || (WORKFLOW_SIDE.test(part) && !part.includes(' ') ? part.replace(WORKFLOW_SIDE, '') : part));
+    .map(part => {
+      const said = DETAIL_SAID[part] || part;
+      const prefixed = WORKFLOW_SIDE.test(said) && !said.includes(' ');
+      const name = prefixed ? said.replace(WORKFLOW_SIDE, '') : said;
+      return (prefixed && !/^shorts?_/i.test(said)) || (side && name === facts.workflow) ? workflowFamily(name) : name;
+    });
   // The size goes right after how many it makes.
-  const size = item.facts && item.facts.resolution;
+  const size = facts.resolution;
   if (size) {
     if (detail.includes(size)) detail.splice(detail.indexOf(size), 1);
     detail.splice(detail.length ? 1 : 0, 0, size);
   }
+  for (const lora of facts.loras || []) detail.push(`LoRA: ${lora}`);
+  if (facts.explicit) detail.push('Explicit');
   // The upscale it renders with, when it has one (Upscale or Latent upscale in its settings).
-  if (item.facts && item.facts.upscale) detail.push(`Upscale: ${item.facts.upscale}`);
-  return detail.join(' · ');
+  if (facts.upscale) detail.push(`Upscale: ${facts.upscale}`);
+  return detail.map(part => COMPARISONS[part] ? `<span class="detail-comparison">${COMPARISON_ICON}${COMPARISONS[part]}</span>` : esc(part)).join(' · ');
 }
 // Kept over a restart, so one from another day says which.
 function finishedWhen(r) {
@@ -561,7 +586,7 @@ function renderStopped(runs, parked = [], results = [], canRunNow = false, check
     <div class="stopped-run" data-motion-key="queue-${esc(String(item.id))}">
       ${workPrivacy(item, 'job', item.id)}
       <div class="run-head"><div class="what">${queueTitle(`queue-${item.id}`, workHeading(item, item.pipeline))}</div></div>
-      <div class="hint">${esc(queueDetail(item))}</div>
+      <div class="hint">${queueDetail(item)}</div>
       ${warningText(item)}
       <div class="stopped-actions">
         <span class="acts-side">${item.editing ? '<span class="when">Editing</span>' : `<button type="button" class="icon-btn start-item${item.continuation ? ' continue-item' : ''}" data-start="${item.id}" aria-label="Add to the queue" title="Add to the queue: it starts when the queue gets to it (with nothing running, the queue waits for Resume)">${ICONS.queue}</button>`

@@ -247,7 +247,11 @@ THEMES = {
 DEFAULT_RESERVE_GB = 3
 DEFAULTS = {"low_priority": False, "reserve_ram_gb": DEFAULT_RESERVE_GB, "h3_model": H3_MODELS[0], "local_llm_model": H3_MODELS[0],
             "default_workflow": {side: "" for side in SIDES}, "title_source": "off", "pin_progress": False,
-            "top_progress": True, "status_progress": False, "theme": "standard", "theme_boxes": True}
+            "top_progress": True, "status_progress": False, "theme": "standard", "theme_boxes": True,
+            "page_swipe": True, "page_animation": "push", "page_speed": "normal"}
+# A phone's swipe from one page to the next (Status, Generate, Output): on or off, how the page comes in, how quickly.
+PAGE_ANIMATIONS = ("slide", "push", "fade", "zoom", "flip", "off")
+PAGE_SPEEDS = ("slow", "normal", "fast")
 _lock = threading.Lock()
 # GPU heat guard (panel/gpu_guard.py): MSI Afterburner restarted above gpu_restart_above C, with profile gpu_profile,
 # and again only once the GPU has cooled to gpu_rearm_at C.
@@ -325,6 +329,9 @@ def load():
             "status_progress": bool(saved.get("status_progress")),
             # Each section in a box of its own (the theme's panel colour), or straight on the background.
             "theme_boxes": bool(saved.get("theme_boxes", True)),
+            "page_swipe": bool(saved.get("page_swipe", True)),
+            "page_animation": saved.get("page_animation") if saved.get("page_animation") in PAGE_ANIMATIONS else DEFAULTS["page_animation"],
+            "page_speed": saved.get("page_speed") if saved.get("page_speed") in PAGE_SPEEDS else DEFAULTS["page_speed"],
             "output_order": saved.get("output_order", []),
             **_gpu_guard(saved),
             "theme": theme if isinstance(theme, str) and theme in THEMES else DEFAULTS["theme"]}
@@ -352,9 +359,14 @@ def update(changes):
             if changes["title_source"] not in TITLE_SOURCES:
                 raise ValueError("Unknown title source.")
             current["title_source"] = changes["title_source"]
-        for key in ("pin_progress", "top_progress", "status_progress", "theme_boxes"):
+        for key in ("pin_progress", "top_progress", "status_progress", "theme_boxes", "page_swipe"):
             if key in changes:
                 current[key] = bool(changes[key])
+        for key, allowed, what in (("page_animation", PAGE_ANIMATIONS, "page animation"), ("page_speed", PAGE_SPEEDS, "page animation speed")):
+            if key in changes:
+                if changes[key] not in allowed:
+                    raise ValueError(f"Unknown {what}.")
+                current[key] = changes[key]
         if "output_order" in changes:
             ids = changes["output_order"]
             if (not isinstance(ids, list) or any(not isinstance(key, str) or not key.startswith(("image:", "film:"))

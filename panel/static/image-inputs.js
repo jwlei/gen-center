@@ -34,9 +34,10 @@ function sizeFallback() {
 function rememberedImageWorkflow() {
   try { return (JSON.parse(draftRead(IMAGE_STORE_KEY)) || {}).workflow || ''; } catch (e) { return ''; }
 }
-async function loadImageWorkflows() {
-  let data;
-  try { data = await (await fetch('/api/workflows?pipeline=image')).json(); } catch (e) { return; }
+async function loadImageWorkflows(fresh) {
+  // The list kept from last time at once (workflowList), drawn again if the one asked for behind it differs.
+  let data = fresh && Array.isArray(fresh.workflows) ? fresh : null;
+  if (!data) try { data = await workflowList('image', loadImageWorkflows); } catch (e) { return; }
   const select = $('imageWorkflow');
   const key = JSON.stringify(data);
   // Writing the options closes the list, and this also runs as it opens.

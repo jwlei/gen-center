@@ -44,7 +44,7 @@ from flask import (Flask, Response, abort, has_request_context, redirect, render
 from werkzeug.exceptions import NotFound
 from werkzeug.datastructures import MultiDict
 
-from core import batch_stop, eta_keys, explicit, lora_hints, model_guide, pills, run_form, variety, workflow_options
+from core import batch_stop, eta_keys, explicit, lora_hints, lora_tests, model_guide, pills, run_form, variety, workflow_options, workflow_tests
 from core.run_checkpoint import CheckpointError, catalogue_errors
 from core.lora_tests import ENV as LORA_TEST_ENV
 from core.upscale_eta import UpscaleEta, is_upscale
@@ -1411,6 +1411,58 @@ def item_upscale(item):
     return pills.image_upscale_description(options) if pipeline == "image" else pills.latent_description(options)
 
 
+# What a queued job's workflow and options give as its LoRAs, by (side, workflow, its saved time, options): the queue is
+# drawn every poll, and working them out reads the workflow.
+_queue_loras = {}
+
+
+def item_loras(item):
+    """
+    The LoRAs a queued job renders with, as Output's pills say them ("realism_v2 (0.5)"): a LoRA comparison's each
+    with the strengths it tries ("realism_v2 (0.5-2)"), or [] for none, or a workflow comparison's own (each workflow's).
+    """
+    pipeline, argv, env = item.get("pipeline"), item.get("argv") or [], item.get("env") or {}
+    if pipeline not in ("image", "video") or upscale_queue_settings(item):
+        return []
+    try:
+        if pipeline == "image" and env.get(workflow_tests.ENV):
+            return lora_tests.tested(workflow_tests.in_env(env))
+        if pipeline == "image" and env.get(LORA_TEST_ENV):
+            return lora_tests.tested([{"lora_test": value} for value in lora_tests.in_env(env)])
+    except ValueError:
+        return []
+    workflow = env.get("COMFYUI_WORKFLOW")
+    if not workflow:
+        return []
+    if pipeline == "image":
+        options = dict(argv[i + 1].split("=", 1) for i, value in enumerate(argv[:-1]) if value == "--option" and "=" in argv[i + 1])
+    else:
+        try:
+            options = json.loads(env.get("COMFYUI_OPTIONS") or "{}")
+        except ValueError:
+            options = {}
+    if not options and item.get("resume"):
+        try:
+            state = PIPELINES[pipeline].load_run(item["resume"])
+        except Exception:  # The queue is drawn every poll: one unreadable run must not stop it
+            state = None
+        options = getattr(state, "options", None) or {}
+    if not isinstance(options, dict):
+        return []
+    try:
+        key = (pipeline, workflow, os.path.getmtime(workflow), json.dumps(options, sort_keys=True))
+    except (OSError, TypeError):
+        return []
+    if key not in _queue_loras:
+        try:
+            _queue_loras[key] = workflow_options.loras_used(workflow, options, pipeline)
+        except Exception:  # A workflow that can't be read shows no LoRA, and the queue still draws
+            _queue_loras[key] = []
+        if len(_queue_loras) > 500:
+            _queue_loras.pop(next(iter(_queue_loras)))
+    return _queue_loras[key]
+
+
 def run_facts(item):
     """What a run's title opens on: the workflow it renders with and the size it makes, as its options say."""
     argv, env = item.get("argv") or [], item.get("env") or {}
@@ -1434,6 +1486,8 @@ def run_facts(item):
             "resolution": size or ("As the run was set up" if "--resume" in argv else "The workflow's own"),
             **({"count": int(count)} if count and count.isdigit() and int(count) > 0 else {}),
             **({"upscale": upscale} if upscale else {}),
+            **({"loras": loras} if (loras := item_loras(item)) else {}),
+            **({"explicit": True} if "--explicit" in argv else {}),
             **({"prompt": item["prompt"]} if item.get("prompt") else {})}
 
 
@@ -1805,8 +1859,12 @@ def _check_comfyui():
         online = requests.get(f"{url}/system_stats", timeout=2).status_code == 200
     except requests.RequestException:
         online = False
+    was = _comfyui_cache.get("online")
     # Not answering, yet its port is open: running, but too busy to reply, as when it pages for want of memory.
     _comfyui_cache.update(online=online, listening=online or _port_open(url), at=time.time())
+    # ComfyUI just came: its workflows listed now, in the background, so none waits for them when opened.
+    if _warm_workflows["on"] and online and was is False:
+        threading.Thread(target=warm_saved_workflows, daemon=True).start()
 
 
 _comfyui_checking = threading.Lock()
@@ -1951,13 +2009,13 @@ class ComfyMonitor:
                 self.nodes = self._load_nodes(data.get("prompt_id"))
                 self.samplers_seen = []
                 self.node_at = self.node_steps = None
-                s.update(active=True, started=time.time(), node=None, label="Starting", value=None, max=None)
+                s.update(active=True, started=time.time(), node=None, label="Starting", value=None, max=None, stopping=False)
                 self._note(f"started a workflow of {len(self.nodes)} nodes" if self.nodes else "started a workflow")
             elif kind == "executing":
                 node = data.get("node")
                 self._close()
                 if node is None:
-                    s.update(active=False, label="Idle", node=None, value=None, max=None)
+                    s.update(active=False, label="Idle", node=None, value=None, max=None, stopping=False)
                     return
                 cls = self.nodes.get(str(node), "")
                 label = COMFY_LABELS.get(cls, cls or f"Node {node}")
@@ -1982,7 +2040,13 @@ class ComfyMonitor:
                     total = int(time.time() - s["started"]) if s.get("started") else None
                     self._note(f"finished{f' in {total}s' if total is not None else ''}")
                 s.update(active=False, label="Idle" if kind == "execution_success" else kind.replace("_", " "),
-                         node=None, value=None, max=None)
+                         node=None, value=None, max=None, stopping=False)
+
+    def mark_stopping(self):
+        """The run was stopped: what ComfyUI is still on is being stopped, not worked on, until it ends."""
+        with self.lock:
+            if self.state.get("active"):
+                self.state["stopping"] = True
 
     def snapshot(self):
         with self.lock:
@@ -2051,19 +2115,65 @@ def cancel_pipeline_clips():
     """
     url = (os.getenv("COMFYUI_URL") or "http://127.0.0.1:8188").rstrip("/")
     client_id = comfyui_client_id()
+    running = None
     try:
         queue = requests.get(f"{url}/queue", timeout=5).json()
         waiting = [entry[1] for entry in queue.get("queue_pending", []) if entry[3].get("client_id") == client_id]
         # Waiting ones first, or the next clip starts as soon as this one stops.
         if waiting:
             requests.post(f"{url}/queue", json={"delete": waiting}, timeout=5)
-        for entry in queue.get("queue_running", []):
-            if entry[3].get("client_id") == client_id:
-                requests.post(f"{url}/interrupt", json={"prompt_id": entry[1]}, timeout=5)
+        running = [entry[1] for entry in queue.get("queue_running", []) if entry[3].get("client_id") == client_id]
+        if not running:
+            return
+        if comfy_monitor:
+            comfy_monitor.mark_stopping()
+        for prompt_id in running:
+            requests.post(f"{url}/interrupt", json={"prompt_id": prompt_id}, timeout=5)
     except requests.ConnectionError:
-        pass  # ComfyUI isn't running, so it has nothing to cancel
+        return  # ComfyUI isn't running, so it has nothing to cancel
     except (requests.RequestException, ValueError, LookupError, AttributeError) as e:
-        job.log(f"⚠️ Could not cancel the ComfyUI clip, it may keep rendering: {e}")
+        job.log(f"⚠️ Could not cancel the ComfyUI clip at once, still trying: {e}")
+    if comfy_monitor:
+        comfy_monitor.mark_stopping()
+    threading.Thread(target=make_sure_stopped, args=(url, client_id, running), daemon=True).start()
+
+
+# How long a stopped clip may keep ComfyUI busy before ComfyUI is restarted to end it. A node only stops when it
+# checks for an interrupt: SeedVR2's upscaler went on for minutes, and a busy ComfyUI may not even take the interrupt.
+STOP_GRACE = 30
+STOP_CHECK_EVERY = 3
+
+
+def make_sure_stopped(url, client_id, prompt_ids=None):
+    """
+    After a stop: asks ComfyUI again and again to interrupt the stopped clip, and restarts ComfyUI if it is still on
+    it after STOP_GRACE seconds. prompt_ids: the clips stopped, or None when ComfyUI was too busy to say (then this
+    client's running clip, while no new run has started that it could be).
+    """
+    deadline = time.time() + STOP_GRACE
+    while time.time() < deadline:
+        time.sleep(STOP_CHECK_EVERY)
+        try:
+            queue = requests.get(f"{url}/queue", timeout=10).json()
+        except requests.ConnectionError:
+            return  # Gone: nothing left rendering
+        except (requests.RequestException, ValueError):
+            continue  # Too busy to answer: asked again
+        mine = [entry[1] for entry in queue.get("queue_running", []) if entry[3].get("client_id") == client_id]
+        if prompt_ids is None:
+            if job.running:
+                return  # A new run has started: its clip isn't this one to stop
+            prompt_ids = mine
+        left = [prompt_id for prompt_id in mine if prompt_id in prompt_ids]
+        if not left:
+            return
+        for prompt_id in left:
+            try:
+                requests.post(f"{url}/interrupt", json={"prompt_id": prompt_id}, timeout=10)
+            except requests.RequestException:
+                pass
+    job.log(f"⚠️ ComfyUI was still on the stopped clip after {STOP_GRACE}s: restarting ComfyUI to end it.")
+    restart_comfyui_in_background(force=True)
 
 
 def _comfyui_workflow(item):
@@ -2651,18 +2761,55 @@ def logout():
     return redirect(url_for("login"))
 
 
-_saved_workflows_cache = {"at": 0.0, "online": None, "value": []}
+_saved_workflows_cache = {"at": 0.0, "online": None, "value": [], "refreshing": False}
+# Whether the panel lists the workflows ahead (as it starts, and as ComfyUI comes): the running panel, not a test.
+_warm_workflows = {"on": False}
+
+
+def warm_saved_workflows():
+    """The workflows listed in the background, so the first thing that opens them has them ready."""
+    try:
+        saved_workflows()
+    except Exception:  # noqa: BLE001 - asked for again when something opens them
+        logging.exception("Could not list the saved workflows ahead")
 _saved_workflows_lock = threading.Lock()
+SAVED_WORKFLOWS_FRESH = 30
+
+
+def _list_saved_workflows():
+    return list_saved((os.getenv("COMFYUI_URL") or "http://127.0.0.1:8188").rstrip("/"), SAVED_WORKFLOWS_DIR)
+
+
+def _refresh_saved_workflows(online, since):
+    try:
+        value = _list_saved_workflows()
+    except Exception:  # noqa: BLE001 - kept as it was: the next one asked tries again
+        logging.exception("Could not refresh the saved workflows")
+        value = None
+    with _saved_workflows_lock:
+        cache = _saved_workflows_cache
+        # Unless it was emptied meanwhile (at 0: worked out afresh), or ComfyUI came or went.
+        if value is not None and cache["at"] == since and cache["online"] == online:
+            cache.update(at=time.time(), value=value)
+        cache["refreshing"] = False
 
 
 def saved_workflows():
-    # Cached briefly: it asks ComfyUI about every node it has. Not across ComfyUI starting, which is when they appear.
+    """
+    The saved workflows, cached: listing them asks ComfyUI about every node it has and checks every LoRA, a few
+    seconds. Older than SAVED_WORKFLOWS_FRESH, the list kept is answered at once and refreshed in the background, so
+    opening a set's prompts or settings doesn't wait on it. Worked out there and then only for the first, or when
+    ComfyUI has come or gone (its nodes appear when it starts).
+    """
     online = comfyui_online()
     with _saved_workflows_lock:
         cache = _saved_workflows_cache
-        if time.time() - cache["at"] > 30 or cache["online"] != online:
-            url = (os.getenv("COMFYUI_URL") or "http://127.0.0.1:8188").rstrip("/")
-            cache.update(at=time.time(), online=online, value=list_saved(url, SAVED_WORKFLOWS_DIR))
+        if cache["at"] and cache["online"] == online:
+            if time.time() - cache["at"] > SAVED_WORKFLOWS_FRESH and not cache["refreshing"]:
+                cache["refreshing"] = True
+                threading.Thread(target=_refresh_saved_workflows, args=(online, cache["at"]), daemon=True).start()
+            return cache["value"]
+        cache.update(at=time.time(), online=online, value=_list_saved_workflows())
         return cache["value"]
 
 
@@ -3625,22 +3772,70 @@ def api_poweroff():
     return {"ok": True, **poweroff_state()}
 
 
+# Starts the panel again once this one has let go of its port, and makes sure it came: it once waited a fixed 2 s,
+# started the server with its output thrown away and never looked, and the panel stayed down. Now it waits for the
+# port, starts it as the launcher does (start_webapp.pyw: UTF-8 output into logs/webapp.log), and tries again, three
+# times in all, until it answers.
+RESPAWN_CODE = r"""
+import json, os, socket, subprocess, sys, time
+a = json.loads(sys.argv[1])
+def answering():
+    s = socket.socket()
+    s.settimeout(1)
+    try:
+        s.connect(("127.0.0.1", a["port"]))
+        return True
+    except OSError:
+        return False
+    finally:
+        s.close()
+for _ in range(120):
+    if not answering():
+        break
+    time.sleep(0.5)
+os.makedirs(os.path.dirname(a["log"]), exist_ok=True)
+for attempt in range(3):
+    with open(a["log"], "a", encoding="utf-8") as log:
+        log.write(f"--- Restarting the panel (attempt {attempt + 1}) ---\n")
+        log.flush()
+        subprocess.Popen(a["argv"], cwd=a["cwd"], stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT,
+                         creationflags=a["flags"], env={**os.environ, "PYTHONUNBUFFERED": "1", "PYTHONIOENCODING": "utf-8"})
+    for _ in range(60):
+        time.sleep(0.5)
+        if answering():
+            sys.exit(0)
+"""
+
+
 def respawn_command():
-    """What starts this server again as it was started: the helper waits for the port to be let go first."""
-    code = ("import json,subprocess,sys,time;time.sleep(2);a=json.loads(sys.argv[1]);"
-            "subprocess.Popen(a['argv'],cwd=a['cwd'],stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,"
-            "stderr=subprocess.DEVNULL,creationflags=a['flags'])")
+    """What starts this server again as it was started, once this one has gone (RESPAWN_CODE)."""
     flags = NO_WINDOW | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
-    return [sys.executable, "-c", code, json.dumps({"argv": [sys.executable, *sys.argv], "cwd": PROJECT_ROOT, "flags": flags})], flags
+    argv = sys.argv
+    port = int(argv[argv.index("--port") + 1]) if "--port" in argv[:-1] else 8800
+    return [sys.executable, "-c", RESPAWN_CODE, json.dumps({
+        "argv": [sys.executable, *argv], "cwd": PROJECT_ROOT, "flags": flags, "port": port,
+        "log": os.path.join(LOGS_DIR, "webapp.log")})], flags
 
 
 @app.route("/restart/panel", methods=["POST"])
 @password_required
 def restart_panel():
-    """Starts the panel again, to load new code. Only when nothing is running that it would cut short."""
+    """
+    Starts the panel again, to load new code. Only when nothing is running that it would cut short, unless the body
+    says force: then the run and upload going are stopped first (as Stop does: the run waits in the queue, which comes
+    back on hold), for when one is stuck.
+    """
     global _panel_closing
+    force = bool((request.get_json(silent=True) or {}).get("force"))
+    if force:
+        if job.running:
+            job.log("⚠️ The panel was force-restarted from Settings while this was running.")
+        stop_run()
+        uploads.stop()
+        if job.running or uploads.running:
+            return {"ok": False, "error": f"{STOP_FAILED} Then restart again."}, 500
     with run_queue.lock:
-        if restart_blocked():
+        if not force and restart_blocked():
             return {"ok": False, "error": "A run, upload or prompt writer is going, or a queue is about to start one. Wait for it first."}, 409
         command, flags = respawn_command()
         subprocess.Popen(command, cwd=PROJECT_ROOT, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
@@ -4206,6 +4401,9 @@ def main():
                 hook()
             except Exception as e:  # Tidying up must never keep the panel from starting
                 app.logger.error("A start-up task failed: %s", e)
+        # The workflows listed straight away, in the background: ready before anything opens them.
+        _warm_workflows["on"] = True
+        threading.Thread(target=warm_saved_workflows, daemon=True).start()
 
     global comfy_monitor
     comfy_monitor = ComfyMonitor()

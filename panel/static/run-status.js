@@ -202,7 +202,8 @@ function renderNow(data) {
   // ComfyUI's own progress: which part of the workflow, and sampling steps.
   $('comfyNow').classList.toggle('hidden', !comfyBusy);
   if (comfyBusy) {
-    $('comfyLabel').textContent = c.label || 'Working';
+    // Stopped, but ComfyUI is still on it until the node lets go (the panel asks again, then restarts ComfyUI).
+    $('comfyLabel').textContent = c.stopping ? `Stopping · ${c.label || 'Working'}` : c.label || 'Working';
     const hasSteps = c.max && c.value != null;
     $('comfySteps').textContent = hasSteps ? `Step ${c.value} of ${c.max}` : '';
     $('comfyBar').style.width = hasSteps ? `${Math.round(100 * c.value / c.max)}%` : '0';

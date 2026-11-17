@@ -17,13 +17,19 @@ function collectionAlbums(id) {
   return { images, films };
 }
 // The one before or after this in its collection's album, as a function that opens it; null at either end.
+// The one by steps from items[at] in the viewer, round in a loop: on from the last is the first, back from the first
+// the last. null when there is no other (one alone, or the one shown not found).
+function loopNeighbour(items, at, by) {
+  if (at < 0 || items.length < 2) return null;
+  return items[((at + by) % items.length + items.length) % items.length];
+}
 function collectionNeighbour(by) {
   const albums = collectionAlbums(viewerCollection);
   if (viewing.film) {
-    const next = albums.films[albums.films.findIndex(v => v.name === viewing.name) + by];
+    const next = loopNeighbour(albums.films, albums.films.findIndex(v => v.name === viewing.name), by);
     return next ? () => openFilm(next.name, 'video') : null;
   }
-  const next = albums.images[albums.images.findIndex(p => p.set === viewing.id && p.position === viewing.position) + by];
+  const next = loopNeighbour(albums.images, albums.images.findIndex(p => p.set === viewing.id && p.position === viewing.position), by);
   return next ? () => openViewer(next.set, next.position) : null;
 }
 // Always above the list, off Shorts: one with anything NSFW in it only in the NSFW view, which shows only those.
@@ -886,6 +892,8 @@ function openFilm(name, filmFolder = folder) {
   $('viewerDownload').href = `/download/${filmFolder}/${encodeURIComponent(name)}`;
   if (!$('imageViewer').open) $('imageViewer').showModal();
   $('viewerVideo').play().catch(() => {});  // A browser may want a tap first
+  // Its run, for Prompts and its settings: asked for now, so either opens at once.
+  if (film.run) prefetch(runUrl(film.run));
 }
 function downloadFile(url) {
   const link = document.createElement('a');
@@ -930,6 +938,8 @@ function openViewer(id, position) {
   $('viewerDownload').href = `${url}&download=1`;
   $('viewerRes').textContent = sizeText(picture.resolution);
   if (!$('imageViewer').open) $('imageViewer').showModal();
+  // Its set, for Prompts, More like this and its settings: asked for now, so each opens at once.
+  prefetch(runUrl(id));
 }
 // The viewer's size, one way whichever told it (the saved "880x1920", or the picture once loaded): "880 × 1920".
 function sizeText(size) { return String(size || '').replace(/^(\d+)\s*[x×]\s*(\d+)$/i, '$1 × $2'); }
@@ -940,7 +950,8 @@ $('viewerImage').addEventListener('load', () => {
   // Past 1440p on its shorter side, SeedVR2 can't take it: greyed, but the other ways still can.
   $('viewerUpscale').classList.toggle('dim', !!viewing && !viewing.film && Math.min(img.naturalWidth, img.naturalHeight) > UPSCALE_MOST_SIDE);
 });
-// The image before or after this one in its set: a swipe, or the arrow keys.
+// The image before or after this one in its set: a swipe, or the arrow keys. Round in a loop: from the last on to
+// the first, and from the first back to the last.
 function stepViewer(by) {
   if (!viewing) return false;
   if (viewerCollection) {
@@ -951,7 +962,7 @@ function stepViewer(by) {
     return true;
   }
   if (viewing.film) {
-    const films = visibleFilms(), next = films[films.findIndex(v => v.name === viewing.name) + by];
+    const films = visibleFilms(), next = loopNeighbour(films, films.findIndex(v => v.name === viewing.name), by);
     if (!next) return false;
     disarm($('viewerDelete'));
     transitionViewer($('viewerVideo'), by > 0 ? 'to-right' : 'to-left', () => openFilm(next.name, viewing.folder));
@@ -959,7 +970,7 @@ function stepViewer(by) {
   }
   const set = imageSets.find(s => s.id === viewing.id);
   const images = set ? set.images : [];
-  const next = images[images.findIndex(p => p.position === viewing.position) + by];
+  const next = loopNeighbour(images, images.findIndex(p => p.position === viewing.position), by);
   if (!next) return false;
   disarm($('viewerDelete'));
   transitionViewer($('viewerImage'), by > 0 ? 'to-right' : 'to-left', () => openViewer(viewing.id, next.position));
@@ -1204,14 +1215,16 @@ $('imageViewer').addEventListener('keydown', e => {
 function closeViewer() {
   if ($('imageViewer').open) $('imageViewer').close();
 }
-// Closed, Output shows the batch it was on at the top: swiped through to another set, that one. Only from Output itself
-// (not a collection, Finished or the queue), and only when it's on screen; already there, nothing moves.
+// Closed, Output shows the batch it was on in the middle of the screen (at the top if it's taller than the screen):
+// swiped through to another set, that one. Only from Output itself (not a collection, Finished or the queue), and only
+// when it's on screen.
 function revealViewedBatch(was, collection) {
   if (!was || collection) return;
   const key = was.film ? `film:${was.name}` : `image:${was.id}`;
   const batch = [...$('imageSets').querySelectorAll('.output-batch[data-output-key]')].find(cell => cell.dataset.outputKey === key);
   if (!batch || !batch.getClientRects().length) return;
-  batch.scrollIntoView({ behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth', block: 'start' });
+  const tall = batch.getBoundingClientRect && batch.getBoundingClientRect().height > window.innerHeight * 0.8;
+  batch.scrollIntoView({ behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth', block: tall ? 'start' : 'center' });
 }
 $('imageViewer').addEventListener('close', () => {
   clearViewerTransition();

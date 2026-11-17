@@ -10,13 +10,13 @@ import time
 from flask import request
 
 from panel import settings, temperatures
-from panel.server import STARTUP_HOOKS, app, gpu_stats, job, password_required
+from panel.server import STARTUP_HOOKS, STATUS_HOOKS, app, gpu_stats, job, password_required
 
 
 def monitor_gpu_heat():
     from panel.gpu_guard import GPUHeatGuard
 
-    guard = GPUHeatGuard(job.log, settings.load)
+    guard = GPUHeatGuard(job.log, settings.load, keep=True)
     while not job.closed:
         reading = gpu_stats()
         gpu = reading["temp"] if reading else None
@@ -62,6 +62,16 @@ def start_monitor():
 STARTUP_HOOKS.append(start_monitor)
 
 
+def afterburner_status(payload):
+    """Whether MSI Afterburner was running at the heat guard's last check, for Settings (None: not known)."""
+    from panel import gpu_guard
+
+    payload["afterburner"] = gpu_guard.state["running"]
+
+
+STATUS_HOOKS.append(afterburner_status)
+
+
 @app.route("/restart/afterburner", methods=["POST"])
 @password_required
 def restart_afterburner():
@@ -76,5 +86,27 @@ def restart_afterburner():
     except (OSError, RuntimeError, gpu_guard.psutil.Error) as e:
         job.log(f"Could not restart MSI Afterburner: {e}")
         return {"ok": False, "error": f"Could not restart MSI Afterburner: {e}"}, 500
+    gpu_guard.state["running"] = True
     job.log(f"MSI Afterburner restarted from Settings with profile {profile}.")
     return {"ok": True, "profile": profile}
+
+
+@app.route("/start/afterburner", methods=["POST"])
+@password_required
+def start_afterburner():
+    """Settings' Start Afterburner: started with the chosen profile if it isn't running, never asking on the PC for
+    administrator rights (its start-at-logon task has them), so it works from a phone."""
+    from panel import gpu_guard
+
+    profile = settings.load()["gpu_profile"]
+    try:
+        started = gpu_guard.start_afterburner(profile)
+    except gpu_guard.Busy as e:
+        return {"ok": False, "error": str(e)}, 409
+    except (OSError, RuntimeError, gpu_guard.psutil.Error) as e:
+        job.log(f"Could not start MSI Afterburner: {e}")
+        return {"ok": False, "error": f"Could not start MSI Afterburner: {e}"}, 500
+    gpu_guard.state["running"] = True
+    if started:
+        job.log(f"MSI Afterburner started from Settings with profile {profile}.")
+    return {"ok": True, "started": started, "profile": profile}

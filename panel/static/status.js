@@ -25,13 +25,37 @@ const statusCatalogue = (() => {
 const panelConnection = (() => {
   // A status call that fails once (a panel restart, a slow reply) isn't worth a notice: it shows only after 5 s down.
   const DISCONNECTED_AFTER_MS = 5000;
-  let lastSuccess = null, disconnectTimer = null, lastError = null;
-  function show(message) {
+  let lastSuccess = null, disconnectTimer = null, lastError = null, wokeAt = 0, shown = null;
+  function show(message, kind = 'render') {
     const notice = document.getElementById('connectionNotice');
     notice.hidden = false;
     document.getElementById('connectionMessage').textContent = message;
     document.body.classList.remove('page-loading');
+    shown = kind;
   }
+  function disconnected() {
+    // Hidden, or back less than 5 s ago (a timer frozen with the page goes off as soon as it's back): not yet.
+    const since = Date.now() - wokeAt;
+    if (document.hidden) return;
+    if (since < DISCONNECTED_AFTER_MS) { disconnectTimer = setTimeout(disconnected, DISCONNECTED_AFTER_MS - since); return; }
+    const last = lastSuccess ? ` Last update: ${lastSuccess.toLocaleTimeString()}.` : ' No status received yet.';
+    show(`Panel disconnected. Retrying automatically.${last} ${(lastError && lastError.message) || 'Could not reach the panel.'}`, 'disconnected');
+  }
+  // The page back in sight (the browser opened again, the phone unlocked): its connection is waking too. Whatever
+  // failed while it was away, the notice waits 5 s more from now, and one already up goes until then.
+  function wake() {
+    wokeAt = Date.now();
+    if (shown === 'disconnected') {
+      document.getElementById('connectionNotice').hidden = true;
+      shown = null;
+    }
+    if (lastError) {
+      clearTimeout(disconnectTimer);
+      disconnectTimer = setTimeout(disconnected, DISCONNECTED_AFTER_MS);
+    }
+  }
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) wake(); });
+  window.addEventListener('pageshow', event => { if (event.persisted) wake(); });
   // Loading, the same: "Connecting to the panel..." only if the first answer takes over 5 s.
   const connecting = setTimeout(() => { if (!lastSuccess) show('Connecting to the panel...'); }, DISCONNECTED_AFTER_MS);
   return {
@@ -40,16 +64,16 @@ const panelConnection = (() => {
       clearTimeout(connecting);
       clearTimeout(disconnectTimer);
       disconnectTimer = null;
+      lastError = null;
       document.getElementById('connectionNotice').hidden = true;
+      shown = null;
     },
     failure(error) {
       lastError = error;
       if (disconnectTimer) return;
-      disconnectTimer = setTimeout(() => {
-        const last = lastSuccess ? ` Last update: ${lastSuccess.toLocaleTimeString()}.` : ' No status received yet.';
-        show(`Panel disconnected. Retrying automatically.${last} ${lastError.message || 'Could not reach the panel.'}`);
-      }, DISCONNECTED_AFTER_MS);
+      disconnectTimer = setTimeout(disconnected, DISCONNECTED_AFTER_MS);
     },
+    wake,
     renderFailure(error) {
       show(`A page section could not update. Retry now or reload the page. ${error.message || ''}`);
     },

@@ -180,6 +180,9 @@
   .queue-item.dragging { cursor: grabbing; scale: 1.02; }
   .queue-item.selected, .queue-item.selected * { user-select: none; -webkit-user-select: none; }
   .queue-item .hint { margin-top: 0; }
+  /* A comparison in a queued job's line: an icon before what it compares, in the theme's colour. */
+  .detail-comparison { color: var(--shared); white-space: nowrap; }
+  .detail-comparison .detail-icon { vertical-align: -1px; margin-right: 3px; }
   .queue-item .when { color: var(--muted); font-size: .78rem; white-space: nowrap; font-variant-numeric: tabular-nums; }
   .queue button { width: auto; margin: 0; padding: 4px 10px; font-size: .78rem; background: var(--panel-2); border: 1px solid var(--line); color: var(--text); }
   .queue .queue-head .queue-fold-toggle { padding: 2px 0; border: 0; background: transparent; }
@@ -592,14 +595,22 @@
   .settings-actions button.restarting, .settings-actions button.restarting:disabled { opacity: 1; color: var(--warn); border-color: var(--warn); background: color-mix(in srgb, var(--warn) 12%, transparent); }
   .settings-power { position: relative; flex: 1 1 0; min-width: 0; }
   .settings-power > button { width: 100%; height: 100%; }
-  .settings-menu { position: absolute; z-index: 12; right: 0; bottom: calc(100% + 6px); display: flex; flex-direction: column; gap: 4px; min-width: 100%;
-    padding: 5px; background: var(--panel); border: 1px solid var(--line); border-radius: 12px; box-shadow: 0 8px 24px rgba(0, 0, 0, .45);
-    transform-origin: bottom center; animation: menu-in .2s ease; }
+  /* Power's and Restart's menus: their options are buttons like the one they grow from, as wide and lined up with it,
+     stacked straight above it, and they slide straight up out of it. */
+  .settings-menu { position: absolute; z-index: 12; left: 0; right: 0; bottom: calc(100% + 6px); display: flex; flex-direction: column; gap: 6px;
+    animation: settings-menu-up .2s ease; }
   .settings-menu[hidden] { display: none; }
-  .settings-menu.closing { animation: menu-out .15s ease forwards; pointer-events: none; }
-  .settings-menu a { display: block; padding: 8px 12px; border: 1px solid var(--line); border-radius: 9px; background: var(--panel-2);
-    color: var(--text); font-size: .78rem; font-weight: 600; text-align: center; text-decoration: none; white-space: nowrap; }
-  .settings-menu a:hover, .settings-menu a:focus-visible { color: var(--text); border-color: var(--accent); }
+  .settings-menu.closing { animation: settings-menu-down .15s ease forwards; pointer-events: none; }
+  @keyframes settings-menu-up { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
+  @keyframes settings-menu-down { to { opacity: 0; transform: translateY(10px); } }
+  .settings-actions .settings-menu > a, .settings-actions .settings-menu > button { display: flex; flex-direction: column; align-items: center; gap: 4px;
+    width: 100%; margin: 0; padding: 7px 4px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel-2); color: var(--text);
+    font-size: .68rem; text-decoration: none; box-shadow: 0 6px 18px rgba(0, 0, 0, .4); }
+  .settings-actions .settings-menu > a:hover, .settings-actions .settings-menu > a:focus-visible { border-color: var(--accent); }
+  .settings-actions .settings-menu > a > span { font-size: .62rem; line-height: 1; white-space: nowrap; }
+  /* Force restart: red, as Power is, since it stops what's going; solid over what's behind it. */
+  .settings-actions .settings-menu > #forceRestartPanel { border-color: var(--err); color: var(--err); background: color-mix(in srgb, var(--err) 14%, var(--panel)); }
+  .settings-actions .settings-menu > #forceRestartPanel.armed { background: var(--err); color: #fff; }
   .settings-body { display: flex; flex-direction: column; gap: 10px; }
   /* Free RAM: the stepper centred, as Generate's; Set to its left, there only while a change waits to be set. */
   .reserve-row { position: relative; display: flex; justify-content: center; }
@@ -639,6 +650,13 @@
   .gpu-guard-actions button { width: auto; margin: 0; padding: 5px 12px; font-size: .78rem; font-weight: 500; background: transparent;
     border: 1px solid var(--line); color: var(--muted); }
   .gpu-guard-actions button:hover:not(:disabled) { color: var(--text); border-color: var(--muted); }
+  /* Whether Afterburner is running, left of Restart Afterburner: green, red when it isn't, grey until known. */
+  .gpu-guard-actions { justify-content: space-between; align-items: center; }
+  .afterburner-state { display: inline-flex; align-items: center; gap: 6px; font-size: .78rem; color: var(--muted); }
+  .afterburner-state.off { color: var(--err); }
+  .afterburner-buttons { display: inline-flex; gap: 8px; }
+  /* Not running: Start stands out, in the accent colour. */
+  .gpu-guard-actions #startAfterburner:not(:disabled) { color: var(--accent); border-color: var(--accent); }
   /* First tap: it asks for a second, in the warning colour. */
   .gpu-guard-actions button.armed { color: var(--warn); border-color: var(--warn); }
   /* Temperatures: GPU green, CPU blue, dark steps validated for the dark surfaces; the direct labels carry them for tritan. */
@@ -1019,7 +1037,9 @@
   .image-line button.pick-output { padding: 6px 8px; }
   .image-line button.pick-output svg { width: 16px; height: 16px; display: block; }
   #expandUnits { margin-top: 8px; }
-  #paintAreas { width: auto; margin-top: 8px; }
+  /* Paint what to change: centred, and as low as the + buttons beside the images, its hint centred under it. */
+  #paintAreas { display: block; width: auto; margin: 8px auto 0; padding: 4px 16px; }
+  #areasHint { text-align: center; }
   /* Inpaint: the whole screen, the picture as large as fits and zoomable, its tools under it. */
   dialog.paint-dialog { width: 100vw; height: 100dvh; max-width: none; max-height: none; margin: 0; border: 0; border-radius: 0;
     padding: max(10px, env(safe-area-inset-top)) 12px max(10px, env(safe-area-inset-bottom)); box-sizing: border-box;
@@ -1628,7 +1648,16 @@
   .wrap { padding-bottom: calc(var(--head, 130px) + 16px); }
   .stick { transition: opacity .2s ease, transform .2s ease; }
   /* Low, to leave the page as much of the screen as it can. */
-  .jump { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)) 34px; gap: 5px; padding: 4px 12px; }
+  .jump { position: relative; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)) 34px; gap: 5px; padding: 4px 12px; }
+  /* The outline round the section shown, gliding from one button to the next (placeJumpGlider): the buttons' own
+     outline gives way to it, in the colour each has. */
+  .jump-glider { position: absolute; box-sizing: border-box; border: 1px solid var(--shared); border-radius: 9px; pointer-events: none; z-index: 1;
+    transition: left .28s cubic-bezier(.3, .7, .3, 1), width .28s cubic-bezier(.3, .7, .3, 1), border-color .28s ease; }
+  .jump-glider.still { transition: none; }
+  .jump-glider[data-at="generate"] { border-color: var(--side); }
+  body.on-shorts .jump-glider[data-at="output"] { border-color: var(--c-shorts); }
+  .jump.glides a.active, body:not(.on-shorts) .jump.glides a#jumpResults.active, .jump.glides a.run.active { border-color: var(--line); }
+  @media (prefers-reduced-motion: reduce) { .jump-glider { transition: none; } }
   .jump-more { position: relative; display: flex; align-items: center; justify-content: center; width: 34px; min-height: 30px;
     margin: 0; padding: 0; background: var(--panel-2); border: 1px solid var(--line); border-radius: 9px; color: var(--muted); }
   .jump-more[aria-expanded="true"] { color: var(--text); border-color: var(--accent); }
@@ -1829,7 +1858,26 @@
     body[data-page="quota"] .dashboard > [data-page="quota"], body[data-page="output"] .dashboard > [data-page="output"] {
       display: block; animation: page-in .24s ease-out;
     }
+    /* Swiped to another page (showPage): it comes in as Settings says, from the side it was swiped from (--page-dir, 1
+       from the right), over --page-time; a tap or a reload, as page-in above. Nothing is wider than the screen meanwhile,
+       and with swiping on, the page only scrolls up and down, leaving a sideways swipe to the panel. */
+    body { overflow-x: clip; }
+    body.page-swipe { touch-action: pan-y pinch-zoom; }
+    body.page-turn .dashboard > [data-page] { animation-duration: var(--page-time, .3s); animation-timing-function: cubic-bezier(.25, .8, .3, 1); }
+    body.page-turn[data-page-anim="slide"] .dashboard > [data-page] { animation-name: page-slide; }
+    body.page-turn[data-page-anim="push"] .dashboard > [data-page] { animation-name: page-push; }
+    body.page-turn[data-page-anim="fade"] .dashboard > [data-page] { animation-name: page-fade; }
+    body.page-turn[data-page-anim="zoom"] .dashboard > [data-page] { animation-name: page-zoom; }
+    body.page-turn[data-page-anim="flip"] .dashboard > [data-page] { animation-name: page-flip; transform-origin: calc(50% - var(--page-dir, 1) * 50%) 50%; }
+    body.page-turn[data-page-anim="off"] .dashboard > [data-page] { animation: none; }
   }
+  @keyframes page-slide { from { transform: translateX(calc(var(--page-dir, 1) * 100%)); } to { transform: none; } }
+  @keyframes page-push { from { opacity: 0; transform: translateX(calc(var(--page-dir, 1) * 28%)); } to { opacity: 1; transform: none; } }
+  @keyframes page-fade { from { opacity: 0; } to { opacity: 1; } }
+  @keyframes page-zoom { from { opacity: 0; transform: scale(.92); } to { opacity: 1; transform: none; } }
+  @keyframes page-flip { from { opacity: 0; transform: perspective(900px) rotateY(calc(var(--page-dir, 1) * -65deg)); } to { opacity: 1; transform: none; } }
+  .page-animation-row { display: flex; gap: 8px; }
+  .page-animation-row select { flex: 1; min-width: 0; }
   .go-eta { flex: 1; min-width: 0; font-size: .8rem; color: var(--muted); }
   /* Why it wasn't added, beside the button you pressed: the form's own message may be off the screen. */
   .go-error { flex: 1; min-width: 0; font-size: .78rem; line-height: 1.3; color: var(--err); overflow-wrap: anywhere; }
@@ -2051,6 +2099,7 @@
 <div class="stick" id="stick">
   <div class="side-menu" id="sideMenu" role="menu" hidden></div>
   <nav class="jump" id="jump" aria-label="Sections">
+    <span class="jump-glider" id="jumpGlider" aria-hidden="true" hidden></span>
     <a href="#runCard" data-page="status" class="run">Status</a>
     <a href="#optionsCard" data-page="generate">Generate</a>
     <a href="#videosCard" data-page="output" id="jumpResults">Output</a>
@@ -2812,6 +2861,9 @@
   <label class="settings-check"><input type="checkbox" id="privateMode"><span>Private mode<small>What you make is tagged private, and Output opens on the private filter. Stays on until you turn it off.</small></span></label>
   <label class="settings-check"><input type="checkbox" id="topProgress"><span>Progress bar at the top<small>While something runs, a progress bar at the top of every page.</small></span></label>
   <label class="settings-check"><input type="checkbox" id="pinProgress"><span>Pin the progress bar<small>Scrolled away from the top, the progress bar stays in sight, stretched along the top of the screen.</small></span></label>
+  <label class="settings-check"><input type="checkbox" id="pageSwipe"><span>Swipe between pages<small>On a phone, a swipe left or right goes to the next page, Status, Generate and Output round in a loop.</small></span></label>
+  <div class="settings-group"><span id="pageAnimationTitle">How a swiped-to page comes in</span></div>
+  <div class="settings-row page-animation-row"><select id="pageAnimation" aria-labelledby="pageAnimationTitle"><option value="push">Push: fades in from the side</option><option value="slide">Slide</option><option value="fade">Fade</option><option value="zoom">Zoom</option><option value="flip">Flip</option><option value="off">Off</option></select><select id="pageSpeed" aria-label="Page animation speed"><option value="slow">Slow</option><option value="normal">Normal</option><option value="fast">Fast</option></select></div>
   <label class="settings-check"><input type="checkbox" id="statusProgress"><span>Progress in the Status button<small>On a phone, the footer's Status button fills as the run goes, with its percentage in the corner.</small></span></label>
   <div class="settings-group"><span id="titlesTitle">Titles</span>{{ hint_button('titleSourceHint', 'titles') }}</div>
   <div class="hint" id="titleSourceHint" hidden>Each new film and image set gets a short descriptive title from its prompt; its files are named by it too. With titles enabled, a local model selected for generation or used in the prompt editor also supplies the title. Without one, the choice below applies. Gemini uses one call per run; if it rejects the prompt, the local model titles it instead. Gemini, the local model for private runs asks Gemini only for what isn't made in Private mode, so private prompts never leave the PC for titling. Local model only never sends a prompt to Gemini. Either way the local model first frees ComfyUI's models and takes a little longer. If every one asked fails, it keeps its usual title.</div>
@@ -2838,13 +2890,13 @@
   </div>
   <label class="settings-check"><input type="checkbox" id="lowPriority"><span>Run generation at lower priority<small>The pipeline and ComfyUI give way to your other programs, so the PC stays responsive while it renders.</small></span></label>
   <div class="settings-group" id="gpuGuardTitle">GPU heat guard</div>
-  <label class="settings-check"><input type="checkbox" id="gpuGuard"><span>Restart MSI Afterburner when the GPU runs hot<small>Once above the restart temperature, Afterburner is restarted with the profile below, which brings its fan control back. Not again until the GPU has cooled down.</small></span></label>
+  <label class="settings-check"><input type="checkbox" id="gpuGuard"><span>Restart MSI Afterburner when the GPU runs hot<small>Once above the restart temperature, Afterburner is restarted with the profile below, which brings its fan control back. Not again until the GPU has cooled down. On, Afterburner is also started whenever it isn't running.</small></span></label>
   <div class="gpu-guard-grid" role="group" aria-labelledby="gpuGuardTitle">
     <label for="gpuRestartAbove">Restart above</label><span class="gpu-temp"><input type="number" id="gpuRestartAbove" min="40" max="95" step="1" inputmode="numeric"><span>°C</span></span>
     <label for="gpuRearmAt">Cool down to</label><span class="gpu-temp"><input type="number" id="gpuRearmAt" min="40" max="95" step="1" inputmode="numeric"><span>°C</span></span>
     <label for="gpuProfile">Profile</label><select id="gpuProfile">{% for n in range(1, 6) %}<option value="{{ n }}">Profile {{ n }}</option>{% endfor %}</select>
   </div>
-  <div class="settings-row gpu-guard-actions"><button type="button" id="restartAfterburner" title="Close MSI Afterburner and start it again now with the chosen profile, whatever the temperature. Tap twice.">Restart Afterburner</button></div>
+  <div class="settings-row gpu-guard-actions"><span class="afterburner-state" id="afterburnerState" aria-live="polite"><span class="dot" id="afterburnerDot"></span><span id="afterburnerText">Afterburner: checking…</span></span><span class="afterburner-buttons"><button type="button" id="startAfterburner" title="Start MSI Afterburner with the chosen profile, if it isn't running. Never asks for administrator rights on the PC.">Start</button><button type="button" id="restartAfterburner" title="Close MSI Afterburner and start it again now with the chosen profile, whatever the temperature. Tap twice.">Restart Afterburner</button></span></div>
   <div class="settings-group">Storage</div>
   <div class="disk" id="diskBox"><div class="hint">Checking…</div></div>
   <div class="settings-group">URL's</div>
@@ -2853,13 +2905,18 @@
   {% if tailscale_problem %}<div class="hint">Tailscale: {{ tailscale_problem }}</div>{% endif %}
   </div>
   <div class="settings-actions">
-    <button type="button" id="restartPanel" aria-label="Restart panel" title="Start the panel again, to load new code. Not while a run or upload is going."><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 11a8 8 0 1 0-2.3 5.7"/><path d="M20 4v7h-7"/></svg><span>Restart</span></button>
+    <div class="settings-power settings-restart">
+      <button type="button" id="restartPanel" data-short-label="Restart" aria-label="Restart panel" aria-haspopup="menu" aria-expanded="false" title="First tap opens Force restart; tap again to restart the panel, to load new code. Not while a run or upload is going."><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 11a8 8 0 1 0-2.3 5.7"/><path d="M20 4v7h-7"/></svg><span>Restart</span></button>
+      <div class="settings-menu" id="restartMenu" role="menu" aria-label="Restart options" hidden>
+        <button type="button" id="forceRestartPanel" data-short-label="Force" role="menuitem" title="Stops the run or upload going (the run waits in the queue, on hold) and restarts the panel at once. Tap twice. For when a run is stuck."><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M13 2 4 14h7l-1 8 9-12h-7z"/></svg><span>Force</span></button>
+      </div>
+    </div>
     <button type="button" id="restartComfy" aria-label="Restart ComfyUI" title="Start fresh: closes local ComfyUI processes, including work started outside the panel. Not while a panel run is going."><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="2"/><rect x="9.5" y="9.5" width="5" height="5" rx=".5"/><path d="M9 2.5v3M15 2.5v3M9 18.5v3M15 18.5v3M2.5 9h3M2.5 15h3M18.5 9h3M18.5 15h3"/></svg><span>Comfy</span></button>
     <button type="button" id="forceRestartComfy" data-short-label="Force" aria-label="Force restart ComfyUI" title="Force restart ComfyUI (three taps): closes ComfyUI and starts it again even while a run is going or the panel thinks one is: that run fails, and is tried once more once ComfyUI is back. Use it when ComfyUI is stuck or has died."><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M13 2 4 14h7l-1 8 9-12h-7z"/></svg><span>Force</span></button>
     <div class="settings-power">
       <button type="button" id="shutdown" aria-label="Shut down" aria-haspopup="menu" aria-expanded="false" title="First click opens Log out; click again to confirm shut down."><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M12 3v9"/><path d="M6.3 7.3a8 8 0 1 0 11.4 0"/></svg><span>Power</span></button>
       <div class="settings-menu" id="shutdownMenu" role="menu" aria-label="Power options" hidden>
-        <a href="/logout" id="logout" role="menuitem" title="Log out on this device; the panel keeps running.">Log out</a>
+        <a href="/logout" id="logout" role="menuitem" title="Log out on this device; the panel keeps running."><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="m16 17 5-5-5-5"/><path d="M21 12H9"/></svg><span>Log out</span></a>
       </div>
     </div>
   </div>

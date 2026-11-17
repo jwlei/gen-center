@@ -104,6 +104,10 @@ async function fillSettings() {
   $('pinProgress').disabled = SETTINGS.top_progress === false;
   $('statusProgress').checked = !!SETTINGS.status_progress;
   $('themeBoxes').checked = SETTINGS.theme_boxes !== false;
+  $('pageSwipe').checked = SETTINGS.page_swipe !== false;
+  $('pageAnimation').value = SETTINGS.page_animation || 'push';
+  syncPageSwipe();
+  $('pageSpeed').value = SETTINGS.page_speed || 'normal';
   showGpuGuard();
   $('h3Model').value = SETTINGS.h3_model;
   $('localLlmModel').value = SETTINGS.local_llm_model || SETTINGS.h3_model;
@@ -125,7 +129,7 @@ async function fillSettings() {
     const chosen = (SETTINGS.default_workflow || {})[side] || '';
     select.innerHTML = `<option value="">Last one used</option><option value="@builtin">${SETTINGS_BUILTIN[side]}</option>`;
     select.value = chosen;
-    fetch('/api/workflows?pipeline=' + side).then(r => r.json()).then(data => {
+    workflowList(side).then(data => {
       const usable = data.workflows.filter(w => !w.problem);
       select.innerHTML += usable.map(w => `<option value="${esc(w.name)}">${esc(w.label)}</option>`).join('');
       select.value = chosen;
@@ -148,6 +152,9 @@ $('settingsBtn').addEventListener('click', e => {
 $('settingsClose').addEventListener('click', () => settingsDialog.close());
 settingsDialog.addEventListener('click', e => { if (e.target === settingsDialog) settingsDialog.close(); });
 $('lowPriority').addEventListener('change', () => saveSettings({ low_priority: $('lowPriority').checked }));
+$('pageSwipe').addEventListener('change', async () => { await saveSettings({ page_swipe: $('pageSwipe').checked }); syncPageSwipe(); });
+$('pageAnimation').addEventListener('change', () => saveSettings({ page_animation: $('pageAnimation').value }));
+$('pageSpeed').addEventListener('change', () => saveSettings({ page_speed: $('pageSpeed').value }));
 $('titleSource').addEventListener('change', () => saveSettings({ title_source: $('titleSource').value }));
 $('pinProgress').addEventListener('change', async () => { await saveSettings({ pin_progress: $('pinProgress').checked }); syncPin(); });
 $('topProgress').addEventListener('change', async () => {
@@ -176,6 +183,16 @@ async function saveGpuGuard(changes) {
   await saveSettings(changes);
   showGpuGuard();  // Refused (cool-down not below restart, out of range): back to what is saved
 }
+// Whether MSI Afterburner is running (the status's afterburner, from the heat guard's last check): null, not known.
+function renderAfterburner(running) {
+  if (!$('afterburnerState')) return;
+  const known = running === true || running === false;
+  $('afterburnerDot').className = 'dot ' + (running === true ? 'ok' : running === false ? 'fail' : '');
+  $('afterburnerText').textContent = !known ? 'Afterburner: not known' : running ? 'Afterburner running' : 'Afterburner not running';
+  $('afterburnerState').classList.toggle('off', running === false);
+  // Start is for when it isn't running; while it is, there is nothing to start.
+  $('startAfterburner').disabled = running === true;
+}
 if ($('gpuGuard')) {
   $('gpuGuard').addEventListener('change', () => saveGpuGuard({ gpu_guard: $('gpuGuard').checked }));
   $('gpuRestartAbove').addEventListener('change', () => saveGpuGuard({ gpu_restart_above: Number($('gpuRestartAbove').value) }));
@@ -189,6 +206,20 @@ if ($('gpuGuard')) {
     try {
       const body = await (await fetch('/restart/afterburner', { method: 'POST' })).json();
       settingsNote(body.ok ? `MSI Afterburner restarted with profile ${body.profile}.` : body.error || 'Could not restart it.', !body.ok);
+      if (body.ok) renderAfterburner(true);
+    } catch (error) { settingsNote('Could not reach the panel. Try again.', true); }
+    button.disabled = false;
+  });
+  // Start: one tap, as starting it stops nothing.
+  $('startAfterburner').addEventListener('click', async () => {
+    const button = $('startAfterburner');
+    button.disabled = true;
+    settingsNote('Starting MSI Afterburner…');
+    try {
+      const body = await (await fetch('/start/afterburner', { method: 'POST' })).json();
+      settingsNote(body.ok ? (body.started ? `MSI Afterburner started with profile ${body.profile}.` : 'MSI Afterburner is already running.')
+        : body.error || 'Could not start it.', !body.ok);
+      if (body.ok) { renderAfterburner(true); return; }
     } catch (error) { settingsNote('Could not reach the panel. Try again.', true); }
     button.disabled = false;
   });
@@ -265,14 +296,51 @@ async function reloadWhenBack() {
   button.setAttribute('aria-label', 'Restart panel');
   settingsNote('The panel did not come back. Start it with start_webapp.pyw.', true);
 }
-$('restartPanel').addEventListener('click', async () => {
-  if (!confirmTap('restartPanel', 'Restart panel')) return;
+// Restart's first tap grows a menu up from it with Force restart; a second tap on Restart restarts as it always has.
+let restartMenuTimer = null;
+function openRestartMenu() {
+  const menu = $('restartMenu');
+  menu.classList.remove('closing');
+  menu.hidden = false;
+  $('restartPanel').setAttribute('aria-expanded', 'true');
+  // Goes again with Restart's confirming tap, a little after it would have.
+  clearTimeout(restartMenuTimer);
+  restartMenuTimer = setTimeout(closeRestartMenu, 6000);
+}
+function closeRestartMenu() {
+  const menu = $('restartMenu');
+  clearTimeout(restartMenuTimer);
+  if (menu.hidden || menu.classList.contains('closing')) return;
+  menu.classList.add('closing');
+  $('restartPanel').setAttribute('aria-expanded', 'false');
+  setTimeout(() => {
+    if (menu.classList.contains('closing')) { menu.hidden = true; menu.classList.remove('closing'); }
+  }, 150);
+}
+document.addEventListener('click', e => {
+  if (!$('restartMenu').hidden && !(e.target.closest && e.target.closest('#restartMenu, #restartPanel'))) closeRestartMenu();
+});
+document.addEventListener('keydown', e => { if (e.key === 'Escape') closeRestartMenu(); });
+if (typeof settingsDialog !== 'undefined') settingsDialog.addEventListener('close', closeRestartMenu);
+async function restartPanel(force) {
+  closeRestartMenu();
   try {
-    const response = await fetch('/restart/panel', { method: 'POST' });
+    const response = await fetch('/restart/panel', force
+      ? { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ force: true }) }
+      : { method: 'POST' });
     const body = await response.json();
     if (!body.ok) { settingsNote(body.error || 'Could not restart.', true); return; }
   } catch (e) { return; }
   reloadWhenBack();
+}
+$('restartPanel').addEventListener('click', () => {
+  if (!confirmTap('restartPanel', 'Restart panel')) { openRestartMenu(); return; }
+  restartPanel(false);
+});
+// Force: the run or upload going stopped first, then the panel restarted, however stuck it is.
+$('forceRestartPanel').addEventListener('click', () => {
+  if (!confirmTap('forceRestartPanel', 'Force restart panel')) { openRestartMenu(); return; }
+  restartPanel(true);
 });
 // With ComfyUI off there is nothing to restart: the same button starts it.
 let comfyOff = false;

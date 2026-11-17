@@ -147,7 +147,9 @@ def region_flags(form, files, source_size):
 def model_problem(flags, takes, source):
     """Why the chosen workflow's model shouldn't make this: too big, or too many prompts for the LLM. None if it's fine."""
     model = takes.get("model")
-    if "--areas" in flags or "--expand" in flags:
+    # A change to painted parts or an expansion has no size flags (build_options leaves them out: it comes out the
+    # image's own size), and the estimate is asked before its --areas or --expand is added: either way, no size to check.
+    if "--areas" in flags or "--expand" in flags or not any(name in flags for name in ("--size", "--aspect", "--megapixels")):
         return models.count_problem(model, int(option(flags, "--count")), True)
     if not takes.get("size"):
         size = None

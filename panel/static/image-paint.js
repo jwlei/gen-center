@@ -154,7 +154,7 @@ function stroke(from, to) {
 let painting = null, paintTap = null, paintPinch = null, paintPan = null, paintResting = false;
 const paintPointers = new Map();
 function startPaintPinch() {
-  const [a, b] = [...pointers.values()];
+  const [a, b] = [...paintPointers.values()];
   const mid = stagePoint((a[0] + b[0]) / 2, (a[1] + b[1]) / 2);
   paintPinch = { distance: Math.hypot(a[0] - b[0], a[1] - b[1]) || 1, z: paintView.z,
             bx: (mid[0] - paintView.x) / paintView.z, by: (mid[1] - paintView.y) / paintView.z };
@@ -187,7 +187,7 @@ $('paintStage').addEventListener('pointermove', e => {
   if (!paintPointers.has(e.pointerId)) return;
   paintPointers.set(e.pointerId, [e.clientX, e.clientY]);
   if (paintPinch && paintPointers.size >= 2) {
-    const [a, b] = [...pointers.values()];
+    const [a, b] = [...paintPointers.values()];
     const mid = stagePoint((a[0] + b[0]) / 2, (a[1] + b[1]) / 2);
     paintView.z = Math.min(MOST_PAINT_ZOOM, Math.max(1, paintPinch.z * Math.hypot(a[0] - b[0], a[1] - b[1]) / paintPinch.distance));
     paintView.x = mid[0] - paintPinch.bx * paintView.z;

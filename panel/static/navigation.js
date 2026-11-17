@@ -200,7 +200,24 @@ function resetOutputView() {
   nsfwView = wanted;
   redrawFiltered();
 }
-function showPage(page) {
+// How long a page takes to come in, at each speed of Settings' (page_speed).
+const PAGE_TIMES = { slow: '.5s', normal: '.3s', fast: '.16s' };
+// A page swiped to comes in as Settings says (page_animation), from the side it was swiped from: dir 1 from the right,
+// -1 from the left. One tapped to (dir left out), or the page loading, comes in as it always has (page-in).
+function turnPage(from, to, dir) {
+  const body = document.body;
+  if (!dir || from === to || WIDE.matches) { body.classList.remove('page-turn'); return; }
+  const side = dir < 0 ? -1 : 1;
+  body.dataset.pageAnim = SETTINGS.page_animation || 'push';
+  body.style.setProperty('--page-dir', String(side));
+  body.style.setProperty('--page-time', PAGE_TIMES[SETTINGS.page_speed] || PAGE_TIMES.normal);
+  // Again from the start, though the last one may still be going.
+  body.classList.remove('page-turn');
+  void body.offsetWidth;
+  body.classList.add('page-turn');
+}
+function showPage(page, dir) {
+  turnPage(document.body.dataset.page, page, dir);
   if (page === 'output' && document.body.dataset.page !== 'output') {
     holdOutput();
     resetOutputView();
@@ -303,9 +320,79 @@ function markJump() {
   // In Generate (its page on a phone, scrolled to it on a desktop): what sits above every page takes the side's colour.
   document.body.classList.toggle('in-generate', WIDE.matches ? desktopGenerateActive : document.body.dataset.page === 'generate');
   JUMPS.forEach(a => a.classList.toggle('active', a === here));
+  placeJumpGlider(here);
   $('goBar').hidden = !WIDE.matches && document.body.dataset.page !== 'generate';
   syncStrips();
 }
+// The footer's outline round the section shown: one, gliding from the button it was on to the next, in that one's
+// colour (the CSS's .jump-glider[data-at]). Placed at once the first time, and when the footer changes size.
+const jumpGlider = $('jumpGlider');
+function placeJumpGlider(here) {
+  if (!here || !here.offsetWidth) { jumpGlider.hidden = true; return; }
+  const place = `${here.offsetLeft},${here.offsetTop},${here.offsetWidth},${here.offsetHeight}`;
+  jumpGlider.hidden = false;
+  jumpGlider.dataset.at = here.dataset.page;
+  if (jumpGlider.dataset.place === place) return;
+  const first = !jumpGlider.dataset.place;
+  jumpGlider.dataset.place = place;
+  jumpGlider.classList.toggle('still', first);
+  Object.assign(jumpGlider.style, { left: `${here.offsetLeft}px`, top: `${here.offsetTop}px`, width: `${here.offsetWidth}px`, height: `${here.offsetHeight}px` });
+  $('jump').classList.add('glides');
+  if (first) requestAnimationFrame(() => jumpGlider.classList.remove('still'));
+}
+window.addEventListener('resize', () => {
+  jumpGlider.dataset.place = '';
+  placeJumpGlider(JUMPS.find(a => a.classList.contains('active')));
+});
+// A swipe left or right anywhere on a phone's page, the footer too, goes to the next section or the one before, round
+// in a loop: Status, Generate, Output, Status... The page itself only scrolls up and down (touch-action), so the
+// browser leaves a sideways swipe to it. Not one on what takes a finger sideways itself (a slider, a box being typed
+// in, a canvas), nor one that scrolled a row sideways, nor with a dialog open or something being arranged or dragged.
+const PAGE_ORDER = ['status', 'generate', 'output'];
+// Swiping on or off (Settings): off, the page scrolls sideways as a browser's would, and a swipe does nothing here.
+function syncPageSwipe() { document.body.classList.toggle('page-swipe', SETTINGS.page_swipe !== false); }
+syncPageSwipe();
+const NO_PAGE_SWIPE = 'input[type="range"], textarea, canvas, video, dialog, [data-no-page-swipe], .queue-item.selected, .dragging';
+let pageSwipe = null;
+// The rows round el that scroll sideways, with where each was: one that moved took the swipe for itself.
+function sidewaysScrollers(el) {
+  const found = [];
+  for (let node = el; node && node !== document.body && node.nodeType === 1; node = node.parentElement) {
+    if (node.scrollWidth > node.clientWidth + 1 && /auto|scroll/.test(getComputedStyle(node).overflowX)) found.push([node, node.scrollLeft]);
+  }
+  return found;
+}
+function stepPage(by) {
+  const at = PAGE_ORDER.indexOf(document.body.dataset.page);
+  if (at < 0 || WIDE.matches || choosingFor) return false;
+  closeSideMenu();
+  showPage(PAGE_ORDER[((at + by) % PAGE_ORDER.length + PAGE_ORDER.length) % PAGE_ORDER.length], by);
+  return true;
+}
+document.addEventListener('touchstart', e => {
+  pageSwipe = null;
+  const target = e.target;
+  if (WIDE.matches || SETTINGS.page_swipe === false || e.touches.length !== 1 || !target.closest || target.closest(NO_PAGE_SWIPE)
+      || (target === document.activeElement && /^(INPUT|SELECT)$/.test(target.tagName))
+      || document.querySelector('dialog[open]') || outputArranging || collectionsArranging || finishedSwiping) return;
+  pageSwipe = { x: e.touches[0].clientX, y: e.touches[0].clientY, at: performance.now(), scrollers: sidewaysScrollers(target) };
+}, { passive: true });
+document.addEventListener('touchmove', e => {
+  if (pageSwipe && e.touches.length !== 1) pageSwipe = null;  // A pinch is no swipe
+}, { passive: true });
+document.addEventListener('touchend', e => {
+  const from = pageSwipe;
+  pageSwipe = null;
+  if (!from || !e.changedTouches.length) return;
+  const dx = e.changedTouches[0].clientX - from.x, dy = e.changedTouches[0].clientY - from.y;
+  // Clearly sideways, far enough and quick: a scroll that drifts, or text being selected, stays where it is.
+  if (Math.abs(dx) < 70 || Math.abs(dx) < Math.abs(dy) * 2 || performance.now() - from.at > 800) return;
+  if (window.getSelection && String(window.getSelection())) return;
+  // A row scrolled sideways under the finger: the swipe was its. One already at its end goes on to the page.
+  if (from.scrollers.some(([node, left]) => Math.abs(node.scrollLeft - left) > 1)) return;
+  stepPage(dx < 0 ? 1 : -1);
+}, { passive: true });
+document.addEventListener('touchcancel', () => { pageSwipe = null; }, { passive: true });
 // The footer's height, once its bars have eased in or out.
 $('stick').addEventListener('transitionend', () => document.documentElement.style.setProperty('--head', `${$('stick').offsetHeight}px`));
 window.addEventListener('scroll', markJump, { passive: true });

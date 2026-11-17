@@ -36,10 +36,14 @@ document.addEventListener('error', event => {
     image.src = fallback;
   } else if (image.hasAttribute('data-remove-on-error')) image.remove();
 }, true);
-// Feedback while a click's request is on its way (delete, move, rename, a queue's buttons...): the button pressed
-// pulses until the answer is back. Only for what a click sends, so the polls and estimates that run by themselves don't.
+// Feedback while a click's request is on its way (delete, move, rename, a queue's buttons, opening a prompt or a set's
+// settings...): the button pressed pulses until the answer is back. Only for what a click asks for, so the polls,
+// estimates and graphs that run by themselves don't.
 let lastPressed = null;
-const QUIET_REQUESTS = /\/api\/(status|estimate)/;
+const QUIET_REQUESTS = /\/api\/(status|estimate|temperatures|page-error)\b/;
+// A click that asks for one thing after another (a set, then its workflow's options) pulses through them all: a
+// request that ends keeps the button busy a moment longer, and the next one it starts in that time is still its own.
+const BUSY_GRACE_MS = 200;
 document.addEventListener('click', e => {
   const button = e.target.closest && e.target.closest('button, a[role="button"], .icon-btn');
   // Steppers (and anything marked data-no-busy) take press after press: each sends its own, none waits on the last.
@@ -51,15 +55,64 @@ function markBusy(el, by) {
   el.classList.toggle('is-busy', el._busy > 0);
   el.setAttribute('aria-busy', String(el._busy > 0));
 }
+// Asked for ahead (prefetch): what a button is about to open, from the moment a finger is on it or the viewer shows
+// its item, so the answer is on its way, or here, by the time it's asked for. Each is used once, for a while; anything
+// sent that changes something drops them all, as one may no longer be so.
+const prefetched = new Map(), PREFETCH_MS = 15000;
+let plainFetch = null;
+function prefetch(url) {
+  if (!plainFetch) return;
+  const kept = prefetched.get(url);
+  if (kept && performance.now() - kept.at < PREFETCH_MS) return;
+  const promise = plainFetch(url);
+  promise.catch(() => { if (prefetched.get(url) && prefetched.get(url).promise === promise) prefetched.delete(url); });
+  prefetched.set(url, { at: performance.now(), promise });
+}
+function takePrefetched(url, options) {
+  const method = String(options.method || 'GET').toUpperCase();
+  if (method !== 'GET') { prefetched.clear(); return null; }
+  const kept = prefetched.get(String(url));
+  if (!kept) return null;
+  prefetched.delete(String(url));
+  return performance.now() - kept.at < PREFETCH_MS ? kept.promise : null;
+}
 if (typeof window.fetch === 'function') {
-  const plainFetch = window.fetch.bind(window);
+  plainFetch = window.fetch.bind(window);
+  const send = (url, options) => takePrefetched(url, options) || plainFetch(url, options);
   window.fetch = (url, options = {}) => {
-    const method = String(options.method || 'GET').toUpperCase();
-    const el = lastPressed && performance.now() - lastPressed.at < 1000 && method !== 'GET' && !QUIET_REQUESTS.test(String(url)) ? lastPressed.el : null;
-    if (!el) return plainFetch(url, options);
+    const pressed = lastPressed;
+    const el = pressed && performance.now() - pressed.at < 1000 && !QUIET_REQUESTS.test(String(url)) ? pressed.el : null;
+    if (!el) return send(url, options);
     markBusy(el, 1);
-    return plainFetch(url, options).finally(() => markBusy(el, -1));
+    return send(url, options).finally(() => {
+      if (lastPressed === pressed) pressed.at = performance.now();
+      setTimeout(() => markBusy(el, -1), BUSY_GRACE_MS);
+    });
   };
+}
+// A finger on a button that opens a saved run (its prompts, or its settings back in Generate): its run asked for now.
+const PREFETCH_BUTTONS = '[data-shots], [data-again-set], [data-again-film], [data-config]';
+document.addEventListener('pointerdown', e => {
+  const button = e.target.closest && e.target.closest(PREFETCH_BUTTONS);
+  if (!button || button.disabled || typeof runUrl !== 'function') return;
+  const d = button.dataset;
+  const id = d.shots || d.againSet || d.againFilm || d.config;
+  if (!id) return;
+  if (d.config && d.pipeline === 'shorts') prefetch(`/shorts-runs/${encodeURIComponent(id)}/form`);
+  else prefetch(d.againSet ? `/image-runs/${encodeURIComponent(id)}` : d.againFilm ? `/runs/${encodeURIComponent(id)}` : runUrl(id));
+}, true);
+// The saved workflows each side lists, kept from the last time: answered at once, and asked again behind, any change
+// handed to onFresh (the side's loader, to draw it again). So opening a run's settings doesn't wait on the list.
+const workflowLists = {};
+async function workflowList(side, onFresh) {
+  const kept = workflowLists[side];
+  const asked = fetch('/api/workflows?pipeline=' + side).then(r => r.json()).then(data => {
+    if (data && Array.isArray(data.workflows)) workflowLists[side] = data;
+    return data;
+  });
+  if (!kept) return asked;
+  asked.then(data => { if (onFresh && data && Array.isArray(data.workflows) && JSON.stringify(data) !== JSON.stringify(kept)) onFresh(data); }).catch(() => {});
+  return kept;
 }
 const SETTINGS = PANEL_CONFIG.settings;
 let LOCAL_MODELS = PANEL_CONFIG.local_models;

@@ -1259,3 +1259,35 @@ class SamplingPillTest(unittest.TestCase):
                "70": {"class_type": "BasicGuider", "inputs": {}},
                "99": {"class_type": "SaveVideo", "inputs": {"video": ["17", 0]}}}
         self.assertEqual((workflow_options.sampling_in(api), workflow_options.cfg_in(api)), ("er_sde, 8 steps", "1"))
+
+
+class ListedAgainTest(unittest.TestCase):
+    def test_a_workflow_unchanged_is_not_worked_out_again(self):
+        # Listed every 30 s: one whose saved form, the nodes it uses and the model files are as they were is used as it
+        # was; another node pack's changing (a random default) doesn't count.
+        from unittest import mock
+        ui = saved_workflow()
+        with tempfile.TemporaryDirectory() as folder, mock.patch.object(saved_workflows, "_prepare", wraps=saved_workflows._prepare) as prepare:
+            self.addCleanup(saved_workflows._prepared.clear)
+            raw = json.dumps(ui).encode()
+            first = saved_workflows._prepared_once("image_x.json", raw, ui, OBJECT_INFO, "files", folder, "image")
+            noisy = {**OBJECT_INFO, "Cache Node": {"input": {"required": {"suffix": ["STRING", {"default": "123_cache"}]}}}}
+            again = saved_workflows._prepared_once("image_x.json", raw, ui, noisy, "files", folder, "image")
+            self.assertEqual(again, first)
+            self.assertEqual(prepare.call_count, 1, "worked out once")
+            saved_workflows._prepared_once("image_x.json", raw, ui, OBJECT_INFO, "files changed", folder, "image")
+            self.assertEqual(prepare.call_count, 2, "a model or LoRA file changed: again")
+            os.remove(os.path.join(folder, "image_x.map.json"))
+            saved_workflows._prepared_once("image_x.json", raw, ui, OBJECT_INFO, "files changed", folder, "image")
+            self.assertEqual(prepare.call_count, 3, "its files gone: again")
+
+    def test_a_file_already_saying_it_is_left_alone(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = os.path.join(folder, "a.json")
+            saved_workflows._write_json(path, {"a": 1})
+            os.utime(path, (1, 1))
+            saved_workflows._write_json(path, {"a": 1})
+            self.assertEqual(os.path.getmtime(path), 1, "not written again")
+            saved_workflows._write_json(path, {"a": 2})
+            with open(path, encoding="utf-8") as f:
+                self.assertEqual(json.load(f), {"a": 2})

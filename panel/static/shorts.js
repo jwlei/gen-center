@@ -3,9 +3,10 @@ let workflowsFor = null, shortsTakes = {}, shortsH3 = {};
 function rememberedWorkflow() {
   try { return (JSON.parse(draftRead(STORE_KEY)) || {}).workflow || ''; } catch (e) { return ''; }
 }
-async function loadWorkflows() {
-  let data;
-  try { data = await (await fetch('/api/workflows?pipeline=shorts')).json(); } catch (e) { return; }
+async function loadWorkflows(fresh) {
+  // The list kept from last time at once (workflowList), drawn again if the one asked for behind it differs.
+  let data = fresh && Array.isArray(fresh.workflows) ? fresh : null;
+  if (!data) try { data = await workflowList('shorts', loadWorkflows); } catch (e) { return; }
   const select = $('workflow');
   const key = JSON.stringify(data);
   // Writing the options closes the list, and this also runs as it opens.

@@ -118,8 +118,10 @@ function syncImageForm() {
   const editing = !!chosenSources();
   const mode = imageMode();
   $('imageLlmBox').classList.toggle('hidden', direct);
-  // Variety and Explicit, under the prompt and negative prompt: for the LLM, so with it.
-  $('imageWriterExtras').classList.toggle('hidden', direct);
+  // Variety and Explicit, under the prompt and negative prompt: for the LLM, so with it. An LLM comparison is written
+  // whatever How says, so its words and Explicit show with it too: to test what each model writes.
+  const comparingLlms = $('imageLlmTest').checked;
+  $('imageWriterExtras').classList.toggle('hidden', direct && !comparingLlms);
   const local = !direct && $('imageLlm').value === 'local' && mode !== 'areas' && mode !== 'expand';
   $('imageLocalModelBox').hidden = !local;
   $('imageLocalModel').disabled = !local;
@@ -137,7 +139,8 @@ function syncImageForm() {
   if (!$('imageCount').disabled && +$('imageCount').value > most) $('imageCount').value = most;
   const count = +$('imageCount').value || 1;
   // Variety and its chips: how different the prompts are, so only for a set an LLM writes.
-  $('imageVarietyBox').hidden = count < 2 || !!imageRole();
+  // Each model in an LLM comparison writes one prompt: nothing to vary between them.
+  $('imageVarietyBox').hidden = count < 2 || !!imageRole() || comparingLlms;
   // Words per prompt: for the pictures an LLM describes in prose. Edit instructions and Fibo 2.0's captions keep their own.
   $('imageWordsBox').hidden = !!imageRole() || imageTakes().model === 'fibo2' || (editing && mode !== 'compose');
   syncWords('image', count);

@@ -9,6 +9,7 @@ inputs to fill is worked out from the graph. Anything that won't run says why, r
 than failing an hour into a queue.
 """
 import copy
+import hashlib
 import itertools
 import json
 import os
@@ -827,9 +828,17 @@ def frames_for(seconds, fps):
 # --- Fetching them from ComfyUI, and keeping what the pipeline runs ---
 
 def _write_json(path, data):
+    """Writes data as JSON, unless the file already says just that: listed again and again, most are as they were."""
+    text = json.dumps(data, ensure_ascii=False, indent=1)
+    try:
+        with open(path, encoding="utf-8") as f:
+            if f.read() == text:
+                return
+    except OSError:
+        pass
     temp = path + ".tmp"
     with open(temp, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=1)
+        f.write(text)
     os.replace(temp, path)
 
 
@@ -1003,6 +1012,14 @@ def _add_media_references(api, node, group, most, sounds):
             node["inputs"][f"{VIDEO_SOUND_GROUP}.{VIDEO_SOUND_GROUP[:-1]}_{number}"] = [split, 1]
 
 
+def _node_kinds(ui):
+    """The kinds of node a workflow uses, and those the pipeline adds to one: all of ComfyUI's it is made with."""
+    from core import workflow_options
+    kinds = {node["type"] for node in _without_subgraphs(_with_hidden_links(ui))["nodes"]}
+    return kinds | {PREVIEW, COMBINE, "LoraLoader", "LoadImage", "LoadVideo", "LoadAudio", "GetVideoComponents",
+                    workflow_options.H3_MEMORY, workflow_options.H3_SPARSE, director.INPUTS, director.ASSETS, *workflow_options.SPLICED_NODES}
+
+
 def _prepare(name, ui, info, folder, pipeline):
     """Writes what the pipeline runs. Returns its path, and how many images it takes."""
     stem = os.path.join(folder, _file_stem(name))
@@ -1012,9 +1029,7 @@ def _prepare(name, ui, info, folder, pipeline):
     options = workflow_options.offered(ui, info, pipeline)
     if options:
         # A run with other options makes its workflow again from these, with what the pipeline adds to it.
-        kinds = {node["type"] for node in _without_subgraphs(_with_hidden_links(ui))["nodes"]}
-        kinds |= {PREVIEW, COMBINE, "LoraLoader", "LoadImage", "LoadVideo", "LoadAudio", "GetVideoComponents",
-                  workflow_options.H3_MEMORY, workflow_options.H3_SPARSE, director.INPUTS, director.ASSETS, *workflow_options.SPLICED_NODES}
+        kinds = _node_kinds(ui)
         _write_json(stem + ".ui.json", ui)
         _write_json(stem + ".info.json", {kind: info[kind] for kind in kinds if kind in info})
     _write_json(stem + ".json", api)
@@ -1024,10 +1039,47 @@ def _prepare(name, ui, info, folder, pipeline):
     return stem + ".json", image_takes(fields, model, options) if pipeline == "image" else with_options(takes(fields), options)
 
 
+# What _prepare made of each workflow, by everything it was made from: the workflow as saved, the ComfyUI nodes it uses
+# (only those: another node pack's may change as it pleases, one has a random default), and the model and LoRA files it
+# checks. Listed again with none of them changed, it is used as it was: working one out reads
+# every LoRA's header and writes its files, seconds for them all.
+_prepared = {}
+
+
+def _model_files():
+    """Each model and LoRA file ComfyUI's folders have, with its size and time: a file changed changes this."""
+    from core import lora_check
+    found = []
+    for base in lora_check.comfyui_folders():
+        for kind in (*lora_check.LORA_FOLDERS, *lora_check.MODEL_FOLDERS):
+            for root, _, files in os.walk(os.path.join(base, "models", kind)):
+                for file in files:
+                    try:
+                        stat = os.stat(os.path.join(root, file))
+                    except OSError:
+                        continue
+                    found.append((root, file, stat.st_size, stat.st_mtime_ns))
+    return hashlib.sha256(repr(sorted(found)).encode()).hexdigest()
+
+
+def _prepared_once(name, ui_bytes, ui, info, models, folder, pipeline):
+    """_prepare, or what it made last time from just the same, while its files are still there."""
+    stem = os.path.join(folder, _file_stem(name))
+    used = json.dumps({kind: info.get(kind) for kind in sorted(_node_kinds(ui))}, sort_keys=True, default=str)
+    key = (hashlib.sha256(ui_bytes).hexdigest(), hashlib.sha256(used.encode()).hexdigest(), models, os.path.abspath(folder), pipeline)
+    kept = _prepared.get(name)
+    if kept and kept[0] == key and all(os.path.exists(stem + end) for end in (".json", ".map.json")):
+        return copy.deepcopy(kept[1])
+    made = _prepare(name, ui, info, folder, pipeline)
+    _prepared[name] = (key, copy.deepcopy(made))
+    return made
+
+
 def _from_comfyui(url, folder):
     names = requests.get(f"{url}/api/userdata", params={"dir": "workflows", "recurse": "true"}, timeout=5).json()
     # Takes a few seconds: ComfyUI asks every node it has.
     info = requests.get(f"{url}/object_info", timeout=60).json()
+    models = _model_files()
     os.makedirs(folder, exist_ok=True)
     found = []
     for name in sorted(n for n in names if n.lower().endswith(".json")):
@@ -1039,7 +1091,7 @@ def _from_comfyui(url, folder):
             if "nodes" not in ui:
                 raise Unusable("It's in API format, which has no way to tell which inputs to fill. Save it from the editor.")
             entry["pipeline"] = pipeline_of(name, ui)
-            entry["path"], entry["takes"] = _prepare(name, ui, info, folder, entry["pipeline"])
+            entry["path"], entry["takes"] = _prepared_once(name, response.content, ui, info, models, folder, entry["pipeline"])
         except Unusable as e:
             entry["problem"] = str(e)
         except (KeyError, IndexError, TypeError, AttributeError, ValueError, requests.RequestException) as e:

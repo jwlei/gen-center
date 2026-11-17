@@ -39,9 +39,10 @@ let workflowTakes = {}, workflowClips = {}, workflowMost = {}, workflowH3 = {}, 
 function rememberedVideoWorkflow() {
   try { return (JSON.parse(draftRead(VIDEO_STORE_KEY)) || {}).workflow || ''; } catch (e) { return ''; }
 }
-async function loadVideoWorkflows() {
-  let data;
-  try { data = await (await fetch('/api/workflows?pipeline=video')).json(); } catch (e) { return; }
+async function loadVideoWorkflows(fresh) {
+  // The list kept from last time at once (workflowList), drawn again if the one asked for behind it differs.
+  let data = fresh && Array.isArray(fresh.workflows) ? fresh : null;
+  if (!data) try { data = await workflowList('video', loadVideoWorkflows); } catch (e) { return; }
   const select = $('videoWorkflow');
   const key = JSON.stringify(data);
   // Writing the options closes the list, and this also runs as it opens.

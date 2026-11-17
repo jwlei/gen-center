@@ -616,16 +616,21 @@ els.viewerMeta.listeners.click();
 assert(!els.viewerMetaDetails.hidden && els.viewerMetaDetails.textContent === 'LoRA: one\nLoRA: <two>', 'preview expands one LoRA per line as plain text');
 els.viewerMeta.listeners.click();
 assert(els.viewerMetaDetails.hidden, 'preview metadata collapses');
-// A swipe, or an arrow key, goes through the set, and stops at its ends.
+// A swipe, or an arrow key, goes through the set, round in a loop.
 run("openViewer('image_20261102_120000', 1)");
 assert.strictEqual(els.viewerTitle.textContent, '<i>Look');
 assert.strictEqual(els.viewerCount.textContent, '1 of 2');
-assert.strictEqual(run('stepViewer(-1)'), false, 'nothing before the first');
+assert.strictEqual(run('stepViewer(-1)'), true, 'back from the first');
+assert.strictEqual(run('viewing.position'), 3, 'is the last');
+run("openViewer('image_20261102_120000', 1)");
 assert.strictEqual(run('stepViewer(1)'), true);
 assert.strictEqual(run('viewing.position'), 3, 'the next one in the set, wherever it was numbered');
 assert.strictEqual(els.viewerTitle.textContent, 'Two');
 assert.strictEqual(els.viewerCount.textContent, '2 of 2');
-assert.strictEqual(run('stepViewer(1)'), false, 'nothing after the last');
+assert.strictEqual(run('stepViewer(1)'), true, 'on from the last');
+assert.strictEqual(run('viewing.position'), 1, 'is the first');
+assert.deepStrictEqual([run('loopNeighbour([1], 0, 1)'), run('loopNeighbour([1, 2], -1, 1)'), run('loopNeighbour([1, 2, 3], 0, -1)')], [null, null, 3],
+  'one alone has none; one not found has none');
 assert(/touchend[\s\S]*?Math\.abs\(dx\) > 50 && Math\.abs\(dx\) > Math\.abs\(dy\)/.test(script) && /ArrowRight/.test(script), 'swipes, and arrow keys on a desktop');
 assert(/#viewerImage \{[^}]*touch-action: none;/.test(html), 'a swipe and a pinch are the page\'s, not the browser\'s');
 {
@@ -1050,7 +1055,12 @@ assert(script.includes("if (pick) moveViewed({ to: pick.dataset.moveTo }, pick);
   run('markBusy(busyButton, -1)');
   assert(!classes.has('is-busy') && attrs['aria-busy'] === 'false', 'and back once answered');
   assert(script.includes("if (button && (button.closest('.count-stepper') || button.closest('[data-no-busy]'))) { lastPressed = null; return; }"), "a stepper's + and - never wait on the last press");
-  assert(/\.is-busy \{ animation: busy-pulse/.test(html) && script.includes("const QUIET_REQUESTS = "), 'polls and estimates never pulse anything');
+  assert(/\.is-busy \{ animation: busy-pulse/.test(html) && script.includes(String.raw`const QUIET_REQUESTS = /\/api\/(status|estimate|temperatures|page-error)\b/;`), 'polls, estimates and graphs never pulse anything');
+  assert(run('QUIET_REQUESTS').test('/api/estimate/image') && run('QUIET_REQUESTS').test('/api/status?x=1') && !run('QUIET_REQUESTS').test('/image-runs/a'));
+  const wrapped = script.slice(script.indexOf('window.fetch = (url, options = {}) => {'), script.indexOf('const SETTINGS = PANEL_CONFIG.settings;'));
+  assert(!wrapped.includes("!== 'GET'"), "opening something (a prompt, a set's settings) pulses too, not only what changes something");
+  assert(wrapped.includes('if (lastPressed === pressed) pressed.at = performance.now();') && wrapped.includes('setTimeout(() => markBusy(el, -1), BUSY_GRACE_MS);'),
+    'one request after another from one click: it pulses through them all');
 }
 assert(/\.thumb-grid button \{[^}]*overflow: clip;/.test(html) && !/\.thumb-grid button \{[^}]*overflow: hidden/.test(html), 'a swipe on a picture scrolls the grid');
 assert(/button, \[role="button"\], \.icon-btn, summary, \.count-stepper, \.count-stepper \.mp-field, \.pills, \.pill \{\s*-webkit-user-select: none; user-select: none; -webkit-touch-callout: none; \}/.test(html),
@@ -2024,7 +2034,7 @@ for (const side of ['image', 'video']) {
     + `<select id="${side}Variety" name="variety" data-segmented>\\s*<option value="slight">Slight</option><option value="mixed" selected>Mixed</option><option value="wide">Wide</option>`);
   assert(box.test(html), `${side}: Variety (Slight, Mixed, Wide) under the negative prompt`);
   assert(html.indexOf(`id="${side}VarietyBox"`) > html.indexOf(`id="${side}PromptWriting"`), `${side}: below the prompt, no longer in the LLM's box above it`);
-  assert(script.includes(`$('${side}WriterExtras').classList.toggle('hidden', direct);`), `${side}: hidden with Exact prompt, as the LLM's box is`);
+  assert(script.includes(`$('${side}WriterExtras').classList.toggle('hidden', direct${side === 'image' ? ' && !comparingLlms' : ''});`), `${side}: hidden with Exact prompt, as the LLM's box is (but for an LLM comparison)`);
 }
 assert.strictEqual((html.match(/<select name="chip_[a-z]+" data-chip="/g) || []).length, 22, 'eleven chips on each side: no time of day or expression');
 assert(!html.includes('name="chip_time"') && !html.includes('name="chip_expression"'));
@@ -2050,7 +2060,7 @@ assert(/\.variety-chip\.vary \{ color: var\(--accent\);/.test(html) && /\.variet
   'varied chips in the accent with ↻, kept ones filled with =');
 assert(/id="imageCount"[^>]*max="30"[^>]*data-most="50" data-most-written="30"/.test(html)
   && script.includes("const most = +(direct ? $('imageCount').dataset.most : $('imageCount').dataset.mostWritten) || 30;")
-  && script.includes("$('imageVarietyBox').hidden = count < 2 || !!imageRole();"),
+  && script.includes("$('imageVarietyBox').hidden = count < 2 || !!imageRole() || comparingLlms;"),
   'up to 30 images an LLM writes, 50 with your own prompt; Variety only for a set it writes');
 for (const side of ['image', 'video']) {
   assert(new RegExp(`<div class="variety-box" id="${side}VarietyBox">[\\s\\S]*?<div class="explicit-box">\\s*<label class="check"><input type="checkbox" id="${side}Explicit" name="explicit"><span class="options-subtitle">Explicit content</span></label>\\s*</div>`).test(html),
@@ -2241,7 +2251,7 @@ assert(run("filmHtml({ name: 'f.mp4', model: 'wan', resolution: '864x480', durat
     context.document.body.classList = stubClasses;
     assert(/<a href="#videosCard" data-page="output" id="jumpResults">Output<\/a>\s*<button type="button" class="jump-more" id="headToggle" aria-expanded="false" aria-controls="topIcons"/.test(html),
       'the button right of Output');
-    assert(/\.jump \{ display: grid; grid-template-columns: repeat\(3, minmax\(0, 1fr\)\) 34px;/.test(html) && !/\.jump::before/.test(html),
+    assert(/\.jump \{ position: relative; display: grid; grid-template-columns: repeat\(3, minmax\(0, 1fr\)\) 34px;/.test(html) && !/\.jump::before/.test(html),
       'the three page buttons the same width, filling the footer up to it');
     assert(/@media \(max-width: 999px\) \{[\s\S]*?\.top-icons \{ position: fixed; right: 12px; bottom: calc\(var\(--head, 60px\) \+ 6px\);[\s\S]*?transform-origin: bottom right;/.test(html)
       && /body\.head-shown \.top-icons \{ opacity: 1; transform: none; visibility: visible;/.test(html), 'over the page, growing up out of the footer');
@@ -2326,6 +2336,32 @@ assert(run("filmHtml({ name: 'f.mp4', model: 'wan', resolution: '864x480', durat
     assert.deepStrictEqual(calls, ['/shutdown'], 'the second Power click confirms shutdown');
     context.fetch = oldFetch;
   }
+  {
+    // Restart grows a menu with Force restart: its first tap opens it, a second restarts; Force restart takes two taps and sends force.
+    const calls = [], oldFetch = context.fetch, attributes = {};
+    const menu = context.document.getElementById('restartMenu');
+    menu.hidden = true;
+    assert(/<div class="settings-power settings-restart">\s*<button type="button" id="restartPanel"[\s\S]*?<div class="settings-menu" id="restartMenu"[^>]*>\s*<button type="button" id="forceRestartPanel"[^>]*role="menuitem"/.test(html) && /.settings-menu { position: absolute; z-index: 12; left: 0; right: 0;/.test(html),
+      'Restart has its menu, with Force restart in it');
+    els.restartPanel.setAttribute = (name, value) => { attributes[name] = value; };
+    context.fetch = async (path, options) => { calls.push([path, options && options.body]); return { json: async () => ({ ok: false, error: 'held' }) }; };
+    els.restartPanel.listeners.click({});
+    assert(!menu.hidden && attributes['aria-expanded'] === 'true' && !calls.length, 'the first Restart tap opens its menu');
+    els.forceRestartPanel.listeners.click({});
+    assert(!calls.length, 'Force restart asks for a second tap');
+    els.forceRestartPanel.listeners.click({});
+    assert.deepStrictEqual(calls, [['/restart/panel', JSON.stringify({ force: true })]], 'then forces the restart');
+    context.fetch = oldFetch;
+  }
+  // Settings says whether MSI Afterburner is running, and its button starts it when it isn't.
+  run('renderAfterburner(false)');
+  assert(els.afterburnerText.textContent === 'Afterburner not running' && els.startAfterburner.disabled === false
+    && els.afterburnerDot.className === 'dot fail', 'not running: said in red, and Start can start it');
+  run('renderAfterburner(true)');
+  assert(els.afterburnerText.textContent === 'Afterburner running' && els.startAfterburner.disabled === true
+    && els.afterburnerDot.className === 'dot ok', 'running: green, nothing to start');
+  assert(script.includes("fetch('/start/afterburner', { method: 'POST' })"), 'Start has its own request, one tap');
+  assert(script.includes("if ('afterburner' in data) safely(() => renderAfterburner(data.afterburner));"), 'kept up to date from the status');
   assert(/\.viewer-meta \{ width: 100%;/.test(html), 'the preview line is 90% of the bar, not of its own content');
 }
 assert(filmRow.includes(run('ICONS.config')), 'film same-again uses the settings slider');
@@ -2342,7 +2378,9 @@ assert.strictEqual(run('stepViewer(1)'), true);
 assert.strictEqual(els.viewerVideo.src, '/videos/video/b.mp4');
 assert.strictEqual(els.viewerMeta.textContent, 'wan · local');
 assert(els.viewerMetaDetails.textContent.includes('LoRA: example') && els.viewerMetaDetails.textContent.includes('OpenH3'), 'film preview exposes inherited metadata');
-assert.strictEqual(run('stepViewer(1)'), false, 'nothing after the last');
+assert.strictEqual(run('stepViewer(1)'), true, 'on from the last film');
+assert.strictEqual(els.viewerVideo.src, '/videos/video/a.mp4', 'is the first');
+run("openFilm('b.mp4')");
 assert.strictEqual(run('stepSet(1)'), false, 'no next video at the end');
 assert(/#viewerVideo \{[^}]*touch-action: none;/.test(html), 'video keeps swipe gestures from the browser');
 run('zoom.scale = 2');
@@ -2458,23 +2496,86 @@ run("viewing = { id: 'image_20261102_120000', position: 1 }; zoom.scale = 2");
 els.imageViewer.listeners.touchstart({ touches: [{ clientX: 20, clientY: 20 }] });
 assert.strictEqual(run('swipeFrom'), null, 'zoomed in, a finger moves the image rather than turning the page');
 run('resetZoom(); viewing = null');
-// Closing the preview brings the batch it was on to the top of Output, smoothly; not from a collection, and not when
-// Output isn't on screen.
+// What a button is about to open is asked for ahead: used once, for a while; anything sent that changes something drops it.
+{
+  run(`prefetched.clear(); prefetched.set('/image-runs/a', { at: performance.now(), promise: 'kept' })`);
+  assert.strictEqual(run(`takePrefetched('/image-runs/a', {})`), 'kept', 'the answer asked for ahead');
+  assert.strictEqual(run(`takePrefetched('/image-runs/a', {})`), null, 'once');
+  run(`prefetched.set('/image-runs/a', { at: performance.now() - PREFETCH_MS - 1, promise: 'old' })`);
+  assert.strictEqual(run(`takePrefetched('/image-runs/a', {})`), null, 'not one asked for too long ago');
+  run(`prefetched.set('/image-runs/a', { at: performance.now(), promise: 'kept' })`);
+  run(`takePrefetched('/image-runs/a/delete/1', { method: 'POST' })`);
+  assert.strictEqual(run('prefetched.size'), 0, 'a change drops them all');
+  assert(script.includes("const PREFETCH_BUTTONS = '[data-shots], [data-again-set], [data-again-film], [data-config]';")
+    && script.includes("document.addEventListener('pointerdown', e => {\n  const button = e.target.closest && e.target.closest(PREFETCH_BUTTONS);"), 'from the moment a finger is on the button');
+  assert(script.includes('  prefetch(runUrl(id));\n}') && script.includes('  if (film.run) prefetch(runUrl(film.run));'), 'and as the viewer shows an image or film');
+  for (const [fn, side] of [['loadImageWorkflows', 'image'], ['loadVideoWorkflows', 'video'], ['loadWorkflows', 'shorts']]) {
+    assert(script.includes(`if (!data) try { data = await workflowList('${side}', ${fn}); }`), `${fn}: the list kept, drawn again if it changed`);
+  }
+}
+// A sideways swipe goes from section to section, round in a loop; the footer's outline glides to the one it's on.
+{
+  const order = [];
+  run('var oldShowPage = showPage; showPage = page => { document.body.dataset.page = page; }');
+  context.document.body.dataset.page = 'output';
+  run('stepPage(1)'); order.push(context.document.body.dataset.page);
+  run('stepPage(-1)'); order.push(context.document.body.dataset.page);
+  run('stepPage(-1)'); order.push(context.document.body.dataset.page);
+  run('stepPage(-1)'); order.push(context.document.body.dataset.page);
+  run('showPage = oldShowPage');
+  assert.deepStrictEqual(order, ['status', 'output', 'generate', 'status'], 'on from Output is Status, back from Status is Output');
+  assert(script.includes("Math.abs(dx) < 70 || Math.abs(dx) < Math.abs(dy) * 2") && script.includes(`const NO_PAGE_SWIPE = 'input[type="range"], textarea, canvas, video, dialog,`)
+    && !/NO_PAGE_SWIPE = [^;]*#stick/.test(script), 'only a clear sideways swipe, anywhere (the footer too), not on what takes a finger sideways itself');
+  assert(script.includes('if (from.scrollers.some(([node, left]) => Math.abs(node.scrollLeft - left) > 1)) return;'), 'a row that scrolled took it; one at its end gives it to the page');
+  assert(/body \{ overflow-x: clip; \}\s*body\.page-swipe \{ touch-action: pan-y pinch-zoom; \}/.test(html), 'with swiping on, the page leaves sideways swipes to the panel');
+  assert(script.includes("if (WIDE.matches || SETTINGS.page_swipe === false ||") && html.includes('<input type="checkbox" id="pageSwipe">'), 'swiping can be turned off in Settings');
+  // Each page comes in as Settings says, from the side it was swiped from, at the speed chosen.
+  const style = {}, bodyClasses = new Set();
+  const body = context.document.body, savedStyle = body.style, savedClasses = body.classList;
+  body.style = { setProperty: (k, v) => { style[k] = v; } };
+  body.classList = { add: c => bodyClasses.add(c), remove: c => bodyClasses.delete(c), contains: c => bodyClasses.has(c), toggle: () => {} };
+  run("SETTINGS.page_animation = 'flip'; SETTINGS.page_speed = 'fast'; turnPage('status', 'output', -1)");
+  assert(body.dataset.pageAnim === 'flip' && style['--page-dir'] === '-1' && style['--page-time'] === '.16s' && bodyClasses.has('page-turn'), 'flip, from the left, fast');
+  run("SETTINGS.page_speed = 'slow'; turnPage('output', 'generate', 1)");
+  assert(style['--page-dir'] === '1' && style['--page-time'] === '.5s' && bodyClasses.has('page-turn'), 'swiped on: from the right, slowly');
+  run("turnPage('generate', 'output')");
+  assert(!bodyClasses.has('page-turn'), 'a tap, or the page loading, comes in as it always has');
+  bodyClasses.clear();
+  run("turnPage('generate', 'generate', 1)");
+  assert(!bodyClasses.has('page-turn'), 'the same page again: nothing moves');
+  run("delete SETTINGS.page_animation; delete SETTINGS.page_speed");
+  body.style = savedStyle; body.classList = savedClasses;
+  for (const kind of ['slide', 'push', 'fade', 'zoom', 'flip']) {
+    assert(html.includes(`body.page-turn[data-page-anim="${kind}"] .dashboard > [data-page] { animation-name: page-${kind};`) && html.includes(`@keyframes page-${kind} {`), kind);
+    assert(html.includes(`<option value="${kind}">`), `${kind} in Settings`);
+  }
+  assert(html.includes('<select id="pageSpeed" aria-label="Page animation speed"><option value="slow">Slow</option><option value="normal">Normal</option><option value="fast">Fast</option></select>'));
+  assert(/\.jump-glider \{ position: absolute;[^}]*transition: left \.28s/.test(html) && /\.jump-glider\[data-at="generate"\] \{ border-color: var\(--side\); \}/.test(html)
+    && script.includes('placeJumpGlider(here);'), 'one outline, gliding between the buttons in their colours');
+}
+// Closing the preview brings the batch it was on to the middle of Output (the top if it's taller than the screen),
+// smoothly; not from a collection, and not when Output isn't on screen.
 {
   const scrolled = [];
-  const cell = (key, shown = true) => ({ dataset: { outputKey: key }, getClientRects: () => (shown ? [{}] : []),
-    scrollIntoView: options => scrolled.push([key, options.behavior, options.block]) });
+  const cell = (key, shown = true, height = 100) => ({ dataset: { outputKey: key }, getClientRects: () => (shown ? [{}] : []),
+    getBoundingClientRect: () => ({ height }), scrollIntoView: options => scrolled.push([key, options.behavior, options.block]) });
+  const oldHeight = context.window.innerHeight;
+  context.window.innerHeight = 800;
   const saved = els.imageSets.querySelectorAll;
   els.imageSets.querySelectorAll = () => [cell('image:a'), cell('image:b'), cell('film:clip.mp4')];
   run("revealViewedBatch({ id: 'b', position: 3 }, null)");
   run("revealViewedBatch({ film: true, name: 'clip.mp4' }, null)");
+  els.imageSets.querySelectorAll = () => [cell('image:tall', true, 2000)];
+  run("revealViewedBatch({ id: 'tall', position: 1 }, null)");
+  els.imageSets.querySelectorAll = () => [cell('image:a'), cell('image:b'), cell('film:clip.mp4')];
   run("revealViewedBatch({ id: 'b', position: 3 }, { id: 'col' })");
   run("revealViewedBatch({ id: 'gone', position: 1 }, null)");
   els.imageSets.querySelectorAll = () => [cell('image:b', false)];
   run("revealViewedBatch({ id: 'b', position: 3 }, null)");
   els.imageSets.querySelectorAll = saved;
-  assert.deepStrictEqual(scrolled, [['image:b', 'smooth', 'start'], ['film:clip.mp4', 'smooth', 'start']],
-    'its own batch, at the top, smoothly; nothing from a collection, for a deleted batch, or with Output hidden');
+  context.window.innerHeight = oldHeight;
+  assert.deepStrictEqual(scrolled, [['image:b', 'smooth', 'center'], ['film:clip.mp4', 'smooth', 'center'], ['image:tall', 'smooth', 'start']],
+    'its own batch, in the middle (a tall one at the top), smoothly; nothing from a collection, for a deleted batch, or with Output hidden');
   assert(/\.output-batch \{ scroll-margin-top: 8px; \}/.test(html) && script.includes('revealViewedBatch(viewing, viewerCollection);'));
 }
 
@@ -2575,6 +2676,9 @@ assert(run("samePreset({ a: '1', b: true }, { b: true, a: '1' })") === true && r
 assert(run("samePreset({ a: '1' }, { a: '1', transparent: false })") === true, 'a field added since a preset was saved does not unmatch it');
 assert(/presetPicked\[side\] = \{ name, values: presetValues\(side\) \};\s*syncPresets\(side\);\s*\}/.test(script), 'the preset picked stays in the box, even where it could not set a field');
 
+// Pinching the picture in Inpaint reads the fingers on it: a name that isn't there threw at the second finger, so it never zoomed.
+assert(!/[^\w.]pointers\.values\(\)/.test(script) && (script.match(/\[\.\.\.paintPointers\.values\(\)\]/g) || []).length === 2,
+  'Inpaint pinches with the fingers on its picture');
 // Inpaint: the whole screen, its title quiet at the top, the colour prompts in a box of their own, Close and Save at the bottom.
 assert(/id="paintDialogTitle">Inpaint<\/div>/.test(html) && !html.includes('One colour is one change'));
 assert(/id="paintPrompts" class="panel-dialog"[\s\S]*?id="paintAreaList"/.test(html), 'the colour prompts open over a blurred painting');
@@ -3768,7 +3872,11 @@ assert(els.comfyFacts.innerHTML.includes('Generating the image · 3/8') && els.c
   assert.strictEqual(run(`queueDetail({detail: '2 images', facts: {resolution: '1568x2800', upscale: 'SeedVR2, denoise 0.1'}})`),
     '2 images · 1568x2800 · Upscale: SeedVR2, denoise 0.1', 'a queued or waiting job says how it is upscaled');
   assert.strictEqual(run(`queueDetail({detail: '4 images · from text · your prompt, word for word · image_Moss_T2I', facts: {resolution: '1568x2800'}})`),
-    '4 images · 1568x2800 · exact prompt · Moss_T2I', 'the size after the count; no "from text"; an exact prompt; the workflow without its side');
+    '4 images · 1568x2800 · exact prompt · Moss', 'the size after the count; no "from text"; an exact prompt; the workflow by its family');
+  assert.deepStrictEqual(['Krea2_T2I_SFW_NSFW', 'Fibo2_edit_turbo', 'Minimax_H3_T2I', 'Qwen21_T2I_turbo', 'Moss_T2I', 'Qwen_edit_2511_int8', 'LTX23_I2V_T2V']
+    .map(name => run(`workflowFamily(${JSON.stringify(name)})`)), ['Krea2', 'Fibo2', 'MinimaxH3', 'Qwen2.1', 'Moss', 'Qwen', 'LTX2.3']);
+  const compared = run(`queueDetail({pipeline: 'image', detail: '8 images · LLM comparison · Krea2_T2I_SFW_NSFW', facts: {workflow: 'Krea2_T2I_SFW_NSFW', resolution: '1568x2800', loras: ['realism_v2 (0.5)'], explicit: true}})`);
+  assert(/^8 images · 1568x2800 · <span class="detail-comparison"><svg[^]*<\/svg>LLM<\/span> · Krea2 · LoRA: realism_v2 \(0\.5\) · Explicit$/.test(compared), compared);
   run(`renderStopped([{ id: 'image_9', pipeline: 'image', label: 'Set', detail: '2 of 4 made', size: '1024x1024', upscale: 'Latent, Fast, 1.5 MP', estimate: 60 }])`);
   assert(els.stoppedRuns.innerHTML.includes('2 of 4 made · 1024x1024 · Upscale: Latent, Fast, 1.5 MP'), 'and a stopped run in Pending too');
   run('renderStopped([])');
@@ -3844,6 +3952,17 @@ assert(els.comfyFacts.innerHTML.includes('Generating the image · 3/8') && els.c
     assert(notice, 'the disconnected notice waits 5 s');
     notice[0]();
     assert(els.connectionMessage.textContent.includes('HTTP 503'), 'HTTP failures are visible even when the body is JSON');
+    // The phone unlocked: the notice goes, and comes back only after 5 s more without an answer, though the timer
+    // that was frozen with the page goes off at once.
+    waits.length = 0;
+    run('panelConnection.wake()');
+    assert.strictEqual(els.connectionNotice.hidden, true, 'back in sight: the notice goes while it reconnects');
+    const again = waits.find(([, ms]) => ms === 5000);
+    assert(again, 'and waits 5 s from waking');
+    waits.length = 0;
+    again[0]();
+    assert.strictEqual(els.connectionNotice.hidden, true, 'gone off straight away, it waits out the rest');
+    assert(waits.length === 1 && waits[0][1] > 0 && waits[0][1] <= 5000, 'the rest of the 5 s');
     context.setTimeout = savedTimeout;
     context.fetch = savedFetch;
     await run('poll()');
@@ -4305,6 +4424,12 @@ assert(/:is\(#go, #goStick\):not\(:disabled\) \{ animation: test-flash 1\.4s eas
   run('syncImageAmount()');
   assert(els.imageCount.disabled && String(els.imageCount.value) === '3', 'Gemini and both local models: 3');
   assert(els.imageLlmTestHint.textContent.startsWith('3 images in one set: each prompt model'), els.imageLlmTestHint.textContent);
+  {
+    const sync = script.slice(script.indexOf('function syncImageForm('), script.indexOf("$('formImage').addEventListener('change'"));
+    assert(sync.includes("$('imageWriterExtras').classList.toggle('hidden', direct && !comparingLlms)"),
+      'an LLM comparison shows Words and Explicit, even with How on your prompt as written');
+    assert(/imageVarietyBox'\)\.hidden = [^;]*\|\| comparingLlms;/.test(sync), 'but not Variety: each model writes one prompt');
+  }
   els.imageLlmTest.checked = false;
   els.imageHow.listeners.change({ target: els.imageLlmTest });
   run('syncLoraTests')('imageOptionsBox', options);
