@@ -1,6 +1,6 @@
 """
 The Image side: the panel in-process, starting the real pipelines.image.main as a real process,
-which talks to a fake ComfyUI and a fake Claude. Nothing costs anything.
+which talks to a fake ComfyUI and a fake Gemini. Nothing costs anything.
 """
 import io
 import json
@@ -17,7 +17,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from fakes import (OBJECT_INFO, caption, captions_reply, close, edit_image_workflow, fake_claude, fake_comfy, fibo2_workflow,
+from fakes import (OBJECT_INFO, caption, captions_reply, close, edit_image_workflow, fake_comfy, fake_gemini, fibo2_workflow, gemini_env,
                    qwen21_edit_workflow, qwen21_text_workflow, switchable_workflow, text_to_image_workflow, versions_reply)
 
 from PIL import Image, ImageDraw
@@ -25,7 +25,7 @@ from PIL import Image, ImageDraw
 from panel import app as _all_pipelines  # noqa: F401
 from panel import image as image_panel
 from panel import server as webapp
-from core import explicit, variety
+from core import explicit, variety, workflow_options
 from core.llm_reply import CutOff
 from pipelines.image import fibo2_prompt, media, models, paths, planner
 from pipelines.image.run_eta import RunEta
@@ -415,11 +415,13 @@ class EtaTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as folder:
             path = os.path.join(folder, "timings.json")
             with open(path, "w", encoding="utf-8") as f:
-                json.dump({"steps": {"Prompts | claude | per prompt": 30, "Prompts | gemini | 3 images": 12, "Prompts | per prompt": 6}}, f)
+                json.dump({"steps": {"Prompts | gemini | 3 images": 12, "Prompts | per prompt": 6}}, f)
             prompts = lambda *argv: RunEta(["--plan-only", *argv], {}, path).plan()["total"]
             self.assertEqual(prompts("--llm", "gemini", "--count", "3"), 12, "as timed for this many")
-            self.assertEqual(prompts("--llm", "claude", "--count", "3"), 90, "claude's time per prompt, times three")
             self.assertEqual(prompts("--llm", "gemini", "--count", "5"), 30, "nothing timed for gemini at 5 yet: any LLM's per prompt, times five")
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump({"steps": {"Prompts | gemini | per prompt": 30, "Prompts | per prompt": 6}}, f)
+            self.assertEqual(prompts("--llm", "gemini", "--count", "3"), 90, "gemini's own time per prompt, times three")
 
     def test_each_workflow_learns_its_own_time(self):
         with tempfile.TemporaryDirectory() as folder:
@@ -629,11 +631,11 @@ class PanelTest(unittest.TestCase):
         self.addCleanup(shutil.rmtree, self.temp, ignore_errors=True)
         self.comfy = fake_comfy(self.temp)
         self.addCleanup(close, self.comfy)
-        self.claude = fake_claude()
-        self.claude.reply = versions_reply()
-        self.addCleanup(close, self.claude)
+        self.llm = fake_gemini()
+        self.llm.reply = versions_reply()
+        self.addCleanup(close, self.llm)
         patcher = mock.patch.dict(os.environ, {
-            "COMFYUI_URL": self.comfy.url, "ANTHROPIC_BASE_URL": self.claude.url, "ANTHROPIC_API_KEY": "test"})
+            "COMFYUI_URL": self.comfy.url, **gemini_env(self.llm)})
         patcher.start()
         self.addCleanup(patcher.stop)
         self.comfy.saved = {"image_text.json": text_to_image_workflow(), "image_edit.json": edit_image_workflow(), "Fibo2_test.json": fibo2_workflow()}
@@ -676,7 +678,7 @@ class PanelTest(unittest.TestCase):
         self.fail(f"Timed out. Log: {[l['text'] for l in webapp.job.lines][-15:]}")
 
     def generate(self, image=False, **fields):
-        form = {"prompt": "different outfits", "count": "3", "llm": "claude", "aspect": "1:1", "megapixels": "1", **fields}
+        form = {"prompt": "different outfits", "count": "3", "llm": "gemini", "aspect": "1:1", "megapixels": "1", **fields}
         if image:
             form["image"] = (io.BytesIO(png_bytes()), "woman.png")
         return self.client.post("/generate/image", data={k: v for k, v in form.items() if v is not None}, content_type="multipart/form-data")
@@ -733,8 +735,8 @@ class PanelTest(unittest.TestCase):
         self.assertEqual(run.title, "Three Looks")
         self.assertEqual(self.comfy.uploads, [], "no image to give it")
         self.assertEqual([self.sent_prompt(p) for p in self.comfy.prompts], [f"Change to look number {n}." for n in (1, 2, 3)])
-        self.assertTrue(all(block["type"] == "text" for block in self.claude.requests[0]["body"]["messages"][0]["content"]), "the LLM has no image either")
-        self.assertIn("each has to say everything", self.claude.requests[0]["body"]["messages"][0]["content"][0]["text"])
+        self.assertTrue(all("text" in part for part in self.llm.requests[0]["parts"]), "the LLM has no image either")
+        self.assertIn("each has to say everything", self.llm.requests[0]["parts"][0]["text"])
         for shot in run.shots:
             self.assertTrue(os.path.exists(run.image_path(shot)))
         self.assertTrue(run.output_dir.startswith(paths.OUTPUT_DIR))
@@ -744,8 +746,8 @@ class PanelTest(unittest.TestCase):
         self.make(image=True, aspect="image", megapixels="1")
         run = self.only_run()
         self.assertEqual(os.path.basename(run.workflow), "image_edit.json")
-        self.assertEqual(self.claude.requests[0]["body"]["messages"][0]["content"][0]["type"], "image", "the LLM sees what it's editing")
-        self.assertIn("edit that image", self.claude.requests[0]["body"]["messages"][0]["content"][1]["text"])
+        self.assertIn("image", self.llm.requests[0]["parts"][0], "the LLM sees what it's editing")
+        self.assertIn("edit that image", self.llm.requests[0]["parts"][1]["text"])
         self.assertEqual(len(self.comfy.uploads), 1, "uploaded once, however many are made from it")
         self.assertEqual(self.inputs(self.comfy.prompts[0], "LoadImage")["image"], "uploaded.png")
         self.assertEqual([self.sent_prompt(p) for p in self.comfy.prompts], [f"Change to look number {n}." for n in (1, 2, 3)])
@@ -785,7 +787,7 @@ class PanelTest(unittest.TestCase):
     def test_a_direct_prompt_goes_in_word_for_word_with_no_llm(self):
         self.make(prompt="Exactly these words", prompt_mode="direct", count="4", llm=None)
         run = self.only_run()
-        self.assertEqual(self.claude.requests, [])
+        self.assertEqual(self.llm.requests, [])
         self.assertEqual([self.sent_prompt(p) for p in self.comfy.prompts], ["Exactly these words"] * 4)
         self.assertEqual(len({self.inputs(p, "KSampler")["seed"] for p in self.comfy.prompts}), 4)
         self.assertTrue(run.direct)
@@ -811,7 +813,7 @@ class PanelTest(unittest.TestCase):
         self.wait_idle()
         self.assertEqual(self.sent_prompt(self.comfy.prompts[1]), "My own wording.")
         self.assertTrue(self.only_run().finished)
-        self.assertEqual(len(self.claude.requests), 1)
+        self.assertEqual(len(self.llm.requests), 1)
 
     def test_a_continuation_queued_before_its_box_said_more_is_described_from_its_run(self):
         self.make(review="1")
@@ -996,7 +998,7 @@ class PanelTest(unittest.TestCase):
                 mock.patch.object(image_panel.video_media, "inputs_fingerprint", return_value="same"), \
                 mock.patch.object(image_panel, "list_runs", return_value=[state]):
             self.assertIs(image_panel.run_to_continue("idea", ["--count", "1", "--llm", "gemini"], {}, []), state)
-            self.assertIsNone(image_panel.run_to_continue("idea", ["--count", "1", "--llm", "claude"], {}, []))
+            self.assertIsNone(image_panel.run_to_continue("idea", ["--count", "1", "--llm", "local"], {}, []))
 
     def test_generate_continues_a_stopped_set_without_new_prompts(self):
         self.comfy.script = ["fail", "fail", "ok", "ok", "fail", "fail"]
@@ -1015,14 +1017,14 @@ class PanelTest(unittest.TestCase):
         self.assertEqual(reply["continued"], "Three Looks")
         run = self.only_run()
         self.assertTrue(run.finished)
-        self.assertEqual(len(self.claude.requests), 1, "the prompts weren't paid for again")
+        self.assertEqual(len(self.llm.requests), 1, "the prompts weren't paid for again")
         self.assertEqual(len(self.comfy.prompts), 7, "and only the missing one was made")
 
     def test_a_different_set_gets_its_own_prompts(self):
         self.make(review="1")
         self.make(prompt="something else", review="1")
         self.assertEqual(len(list_runs()), 2)
-        self.assertEqual(len(self.claude.requests), 2)
+        self.assertEqual(len(self.llm.requests), 2)
 
     def test_a_bad_file_is_made_again(self):
         self.comfy.script = ["corrupt"]
@@ -1326,7 +1328,10 @@ class PanelTest(unittest.TestCase):
                  "problem": "Needs krea2_darkbrush.safetensors, which isn't installed."},
                 {"id": "prompt_enhancer", "kind": "switch", "role": "llm", "label": "Prompt enhancer", "default": "0",
                  "takes": {"min_images": 0, "max_images": 0}},
-                {"id": "steps", "kind": "number", "label": "Steps", "default": "8", "min": 1, "max": 150, "step": 1, "advanced": True}]}}])
+                {"id": "steps", "kind": "number", "label": "Steps", "default": "8", "min": 1, "max": 150, "step": 1, "advanced": True},
+                {"id": "model_file", "kind": "choice", "label": "Model", "default": "model.safetensors", "choices": ["model.safetensors"],
+                 "labels": {"model.safetensors": "model"}, "model": True, "problem": "No other model that fits is installed.",
+                 "hint": workflow_options.HINTS["model_file"]}]}}])
         self.assertEqual(self.client.get("/api/workflows?pipeline=video").get_json()["workflows"], [], "they don't turn up among the films")
         reply = self.generate(image=True)
         self.assertEqual(reply.status_code, 400)
@@ -1370,7 +1375,7 @@ class PanelTest(unittest.TestCase):
         self.assertEqual(reply.status_code, 400)
         # Every LLM writes at most 30 now (Fibo 2.0's own limit is the same), so the general limit answers first.
         self.assertIn("writes up to 30", reply.get_json()["error"])
-        self.assertEqual(self.claude.requests, [], "refused before anything is paid for")
+        self.assertEqual(self.llm.requests, [], "refused before anything is paid for")
         self.assertIn("1.1 megapixels", self.client.post("/api/estimate/image", data={"workflow": "Fibo2_test.json", "aspect": "3840x2160"}).get_json()["error"],
                       "and the form hears it before Generate")
 
@@ -1383,20 +1388,20 @@ class PanelTest(unittest.TestCase):
         self.assertLessEqual(run.width * run.height, 1.1 * media.PIXELS_PER_MEGAPIXEL)
 
     def test_fibo2_gets_the_llms_json_captions(self):
-        self.claude.reply = captions_reply(edit=False)
+        self.llm.reply = captions_reply(edit=False)
         self.make(workflow="Fibo2_test.json")
         run = self.only_run()
         self.assertTrue(run.finished, [l["text"] for l in webapp.job.lines][-15:])
         sent = [self.inputs(p, "TextEncodeFibo2")["prompt"] for p in self.comfy.prompts]
         self.assertEqual([json.loads(prompt)["short_description"] for prompt in sent], [f"A woman in look number {n}." for n in (1, 2, 3)])
         self.assertTrue(all("edit_instruction" not in json.loads(prompt) for prompt in sent), "an image from text has nothing to edit")
-        self.assertIn("ONE JSON object", self.claude.requests[0]["body"]["messages"][0]["content"][-1]["text"])
+        self.assertIn("ONE JSON object", self.llm.requests[0]["parts"][-1]["text"])
         encoder = self.inputs(self.comfy.prompts[0], "TextEncodeFibo2")
         self.assertEqual((encoder["width"], encoder["height"]), (1024, 1024), "the size goes to the encoder, which makes the latent")
         self.assertFalse(any(name.startswith("images.") for name in encoder), "and with no image, none of its inputs are left")
 
     def test_fibo2_edits_with_an_instruction(self):
-        self.claude.reply = captions_reply()
+        self.llm.reply = captions_reply()
         self.make(image=True, workflow="Fibo2_test.json", aspect="image", megapixels="1")
         prompt = json.loads(self.inputs(self.comfy.prompts[0], "TextEncodeFibo2")["prompt"])
         self.assertEqual(prompt["edit_instruction"], "Change her outfit to look number 1.")
@@ -1422,8 +1427,8 @@ class PanelTest(unittest.TestCase):
         self.wait_idle()
         run = self.only_run()
         self.assertTrue(run.finished, [l["text"] for l in webapp.job.lines][-15:])
-        self.assertEqual(run.options, {"group_sharpen": "1", "lora": "1", "lora_strength": "0.7", "prompt_boost": "0", "steps": "12"},
-                         "what differs from the workflow as saved")
+        self.assertLessEqual({"group_sharpen": "1", "lora": "1", "lora_strength": "0.7", "prompt_boost": "0", "steps": "12"}.items(),
+                             run.options.items(), "what was chosen, kept with all the rest")
         sent = self.comfy.prompts[0]["prompt"]
         self.assertIn("Image Lucy Sharpen", [node["class_type"] for node in sent.values()])
         self.assertEqual(self.inputs(self.comfy.prompts[0], "KSampler")["steps"], 12)
@@ -1434,18 +1439,21 @@ class PanelTest(unittest.TestCase):
         self.wait_idle()
         self.assertEqual(self.inputs(self.comfy.prompts[1], "KSampler")["steps"], 12, "made again as it was")
 
-    def test_options_as_saved_send_nothing(self):
+    def test_options_as_saved_are_kept_too(self):
+        # Every setting goes with the run, so it opens again as it was made after the workflow's defaults change.
         self.assertTrue(self.switchable(opt_group_sharpen=["0"], opt_steps="8").get_json()["ok"])
         self.wait_idle()
-        self.assertIsNone(self.only_run().options)
+        options = self.only_run().options
+        self.assertEqual((options["group_sharpen"], options["steps"]), ("0", "8"))
+        self.assertIn("lora", options, "one the form didn't send, as the workflow has it")
 
     def test_the_workflows_own_prompt_enhancer_writes_them(self):
         self.make(llm="prompt_enhancer", prompt="a lighthouse", count="2", workflow="image_text.json")
         run = self.only_run()
         self.assertTrue(run.finished, [l["text"] for l in webapp.job.lines][-15:])
-        self.assertEqual(self.claude.requests, [], "no LLM is asked")
+        self.assertEqual(self.llm.requests, [], "no LLM is asked")
         self.assertTrue(run.direct)
-        self.assertEqual(run.options, {"prompt_enhancer": "1"})
+        self.assertEqual(run.options["prompt_enhancer"], "1")
         # Named after its title and the workflow that made it: the folder, and each file in it.
         self.assertEqual(run.output_name, "a_lighthouse_text")
         # While a set is going, each image it has made is under Finished already.
@@ -1457,8 +1465,8 @@ class PanelTest(unittest.TestCase):
         self.assertEqual(webapp.made_in_this_run(), [], "and once it is done, the set's own line says so")
         # The same again: what it was made with, for Generate to start from.
         settings = self.client.get(f"/image-runs/{run.id}").get_json()["settings"]
-        self.assertEqual((settings["prompt"], settings["direct"], settings["count"], settings["workflow"], settings["options"]),
-                         ("a lighthouse", False, 2, "image_text.json", {"prompt_enhancer": "1"}))
+        self.assertEqual((settings["prompt"], settings["direct"], settings["count"], settings["workflow"], settings["options"]["prompt_enhancer"]),
+                         ("a lighthouse", False, 2, "image_text.json", "1"))
         self.assertEqual(settings["llm"], "prompt_enhancer")
         # A set that came out short, or lost some since, opens with the number asked for.
         run.shots = run.shots[:1]
@@ -1480,7 +1488,7 @@ class PanelTest(unittest.TestCase):
         kinds = {node["class_type"] for node in self.comfy.prompts[0]["prompt"].values()}
         self.assertIn("TextGenerate", kinds)
         self.assertFalse(kinds & {"PreviewImage", "KSampler"}, "only what the enhancer needs is run")
-        self.assertEqual(run.options, {"prompt_enhancer": "0"}, "what it wrote goes in as it is")
+        self.assertEqual(run.options["prompt_enhancer"], "0", "what it wrote goes in as it is")
         prompts = [shot["prompt"] for shot in run.shots]
         prompts[1] = "My own wording."
         self.assertTrue(self.client.post(f"/image-runs/{run.id}/shots", json={"prompts": prompts}).get_json()["ok"])
@@ -1609,7 +1617,7 @@ class QwenImage21Test(unittest.TestCase):
         buffer.seek(0)
         run = self.make_with(prompt="", image=(buffer, "a.png"), image_mode="areas", areas_mask=(self.painted((1200, 900), [500, 350, 700, 550]), "areas.png"),
                              areas=json.dumps([{"colour": "#e62828", "action": "remove", "text": "the bin"}]))
-        self.assertEqual(self.claude.requests, [], "its instruction is written from what's painted")
+        self.assertEqual(self.llm.requests, [], "its instruction is written from what's painted")
         self.assertEqual(len(self.comfy.uploads), 2, "the part around it, and the same with the area marked")
         sent = self.sent_prompt(self.comfy.prompts[0])
         self.assertIn("<image2>", sent)
@@ -1694,3 +1702,75 @@ class QwenImage21Test(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class InpaintMaskTest(unittest.TestCase):
+    """A workflow's inpaint mode: what's painted over image 1 becomes transparent, which Load Image takes as its mask."""
+
+    def test_the_painted_part_is_transparent_after_the_same_fit(self):
+        with tempfile.TemporaryDirectory() as folder:
+            source, painted, out = (os.path.join(folder, name) for name in ("source.png", "mask.png", "out.png"))
+            Image.new("RGB", (400, 200), "blue").save(source)
+            mask = Image.new("RGBA", (400, 200), (0, 0, 0, 0))
+            # The right quarter painted. Fitted to a square, only the middle 200 columns are kept, which it doesn't reach.
+            ImageDraw.Draw(mask).rectangle([300, 0, 399, 199], fill=(230, 40, 40, 255))
+            mask.save(painted)
+            fitted = media.fit(source, 100, 100, os.path.join(folder, "fitted.png"))
+            media.with_mask(fitted, painted, (100, 100), out)
+            with Image.open(out) as image:
+                self.assertEqual((image.mode, image.size), ("RGBA", (100, 100)))
+                alpha = image.getchannel("A")
+                self.assertEqual((alpha.getpixel((10, 50)), alpha.getpixel((90, 50))), (255, 255),
+                                 "the middle square, which the paint doesn't reach, is kept")
+                self.assertEqual(image.getpixel((10, 50))[:3], (0, 0, 255))
+
+    def test_painting_inside_the_crop_is_redrawn(self):
+        with tempfile.TemporaryDirectory() as folder:
+            source, painted, out = (os.path.join(folder, name) for name in ("source.png", "mask.png", "out.png"))
+            Image.new("RGB", (200, 200), "green").save(source)
+            mask = Image.new("RGBA", (200, 200), (0, 0, 0, 0))
+            ImageDraw.Draw(mask).rectangle([0, 0, 99, 199], fill=(40, 90, 235, 255))
+            mask.save(painted)
+            media.with_mask(source, painted, None, out)
+            with Image.open(out) as image:
+                alpha = image.getchannel("A")
+                self.assertEqual((alpha.getpixel((20, 100)), alpha.getpixel((180, 100))), (0, 255), "painted: transparent; the rest kept")
+                self.assertEqual(image.getpixel((20, 100))[:3], (0, 128, 0), "the colour under the paint stays for the model to start from")
+
+
+class ModelFilePillsTest(unittest.TestCase):
+    """A set's pills say the files it ran, plainly: from its settings, or what ComfyUI wrote into its image."""
+
+    def png_with(self, folder, api, size=(64, 48)):
+        from PIL import PngImagePlugin
+        path = os.path.join(folder, "made.png")
+        info = PngImagePlugin.PngInfo()
+        info.add_text("prompt", json.dumps(api))
+        Image.new("RGB", size, "red").save(path, pnginfo=info)
+        return path
+
+    API = {"1": {"class_type": "UNETLoader", "inputs": {"unet_name": "krea2_turbo_int8_convrot.safetensors"}},
+           "2": {"class_type": "CLIPLoader", "inputs": {"clip_name": "qwen3vl_4b_fp8_scaled.safetensors", "type": "krea2"}},
+           "3": {"class_type": "VAELoader", "inputs": {"vae_name": "krea2RealVae_v10.safetensors"}}}
+
+    def test_a_set_made_before_its_settings_kept_them_reads_its_image(self):
+        from core import model_files, pills
+        with tempfile.TemporaryDirectory() as folder:
+            self.png_with(folder, self.API)
+            state = mock.Mock(shots=[{"file": "made.png"}], output_dir=folder, options={"steps": "8"})
+            self.assertEqual(pills.image_files(state), [("model", "Model: Krea-2 Turbo int8"), ("encoder", "Encoder: Qwen3-VL 4B fp8"),
+                                                        ("vae", "VAE: Krea2Real")])
+            # Its settings, where it kept them, before what its image says.
+            state.options = {"vae_file": "qwen_image_vae.safetensors"}
+            self.assertIn(("vae", "VAE: Qwen-Image"), pills.image_files(state))
+            self.assertEqual(model_files.friendly("some_new_model_with_a_very_long_name_v2_fp8_scaled.safetensors")[-1], "…",
+                             "one it doesn't know: its name, cut to fit")
+
+    def test_cropping_to_the_size_asked_keeps_what_comfyui_wrote_in_it(self):
+        from core import model_files
+        with tempfile.TemporaryDirectory() as folder:
+            path = self.png_with(folder, self.API, size=(64, 64))
+            media.trim(path, (64, 64), (64, 48))
+            with Image.open(path) as image:
+                self.assertEqual(image.size, (64, 48))
+            self.assertEqual(model_files.files_of_image(path)["model"], "krea2_turbo_int8_convrot.safetensors")

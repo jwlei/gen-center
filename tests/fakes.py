@@ -1,5 +1,5 @@
 """
-Stand-ins for ComfyUI and the Claude API on localhost: real HTTP, no GPU, no cost.
+Stand-ins for ComfyUI and the Gemini API on localhost: real HTTP, no GPU, no cost.
 
 Imported before anything else in the tests, so every file they make goes to a
 throwaway folder, including from the pipeline processes the panel starts.
@@ -28,7 +28,7 @@ DATA = tempfile.mkdtemp(prefix="comfyui_auto_gen_tests_")
 atexit.register(shutil.rmtree, DATA, ignore_errors=True)
 os.environ["AUTOGEN_DATA"] = DATA
 # load_dotenv never replaces what is already set, so the real .env can't reach the tests.
-for name in ("APP_PASSWORD", "COMFYUI_LAUNCHER", "COMFYUI_DIR", "GEMINI_MODEL", "CLAUDE_MODEL", "LLM_PROVIDER", "COMFYUI_WORKFLOW",
+for name in ("APP_PASSWORD", "COMFYUI_LAUNCHER", "COMFYUI_DIR", "GEMINI_MODEL", "GEMINI_API_KEY", "GOOGLE_GEMINI_BASE_URL", "LLM_PROVIDER", "COMFYUI_WORKFLOW",
              "YOUTUBE_CLIENT_ID", "YOUTUBE_CLIENT_SECRET", "YOUTUBE_REFRESH_TOKEN"):
     os.environ[name] = ""
 # The tests fake Gemini's replies; the real default is the local model (planner.default_llm).
@@ -163,32 +163,41 @@ class _ComfyHandler(_Handler):
             self._send({}, 404)
 
 
-class _ClaudeHandler(_Handler):
+def _bytes_of(data):
+    """An image's bytes as google-genai sends them: base64, URL-safe, sometimes without its padding."""
+    import base64
+    return base64.urlsafe_b64decode(data.replace("+", "-").replace("/", "_") + "=" * (-len(data) % 4))
+
+
+class _GeminiHandler(_Handler):
+    """
+    Gemini's generateContent, as google-genai calls it (pointed here by GOOGLE_GEMINI_BASE_URL). Each request is kept
+    with its parts: {"text": ...} and {"image": jpeg bytes}, in order. The reply is its last text: a list as the
+    planner's replies are written (fakes.plan_reply), or a function of the request that makes one.
+    """
     def do_POST(self):
         state = self.server
         request = json.loads(self.rfile.read(int(self.headers.get("Content-Length") or 0)))
-        state.requests.append({"body": request, "beta": self.headers.get("anthropic-beta"), "path": self.path})
+        parts = [part for content in request.get("contents") or [] for part in content.get("parts") or []]
+        state.requests.append({"body": request, "path": self.path, "model": self.path.rsplit("/", 1)[-1].split(":")[0],
+                               "parts": [{"image": _bytes_of(part["inlineData"]["data"])} if "inlineData" in part
+                                         else {"text": part.get("text", "")} for part in parts]})
         if state.status != 200:
-            self._send({"type": "error", "error": {"type": "api_error", "message": "fake failure"}}, state.status)
+            self._send({"error": {"code": state.status, "message": "fake failure", "status": "UNAUTHENTICATED" if state.status == 401 else "INTERNAL"}}, state.status)
             return
         reply = state.reply(request) if callable(state.reply) else state.reply
-        events = [{"type": "message_start", "message": {
-            "id": "msg_fake", "type": "message", "role": "assistant", "content": [], "model": request["model"],
-            "stop_reason": None, "stop_sequence": None, "usage": {"input_tokens": 1, "output_tokens": 1}}}]
-        for index, text in enumerate(reply):
-            events += [{"type": "content_block_start", "index": index, "content_block": {"type": "text", "text": ""}},
-                       {"type": "content_block_delta", "index": index, "delta": {"type": "text_delta", "text": text}},
-                       {"type": "content_block_stop", "index": index}]
-        events += [{"type": "message_delta", "delta": {"stop_reason": state.stop_reason, "stop_sequence": None},
-                    "usage": {"output_tokens": 5}},
-                   {"type": "message_stop"}]
-        stream = "".join(f"event: {event['type']}\ndata: {json.dumps(event)}\n\n" for event in events)
-        self._send(stream.encode(), kind="text/event-stream")
+        self._send({"candidates": [{"content": {"role": "model", "parts": [{"text": reply[-1] if reply else ""}]},
+                                    "finishReason": state.finish_reason}],
+                    "usageMetadata": {"promptTokenCount": 1, "candidatesTokenCount": 1, "totalTokenCount": 2},
+                    "modelVersion": state.requests[-1]["model"]})
+
 
 
 def _serve(handler):
     server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
-    threading.Thread(target=server.serve_forever, daemon=True).start()
+    # Polled often, so close() (shutdown waits for the next poll) takes a few milliseconds, not the default half second:
+    # every test that starts a fake server pays it.
+    threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True).start()
     return server
 
 
@@ -576,11 +585,19 @@ def plan_reply(shots=8, seconds=8, title="The Harbour Storm"):
         {"title": f"Shot {i + 1}", "seconds": seconds, "prompt": f"Prompt number {i + 1}."} for i in range(shots)]})]
 
 
-def fake_claude():
-    server = _serve(_ClaudeHandler)
-    server.requests, server.reply, server.status, server.stop_reason = [], plan_reply(), 200, "end_turn"
+def fake_gemini():
+    """
+    A Gemini that answers at once. The tests point the pipelines at it with gemini_env(server): a key, one model, and
+    this server's address, which google-genai reads from GOOGLE_GEMINI_BASE_URL.
+    """
+    server = _serve(_GeminiHandler)
+    server.requests, server.reply, server.status, server.finish_reason = [], plan_reply(), 200, "STOP"
     server.url = f"http://127.0.0.1:{server.server_port}"
     return server
+
+
+def gemini_env(server):
+    return {"GOOGLE_GEMINI_BASE_URL": server.url, "GEMINI_API_KEY": "test", "GEMINI_MODEL": "gemini-test", "LLM_PROVIDER": "gemini"}
 
 
 def close(server):

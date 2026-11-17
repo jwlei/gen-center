@@ -718,16 +718,30 @@ function applyOptions(box, options, chosen) {
     if (chosen.latent_upscale_chunking) $('videoLatentChunking').checked = chosen.latent_upscale_chunking === '1';
     showVideoLatent();
   }
+  // What the run chose that this form can't show now, said rather than swapped for another without a word.
+  box.unavailable = [];
   for (const option of options.filter(o => !o.role)) {
     const value = chosen[option.id] ?? option.default;
-    const field = name => optionField(box, `[name="${name}"]:not([type="hidden"])`);
+    // The image side's Mode and its Denoise sit at the top of Setup, not in the box.
+    const field = name => optionField(box, `[name="${name}"]:not([type="hidden"])`)
+      || (box === $('imageOptionsBox') ? $('formImage').querySelector(`#imageWorkflowModeBox [name="${name}"]`) : null);
     if (option.kind === 'lora_stack') box.querySelector('[name=opt_additional_loras]').value = value;
     else if (option.kind === 'switch') { const el = field(`opt_${option.id}`); if (el) el.checked = value === '1'; }
     else if (option.kind === 'strength') {
       const on = field(`opt_${option.id}_on`), strength = field(`opt_${option.id}_strength`);
       if (on) on.checked = value !== '0';
       if (strength && value !== '0') strength.value = value;
-    } else { const el = field(`opt_${option.id}`); if (el) el.value = value; }
+    } else {
+      const el = field(`opt_${option.id}`);
+      if (el && el.options && ![...el.options].some(o => o.value === String(value))) {
+        // A LoRA with NSFW in its name is only offered in Private mode.
+        const name = String(value).replace(/\.safetensors$/, '');
+        const used = (chosen[option.parent] ?? (options.find(o => o.id === option.parent) || {}).default) === '1';
+        if (option.id === 'lora_name' && used) box.unavailable.push(/nsfw|uncensor/i.test(name) && !privateMode
+          ? `This set used the LoRA ${name}, which is only offered in Private mode: switch it on and open the set again.`
+          : `This set used the LoRA ${name}, which isn't installed now.`);
+      } else if (el) el.value = value;
+    }
   }
   renderLoraStack(box);
   if (box.dataset.workflow) rememberOptions(box);

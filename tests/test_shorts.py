@@ -998,7 +998,8 @@ class SwitchTest(unittest.TestCase):
             self.assertIsNone(error)
             self.assertEqual(json.loads(env["COMFYUI_OPTIONS"]), {"steps": "12"})
             self.assertIn("COMFYUI_OPTIONS", run_state.RUN_ENV, "kept with the run, for continuing it")
-            self.assertNotIn("COMFYUI_OPTIONS", shorts_panel.build_run(form(opt_steps="20"))[1], "as saved, nothing to change")
+            self.assertEqual(json.loads(shorts_panel.build_run(form(opt_steps="20"))[1]["COMFYUI_OPTIONS"]), {"steps": "20"},
+                             "as saved, kept too: the run opens again as it was made")
             self.assertIn("1 to 150", shorts_panel.build_run(form(opt_steps="0"))[2])
 
     def test_workflows_are_kept_apart_by_their_name(self):

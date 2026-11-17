@@ -17,7 +17,7 @@ from unittest import mock
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from fakes import close, fake_claude, fake_comfy, make_clip, plan_reply
+from fakes import close, fake_comfy, fake_gemini, gemini_env, make_clip, plan_reply
 
 import ffmpeg
 from PIL import Image
@@ -455,7 +455,7 @@ class PipelineTest(unittest.TestCase):
 
     def test_no_key_for_the_chosen_llm_spends_nothing(self):
         with mock.patch.object(planner, "llm_configured", return_value=False):
-            self.assertEqual(self.film("--llm", "claude"), 1)
+            self.assertEqual(self.film("--llm", "gemini"), 1)
         main.planner.plan_film.assert_not_called()
 
 class SeedTest(unittest.TestCase):
@@ -782,7 +782,7 @@ class PlanTest(unittest.TestCase):
                                for i in range(2)])
         distinct = self.reply([{"title": "First", "seconds": 10, "prompt": "The door opens."},
                                {"title": "Next", "seconds": 10, "prompt": "She walks through."}])
-        for llm in ("gemini", "claude", "local"):
+        for llm in ("gemini", "local"):
             with self.subTest(llm=llm), mock.patch.object(planner, "_ask", side_effect=[repeated, distinct]) as call:
                 _, shots = planner.plan_film(b"jpeg", "brief", 20, "chain", llm, refiner=object())
                 self.assertEqual([shot["prompt"] for shot in shots], ["The door opens.", "She walks through."])
@@ -1132,19 +1132,18 @@ class PlanTest(unittest.TestCase):
         self.assertEqual(planned[0]["prompt"], "A woman walks into the rain.")
 
 
-class ClaudeTest(unittest.TestCase):
-    """The real SDK, speaking its real streaming protocol to a fake server."""
+class GeminiTest(unittest.TestCase):
+    """The real SDK (google-genai), speaking Gemini's real protocol to a fake server."""
 
     def setUp(self):
-        self.server = fake_claude()
+        self.server = fake_gemini()
         self.addCleanup(close, self.server)
-        patcher = mock.patch.dict(os.environ, {"ANTHROPIC_BASE_URL": self.server.url, "ANTHROPIC_API_KEY": "test",
-                                               "ANTHROPIC_AUTH_TOKEN": ""})
+        patcher = mock.patch.dict(os.environ, gemini_env(self.server))
         patcher.start()
         self.addCleanup(patcher.stop)
 
     def plan(self):
-        return planner.plan_film(b"jpeg-bytes", "a storm", 60, "chain", "claude")
+        return planner.plan_film(b"jpeg-bytes", "a storm", 60, "chain", "gemini")
 
     def test_request_and_reply(self):
         title, shots = self.plan()
@@ -1152,53 +1151,30 @@ class ClaudeTest(unittest.TestCase):
         self.assertEqual(sum(shot["seconds"] for shot in shots), 60)
 
         sent = self.server.requests[0]
-        body = sent["body"]
-        self.assertEqual(body["model"], "claude-opus-5-5")
-        self.assertIs(body["stream"], True)
-        self.assertEqual(body["max_tokens"], planner.CLAUDE_MAX_TOKENS)
-        self.assertEqual(body["fallbacks"], "default")
-        self.assertIn("server-side-fallback-2026-07-01", sent["beta"])
-        self.assertEqual(body["output_config"]["effort"], "high")
-        self.assertEqual(body["output_config"]["format"]["schema"], planner.PLAN_SCHEMA)
-        self.assertNotIn("thinking", body)
-        self.assertNotIn("temperature", body)
-        image, text = body["messages"][0]["content"]
-        self.assertEqual(image["type"], "image")
-        self.assertEqual(image["source"]["media_type"], "image/jpeg")
+        self.assertEqual(sent["model"], "gemini-test", "GEMINI_MODEL")
+        self.assertEqual(sent["body"]["generationConfig"]["responseMimeType"], "application/json")
+        image, text = sent["parts"]
+        self.assertEqual(image["image"], b"jpeg-bytes")
         self.assertIn("a storm", text["text"])
-
-    def test_model_can_be_changed(self):
-        with mock.patch.dict(os.environ, {"CLAUDE_MODEL": "claude-sonnet-5-5"}):
-            self.plan()
-        self.assertEqual(self.server.requests[0]["body"]["model"], "claude-sonnet-5-5")
-
-    def test_after_a_fallback_the_last_text_is_the_answer(self):
-        self.server.reply = ['{"title": "half a repl'] + plan_reply()
-        self.assertEqual(self.plan()[0], "The Harbour Storm")
-
-    def test_refusal_says_so_without_retrying(self):
-        self.server.stop_reason = "refusal"
-        with self.assertRaisesRegex(RuntimeError, "declined"):
-            self.plan()
-        self.assertEqual(len(self.server.requests), 1)
 
     def test_bad_key_says_so(self):
         self.server.status = 401
-        with self.assertRaisesRegex(RuntimeError, "ANTHROPIC_API_KEY"):
+        with self.assertRaisesRegex(RuntimeError, "Gemini failed"):
             self.plan()
 
     def test_truncated_reply_is_asked_again(self):
-        self.server.stop_reason = "max_tokens"
+        self.server.finish_reason = "MAX_TOKENS"
         self.server.reply = ['{"title": "cut of']
         with self.assertRaisesRegex(RuntimeError, "usable plan"):
             self.plan()
         self.assertEqual(len(self.server.requests), planner.PLAN_ATTEMPTS)
 
     def test_credentials_are_noticed(self):
-        self.assertTrue(planner.llm_configured("claude"))
-        with mock.patch.dict(os.environ, {"ANTHROPIC_API_KEY": "", "ANTHROPIC_PROFILE": ""}), \
-             mock.patch.object(os.path, "isdir", return_value=False):
-            self.assertFalse(planner.llm_configured("claude"))
+        self.assertTrue(planner.llm_configured("gemini"))
+        self.assertTrue(planner.llm_configured("local"))
+        with mock.patch.dict(os.environ, {"GEMINI_API_KEY": ""}):
+            self.assertFalse(planner.llm_configured("gemini"))
+        self.assertFalse(planner.llm_configured("claude"), "no longer one")
 
 
 class ArgsTest(unittest.TestCase):

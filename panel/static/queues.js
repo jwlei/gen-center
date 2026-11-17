@@ -140,7 +140,9 @@ function queueDetail(item) {
   if (facts.explicit) detail.push('Explicit');
   // The upscale it renders with, when it has one (Upscale or Latent upscale in its settings).
   if (facts.upscale) detail.push(`Upscale: ${facts.upscale}`);
-  return detail.map(part => COMPARISONS[part] ? `<span class="detail-comparison">${COMPARISON_ICON}${COMPARISONS[part]}</span>` : esc(part)).join(' · ');
+  // A comparison by its name ("VAE test", "LoRA strength test"), with its icon, in the theme's colour.
+  const compared = part => COMPARISONS[part] || (/ test$/.test(part) ? part : null);
+  return detail.map(part => compared(part) ? `<span class="detail-comparison">${COMPARISON_ICON}${esc(compared(part))}</span>` : esc(part)).join(' · ');
 }
 // Kept over a restart, so one from another day says which.
 function finishedWhen(r) {
@@ -275,9 +277,10 @@ function placePanelControls() {
     for (const id of ['logToggle', 'openTemperatures', 'finishedToggle', 'quotaToggle']) $('statusToggles').appendChild($(id));
   } else {
     // The header: Finished, privacy, the log, the temperatures, then the gear.
-    $('topIcons').insertBefore($('finishedToggle'), $('privateToggle'));
-    $('topIcons').insertBefore($('logToggle'), $('settingsBtn'));
-    $('topIcons').insertBefore($('openTemperatures'), $('settingsBtn'));
+    // In the box's second row, under its power buttons.
+    $('topIconsRow').insertBefore($('finishedToggle'), $('privateToggle'));
+    $('topIconsRow').insertBefore($('logToggle'), $('settingsBtn'));
+    $('topIconsRow').insertBefore($('openTemperatures'), $('settingsBtn'));
     $('settingsHead').appendChild($('quotaToggle'));
   }
   const running = !!(lastStatus && lastStatus.running);
@@ -859,10 +862,20 @@ function dragQueue(el) {
     sendOrder(el);
   });
 }
+// Opened, all of it is brought into sight: scrolled just so far that its end is above the footer, and never so far
+// that its header goes under the header pinned at the top. Taller than the room, its header shows first.
 function revealQueueSection(section) {
   if (section.closest('#optionsCard')) return;
-  const header = section.querySelector('.queue-head, summary') || section;
-  header.scrollIntoView({ behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth', block: 'start' });
+  const behavior = window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth';
+  if (WIDE.matches) { section.scrollIntoView({ behavior, block: 'nearest' }); return; }
+  const gap = (typeof getComputedStyle === 'function' && parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--page-gap'))) || 8;
+  const pinned = document.querySelector('.top'), stick = $('stick');
+  const top = (pinned ? pinned.getBoundingClientRect().bottom : 0) + gap;
+  const bottom = window.innerHeight - (stick ? stick.offsetHeight : 0) - gap;
+  const box = section.getBoundingClientRect();
+  let by = box.bottom > bottom ? box.bottom - bottom : 0;
+  if (box.top - by < top) by = box.top - top;
+  if (Math.abs(by) > 1) window.scrollBy({ top: by, behavior });
 }
 function setQueueSectionOpen(section, open) {
   section._open = open;

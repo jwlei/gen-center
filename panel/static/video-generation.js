@@ -307,7 +307,8 @@ function syncVideoForm() {
   $('audioMode').disabled = infinite;
   syncH3Controls('video', !multishot && !infinite && !!workflowH3[$('videoWorkflow').value]);
   $('videoLlmBox').classList.toggle('hidden', direct);
-  $('videoWriterExtras').classList.toggle('hidden', direct);  // Words, Variety and Explicit, under the prompts: for the LLM
+  $('videoWriterExtras').classList.toggle('hidden', direct);  // Words and Variety, under the prompts: for the LLM
+  $('videoExplicitBox').classList.toggle('hidden', direct);  // and Explicit, on the Prompt line
   syncWords('video');
   $('videoLocalModelBox').hidden = direct || $('llm').value !== 'local';
   $('videoLocalModel').disabled = $('videoLocalModelBox').hidden;

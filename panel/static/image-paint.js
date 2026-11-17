@@ -11,9 +11,27 @@ function forgetPaint() {
     $('areasMask').value = '';
     $('areasHint').textContent = 'Nothing painted yet.';
   }
+  if ($('inpaintMask')) {
+    $('inpaintMask').value = '';
+    showInpaintPainted(false);
+  }
 }
+// Inpaint's button says itself whether something is painted, in place of a line under it.
+function showInpaintPainted(painted) {
+  $('paintInpaint').textContent = painted ? 'Painted: tap to change' : 'Paint what to redraw';
+  $('paintInpaint').classList.toggle('painted', painted);
+  $('paintInpaint').title = painted ? 'What is painted is redrawn from the prompt; the rest stays.' : '';
+}
+// What the painting is for: 'areas', a colour and a prompt per change; or 'mask', one part to redraw (a workflow's
+// inpaint mode), from the prompt itself.
+let paintPurpose = 'areas';
 function paintColour() { return PAINT_COLOURS.find(([name]) => name === paint.colour)[1]; }
-async function openPaint() {
+async function openPaint(purpose = 'areas') {
+  paintPurpose = purpose === 'mask' ? 'mask' : 'areas';
+  // A mask is one part: no colours to tell apart, nor prompts for them.
+  $('paintPromptsOpen').hidden = paintPurpose === 'mask';
+  $('paintColourToggle').parentNode.hidden = paintPurpose === 'mask';
+  $('paintDialogTitle').textContent = paintPurpose === 'mask' ? 'Paint what to redraw' : 'Inpaint';
   const epoch = workspaceEpoch;
   const box = sourceBoxes()[0], file = box && box.querySelector('input').files[0];
   if (!file) { showFormError('Choose image 1 first: the image to paint on.'); return; }
@@ -353,7 +371,19 @@ $('paintDone').addEventListener('click', async () => {
   const epoch = workspaceEpoch;
   try {
     const colours = paintedColours(), single = colours.length === 1;
-    if (!colours.length) { paintError('Paint over what to change first.'); return; }
+    if (!colours.length) { paintError(paintPurpose === 'mask' ? 'Paint over what to redraw first.' : 'Paint over what to change first.'); return; }
+    if (paintPurpose === 'mask') {
+      paint.canvas.getContext('2d').clearRect(0, 0, paint.canvas.width, paint.canvas.height);
+      paint.canvas.getContext('2d').drawImage($('paintCanvas'), 0, 0);
+      const blob = await new Promise(resolve => $('paintCanvas').toBlob(resolve, 'image/png'));
+      if (epoch !== workspaceEpoch) return;
+      if (!blob) throw new Error('The painting could not be read back.');
+      putFile($('inpaintMask'), new File([blob], 'inpaint.png', { type: 'image/png' }));
+      showInpaintPainted(true);
+      paintError('');
+      $('paintDialog').close();
+      return;
+    }
     const areas = colours.map(name => ({ colour: PAINT_COLOURS.find(([n]) => n === name)[1], action: single ? paint.actions[name] || 'remove' : 'change',
                                           text: (paint.texts[name] || '').trim() }));
     const missing = areas.find(area => !area.text && !(single && area.action === 'remove'));
@@ -381,4 +411,5 @@ $('paintDone').addEventListener('click', async () => {
     if (epoch === workspaceEpoch) paintError(`Could not keep the painting: ${e.message || e}`);
   }
 });
-$('paintAreas').addEventListener('click', openPaint);
+$('paintAreas').addEventListener('click', () => openPaint('areas'));
+$('paintInpaint').addEventListener('click', () => openPaint('mask'));

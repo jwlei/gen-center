@@ -30,8 +30,7 @@ In `.env`, set at least one LLM key:
 |---|---|
 | `GEMINI_API_KEY` | Writing the prompts with Gemini, on its free tier. |
 | `GEMINI_TIMEOUT` | Finite positive seconds for each Gemini text request (`90` by default); this is an SDK transport deadline, with SDK-internal retries disabled. |
-| `ANTHROPIC_API_KEY` | Writing the prompts with Claude Opus 5.5, paid per use. Keys come from platform.claude.com. |
-| `LLM_PROVIDER` | Which one to use when you don't choose: `local` (default), `gemini` or `claude`. |
+| `LLM_PROVIDER` | Which one to use when you don't choose: `local` (default) or `gemini`. |
 | `COMFYUI_LAUNCHER` | Lets the panel start ComfyUI when a render needs it. |
 | `COMFYUI_QUEUE_TIMEOUT` | Finite positive seconds a video prompt may wait in ComfyUI's queue before it must start (`3600`, one hour, by default). |
 | `COMFYUI_TIMEOUT` | Finite positive maximum render time per video clip after ComfyUI starts it (`7200` seconds by default). Together, the two budgets bound the clip's queue-and-render lifecycle to three hours; a timeout cancels only that prompt from this client. |
@@ -397,18 +396,18 @@ usable until remeasured; historical averages are not treated as individual sampl
 Shorts, standalone upscales and the prompt editor.
 
 A film's prompts take one LLM request, however long the film is, and an upload's title and description take one
-more. Claude's cost depends on the film's length and is shown on your account at platform.claude.com.
+more.
 
 ## The command line
 
 ```
-python -m pipelines.video.main harbour.jpg "a storm rolls in over the harbour" --duration 3m --llm claude
+python -m pipelines.video.main harbour.jpg "a storm rolls in over the harbour" --duration 3m --llm gemini
 ```
 
 | Option | What it does |
 |---|---|
 | `--duration` | Film length: `90`, `3m` or `2m30`. From 5 seconds to 10 minutes, default `2m`. It's split into clips as long as the video model makes them. |
-| `--llm` | `local`, `gemini` or `claude`. Default: `LLM_PROVIDER`, else `local`. |
+| `--llm` | `local` or `gemini`. Default: `LLM_PROVIDER`, else `local`. |
 | `--start` | `chain` for a normal continuous take (default), `image` for separate moments, `director` for H3 Motion Director chaining, `multishot` for an H3 Multishot take, or `infinite` for H3 Infinite continuation. |
 | `--h3-first-frame`, `--h3-multishot-steps N` | For Multishot: use image 1 as the first frame and a reference; set sampling steps (default 20). Multishot also requires `--fixed-clips --clip-seconds N-N`. |
 | `--reference IMAGE` | Another image, repeatable. The first one is image 2. |
@@ -483,7 +482,7 @@ webapp.py             the panel
 main.py               the run: plan, render, stitch, resume
 publish.py            uploads what's in output/
 start_webapp.pyw      what the shortcut runs
-modules/planner.py    writes the shot list and upload text, with Gemini or Claude
+modules/planner.py    writes the shot list and upload text, with Gemini or the local model
 modules/h3_prompt.py  what the LLM is told when a film renders on MiniMax H3
 modules/wan_prompt.py what the LLM is told when a film renders on Wan
 modules/comfy.py      talks to ComfyUI
@@ -507,5 +506,5 @@ python -m unittest discover tests
 ```
 
 The panel runs the real `main.py` as a real process, with real ffmpeg on tiny synthetic clips, against a fake
-ComfyUI and a fake Claude on localhost. They use no GPU, no quota and no money, and everything they make goes to a
+ComfyUI and a fake Gemini on localhost. They use no GPU, no quota and no money, and everything they make goes to a
 temporary folder. The page's script is checked with Node if it's installed.

@@ -6,6 +6,7 @@ import argparse
 import hashlib
 import json
 import os
+import shutil
 import sys
 import time
 
@@ -54,8 +55,9 @@ def parse_megapixels(text):
 
 
 def parse_option(text):
-    name, _, value = text.partition("=")
-    if not name.strip() or not value.strip():
+    name, equals, value = text.partition("=")
+    # An empty value is a setting too, such as no negative prompt: a run keeps every one it was made with.
+    if not name.strip() or not equals:
         raise argparse.ArgumentTypeError(f"'{text}' is not an option. Use NAME=VALUE, such as group_2nd_pass=0.")
     return name.strip(), value.strip()
 
@@ -92,6 +94,8 @@ def parse_args(argv=None):
                         help="A seed that made one of the images, repeatable. An edit never uses it again: it would come out over-sharpened.")
     parser.add_argument("--areas", metavar="FILE", help='Change only painted parts of image 1, as JSON: {"mask": PNG painted in a colour per area, '
                                                        '"areas": [{"colour": "#e62828", "action": "change|remove|replace|add", "text": ...}]}.')
+    parser.add_argument("--inpaint-mask", metavar="PNG", help="For a workflow's inpaint mode: a PNG painted over image 1, the same size. "
+                                                              "What's painted is redrawn; the rest stays as it is.")
     parser.add_argument("--expand", metavar="L,T,R,B", help="Expand image 1 by these many pixels left, top, right and bottom. The prompt, "
                                                             "if any, says what the new parts show.")
     parser.add_argument("--plan-only", action="store_true", help="Write the prompts and stop before rendering.")
@@ -227,6 +231,11 @@ def plan_run(args, stages):
     state.form = run_form.from_env()
     for image, path in zip(images, state.input_paths):
         media.save_source(image, path)
+    if args.inpaint_mask:
+        if not images:
+            raise RuntimeError("Inpaint needs image 1: the image the mask is painted on.")
+        # Kept with the run, so Continue redraws the same part.
+        shutil.copyfile(args.inpaint_mask, state.inpaint_mask_path)
     taken = set(args.source_seed)
     for path in args.image:
         taken |= media.seeds_in(path)
@@ -422,6 +431,10 @@ def upload_images(state, comfy):
         if tuple(size) != tuple(media.size_of(path)):
             path = media.resized(path, size, os.path.join(state.folder, f"shown_{number}.png"))
         shown.append(path)
+    if os.path.exists(state.inpaint_mask_path):
+        # Load Image takes what's transparent as its mask: the painted part, fitted and sized as image 1 was.
+        shown[0] = media.with_mask(shown[0], state.inpaint_mask_path, None if state.compose else made,
+                                   os.path.join(state.folder, "shown_1_inpaint.png"))
     return [comfy.upload(path, name(number)) for number, path in enumerate(shown, 1)]
 
 
@@ -435,7 +448,7 @@ def render_image(state, comfy, shot, images):
         try:
             comfy.set_options({**(state.options or {}), **shot["lora_test"]})
         except RuntimeError as e:
-            print(f"      ❌ Can't use the LoRA {shot['lora_test'].get('lora_name')}: {e}")
+            print(f"      ❌ Can't use {lora_tests.shot_lora(shot) or 'these settings'}: {e}")
             return None
     for attempt in range(1, IMAGE_ATTEMPTS + 1):
         seed = seeds.pick(shot.get("seed"), 1 if shot.get("lora_test") else attempt)

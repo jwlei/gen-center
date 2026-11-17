@@ -60,6 +60,13 @@ const panelConnection = (() => {
   const connecting = setTimeout(() => { if (!lastSuccess) show('Connecting to the panel...'); }, DISCONNECTED_AFTER_MS);
   return {
     success() {
+      // Back after the notice said disconnected: what happened goes to the panel's page error log now that it can be
+      // reached, so a run of them can be told apart afterwards (a restart, the network, a slow reply).
+      if (shown === 'disconnected') {
+        const away = lastSuccess ? Math.round((Date.now() - lastSuccess) / 1000) : null;
+        const text = `disconnected | since ${lastSuccess ? lastSuccess.toLocaleTimeString() : 'loading'}${away != null ? ` (${away}s)` : ''} | ${(lastError && lastError.message) || 'no reply'}`;
+        try { fetch('/api/page-error', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ error: text }) }).catch(() => {}); } catch (_) {}
+      }
       lastSuccess = new Date();
       clearTimeout(connecting);
       clearTimeout(disconnectTimer);

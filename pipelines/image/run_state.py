@@ -87,6 +87,11 @@ class RunState:
                 for number in range(1, self.image_count + 1)]
 
     @property
+    def inpaint_mask_path(self):
+        """What to redraw on image 1, painted over it, for a workflow's inpaint mode: there only when it was asked for."""
+        return os.path.join(self.folder, "inpaint_mask.png")
+
+    @property
     def fitted_path(self):
         return os.path.join(self.folder, f"input_{self.width}x{self.height}.png")
 

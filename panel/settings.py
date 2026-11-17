@@ -259,6 +259,11 @@ GPU_GUARD_DEFAULTS = {"gpu_guard": True, "gpu_restart_above": 78, "gpu_rearm_at"
 GPU_LOWEST_C, GPU_HIGHEST_C = 40, 95
 
 
+def _names(value):
+    """A list of workflow names, as saved: what isn't one is left out."""
+    return [name for name in value if isinstance(name, str) and name.strip()][:100] if isinstance(value, list) else []
+
+
 def _whole(value, low, high):
     """value as a whole number from low to high, or None."""
     try:
@@ -318,6 +323,9 @@ def load():
             "edit_video_preset": str(saved.get("edit_video_preset") or "")[:200],
             # Private mode: what is made is tagged NSFW, and Output opens on the NSFW filter. Kept over restarts.
             "private_mode": bool(saved.get("private_mode")),
+            # Saved workflows the picker leaves out, as another stands for them (the Krea-2 ones the merged one does,
+            # their looks kept as presets): still there for those presets and to open or continue what they made.
+            "retired_workflows": _names(saved.get("retired_workflows")),
             # Titles: who titles a new film or set from its prompt (core/titles.py). Before it was a choice, Gemini titles
             # on meant "gemini".
             "title_source": saved["title_source"] if saved.get("title_source") in TITLE_SOURCES else "gemini" if saved.get("gemini_titles") else "off",
@@ -355,6 +363,10 @@ def update(changes):
             current["local_llm_model"] = changes["local_llm_model"]
         if "private_mode" in changes:
             current["private_mode"] = bool(changes["private_mode"])
+        if "retired_workflows" in changes:
+            if not isinstance(changes["retired_workflows"], list):
+                raise ValueError("Retired workflows are a list of workflow names.")
+            current["retired_workflows"] = _names(changes["retired_workflows"])
         if "title_source" in changes:
             if changes["title_source"] not in TITLE_SOURCES:
                 raise ValueError("Unknown title source.")

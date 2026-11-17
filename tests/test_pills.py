@@ -35,17 +35,14 @@ class PillsTest(unittest.TestCase):
         self.assertNotIn("_sibling", latent, "the prompt stays on the server")
         self.assertNotIn("_facts", latent)
 
-    def test_a_lora_comparisons_workflow_pill_says_so(self):
-        compared = {**item("An elf", workflow="Krea2", direct=True), "_comparison": True}
+    def test_a_comparisons_test_pill_comes_second_and_says_so(self):
+        compared = {**item("An elf", workflow="Krea2", direct=True, test="VAE test"), "_comparison": True}
         usual = item("An elf", workflow="Krea2", direct=True)
         pills.with_pills([compared, usual])
-        self.assertEqual([p.get("comparison", False) for p in compared["pills"]], [True, False], "its workflow pill alone")
+        self.assertEqual([(p["text"], p.get("comparison", False)) for p in compared["pills"]][:3],
+                         [("Krea2", False), ("VAE test", True), ("Exact prompt", False)], "its test pill, second, in the theme's colour")
         self.assertFalse(any(p.get("comparison") for p in usual["pills"]))
         self.assertNotIn("_comparison", compared)
-        # An LLM comparison: its prompt pill ("All LLMs") is what it compares.
-        llms = {**item("An elf", workflow="Krea2", prompt_writer="All LLMs"), "_comparison": ["prompt"]}
-        pills.with_pills([llms])
-        self.assertEqual([(p["text"], p.get("comparison", False)) for p in llms["pills"]], [("Krea2", False), ("All LLMs", True)])
 
     def test_a_sides_prompt_is_its_own(self):
         self.assertNotEqual(pills.sibling_key("video", "x"), pills.sibling_key("image", "x"))

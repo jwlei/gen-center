@@ -155,6 +155,94 @@ function chipSelect(select) {
   paint();
 }
 for (const select of document.querySelectorAll('select[data-chip]')) chipSelect(select);
+// --- Every dropdown's list as the prompt editor's Enhance menu draws it: one menu, under the select it opens from ---
+// The select stays where it is, showing its value, so the layout is as it was; only its list is ours. A segmented
+// switch, a Variety chip, a multiple choice or one marked data-native keeps its own.
+let menuSelectOpen = null, menuTouch = null;
+function menuOwns(select) {
+  return !!select && select.tagName === 'SELECT' && !select.multiple && !select.disabled
+    && !select.matches('[data-segmented], [data-chip], [data-native]');
+}
+function closeSelectMenu() {
+  const menu = $('selectMenu');
+  if (!menuSelectOpen) return;
+  menu.hidden = true;
+  menuSelectOpen = null;
+}
+function drawSelectMenu(select) {
+  const menu = $('selectMenu'), button = option => `<button type="button" role="menuitemradio" aria-checked="${option.selected}"`
+    + ` class="${option.selected ? 'selected' : ''}" data-index="${option.index}"${option.disabled ? ' disabled' : ''} title="${esc(option.textContent)}">${esc(option.textContent)}</button>`;
+  menu.innerHTML = [...select.children].map(child => child.tagName === 'OPTGROUP'
+    ? `<div class="select-menu-group">${esc(child.label)}</div>` + [...child.children].filter(o => !o.hidden).map(button).join('')
+    : child.hidden ? '' : button(child)).join('');
+}
+function openSelectMenu(select) {
+  const menu = $('selectMenu');
+  // What lists its options as it opens (the workflow lists) is told it was opened.
+  select.dispatchEvent(new Event('focus'));
+  // In a dialog, the menu goes in it: a dialog is drawn over everything outside it.
+  const home = select.closest('dialog') || document.body;
+  if (menu.parentNode !== home) home.appendChild(menu);
+  drawSelectMenu(select);
+  const box = select.getBoundingClientRect(), room = window.innerHeight;
+  const below = room - box.bottom - 12, above = box.top - 12, downward = below >= 160 || below >= above;
+  // As wide as its select, straight under or over it.
+  menu.style.width = `${box.width}px`;
+  menu.style.left = `${box.left}px`;
+  menu.style.maxHeight = `${Math.max(120, Math.min(320, downward ? below : above))}px`;
+  menu.style.top = downward ? `${box.bottom + 4}px` : '';
+  menu.style.bottom = downward ? '' : `${room - box.top + 4}px`;
+  menu.classList.toggle('upward', !downward);
+  menu.hidden = false;
+  menuSelectOpen = select;
+  const chosen = menu.querySelector('.selected');
+  if (chosen) chosen.scrollIntoView({ block: 'nearest' });
+}
+function toggleSelectMenu(select) {
+  if (menuSelectOpen === select) closeSelectMenu();
+  else { closeSelectMenu(); openSelectMenu(select); }
+}
+// The browser's own list never opens: a press, a tap that didn't scroll, or Enter, Space or Alt+Down opens ours.
+document.addEventListener('mousedown', e => {
+  const select = e.target.closest && e.target.closest('select');
+  if (!menuOwns(select)) return;
+  e.preventDefault();
+  toggleSelectMenu(select);
+}, true);
+document.addEventListener('touchstart', e => {
+  const select = e.target.closest && e.target.closest('select');
+  menuTouch = menuOwns(select) ? { select, x: e.touches[0].clientX, y: e.touches[0].clientY } : null;
+}, { capture: true, passive: true });
+document.addEventListener('touchend', e => {
+  const touch = menuTouch, end = e.changedTouches && e.changedTouches[0];
+  menuTouch = null;
+  if (!touch || !end || Math.hypot(end.clientX - touch.x, end.clientY - touch.y) > 10) return;
+  e.preventDefault();
+  toggleSelectMenu(touch.select);
+}, { capture: true });
+document.addEventListener('keydown', e => {
+  if (menuSelectOpen && e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); const s = menuSelectOpen; closeSelectMenu(); s.focus(); return; }
+  if (!menuOwns(e.target) || !(e.key === 'Enter' || e.key === ' ' || (e.altKey && e.key === 'ArrowDown'))) return;
+  e.preventDefault();
+  toggleSelectMenu(e.target);
+}, true);
+$('selectMenu').addEventListener('click', e => {
+  const button = e.target.closest && e.target.closest('[data-index]');
+  const select = menuSelectOpen;
+  if (!button || !select || button.disabled) return;
+  closeSelectMenu();
+  if (select.selectedIndex !== +button.dataset.index) {
+    select.selectedIndex = +button.dataset.index;
+    select.dispatchEvent(new Event('input', { bubbles: true }));
+    select.dispatchEvent(new Event('change', { bubbles: true }));
+  }
+});
+document.addEventListener('pointerdown', e => {
+  if (menuSelectOpen && !e.target.closest('#selectMenu') && e.target !== menuSelectOpen) closeSelectMenu();
+}, true);
+// Its place goes with the page: scrolled or resized, it closes rather than float away from its select.
+document.addEventListener('scroll', e => { if (menuSelectOpen && !(e.target.closest && e.target.closest('#selectMenu'))) closeSelectMenu(); }, true);
+window.addEventListener('resize', closeSelectMenu);
 // All that the kind and the view decide: Output, its collections, and Finished (NSFW only in the NSFW view).
 function redrawFiltered() {
   $('videos').dataset.key = $('imageSets').dataset.key = '';

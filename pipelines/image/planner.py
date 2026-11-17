@@ -40,7 +40,7 @@ class Versions(BaseModel):
     versions: list[Version]
 
 
-# Claude's structured output needs every object closed and every field required.
+# The local model's structured output: every object closed and every field required.
 VERSIONS_SCHEMA = {
     "type": "object",
     "properties": {

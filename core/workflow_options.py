@@ -28,7 +28,27 @@ import re
 from core import lora_check, run_form
 from core import saved_workflows as sw
 
-BYPASSERS = ("Fast Groups Bypasser (rgthree)", "Fast Groups Muter (rgthree)")
+MUTER = "Fast Groups Muter (rgthree)"
+BYPASSERS = ("Fast Groups Bypasser (rgthree)", MUTER)
+# rgthree's switchers that keep one of their groups on: those groups are one choice on the form.
+ONE_OF = ("always one", "max one")
+# A primitive the pipeline's size goes into (core/saved_workflows.py finds it by this title).
+SIZE_TITLE = re.compile(r"^(width|height)$", re.I)
+# A group with a full mask beside an image-to-image choice: on, all the image is redrawn; off, only what's painted.
+FULL_MASK = "SolidMask"
+INPAINT = "inpaint"
+# How far image to image strays from its image: a slider or number titled Denoise in its group.
+DENOISE_TITLE = re.compile(r"^denoise$", re.I)
+DENOISE_NODES = ("mxSlider", "PrimitiveFloat", "easy float")
+# Finishing nodes a group switches, and what of each is worth setting beside the switch: (widget, label, min, max, step).
+NODE_SETTINGS = {"Image Lucy Sharpen": [("kernel_size", "px", 1, 16, 1), ("iterations", "str", 1, 12, 1)],
+                 "LayerFilter: AddGrain": [("grain_power", "str", 0, 1, 0.01)]}
+# The pipeline's own 2nd pass, for a Krea-2 workflow without one: RES4LYF's sampler, as the community workflows run it.
+SECOND_PASS, SECOND_PASS_NODE = "second_pass", "ClownsharKSampler_Beta"
+SECOND_PASS_STRENGTH, SECOND_PASS_STEPS = 0.2, 8
+# The VAE and text encoder pickers: each workflow's, from what's installed (_vae_choice, _encoder_choice).
+VAE = "vae_file"
+ENCODER = "text_encoder_file"
 # LiteGraph's group colours, as rgthree's matchColors names them.
 COLOR_NAMES = {"red": "#a88", "brown": "#b06634", "green": "#8a8", "blue": "#88a", "pale_blue": "#3f789e",
                "cyan": "#8aa", "purple": "#a1309b", "yellow": "#b58b2a", "black": "#444"}
@@ -40,7 +60,7 @@ LORA_LOADER = "Power Lora Loader (rgthree)"
 ENHANCER = "ComfyUI-Krea2T-Enhancer"
 CHOOSER = "CustomCombo"
 ON, OFF = "1", "0"
-BYPASSED = 4
+BYPASSED, MUTED = 4, 2
 # What a subgraph's face sets that isn't for the form: what the pipeline sets itself (prompt, size, seed), the
 # settings of a prompt writer it keeps off, and which model files it loads.
 FACE_SKIP = re.compile(r"prompt|enhance|refine|thinking|max_tok|max_length|width|height|seed|unet|clip|vae|ckpt|trigger"
@@ -79,31 +99,154 @@ def _inside(node, group):
     return left <= x <= left + width and top <= y <= top + height
 
 
+def _switchers(ui):
+    return [node for node in ui["nodes"] if node["type"] in BYPASSERS and not node.get("mode")]
+
+
+def _matches(switcher, group):
+    """Whether this Fast Groups Bypasser or Muter switches the group: by title, colour, or both if it says both."""
+    found = switcher.get("properties") or {}
+    pattern = found.get("matchTitle") or ""
+    colors = [COLOR_NAMES.get(name.strip().lower(), name.strip().lower()) for name in (found.get("matchColors") or "").split(",") if name.strip()]
+    title, color = group.get("title") or "", (group.get("color") or "").lower()
+    try:
+        by_title = not pattern or re.search(pattern, title, re.I)
+    except re.error:
+        by_title = False
+    # One with neither would switch every group, which isn't a part of the workflow worth offering.
+    return bool((pattern or colors) and by_title and (not colors or color in colors))
+
+
+def _switcher(ui, group):
+    """The first switcher that switches this group, or None."""
+    return next((node for node in _switchers(ui) if _matches(node, group)), None)
+
+
 def _switched_groups(ui):
-    """The groups a Fast Groups Bypasser in the workflow turns on and off: by title, colour, or both if it says both."""
-    rules = []
-    for node in ui["nodes"]:
-        if node["type"] in BYPASSERS and not node.get("mode"):
-            found = node.get("properties") or {}
-            colors = [COLOR_NAMES.get(name.strip().lower(), name.strip().lower()) for name in (found.get("matchColors") or "").split(",") if name.strip()]
-            rules.append((found.get("matchTitle") or "", colors))
-    switched = []
-    for group in ui.get("groups", []):
-        title, color = group.get("title") or "", (group.get("color") or "").lower()
-        for pattern, colors in rules:
-            try:
-                by_title = not pattern or re.search(pattern, title, re.I)
-            except re.error:
-                by_title = False
-            # One with neither would switch every group, which isn't a part of the workflow worth offering.
-            if (pattern or colors) and by_title and (not colors or color in colors):
-                switched.append(group)
-                break
-    return switched
+    """The groups a Fast Groups Bypasser or Muter in the workflow turns on and off."""
+    return [group for group in ui.get("groups", []) if _switcher(ui, group)]
+
+
+def _off_mode(ui, group):
+    """How a group is switched off: a Muter mutes it, as in the editor; a Bypasser bypasses it."""
+    switcher = _switcher(ui, group)
+    return MUTED if switcher and switcher["type"] == MUTER else BYPASSED
+
+
+def _members(ui, group):
+    return [node for node in ui["nodes"] if _inside(node, group) and node["type"] not in sw.NOTES + sw.EDITOR_ONLY]
+
+
+def _is_on(ui, group):
+    return not all(node.get("mode") in (BYPASSED, MUTED) for node in _members(ui, group))
+
+
+def _one_of_sets(ui):
+    """
+    The groups a switcher keeps only one of on at a time (rgthree's "always one"), as {"switcher", "groups", "size"}:
+    each is one choice rather than a tickbox each, as FoxFurEssence's text2image | image2image. One whose group holds
+    the Width and Height the pipeline sets (Aspect Ratio | Custom Size) is its own: "size" is that group, kept on.
+    """
+    found = []
+    for switcher in _switchers(ui):
+        if (switcher.get("properties") or {}).get("toggleRestriction") not in ONE_OF:
+            continue
+        groups = [group for group in ui.get("groups", []) if _switcher(ui, group) is switcher and _members(ui, group)]
+        if len(groups) < 2:
+            continue
+        size = next((group for group in groups if any(SIZE_TITLE.match(node.get("title") or "") for node in _members(ui, group))), None)
+        # Ways of setting the size, as LatentHeart's Simple or Advanced Image Size: the pipeline's, left as saved.
+        saved = not size and all(SIZE_GROUPS.search(group.get("title") or "") for group in groups)
+        found.append({"switcher": switcher, "groups": groups, "size": size, "saved": saved})
+    return found
+
+
+def _one_of_id(found):
+    return "one_of_" + _slug("_".join(group.get("title") or "" for group in found["groups"]))
+
+
+def _inpaint_of(ui, found):
+    """
+    (the group that starts from an image, the group whose full mask redraws all of it), where a one-of set has both: as
+    FoxFurEssence's image2image and its i2i Entire Image (a Solid Mask). Off, the mask is Load Image's own: inpainting.
+    """
+    base = next((group for group in found["groups"] if any(node["type"] == "LoadImage" for node in _members(ui, group))), None)
+    if not base or found["size"] or found["saved"]:
+        return None
+    taken = [group for other in _one_of_sets(ui) for group in other["groups"]]
+    whole = next((group for group in _switched_groups(ui) if not any(group is other for other in taken)
+                  and any(node["type"] == FULL_MASK for node in _members(ui, group))), None)
+    return (base, whole) if whole else None
+
+
+def _denoise_of(ui, group):
+    """The denoise a group starts from an image with, as (node, index in its widgets), or None: below 1, as image2image's 0.6."""
+    for node in _members(ui, group):
+        if not DENOISE_TITLE.match(node.get("title") or "") or node["type"] not in DENOISE_NODES:
+            continue
+        values = node.get("widgets_values") or []
+        index = 1 if node["type"] == "mxSlider" and len(values) > 2 and values[2] else 0
+        if index < len(values) and isinstance(values[index], (int, float)) and values[index] < 1:
+            return node, index
+    return None
+
+
+def _one_of_options(ui, found):
+    """The mode choice for a one-of set, an inpaint choice where it has one, and the denoise that goes with it."""
+    titles = [group.get("title") or "" for group in found["groups"]]
+    on = next((group.get("title") or "" for group in found["groups"] if _is_on(ui, group)), titles[0])
+    mode = {"id": _one_of_id(found), "kind": "choice", "label": found["switcher"].get("title") or " or ".join(titles),
+            "choices": titles, "default": on, "one_of": True}
+    inpaint = _inpaint_of(ui, found)
+    if inpaint:
+        mode["choices"] = titles + [INPAINT]
+        mode["inpaint"] = inpaint[0].get("title") or ""
+        if on == mode["inpaint"] and not _is_on(ui, inpaint[1]):
+            mode["default"] = INPAINT
+    options = [mode]
+    for group in found["groups"]:
+        denoise = _denoise_of(ui, group)
+        if denoise:
+            node, index = denoise
+            found_props = node.get("properties") or {}
+            title = group.get("title") or ""
+            options.append({"id": f"{mode['id']}.denoise", "kind": "number", "label": "Denoise", "parent": mode["id"],
+                            "default": str(node["widgets_values"][index]), "min": float(found_props.get("min", 0)),
+                            "max": float(found_props.get("max", 1)), "step": float(found_props.get("step", 0.01)),
+                            "for": [title] + ([INPAINT] if inpaint and title == mode["inpaint"] else []),
+                            "node": node["id"], "index": index})
+            break
+    return options
 
 
 def _subgraphs(ui):
     return {subgraph["id"]: subgraph for subgraph in ui.get("definitions", {}).get("subgraphs", [])}
+
+
+def _node_settings(node, group_id, info):
+    """What a finishing node in a switched group has worth setting, beside its switch (NODE_SETTINGS)."""
+    names = sw._widget_names(node, info.get(node["type"])) if info.get(node["type"]) else []
+    values = node.get("widgets_values") or []
+    found = []
+    for widget, label, low, high, step in NODE_SETTINGS[node["type"]]:
+        if widget in names and names.index(widget) < len(values) and isinstance(values[names.index(widget)], (int, float)):
+            found.append({"id": f"{group_id}.{_slug(widget)}", "kind": "number", "label": label, "default": str(values[names.index(widget)]),
+                          "min": low, "max": high, "step": step, "parent": group_id, "node": node["id"], "widget_index": names.index(widget)})
+    return found
+
+
+def _inner_strength(instance, subgraph, prefix):
+    """
+    How strongly a group's subgraph redraws, where a number titled Denoise inside it says: Krea-2's 2nd pass, 0.2 in
+    LatentHeart's and 0.25 in FoxFurEssence's (whose steps follow it, ceil(denoise x 8)). As a Strength beside its switch.
+    """
+    for node in subgraph.get("nodes", []):
+        values = node.get("widgets_values") or []
+        if (DENOISE_TITLE.match(node.get("title") or "") and node["type"] in DENOISE_NODES and values
+                and isinstance(values[0], (int, float)) and not isinstance(values[0], bool) and values[0] < 1):
+            return [{"id": f"{prefix}.strength", "kind": "number", "label": "Strength", "default": str(values[0]), "min": 0.05, "max": 1,
+                     "step": 0.05, "parent": prefix, "node": instance["id"], "subgraph": subgraph["id"], "inner": node["id"]}]
+    return []
 
 
 def _face_choices(instance, subgraph, prefix, label):
@@ -247,8 +390,18 @@ def describe(ui, info=None, pipeline="image"):
     for node in ui["nodes"]:
         if node["type"] in subgraphs and not node.get("mode"):
             options += _face_settings(node, subgraphs[node["type"]], info or {})
+    one_of = _one_of_sets(ui)
     for group in _switched_groups(ui):
         title = group.get("title") or "Group"
+        found = next((found for found in one_of if any(member is group for member in found["groups"])), None)
+        if found:
+            # One choice for them all, where the first of them is; the size's are the pipeline's to set.
+            if group is found["groups"][0] and not found["size"] and not found["saved"]:
+                options += _one_of_options(ui, found)
+            continue
+        if any(_inpaint_of(ui, found) and _inpaint_of(ui, found)[1] is group for found in one_of):
+            # Whole image or a painted part: the mode's inpaint choice says which.
+            continue
         if PROMPT_GROUPS.search(title):
             role = "prompt_enhancer" if ENHANCER_GROUP.search(title) else "image_to_prompt" if IMAGE_TO_PROMPT.search(title) else None
             if pipeline == "image" and role and role not in [option["id"] for option in options]:
@@ -256,14 +409,25 @@ def describe(ui, info=None, pipeline="image"):
             continue
         if SIZE_GROUPS.search(title):
             continue
-        members = [node for node in ui["nodes"] if _inside(node, group) and node["type"] not in sw.NOTES + sw.EDITOR_ONLY]
+        members = _members(ui, group)
         if not members:
             continue
         group_id = f"group_{_slug(title)}"
-        options.append({"id": group_id, "kind": "switch", "label": GROUP_LABELS.get(title.strip().lower(), title), "default": OFF if all(node.get("mode") == BYPASSED for node in members) else ON})
+        # A muted group is off too, as a Muter leaves it.
+        options.append({"id": group_id, "kind": "switch", "label": GROUP_LABELS.get(title.strip().lower(), title), "default": ON if _is_on(ui, group) else OFF})
         for node in members:
             if node["type"] in subgraphs:
                 options += _face_choices(node, subgraphs[node["type"]], group_id, title)
+                if not any(option["id"] == f"{group_id}.strength" for option in options):
+                    options += _inner_strength(node, subgraphs[node["type"]], group_id)
+            elif node["type"] in NODE_SETTINGS:
+                options += _node_settings(node, group_id, info or {})
+            elif node["type"] == ENHANCER and not any(option["id"] == f"{group_id}.strength" for option in options):
+                # The Krea2T Enhancer switched by its group: how much it adds, beside the switch.
+                values = node.get("widgets_values") or []
+                if len(values) > 1 and isinstance(values[1], (int, float)):
+                    options.append({"id": f"{group_id}.strength", "kind": "number", "label": "Strength", "default": str(values[1]),
+                                    "min": 0, "max": 2, "step": 0.05, "parent": group_id, "node": node["id"], "index": 1})
     for node in ui["nodes"]:
         if node["type"] == LORA_LOADER and not node.get("mode"):
             loras = [value for value in node.get("widgets_values") or [] if isinstance(value, dict) and value.get("lora")]
@@ -351,8 +515,33 @@ def _set_mode(ui, node, mode):
 def _before(ui, options, chosen):
     """The saved workflow with the groups and face choices as chosen, and every prompt writer or enhancer off."""
     ui = copy.deepcopy(ui)
+    one_of = _one_of_sets(ui)
     for group in _switched_groups(ui):
         title = group.get("title") or ""
+        found = next((found for found in one_of if any(member is group for member in found["groups"])), None)
+        if found:
+            if found["saved"]:
+                continue
+            # Only the one chosen is on, as the switcher keeps it. The size's: the group the pipeline's size goes into.
+            if found["size"]:
+                wanted = ON if group is found["size"] else OFF
+            else:
+                option = next((option for option in options if option["id"] == _one_of_id(found)), None)
+                picked = chosen.get(option["id"], option["default"]) if option else None
+                # Inpaint starts from the image as image2image does.
+                picked = option.get("inpaint") if option and picked == INPAINT else picked
+                wanted = ON if picked == title else OFF
+            for node in _members(ui, group):
+                _set_mode(ui, node, 0 if wanted == ON else _off_mode(ui, group))
+            continue
+        whole = next((found for found in one_of if (_inpaint_of(ui, found) or (None, None))[1] is group), None)
+        if whole:
+            # The full mask is on unless the part to redraw is painted.
+            option = next((option for option in options if option["id"] == _one_of_id(whole)), None)
+            wanted = OFF if option and chosen.get(option["id"], option["default"]) == INPAINT else ON
+            for node in _members(ui, group):
+                _set_mode(ui, node, 0 if wanted == ON else _off_mode(ui, group))
+            continue
         # By its id, not its label: a group said as what it does ("Noise" as "Add noise (film grain)") was never found,
         # so choosing it did nothing. A prompt writer's group is found by its title, its label.
         option = next((option for option in options if option["kind"] == "switch" and (option["id"] == f"group_{_slug(title)}"
@@ -363,15 +552,36 @@ def _before(ui, options, chosen):
             wanted = OFF if PROMPT_GROUPS.search(title) else chosen.get(option["id"], option["default"]) if option else None
         if wanted is None:
             continue
-        for node in ui["nodes"]:
-            if _inside(node, group) and node["type"] not in sw.NOTES + sw.EDITOR_ONLY:
-                _set_mode(ui, node, 0 if wanted == ON else BYPASSED)
+        for node in _members(ui, group):
+            _set_mode(ui, node, 0 if wanted == ON else _off_mode(ui, group))
     nodes = {node["id"]: node for node in ui["nodes"]}
     subgraphs = _subgraphs(ui)
     for option in options:
         # A named Boolean on the canvas: set before the workflow is made, as the Image side settles switches then.
         # A prompt writer is off unless chosen, as a group of one is.
         picked = chosen.get(option["id"], OFF) if option.get("role") else chosen.get(option["id"])
+        # A strength inside a group's subgraph, such as the 2nd pass's denoise.
+        if "inner" in option and picked is not None:
+            inner = next((node for node in subgraphs.get(option["subgraph"], {}).get("nodes", []) if node["id"] == option["inner"]), None)
+            if inner:
+                inner["widgets_values"][0] = float(picked)
+            continue
+        # A setting on a finishing node a group switches: Sharpen's px and str, Noise's str.
+        if "widget_index" in option and picked is not None and option["node"] in nodes:
+            value = float(picked)
+            nodes[option["node"]]["widgets_values"][option["widget_index"]] = int(value) if option["step"] >= 1 else value
+            continue
+        # A strength on a node a group switches, such as the Krea2T Enhancer's.
+        if option["id"].endswith(".strength") and "index" in option and picked is not None and option["node"] in nodes:
+            nodes[option["node"]]["widgets_values"][option["index"]] = float(picked)
+            continue
+        # Image to image's denoise, on its slider or number.
+        if option["id"].endswith(".denoise") and "index" in option and picked is not None and option["node"] in nodes:
+            node = nodes[option["node"]]
+            node["widgets_values"][option["index"]] = float(picked)
+            if "value" in (node.get("properties") or {}):
+                node["properties"]["value"] = float(picked)
+            continue
         if option.get("primitive") and picked is not None and option["node"] in nodes:
             nodes[option["node"]]["widgets_values"][0] = picked == ON
             continue
@@ -563,8 +773,8 @@ def _model_feeds(api):
 
 MODEL_LOADERS = {"UNETLoader", "UNETLoaderGGUF", "CheckpointLoader", "CheckpointLoaderSimple", "DiffusionModelLoader"}
 # The loaders whose file can be picked: each one's file input, and what the picker is called.
-MODEL_PICKERS = {"UNETLoader": ("unet_name", "Diffusion model"), "UNETLoaderGGUF": ("unet_name", "Diffusion model"),
-                 "CheckpointLoaderSimple": ("ckpt_name", "Checkpoint"), "CheckpointLoader": ("ckpt_name", "Checkpoint")}
+MODEL_PICKERS = {"UNETLoader": ("unet_name", "Model"), "UNETLoaderGGUF": ("unet_name", "Model"), "UnetLoaderGGUF": ("unet_name", "Model"),
+                 "CheckpointLoaderSimple": ("ckpt_name", "Model"), "CheckpointLoader": ("ckpt_name", "Model")}
 def _variant(name, family):
     """
     Within a family, what can't stand in for the other, told by its name: MiniMax H3's image model, its reference-to-
@@ -593,6 +803,10 @@ def _model_choice(api, info, chosen):
     quantization): a choice of its loader's file, last in the workflow's settings. Applied here. [] with nothing to pick.
     """
     model = _workflow_model(api)
+    if not model:
+        # One model loader: it's the model, though the sampler's path to it can't be followed (Qwen-Image 2.1's cache).
+        single = [node["inputs"].get(MODEL_PICKERS[node["class_type"]][0]) for node in api.values() if node["class_type"] in MODEL_PICKERS]
+        model = single[0] if len(single) == 1 and isinstance(single[0], str) else None
     loaders = [(node_id, MODEL_PICKERS[node["class_type"]]) for node_id, node in api.items()
                if node["class_type"] in MODEL_PICKERS and node["inputs"].get(MODEL_PICKERS[node["class_type"]][0]) == model]
     if not model or not loaders:
@@ -602,16 +816,89 @@ def _model_choice(api, info, chosen):
         return []
     (key, label), = {picker for _, picker in loaders}
     files = _combo(info, kinds.pop(), key)
+    # Its kind by name (Krea2, Qwen, MiniMax...): any file of it put in ComfyUI's folder is offered with it.
     choices = [name for name in files if name == model or _same_kind(name, model)]
-    if model not in choices or len(choices) < 2:
-        return []
+    if model not in choices:
+        choices = [model, *choices]
     picked = chosen.get(MODEL)
     if picked and picked != model and picked in choices:
         for node_id, _ in loaders:
             api[node_id]["inputs"][key] = picked
-    return [{"id": MODEL, "kind": "choice", "label": label, "default": model, "choices": choices, "model": True,
-             "labels": {name: os.path.splitext(os.path.basename(name.replace("\\", "/")))[0] for name in choices}}]
+    return [_file_option(MODEL, label, model, choices)]
 
+
+def _file_option(option_id, label, saved, choices):
+    """
+    A file to pick (Model, Text, VAE), last in the settings: greyed out, in its place still, when it's the only one
+    installed that fits, so it's plain which it runs and that another put in ComfyUI's folder would be offered.
+    """
+    found = {"id": option_id, "kind": "choice", "label": label, "default": saved, "choices": choices, "model": True,
+             "labels": {name: os.path.splitext(os.path.basename(name.replace("\\", "/")))[0] for name in choices}}
+    if len(choices) < 2:
+        found["problem"] = f"No other {label if label == 'VAE' else label.lower()} that fits is installed."
+    return found
+
+
+def _file_slots(api, pattern, input_pattern):
+    """
+    Each file a workflow loads of a kind, as (node id, its loader, its input, the file): whatever its loader is called
+    (VAELoader, VAELoaderKJ; CLIPLoader, H3ClipLoaderAny, DualCLIPLoaderGGUF's two), in the order they're met.
+    """
+    found = []
+    for node_id, node in sorted(api.items(), key=lambda item: (len(item[0]), item[0])):
+        if not re.search(pattern, node["class_type"], re.I):
+            continue
+        for name, value in node["inputs"].items():
+            if re.fullmatch(input_pattern, name) and isinstance(value, str) and value:
+                found.append((node_id, node["class_type"], name, value))
+    return found
+
+
+def _slot_options(api, info, chosen, slots, base_id, label, fits):
+    """
+    A picker for each file slot: the first base_id ("vae_file"), an audio one "audio_" before it, any more numbered;
+    its choices those installed that fits(saved, other) says can stand in. Applied here.
+    """
+    options, numbered = [], 0
+    for node_id, kind, name, saved in slots:
+        audio = "audio" in saved.lower()
+        if audio:
+            option_id, said = f"audio_{base_id}", f"Audio {label}"
+        else:
+            numbered += 1
+            option_id, said = (base_id, label) if numbered == 1 else (f"{base_id}_{numbered}", f"{label} {numbered}")
+        if any(option["id"] == option_id for option in options):
+            continue
+        choices = [other for other in _combo(info, kind, name) if other == saved or fits(saved, other)]
+        if saved not in choices:
+            choices = [saved, *choices]
+        if chosen.get(option_id) in choices:
+            api[node_id]["inputs"][name] = chosen[option_id]
+        options.append(_file_option(option_id, said, saved, choices))
+    return options
+
+
+def _vae_choice(api, info, chosen):
+    """
+    The VAEs, each to pick from those installed it can decode with: VAEs of the same layers at the same sizes (read
+    from each file's header, model_files.vae_shape), whatever they're called, as Krea2Real, Qwen-Image's and WAN 2.1's
+    are. One picker for each the workflow loads: a film's video and audio VAE each have theirs. Applied here.
+    """
+    from core import model_files
+    slots = _file_slots(api, r"vae.?loader", r"vae_name")
+    fits = lambda saved, other: bool(model_files.vae_shape(saved)) and model_files.vae_shape(other) == model_files.vae_shape(saved)
+    return _slot_options(api, info, chosen, slots, VAE, "VAE", fits)
+
+def _encoder_choice(api, info, chosen):
+    """
+    The text encoders, each to pick from the copies installed of the one it reads prompts with: the same model and size
+    by name (model_files.encoder_base: Qwen3-VL 4B as fp8, int8, bf16 or abliterated), not another prompt model. One
+    picker for each the workflow loads, whatever its loader (LTX's two through one: Text and Text 2). Applied here.
+    """
+    from core import model_files
+    slots = _file_slots(api, r"clip.?loader", r"clip_name\d*")
+    fits = lambda saved, other: bool(model_files.encoder_base(saved)) and model_files.encoder_base(other) == model_files.encoder_base(saved)
+    return _slot_options(api, info, chosen, slots, ENCODER, "Text", fits)
 
 def _workflow_model(api):
     """The diffusion model behind the sampler, by its actual model loader, not its workflow name or text encoder."""
@@ -1236,11 +1523,117 @@ def convert(ui, info, chosen=None, pipeline="image"):
                 if "seedvr2" in option["id"].lower() and option["id"] != "image_upscale":
                     option["moved"] = "Upscale"
     options += picker
+    options += _encoder_choice(api, info, chosen)
+    options += _vae_choice(api, info, chosen)
+    # Last: Steps, Sampler and the rest are the main pass's.
+    options += _second_pass(api, info, chosen, options, sw.image_model(api))
+    _hinted(options)
     _drop_idle_loras(api)
     _validate_loras(api, model, native)
     if pipeline == "image":
         return api, sw.find_image_fields(api, info), sw.image_model(api), options
     return api, sw.find_fields(api, info, needs_audio=pipeline == "shorts"), None, options
+
+
+def _second_pass(api, info, chosen, options, model):
+    """
+    A 2nd pass for a Krea-2 workflow without one of its own (ComfyUI's template): the image refined at its own size,
+    as LatentHeart's and FoxFurEssence's do, with ClownsharKSampler's res_2s over bong_tangent from a little noise,
+    ceil(strength x 8) of 8 steps. Offered off, with its strength; returns the options.
+    """
+    samplers = [node_id for node_id, node in api.items() if node["class_type"] == "KSampler"]
+    if (model != "krea2" or SECOND_PASS_NODE not in info or len(samplers) != 1
+            or any(node["class_type"] == SECOND_PASS_NODE for node in api.values())
+            or any(re.search(r"2nd|second", option["label"], re.I) for option in options if option["kind"] == "switch")):
+        return []
+    found = [{"id": SECOND_PASS, "kind": "switch", "label": "2nd pass", "default": OFF},
+             {"id": f"{SECOND_PASS}.strength", "kind": "number", "label": "Strength", "default": str(SECOND_PASS_STRENGTH), "min": 0.05,
+              "max": 1, "step": 0.05, "parent": SECOND_PASS}]
+    if chosen.get(SECOND_PASS) != ON:
+        return found
+    first = samplers[0]
+    inputs = api[first]["inputs"]
+    strength = min(1.0, max(0.05, float(chosen.get(f"{SECOND_PASS}.strength") or SECOND_PASS_STRENGTH)))
+    users = [(node_id, name) for node_id, node in api.items() for name, value in node["inputs"].items() if value == [first, 0]]
+    node_id = "second_pass"
+    api[node_id] = {"class_type": SECOND_PASS_NODE, "_meta": {"title": "2nd pass"}, "inputs": {
+        "eta": 0.9, "sampler_name": "exponential/res_2s", "scheduler": "bong_tangent", "steps": SECOND_PASS_STEPS,
+        "steps_to_run": math.ceil(strength * SECOND_PASS_STEPS), "denoise": strength, "cfg": inputs.get("cfg", 1), "seed": inputs.get("seed", 0),
+        "sampler_mode": "standard", "bongmath": True, "model": inputs["model"], "positive": inputs["positive"],
+        "negative": inputs["negative"], "latent_image": [first, 0]}}
+    # Its "denoised" output, as the workflows that have one decode.
+    for user, name in users:
+        api[user]["inputs"][name] = [node_id, 1]
+    return found
+
+
+# What a setting does, where its name doesn't say (the (i) beside it). By its id; a group's by its title. Sources: the
+# node packs' own READMEs (Krea2T Enhancer, Krea2 NegPiP), ComfyUI's node descriptions, the workflows' authors' notes,
+# and Comfy-Org/Krea-2's model card for which VAE its files use.
+HINTS = {
+    VAE: "Turns the finished picture from the model's latent into pixels, so it decides fine texture, colour and sharpness, "
+         "not what is in the picture. Qwen-Image's is the one ComfyUI's Krea-2 files use; WAN 2.1's is the one it was tuned "
+         "from. Krea2Real is a community VAE for Krea-2 that comes without a description: compare them on the same seed.",
+    ENCODER: "Reads your prompt for the model. Krea-2's is Qwen3-VL 4B: bf16, fp8 and int8 are the same encoder at other "
+             "precisions (smaller is quicker to load, a little less exact). An abliterated copy has had its refusals taken "
+             "out, so it encodes explicit prompts as they're written.",
+    MODEL: "Which file of the model is loaded: the same model at another precision, or a fine-tune. Smaller precisions load "
+           "faster and use less memory, for slightly different images; int8 ones run quicker on RTX 30-series cards.",
+    SECOND_PASS: "Runs the finished picture through the model again at its own size, from a little noise, to clean up detail. "
+                 "Strength is how much noise: about 0.2 touches up texture, from about 0.4 it starts to change the picture. "
+                 "Its steps follow it: strength x 8.",
+    "group_2nd_pass": "Runs the finished picture through the model again at its own size, from a little noise, to clean up "
+                      "detail. Strength is how much noise: about 0.2 touches up texture, from about 0.4 it starts to change "
+                      "the picture. Its steps follow it: strength x 8.",
+    "group_enhancer": "The Krea2T Enhancer: patches how Krea-2 mixes your prompt in, so it follows the prompt's details more "
+                      "closely. Strength from 0 (no change) to 2; 1 is its own default.",
+    "prompt_boost": "The Krea2T Enhancer: patches how Krea-2 mixes your prompt in, so it follows the prompt's details more "
+                    "closely. Strength from 0 (no change) to 2; 1 is its own default.",
+    "group_negative_conditioning": "NegPiP: lets the prompt push things away. Write (word:-1.0) in it, such as (blurry:-1.0); "
+                                   "further below 0 pushes harder. Krea-2 runs at CFG 1, which reads no negative prompt, so this "
+                                   "is its way to have one. The LLM doesn't write these: add them to your own prompt.",
+    "group_misc_quality_functions": "FoxFurEssence's experiments: a shift of the noise schedule by image size "
+                                    "(ModelSamplingFlux) and a CFG override from 5% of the way on. In the author's words, "
+                                    "they may or may not help a given image.",
+    "group_turbo_lora": "Only for Krea-2 Raw, the undistilled model: the LoRA that makes it work in 8 steps. Leave it off with a "
+                        "Turbo model, which has it built in.",
+    "group_color_correction": "Brightness, contrast and saturation of the finished picture. As saved they are all 1, which "
+                              "leaves it as it is: set them in the workflow in ComfyUI to use it.",
+    "group_noise": "Adds a light film grain to the finished picture (power 0.09), which takes the plastic look off very clean "
+                   "renders.",
+    "group_sharpen": "Sharpens the finished picture a little: one pass of a 3-pixel sharpen.",
+    "face_enable_turbo_mode": "Runs the edit with its Lightning LoRA in 4 steps instead of 40: about ten times faster, for a "
+                              "little less detail.",
+    "negative": "What the picture shouldn't have. Only read where CFG is above 1; a distilled model at CFG 1 ignores it.",
+}
+DENOISE_HINT = ("How far I2I strays from image 1: about 0.3 keeps its layout and colours, the author's 0.6 keeps the "
+                "composition and redraws the rest, 1 makes a new picture. Inpaint uses it for the painted part.")
+
+
+# The same setting has the same hint in every workflow, by its label: Model, Text and VAE wherever they are, a second
+# text encoder (Text 2) or a film's Audio VAE as the first. Labels said by more than one setting (Strength) aren't here.
+HINTS_BY_LABEL = {
+    "Model": HINTS[MODEL], "Text": HINTS[ENCODER], "VAE": HINTS[VAE], "Negative prompt": HINTS["negative"],
+    "Audio VAE": "Turns the finished sound from the model's latent into audio, as the VAE does the picture. Only VAEs of the "
+                 "same layers are offered, whatever they're called.",
+    "2nd pass": HINTS[SECOND_PASS], "2nd Pass": HINTS[SECOND_PASS], "Enhancer": HINTS["group_enhancer"],
+    "Color correction": HINTS["group_color_correction"], "Add noise (film grain)": HINTS["group_noise"],
+    "Sharpen": HINTS["group_sharpen"], "Denoise": DENOISE_HINT,
+}
+
+
+def _hinted(options):
+    """
+    Each option with what it does, where that isn't plain from its name: by its label (HINTS_BY_LABEL), so a setting
+    has the same hint in every workflow, a second of one ("Text 2") as the first; else by its id (HINTS).
+    """
+    for option in options:
+        label = re.sub(r"\s+\d+$", "", str(option.get("label") or ""))
+        hint = (HINTS_BY_LABEL.get(label) or HINTS.get(option["id"])
+                or (DENOISE_HINT if option["id"].endswith(".denoise") and option["id"].startswith("one_of_") else None))
+        if hint and "hint" not in option:
+            option["hint"] = hint
+    return options
 
 
 def offered(ui, info, pipeline="image"):
@@ -1268,8 +1661,23 @@ def offered(ui, info, pipeline="image"):
                     option["takes"] = {key: found[key] for key in ("min_images", "max_images")}
             except sw.Unusable as e:
                 problem = str(e)
+        if option.get("one_of"):
+            # Each way takes its own images: image2image needs the one it starts from, text2image none.
+            for choice in option["choices"]:
+                try:
+                    _, fields, found_model, _ = convert(ui, info, {option["id"]: choice}, pipeline)
+                    found = sw.image_takes(fields, found_model) if pipeline == "image" else sw.takes(fields)
+                    option.setdefault("takes_by", {})[choice] = {key: found[key] for key in ("min_images", "max_images")}
+                except sw.Unusable as e:
+                    option.setdefault("problems", {})[choice] = str(e)
         if problem:
             option["problem"] = problem
+    # A group switch that can't be turned on, as a file it needs isn't installed, and is off: not offered at all, nor what
+    # goes with it (Turbo LoRA? without its LoRA). One that needs a node pack stays, greyed out with why: that's a fix.
+    idle = {option["id"] for option in options if option["kind"] == "switch" and option["id"].startswith("group_")
+            and option["default"] == OFF and "isn't installed" in (option.get("problem") or "")
+            and not (option.get("problem") or "").startswith("Needs the node")}
+    options[:] = [option for option in options if option["id"] not in idle and option.get("parent") not in idle]
     switches = {option["id"]: option for option in options if option["kind"] == "switch"}
     # What goes with a switch that can't be switched can't be set either, for the same reason.
     for option in options:
@@ -1325,6 +1733,16 @@ def chosen_in_env():
     return found if isinstance(found, dict) else {}
 
 
+def takes_for(takes, chosen):
+    """The images a workflow takes with these choices: a choice such as text2image or image2image has its own."""
+    for option in takes.get("options") or []:
+        by = option.get("takes_by") or {}
+        picked = (chosen or {}).get(option["id"], option.get("default"))
+        if picked in by:
+            takes = {**takes, **by[picked]}
+    return takes
+
+
 def check(options, chosen):
     """Why these choices can't be made, or None."""
     chosen = upgraded(chosen, options)
@@ -1332,13 +1750,16 @@ def check(options, chosen):
     for key, value in chosen.items():
         option = known.get(key)
         if not option:
-            return f"This workflow has no option {key}."
+            # One the workflow no longer has (a run keeps every setting it was made with): nothing to set now.
+            continue
         if option.get("problem") and value != option["default"]:
             return f"{option['label']} can't be changed: {option['problem']}"
         if option["kind"] == "switch" and value not in (ON, OFF):
             return f"{option['label']} is on or off."
         if option["kind"] == "choice" and value not in option["choices"]:
             return f"{option['label']} is one of {', '.join(option['choices'])}."
+        if value in (option.get("problems") or {}):
+            return f"{option['label']} {value} can't run: {option['problems'][value]}"
         if option["kind"] == "text" and (not isinstance(value, str) or len(value) > MOST_TEXT):
             return f"{option['label']} is text of up to {MOST_TEXT} characters."
         if option["kind"] == "lora_stack":

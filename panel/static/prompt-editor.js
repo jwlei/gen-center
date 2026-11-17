@@ -14,10 +14,26 @@ function promptLabel(field) {
   const label = field.id && document.querySelector(`label[for="${field.id}"]`);
   return (label && label.textContent.trim()) || field.getAttribute('aria-label') || 'Prompt';
 }
-// A box with more than two lines fades out at the bottom, so it is plain there is more.
+// A box with more than two lines fades out at the bottom, so it is plain there is more. With an exact prompt, your own
+// words are what's made, so the box grows to show them: as far as the room left in its section, and fades only past it.
+const EXACT_PROMPTS = { imagePrompt: 'imagePromptMode', prompt: 'videoPromptMode' };
 function syncPromptBox(field) {
-  if (field && field.classList) field.classList.toggle('more', field.scrollHeight > field.clientHeight + 2);
+  if (!field || !field.classList) return;
+  const mode = EXACT_PROMPTS[field.id] && $(EXACT_PROMPTS[field.id]);
+  if (field.style) field.style.height = '';
+  if (mode && mode.value === 'direct' && field.scrollHeight > field.clientHeight + 2 && field.getBoundingClientRect) {
+    const room = field.closest && field.closest('.section-body');
+    const bottom = room && room.getBoundingClientRect ? room.getBoundingClientRect().bottom : window.innerHeight;
+    const space = Math.floor(bottom - field.getBoundingClientRect().top - 8);
+    if (space > field.clientHeight) field.style.height = `${Math.min(field.scrollHeight + 2, space)}px`;
+  }
+  field.classList.toggle('more', field.scrollHeight > field.clientHeight + 2);
 }
+// Again as the mode changes, the section shown changes or the screen does: the room it has changes with them.
+const resyncExactPrompts = () => { for (const id of Object.keys(EXACT_PROMPTS)) if ($(id)) syncPromptBox($(id)); };
+for (const id of Object.values(EXACT_PROMPTS)) if ($(id)) $(id).addEventListener('change', () => requestAnimationFrame(resyncExactPrompts));
+window.addEventListener('resize', resyncExactPrompts);
+document.addEventListener('click', e => { if (e.target.closest && e.target.closest('[data-tab]')) requestAnimationFrame(resyncExactPrompts); });
 // The box being edited: the one prompt, or the page shown of a run's generated prompts.
 let generatedEdit = null;
 function promptPage() {

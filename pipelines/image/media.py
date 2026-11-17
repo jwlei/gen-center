@@ -117,6 +117,28 @@ def fit(path, width, height, output):
     return output
 
 
+def with_mask(path, mask_path, fitted, output):
+    """
+    The image with what's painted on the mask made transparent, which Load Image gives as its mask (where alpha is 0):
+    the part a workflow's inpaint mode redraws. The mask was painted over the image as it was given, so it's fitted to
+    the same size as the image was (fitted, or None if it wasn't), then sized to it.
+    """
+    with Image.open(mask_path) as painted:
+        alpha = painted.convert("RGBA").getchannel("A")
+    alpha = alpha.point(lambda value: 255 if value >= 128 else 0)
+    if fitted:
+        alpha = ImageOps.fit(alpha, tuple(fitted), Image.LANCZOS)
+    with Image.open(path) as image:
+        image = image.convert("RGB")
+        if alpha.size != image.size:
+            alpha = alpha.resize(image.size, Image.LANCZOS)
+        # Painted is kept (255 on the mask), so the image's alpha is its opposite.
+        image.putalpha(alpha.point(lambda value: 0 if value >= 128 else 255))
+        os.makedirs(os.path.dirname(output), exist_ok=True)
+        image.save(output)
+    return output
+
+
 def trim(path, rendered, wanted):
     """
     Crops the finished image to the size asked for, when that isn't on the model's grid: 1080 isn't, so 1080p
@@ -129,12 +151,21 @@ def trim(path, rendered, wanted):
         if image.size != tuple(rendered):
             return
         kind = image.format
+        # What ComfyUI wrote into it (the workflow it ran, which says its model, text encoder and VAE): kept.
+        texts = {key: value for key, value in image.info.items() if isinstance(value, str)}
         left, top = (rendered[0] - wanted[0]) // 2, (rendered[1] - wanted[1]) // 2
         cropped = image.crop((left, top, left + wanted[0], top + wanted[1]))
         cropped.load()
     # Under another name until complete: a cut-off save must not pass as the image.
     part = path + ".part"
-    cropped.save(part, format=kind)
+    if kind == "PNG" and texts:
+        from PIL import PngImagePlugin
+        info = PngImagePlugin.PngInfo()
+        for key, value in texts.items():
+            info.add_text(key, value)
+        cropped.save(part, format=kind, pnginfo=info)
+    else:
+        cropped.save(part, format=kind)
     os.replace(part, path)
 
 

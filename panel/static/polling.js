@@ -204,7 +204,7 @@ function applyStatus(data, askedAt, editAtRequest, upscaleAtRequest) {
   $('dot').setAttribute('aria-label', running ? 'Running' : nextUp ? 'Starting' : 'Idle');
   safely(() => renderStrips(data));
   $('go').disabled = $('goStick').disabled = submitting;
-  if (!submitting) $('go').textContent = $('goStick').textContent = queueSaves() ? 'Save to queue' : goLabel(running);
+  if (!submitting) $('go').textContent = $('goStick').textContent = queueSaves() ? 'Save' : goLabel(running);
   workItem = running ? queue.current : nextUp ? ready[0] : null;
   lastStatus = data;
   const facts = (workItem && workItem.facts) || {};

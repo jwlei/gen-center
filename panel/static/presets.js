@@ -190,7 +190,26 @@ function syncPresets(side) {
   star.setAttribute('aria-pressed', String(isDefault));
   star.title = isDefault ? 'Favourite preset: used when this side opens. Tap to remove favourite.' : 'Favourite this preset: use it when this side opens';
   star.setAttribute('aria-label', star.title);
+  drawPresetList(side, list, match);
 }
+// The presets as lines in the box, as Finished lists what's done: the one the form matches outlined, the favourite
+// starred. A tap picks it in the (hidden) select, which applies it as picking it there always has.
+function drawPresetList(side, list, match) {
+  const box = $(`${side}PresetList`);
+  if (!box) return;
+  const key = JSON.stringify([list.map(p => [p.name, !!p.default]), match ? match.name : '']);
+  if (box.dataset.key === key) return;
+  box.dataset.key = key;
+  box.innerHTML = list.map(p => `<button type="button" class="preset-row" role="option" aria-selected="${match && match.name === p.name}" data-preset-pick="${esc(p.name)}">`
+    + `<span class="preset-row-name">${esc(p.name)}</span>${p.default ? '<span class="preset-row-star" title="Favourite: used when this side opens">★</span>' : ''}</button>`).join('');
+}
+document.addEventListener('click', e => {
+  const row = e.target.closest && e.target.closest('[data-preset-pick]');
+  if (!row) return;
+  const side = row.closest('.preset-dialog').id.replace('PresetDialog', ''), select = $(`${side}Preset`);
+  select.value = row.dataset.presetPick;
+  select.dispatchEvent(new Event('change', { bubbles: true }));
+});
 let presetsLoaded = false;
 const defaultsDue = new Set(['shorts', 'video', 'image']);
 const WORKFLOW_PICKERS = { shorts: 'workflow', video: 'videoWorkflow', image: 'imageWorkflow' };

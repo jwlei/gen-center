@@ -6,17 +6,20 @@ who wrote the prompts: an LLM or your exact prompt, and which LLM), and which of
 Live, Output marks the pills that differ from its siblings as they are now. Fixed, a new film's or set's file name
 takes the differing ones when it is made (fixed_tag), in place of a bare _2, _3.
 """
+import os
 import re
 
-from core import llm_tests, lora_tests, workflow_options, workflow_tests
+from core import file_tests, llm_tests, lora_tests, model_files, test_names, workflow_options, workflow_tests
 
 # How a film's clips connect, in short: the long names are Generate's "How clips connect".
 CONNECTIONS = {"chain": "Continuous take", "image": "Separate moments", "director": "H3 Motion Director",
                "multishot": "H3 Multishot", "infinite": "H3 Infinite continuation"}
 # The order pills are shown in, after the differing ones.
-KINDS = ("workflow", "prompt", "upscale", "clips", "openh3", "lora", "sampling", "cfg", "llm")
+# The files it ran (Model, Encoder, VAE) right after its workflow: they tell sets of one workflow apart.
+KINDS = ("workflow", "test", "model", "encoder", "vae", "prompt", "upscale", "clips", "openh3", "lora", "sampling", "cfg", "llm")
 # The pills that are always first, whether or not they differ: the workflow, who writes the prompts, and which LLM.
-LEADING = ("workflow", "prompt", "llm")
+# A comparison's name ("VAE test") second, right after its workflow.
+LEADING = ("workflow", "test", "prompt", "llm")
 
 
 def latent_description(options):
@@ -41,10 +44,34 @@ def image_upscale_description(options):
 
 def image_loras(state):
     """
-    The LoRAs an image set's pills name: for a LoRA comparison, those its images tested (the set's own LoRA setting
-    is none of them); otherwise the ones its workflow ran with.
+    The LoRAs an image set's pills name: the ones its workflow ran with. A LoRA comparison names none: its test pill
+    says it's one ("LoRA strength test"), and each image's own pill its LoRA and strength.
     """
-    return lora_tests.tested(state.shots) or workflow_options.loras_used(state.workflow, state.options, "image")
+    if lora_tests.tested(state.shots):
+        return []
+    return workflow_options.loras_used(state.workflow, state.options, "image")
+
+
+def image_files(state):
+    """
+    The files an image set ran, as pills (core/model_files.py): what a file comparison compared, each kind with the
+    ones it ran; else the set's own, from its settings or what ComfyUI wrote into its first image. A workflow
+    comparison runs each workflow's own, so it has none.
+    """
+    if workflow_tests.kind_of(state.shots):
+        return []
+    # What a comparison varied isn't a pill of the set's (its test pill says it is one); what all its images shared is.
+    varied = {kind for kind, _ in file_tests.tested(state.shots)}
+    return [(kind, text) for kind, text in model_files.pills(model_files.used(state.options, first_image(state))) if kind not in varied]
+
+
+def first_image(state):
+    """Where the first image a set made is, or None."""
+    shot = next((shot for shot in state.shots or [] if shot.get("file")), None)
+    try:
+        return os.path.join(state.output_dir, shot["file"]) if shot else None
+    except (AttributeError, TypeError):
+        return None
 
 
 def run_facts(state, pipeline, workflow_name):
@@ -57,6 +84,7 @@ def run_facts(state, pipeline, workflow_name):
     writer = workflow_options.prompt_writer_used(state.workflow, state.options, state.form)
     # A workflow comparison's workflow pill says what it compares ("All T2I workflows").
     return facts(workflow_tests.pill(state.shots) or workflow_name, image_upscale_description(state.options),
+                 files=image_files(state), test=test_names.of_shots(state.shots),
                  loras=image_loras(state), llm=state.llm, direct=state.direct,
                  sampling=workflow_options.sampling_used(state.workflow, state.options, "image"),
                  cfg=workflow_options.cfg_used(state.workflow, state.options, "image"),
@@ -70,11 +98,14 @@ def run_stamp(run_id):
 
 
 def facts(workflow=None, upscaled=None, clips=None, h3_mode=None, h3_creativity=None, loras=(), llm=None, direct=False, sampling=None, cfg=None,
-          prompt_writer=None):
+          prompt_writer=None, files=(), test=None):
     """What it was made with, as (kind, text), in the order they are shown."""
     found = []
     if workflow:
         found.append(("workflow", workflow))
+    if test:
+        found.append(("test", test))
+    found += list(files or ())
     if upscaled:
         found.append(("upscale", f"Upscaled: {upscaled}"))
     if clips:
@@ -136,10 +167,9 @@ def with_pills(items):
     for item in items:
         item.pop("_sibling", None)
         item.pop("_facts", None)
-        # What a comparison compares says so, in the theme's colour: the workflow pill of a LoRA or workflow
-        # comparison, the prompt pill ("All LLMs") of an LLM one. True: the workflow's.
+        # A comparison says so in the theme's colour: its test pill ("VAE test"), second after its workflow.
         marked = item.pop("_comparison", None)
-        marked = ("workflow",) if marked is True else marked or ()
+        marked = ("test",) if marked else ()
         for pill in item["pills"]:
             if pill["kind"] in marked:
                 pill["comparison"] = True

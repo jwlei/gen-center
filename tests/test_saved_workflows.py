@@ -4,6 +4,7 @@ import os
 import tempfile
 import sys
 import unittest
+from unittest import mock
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -288,8 +289,8 @@ class OptionsTest(unittest.TestCase):
 
     def test_each_switch_and_setting_is_an_option(self):
         options = self.options()
-        self.assertEqual(sorted(options), ["additional_loras", "group_color_correction", "group_sharpen", "group_upscaler", "group_upscaler.choice",
-                                           "lora", "lora_name", "lora_strength", "prompt_boost", "prompt_enhancer", "steps"])
+        self.assertEqual(sorted(options), ["additional_loras", "group_color_correction", "group_sharpen", "group_sharpen.kernel_size", "group_upscaler", "group_upscaler.choice",
+                                           "lora", "lora_name", "lora_strength", "model_file", "prompt_boost", "prompt_enhancer", "steps"])
         self.assertEqual(options["prompt_enhancer"]["role"], "llm", "chosen with the LLM, not as a switch")
         self.assertNotIn("group_prompt_enhancer", options, "the pipeline writes the prompt: its own enhancer stays off")
         self.assertEqual((options["group_sharpen"]["default"], options["steps"]["default"]), ("0", "8"))
@@ -333,7 +334,8 @@ class OptionsTest(unittest.TestCase):
         self.assertIn("can't be changed", workflow_options.check(options, {"group_color_correction": "1"}))
         self.assertIn("one of", workflow_options.check(options, {"group_upscaler.choice": "8K"}))
         self.assertIn("from 1 to 150", workflow_options.check(options, {"steps": "0"}))
-        self.assertIn("no option", workflow_options.check(options, {"made_up": "1"}))
+        # One the workflow no longer has, as a run made before kept: nothing to set, so no reason to refuse it.
+        self.assertIsNone(workflow_options.check(options, {"made_up": "1"}))
 
     def test_a_templates_subgraph_switches_are_options(self):
         options = self.options(text_to_image_workflow())
@@ -345,6 +347,243 @@ class OptionsTest(unittest.TestCase):
         self.assertNotIn("problem", self.options(ui)["face_enable_lora"])
         api = workflow_options.convert(ui, OBJECT_INFO, {"face_enable_lora": "1"})[0]
         self.assertIn("LoraLoaderModelOnly", [node["class_type"] for node in api.values()], "its switch went the way chosen")
+
+
+def one_of_workflow():
+    """
+    Like FoxFurEssence's Krea2 workflow, small: text2image or image2image, one kept on by a Bypasser set to "always one",
+    into rgthree's Any Switch; Aspect Ratio or Custom Size the same way under a Muter, the Custom Size group muted with
+    the Width and Height the pipeline fills; and an Extra group of its own under another Muter, muted.
+    """
+    placed = lambda node, x, y: {**node, "pos": [x, y]}
+    switcher = lambda node_id, kind, title, match, restriction: {**_ui_node(node_id, kind, title=title), "pos": [0, 1000 + node_id],
+                                                                 "properties": {"matchTitle": match, "matchColors": "", "toggleRestriction": restriction}}
+    nodes = [
+        placed(_ui_node(1, "CheckpointLoader", {"ckpt_name": "model.safetensors"}, outputs=["MODEL", "CLIP"]), 0, 0),
+        placed(_ui_node(4, "CLIPTextEncode", {"text": "saved prompt"}, {"clip": 7}, ["CONDITIONING"]), 0, 100),
+        placed(_ui_node(5, "EmptyLatentImage", {"batch_size": 1}, {"width": 20, "height": 21}, ["LATENT"]), 500, 0),
+        placed(_ui_node(9, "LoadImage", values=["example.png", "image"], outputs=["IMAGE", "MASK"], mode=4), 500, 300),
+        placed(_ui_node(10, "VAEEncode", links={"pixels": 10}, outputs=["LATENT"], mode=4), 500, 350),
+        placed(_ui_node(11, "Any Switch (rgthree)", links={"any_01": 11, "any_02": 12}, outputs=["*"], title="Latent"), 0, 200),
+        placed(_ui_node(6, "KSampler", {"seed": 0, "steps": 0}, {"model": 1, "positive": 2, "negative": 3, "latent_image": 4}, ["LATENT"],
+                        values=[1, "fixed", 8]), 0, 300),
+        placed(_ui_node(7, "VAEDecode", links={"samples": 5}, outputs=["IMAGE"]), 0, 400),
+        placed(_ui_node(8, "PreviewImage", links={"images": 6}), 0, 500),
+        placed(_ui_node(12, "ResolutionSelector", {"aspect_ratio": "9:16"}, outputs=["INT", "INT"]), 900, 0),
+        placed(_ui_node(13, "PrimitiveInt", values=[1024, "fixed"], outputs=["INT"], title="Width", mode=2), 900, 300),
+        placed(_ui_node(14, "PrimitiveInt", values=[2048, "fixed"], outputs=["INT"], title="Height", mode=2), 900, 350),
+        placed(_ui_node(15, "Any Switch (rgthree)", links={"any_01": 13, "any_02": 14}, outputs=["*"], title="Width"), 0, 600),
+        placed(_ui_node(16, "Any Switch (rgthree)", links={"any_01": 15, "any_02": 16}, outputs=["*"], title="Height"), 0, 650),
+        placed(_ui_node(17, "PrimitiveFloat", values=[0.5], outputs=["FLOAT"], mode=2), 1300, 0),
+        placed(_ui_node(18, "SolidMask", values=[1, 512, 512], outputs=["MASK"]), 1300, 300),
+        placed({**_ui_node(19, "mxSlider", values=[0, 0.6, 1], outputs=["FLOAT"], title="Denoise", mode=4),
+                "properties": {"value": 0.6, "min": 0.2, "max": 1, "step": 0.02}}, 500, 320),
+        switcher(30, "Fast Groups Bypasser (rgthree)", "Whatcha Up To?", "text2image|image2image", "always one"),
+        switcher(31, "Fast Groups Muter (rgthree)", "Latent Size", "Aspect Ratio|Custom Size", "always one"),
+        switcher(32, "Fast Groups Muter (rgthree)", None, "Extra", "default"),
+        switcher(33, "Fast Groups Muter (rgthree)", None, "i2i Entire Image", "default"),
+    ]
+    links = [[1, 1, 0, 6, 0, "MODEL"], [7, 1, 1, 4, 0, "CLIP"], [2, 4, 0, 6, 1, "CONDITIONING"], [3, 4, 0, 6, 2, "CONDITIONING"], [4, 11, 0, 6, 3, "LATENT"],
+             [5, 6, 0, 7, 0, "LATENT"], [6, 7, 0, 8, 0, "IMAGE"], [10, 9, 0, 10, 0, "IMAGE"], [11, 5, 0, 11, 0, "LATENT"],
+             [12, 10, 0, 11, 1, "LATENT"], [13, 12, 0, 15, 0, "INT"], [14, 13, 0, 15, 1, "INT"], [15, 12, 1, 16, 0, "INT"],
+             [16, 14, 0, 16, 1, "INT"], [20, 15, 0, 5, 0, "INT"], [21, 16, 0, 5, 1, "INT"]]
+    groups = [{"title": "text2image", "bounding": [450, -50, 200, 150]}, {"title": "image2image", "bounding": [450, 250, 200, 150]},
+              {"title": "Aspect Ratio", "bounding": [850, -50, 200, 150]}, {"title": "Custom Size", "bounding": [850, 250, 200, 150]},
+              {"title": "Extra", "bounding": [1250, -50, 200, 150]}, {"title": "i2i Entire Image", "bounding": [1250, 250, 200, 150]}]
+    return {"nodes": nodes, "links": links, "groups": groups}
+
+
+ONE_OF_INFO = {**OBJECT_INFO,
+               "Any Switch (rgthree)": {"display_name": "Any Switch", "input": {"required": {}, "optional": {"any_01": ["*"], "any_02": ["*"]}}},
+               "VAEEncode": {"display_name": "VAEEncode", "input": {"required": {"pixels": ["IMAGE"]}}},
+               "ResolutionSelector": {"display_name": "ResolutionSelector", "input": {"required": {"aspect_ratio": [["9:16"]]}}},
+               "SolidMask": {"display_name": "SolidMask", "input": {"required": {"value": ["FLOAT", {}], "width": ["INT", {}], "height": ["INT", {}]}}},
+               "mxSlider": {"display_name": "mxSlider", "input": {"required": {"Xi": ["INT", {}], "Xf": ["FLOAT", {}], "isfloatX": ["INT", {}]}}}}
+
+
+class OneOfGroupsTest(unittest.TestCase):
+    """rgthree's "always one" switchers: their groups are one choice, and the size's are the pipeline's."""
+
+    def options(self):
+        return {option["id"]: option for option in workflow_options.offered(one_of_workflow(), ONE_OF_INFO)}
+
+    def test_groups_kept_one_on_are_one_choice(self):
+        options = self.options()
+        mode = options["one_of_text2image_image2image"]
+        self.assertEqual((mode["kind"], mode["label"], mode["choices"], mode["default"]),
+                         ("choice", "Whatcha Up To?", ["text2image", "image2image", "inpaint"], "text2image"))
+        self.assertFalse({"group_text2image", "group_image2image", "group_aspect_ratio", "group_custom_size", "group_i2i_entire_image"} & set(options),
+                         "no tickbox each, the size's aren't offered, and whole image or painted part is the inpaint choice")
+        self.assertEqual(mode["takes_by"]["text2image"]["max_images"], 0)
+        self.assertEqual(mode["takes_by"]["image2image"]["max_images"], 1, "image2image takes the image it starts from")
+        self.assertEqual(mode["takes_by"]["inpaint"]["max_images"], 1)
+
+    def test_inpaint_starts_from_the_image_without_the_full_mask(self):
+        for mode, whole in (("image2image", 0), ("inpaint", 2)):
+            ui = workflow_options._before(one_of_workflow(), list(self.options().values()), {"one_of_text2image_image2image": mode})
+            self.assertEqual((node_of(ui, 9)["mode"], node_of(ui, 5)["mode"], node_of(ui, 18)["mode"]), (0, 4, whole),
+                             "image2image's group on, text2image's off; the full mask muted only to inpaint")
+
+    def test_image_to_images_denoise_is_a_setting_under_the_mode(self):
+        denoise = self.options()["one_of_text2image_image2image.denoise"]
+        self.assertEqual((denoise["default"], denoise["min"], denoise["max"], denoise["step"], denoise["for"], denoise["parent"]),
+                         ("0.6", 0.2, 1.0, 0.02, ["image2image", "inpaint"], "one_of_text2image_image2image"))
+        ui = workflow_options._before(one_of_workflow(), list(self.options().values()),
+                                      {"one_of_text2image_image2image": "image2image", "one_of_text2image_image2image.denoise": "0.4"})
+        self.assertEqual((node_of(ui, 19)["widgets_values"][1], node_of(ui, 19)["properties"]["value"]), (0.4, 0.4))
+
+    def test_the_chosen_one_runs_and_the_other_doesnt(self):
+        api, fields, _, _ = workflow_options.convert(one_of_workflow(), ONE_OF_INFO)
+        kinds = {node["class_type"] for node in api.values()}
+        self.assertIn("EmptyLatentImage", kinds)
+        self.assertNotIn("LoadImage", kinds)
+        api, fields, _, _ = workflow_options.convert(one_of_workflow(), ONE_OF_INFO, {"one_of_text2image_image2image": "image2image"})
+        self.assertIn("image", fields)
+        self.assertNotIn("EmptyLatentImage", {node["class_type"] for node in api.values()})
+
+    def test_the_size_chosen_is_the_one_made(self):
+        # As saved, Aspect Ratio was on and Any Switch took its size first: the size chosen on the form was ignored.
+        api, fields, _, _ = workflow_options.convert(one_of_workflow(), ONE_OF_INFO)
+        self.assertEqual((fields["width"], fields["height"]), (["13", "value"], ["14", "value"]))
+        self.assertNotIn("12", api, "the aspect ratio picker is off")
+        self.assertEqual(api["15"]["inputs"], {"any_02": ["13", 0]})
+
+    def test_a_muted_group_starts_off_and_is_muted_again(self):
+        options = self.options()
+        self.assertEqual(options["group_extra"]["default"], "0")
+        ui = workflow_options._before(one_of_workflow(), list(options.values()), {"group_extra": "1"})
+        self.assertEqual(node_of(ui, 17)["mode"], 0)
+        ui = workflow_options._before(ui, list(options.values()), {"group_extra": "0"})
+        self.assertEqual(node_of(ui, 17)["mode"], 2, "a Muter's group is muted, not bypassed")
+
+    def test_a_run_takes_the_images_of_its_choice(self):
+        takes = {"min_images": 0, "max_images": 0, "options": list(self.options().values())}
+        self.assertEqual(workflow_options.takes_for(takes, {})["max_images"], 0)
+        self.assertEqual(workflow_options.takes_for(takes, {"one_of_text2image_image2image": "image2image"})["max_images"], 1)
+
+
+def krea2_template():
+    """Like ComfyUI's Krea-2 template, small: one KSampler and no 2nd pass of its own."""
+    return {"nodes": [
+        _ui_node(1, "CheckpointLoader", {"ckpt_name": "model.safetensors"}, outputs=["MODEL", "CLIP"]),
+        _ui_node(2, "CLIPLoader", values=["qwen3vl.safetensors", "krea2"], outputs=["CLIP"]),
+        _ui_node(4, "CLIPTextEncode", {"text": "saved prompt"}, {"clip": 7}, ["CONDITIONING"]),
+        _ui_node(5, "EmptyLatentImage", {"width": 1024, "height": 1024, "batch_size": 1}, outputs=["LATENT"]),
+        _ui_node(6, "KSampler", {"seed": 0, "steps": 0}, {"model": 1, "positive": 2, "negative": 3, "latent_image": 4}, ["LATENT"],
+                 values=[1, "fixed", 8]),
+        _ui_node(7, "VAEDecode", links={"samples": 5}, outputs=["IMAGE"]),
+        _ui_node(8, "PreviewImage", links={"images": 6})],
+        "links": [[1, 1, 0, 6, 0, "MODEL"], [7, 2, 0, 4, 0, "CLIP"], [2, 4, 0, 6, 1, "CONDITIONING"], [3, 4, 0, 6, 2, "CONDITIONING"],
+                  [4, 5, 0, 6, 3, "LATENT"], [5, 6, 0, 7, 0, "LATENT"], [6, 7, 0, 8, 0, "IMAGE"]]}
+
+
+KREA2_INFO = {**OBJECT_INFO,
+              "CLIPLoader": {"display_name": "CLIPLoader", "input": {"required": {"clip_name": [["qwen3vl.safetensors"]], "type": [["krea2"]]}}},
+              "ClownsharKSampler_Beta": {"display_name": "ClownsharKSampler", "input": {"required": {}, "optional": {}}}}
+
+
+class SecondPassTest(unittest.TestCase):
+    """A Krea-2 workflow without a 2nd pass gets one to switch on, with its strength, as the community ones have."""
+
+    def test_offered_off_with_its_strength(self):
+        options = {option["id"]: option for option in workflow_options.offered(krea2_template(), KREA2_INFO)}
+        self.assertEqual((options["second_pass"]["default"], options["second_pass.strength"]["default"], options["second_pass.strength"]["parent"]),
+                         ("0", "0.2", "second_pass"))
+        api = workflow_options.convert(krea2_template(), KREA2_INFO)[0]
+        self.assertNotIn("second_pass", api, "off as saved")
+
+    def test_on_it_refines_what_the_sampler_made(self):
+        api = workflow_options.convert(krea2_template(), KREA2_INFO, {"second_pass": "1", "second_pass.strength": "0.3"})[0]
+        refine = api["second_pass"]["inputs"]
+        self.assertEqual((refine["denoise"], refine["steps_to_run"], refine["latent_image"], refine["model"]), (0.3, 3, ["6", 0], ["1", 0]))
+        self.assertEqual(api["7"]["inputs"]["samples"], ["second_pass", 1], "the decode takes its denoised output")
+
+    def test_not_for_other_models_or_without_res4lyf(self):
+        for ui, info in ((krea2_template(), OBJECT_INFO), (switchable_workflow(), KREA2_INFO)):
+            self.assertNotIn("second_pass", {option["id"] for option in workflow_options.offered(ui, {**info, "CLIPLoader": KREA2_INFO["CLIPLoader"]})})
+
+
+class MergedKreaTest(unittest.TestCase):
+    """What lets one Krea-2 workflow stand for several: its VAE to pick, and the Enhancer's strength beside its group."""
+
+    def info(self, vaes):
+        return {**KREA2_INFO, "VAELoader": {"display_name": "VAELoader", "input": {"required": {"vae_name": [vaes]}}}}
+
+    def with_vae(self):
+        ui = krea2_template()
+        ui["nodes"].append(_ui_node(9, "VAELoader", values=["krea2RealVae_v10.safetensors"], outputs=["VAE"]))
+        ui["nodes"][[n["id"] for n in ui["nodes"]].index(7)]["inputs"].append({"name": "vae", "type": "VAE", "link": 8})
+        ui["links"].append([8, 9, 0, 7, 1, "VAE"])
+        return ui
+
+    # VAEs by their layers, as each file's header says them: two the same can stand in for each other.
+    SHAPES = {"krea2RealVae_v10.safetensors": frozenset({("decoder.conv_in.weight", (384, 16, 3, 3, 3))}),
+              "qwen_image_vae.safetensors": frozenset({("decoder.conv_in.weight", (384, 16, 3, 3, 3))}),
+              "LTX23_video_vae_bf16.safetensors": frozenset({("decoder.conv_in.weight", (1024, 128, 3, 3, 3))})}
+
+    def test_the_vaes_krea2_decodes_with_are_a_choice(self):
+        from core import model_files
+        vaes = ["krea2RealVae_v10.safetensors", "qwen_image_vae.safetensors", "LTX23_video_vae_bf16.safetensors"]
+        with mock.patch.object(model_files, "vae_shape", self.SHAPES.get):
+            options = {o["id"]: o for o in workflow_options.offered(self.with_vae(), self.info(vaes))}
+            api = workflow_options.convert(self.with_vae(), self.info(vaes), {"vae_file": "qwen_image_vae.safetensors"})[0]
+        self.assertEqual((options["vae_file"]["default"], options["vae_file"]["choices"]),
+                         ("krea2RealVae_v10.safetensors", ["krea2RealVae_v10.safetensors", "qwen_image_vae.safetensors"]),
+                         "those of the same layers, whatever they're called; not another model's")
+        self.assertEqual(api["9"]["inputs"]["vae_name"], "qwen_image_vae.safetensors")
+
+    def test_one_installed_is_shown_greyed_out(self):
+        options = {o["id"]: o for o in workflow_options.offered(self.with_vae(), self.info(["krea2RealVae_v10.safetensors"]))}
+        self.assertEqual(options["vae_file"]["choices"], ["krea2RealVae_v10.safetensors"])
+        self.assertIn("No other VAE", options["vae_file"]["problem"], "in its place still, saying why it can't be changed")
+
+    def test_the_enhancer_switched_by_its_group_has_its_strength_beside_it(self):
+        ui = self.with_vae()
+        ui["nodes"].append({**_ui_node(10, "ComfyUI-Krea2T-Enhancer", values=[True, 0.5, False], outputs=["MODEL"], mode=4), "pos": [500, 0]})
+        ui["nodes"].append({**_ui_node(11, "Fast Groups Bypasser (rgthree)"), "pos": [0, 1000], "properties": {"matchTitle": "Enhancer", "matchColors": ""}})
+        ui["groups"] = [{"title": "Enhancer", "bounding": [450, -50, 200, 150]}]
+        for node in ui["nodes"]:
+            node.setdefault("pos", [0, 0])
+        options = {o["id"]: o for o in workflow_options.describe(ui, self.info(["krea2RealVae_v10.safetensors"]))}
+        self.assertEqual((options["group_enhancer.strength"]["default"], options["group_enhancer.strength"]["parent"]), ("0.5", "group_enhancer"))
+        before = workflow_options._before(ui, list(options.values()), {"group_enhancer": "1", "group_enhancer.strength": "1.5"})
+        self.assertEqual(node_of(before, 10)["widgets_values"][1], 1.5)
+
+
+class FinishingSettingsTest(unittest.TestCase):
+    """Beside Sharpen: its px and str. A switch whose file isn't installed, off: not offered."""
+
+    def test_sharpen_has_its_size_and_strength_beside_it(self):
+        info = {**OBJECT_INFO, "Image Lucy Sharpen": {"display_name": "Sharpen", "input": {"required": {
+            "images": ["IMAGE"], "iterations": ["INT", {}], "kernel_size": ["INT", {}]}}}}
+        ui = switchable_workflow()
+        node_of(ui, 8)["widgets_values"] = [1, 3]
+        options = {o["id"]: o for o in workflow_options.describe(ui, info)}
+        self.assertEqual((options["group_sharpen.kernel_size"]["label"], options["group_sharpen.kernel_size"]["default"]), ("px", "3"))
+        self.assertEqual((options["group_sharpen.iterations"]["label"], options["group_sharpen.iterations"]["default"]), ("str", "1"))
+        before = workflow_options._before(ui, list(options.values()), {"group_sharpen": "1", "group_sharpen.kernel_size": "5", "group_sharpen.iterations": "2"})
+        self.assertEqual(node_of(before, 8)["widgets_values"], [2, 5])
+
+    def test_a_switch_whose_file_isnt_installed_isnt_offered(self):
+        # As the merged Krea-2's Turbo LoRA? says without its LoRA.
+        missing = lambda option, *rest: ("Needs KREA\krea2_turbo_lora.safetensors, which isn't installed."
+                                         if option["id"] == "group_sharpen" else None)
+        with mock.patch.object(workflow_options, "lora_problem", missing):
+            ids = {o["id"] for o in workflow_options.offered(switchable_workflow(), OBJECT_INFO)}
+        self.assertNotIn("group_sharpen", ids, "its LoRA isn't installed and it's off: nothing to offer")
+        self.assertIn("group_color_correction", ids, "one that needs a node pack stays, greyed out with why")
+
+
+class FilePickerTest(unittest.TestCase):
+    """Every workflow's files to pick, from what's installed: its text encoder by name, any precision of it."""
+
+    def test_the_copies_of_its_encoder_and_not_another(self):
+        from core import model_files
+        base = model_files.encoder_base
+        self.assertEqual(base("qwen3vl_4b_fp8_scaled.safetensors"), base("qwen3VL4BAbliteratedComfyui_v10_full_fp8.safetensors"))
+        self.assertEqual(base("qwen3vl_32b_minimax_h3_int8_convrot.safetensors"), base("qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors"))
+        self.assertNotEqual(base("qwen3vl_4b_bf16.safetensors"), base("qwen3vl_8b_int8_convrot.safetensors"), "another size is another encoder")
+        self.assertIsNone(base("qwen3.5_9b_qwen_image_2.1_pe_t2i.int8_convrot.safetensors"), "a prompt enhancer isn't one")
 
 
 class SamplingOptionsTest(unittest.TestCase):
@@ -1129,7 +1368,7 @@ class LoraFamilyTest(unittest.TestCase):
         with mock.patch.dict(os.environ, {"COMFYUI_DIR": folder, "COMFYUI_LAUNCHER": ""}):
             option, = workflow_options._model_choice(api, info, {})
             self.assertEqual((option["id"], option["label"], option["default"]),
-                             ("model_file", "Diffusion model", "moss_image_base.safetensors"))
+                             ("model_file", "Model", "moss_image_base.safetensors"))
             self.assertEqual(option["choices"], ["moss_image_base.safetensors", "PornMaster_SFT.safetensors"], "not Krea's")
             self.assertTrue(option["model"], "drawn last, under Model")
             self.assertIsNone(workflow_options.check([option], {"model_file": "PornMaster_SFT.safetensors"}))

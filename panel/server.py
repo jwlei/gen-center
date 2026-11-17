@@ -44,7 +44,7 @@ from flask import (Flask, Response, abort, has_request_context, redirect, render
 from werkzeug.exceptions import NotFound
 from werkzeug.datastructures import MultiDict
 
-from core import batch_stop, eta_keys, explicit, lora_hints, lora_tests, model_guide, pills, run_form, variety, workflow_options, workflow_tests
+from core import batch_stop, eta_keys, explicit, llm_tests, lora_hints, lora_tests, model_guide, pills, run_form, variety, workflow_options, workflow_tests
 from core.run_checkpoint import CheckpointError, catalogue_errors
 from core.lora_tests import ENV as LORA_TEST_ENV
 from core.upscale_eta import UpscaleEta, is_upscale
@@ -1028,14 +1028,20 @@ class JobQueue:
         if run_id:
             pipeline = PIPELINES.get(item.get("pipeline"))
             state = pipeline.load_run(run_id) if pipeline and hasattr(pipeline, "resume_argv") else None
-            if not state or item.get("plan_only"):
+            # Stopped at its start: its run named (its folder) but nothing saved in it yet, as an image set is while its
+            # prompts are written. Nothing to continue: it starts over with its settings, as one stopped sooner does.
+            # Before, it went from the queue and its Stopped line named a run that isn't there: it was gone.
+            if not state and not item.get("resume"):
+                run_id = None
+            elif not state or item.get("plan_only"):
                 return
+        if not run_id and self.results and self.results[-1].get("job_id") == item.get("id"):
+            self.results.pop()  # Nothing made: no Stopped line for it, as it is in the queue again
+        if run_id:
             argv = pipeline.resume_argv(state)
             # A preview run stays one: continuing would otherwise make every clip.
             again["argv"] = argv + ["--first-only"] if "--first-only" in (item.get("argv") or []) else argv
             again["resume"] = run_id
-        elif self.results and not self.results[-1].get("run_id") and self.results[-1].get("job_id") == item.get("id"):
-            self.results.pop()  # Nothing made: no Stopped line for it, as it is in the queue again
         again["id"] = self.next_id
         self.next_id += 1
         # Nothing else waiting to run: held, or it would start straight away again.
@@ -1357,10 +1363,32 @@ class JobQueue:
                     "held": self.held}
 
 
+# How comparisons were said in the queue before they were named as tests, and how a new one says it.
+OLD_COMPARISONS = ("LoRA and model files comparison", "model files comparison", "workflow and LoRA comparison", "workflow comparison",
+                   "LoRA comparison", "LLM comparison", "exact prompt")
+
+
 def named_comparison(item):
-    """An image LoRA comparison queued while its box said "exact prompt", said now as a new one is: "LoRA comparison"."""
-    if item.get("pipeline") == "image" and LORA_TEST_ENV in (item.get("env") or {}) and " · exact prompt" in str(item.get("detail") or ""):
-        item["detail"] = item["detail"].replace(" · exact prompt", " · LoRA comparison", 1)
+    """
+    A comparison queued before it was named as a test ("LoRA comparison", or while its box said "exact prompt"), said
+    now as a new one is: "LoRA strength test", "Model + VAE test", "Workflow test", "LLM test".
+    """
+    if item.get("pipeline") != "image":
+        return
+    from core import test_names
+    env, detail = item.get("env") or {}, str(item.get("detail") or "")
+    try:
+        name = (test_names.of_shots(workflow_tests.shots({}, workflow_tests.in_env(env), 0)) if env.get(workflow_tests.ENV)
+                else test_names.of_tests(lora_tests.in_env(env)) if LORA_TEST_ENV in env
+                else "LLM test" if env.get(llm_tests.ENV) else None)
+    except (ValueError, KeyError, TypeError):
+        return
+    if not name:
+        return
+    for old in OLD_COMPARISONS:
+        if f" · {old}" in detail and (old != "exact prompt" or LORA_TEST_ENV in env):
+            item["detail"] = detail.replace(f" · {old}", f" · {name}", 1)
+            return
 
 
 OLD_CONTINUATION = re.compile(r"^(Continue|Redo image (\d+)|Redo from shot (\d+))$")
@@ -1425,10 +1453,9 @@ def item_loras(item):
     if pipeline not in ("image", "video") or upscale_queue_settings(item):
         return []
     try:
-        if pipeline == "image" and env.get(workflow_tests.ENV):
-            return lora_tests.tested(workflow_tests.in_env(env))
-        if pipeline == "image" and env.get(LORA_TEST_ENV):
-            return lora_tests.tested([{"lora_test": value} for value in lora_tests.in_env(env)])
+        # A comparison lists none: its line says it's one ("LoRA strength test"), each image says its own.
+        if pipeline == "image" and (env.get(workflow_tests.ENV) or env.get(LORA_TEST_ENV)):
+            return []
     except ValueError:
         return []
     workflow = env.get("COMFYUI_WORKFLOW")
@@ -1515,9 +1542,10 @@ def notify_ended(item, outcome, note=None):
 
 def form_options(form, takes):
     """
-    The workflow's own options as the form sets them (core/workflow_options.py): only what differs from the workflow as
-    saved. Returns (chosen, error). A checkbox sends a hidden "0" before its own "1", so the last value is the one that
-    counts. A way for the workflow to write its own prompt is chosen with the LLM instead, so it isn't here.
+    The workflow's own options as the form sets them (core/workflow_options.py): every one, those left as the workflow
+    has them too, so a run keeps all it was made with and opens again with them after the workflow's defaults change.
+    Returns (chosen, error). A checkbox sends a hidden "0" before its own "1", so the last value is the one that counts.
+    A way for the workflow to write its own prompt is chosen with the LLM instead, so it isn't here.
     """
     from core import workflow_options
     options = takes.get("options") or []
@@ -1532,7 +1560,19 @@ def form_options(form, takes):
                 chosen[option["id"]] = (form.get(f"{name}_strength") or option.get("usual") or "1").strip() if on else workflow_options.OFF
         elif name in form:
             chosen[option["id"]] = form.getlist(name)[-1].strip()
-    chosen = {key: value for key, value in chosen.items() if value != next(option["default"] for option in options if option["id"] == key).strip()}
+            # A number left empty is its default (Denoise cleared, say), not an error.
+            if option.get("kind") == "number" and not chosen[option["id"]]:
+                chosen[option["id"]] = str(option["default"]).strip()
+    # What the form didn't send (a setting it doesn't show now) as the workflow has it.
+    for option in options:
+        if not option.get("role") and option["id"] not in chosen:
+            chosen[option["id"]] = str(option["default"]).strip()
+    # A choice left as the workflow has it, where that isn't one it offers (a LoRA none installed fits, so the list is
+    # empty): nothing to change or to keep, so not sent, as before every setting went with a run.
+    for option in options:
+        if (option.get("kind") == "choice" and option["id"] in chosen and chosen[option["id"]] == str(option.get("default")).strip()
+                and chosen[option["id"]] not in (option.get("choices") or [])):
+            del chosen[option["id"]]
     error = workflow_options.check(options, chosen)
     return (None, error) if error else (chosen, None)
 
@@ -3627,6 +3667,8 @@ def write_prompt():
                 return {"ok": False, "error": "The selected image workflow has no prompt enhancer."}, 400
             if enhancer.get("problem"):
                 return {"ok": False, "error": f"{enhancer['label']} can't run: {enhancer['problem']}"}, 400
+            from core import workflow_options
+            takes = workflow_options.takes_for(takes, form_options(request.form, takes)[0])
             if not takes["min_images"] <= len(uploads) <= takes["max_images"]:
                 return {"ok": False, "error": "Choose the number of source images this workflow needs."}, 400
             workflow_path = env.get("COMFYUI_WORKFLOW")

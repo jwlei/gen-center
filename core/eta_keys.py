@@ -52,8 +52,30 @@ def workflow_models(path):
         return None
 
 
+_defaults = {}
+
+
+def workflow_defaults(path):
+    """Each option's default in the workflow at path, from the .map.json beside it, read once per change. {} if none."""
+    try:
+        map_path = os.path.splitext(path)[0] + ".map.json"
+        stat = os.stat(map_path)
+        key = (map_path, stat.st_mtime_ns, stat.st_size)
+        if key not in _defaults:
+            with open(map_path, "r", encoding="utf-8") as f:
+                _defaults[key] = {option["id"]: str(option.get("default")) for option in json.load(f).get("_options") or []
+                                  if isinstance(option, dict) and "id" in option}
+        return _defaults[key]
+    except (OSError, TypeError, ValueError, AttributeError):
+        return {}
+
+
 def render_keys(workflow, options=None, size=None, fallback="built-in"):
     """The keys a render is timed under, from the most particular to the least."""
+    # A run keeps every option, those as the workflow has them too: only what differs tells renders apart.
+    if workflow and options:
+        defaults = workflow_defaults(workflow)
+        options = {key: value for key, value in options.items() if defaults.get(key) != str(value)}
     name = os.path.splitext(os.path.basename(workflow))[0] if workflow else fallback
     model = (workflow_models(workflow) if workflow else None) or name
     # A long text, such as a negative prompt, would make a key of paragraphs: it is told apart by a short digest.
@@ -167,8 +189,8 @@ class Timings:
 
 def llm_tag(llm, local_model=None):
     """
-    Who writes the prompts, down to the model, so each is timed apart: local:gemma-4-12b, gemini:<its first model>,
-    claude:<model>. None or "direct" is your prompt as it is, which no LLM writes.
+    Who writes the prompts, down to the model, so each is timed apart: local:gemma-4-12b, gemini:<its first model>.
+    None or "direct" is your prompt as it is, which no LLM writes.
     """
     if not llm or llm == "direct":
         return "direct"
@@ -186,8 +208,6 @@ def llm_tag(llm, local_model=None):
             return f"gemini:{get_text_models()[0]}"
         except Exception:
             return "gemini"
-    if llm == "claude":
-        return f"claude:{os.getenv('CLAUDE_MODEL') or 'claude-opus-5-5'}"
     return llm
 
 

@@ -16,7 +16,7 @@
    changes or stays (core.variety). Each chip is a select drawn as a chip (chipSelect): saved with the form, and with
    the run, so it comes back for the next generation and with More like this. #}
 {% macro variety_box(side, things) %}<div class="variety-box" id="{{ side }}VarietyBox">
-  <div class="options-subtitle"><label for="{{ side }}Variety">Variety</label>{{ hint_button(side ~ 'VarietyHelp', 'variety') }}<span class="options-subtitle-what"> · how different they are</span></div>
+  <div class="options-subtitle"><label for="{{ side }}Variety">Variety</label>{{ hint_button(side ~ 'VarietyHelp', 'variety') }}</div>
   <div class="field-help variety-help" id="{{ side }}VarietyHelp" hidden>
     <div class="hint">How different the prompts the writer makes are from one {{ things }} to the next.</div>
     <dl class="variety-terms">{% for name, what in variety_levels %}<dt>{{ name }}</dt><dd>{{ what }}</dd>{% endfor %}</dl>
@@ -36,15 +36,15 @@
    (syncWords, shared.js). The image form starts at its usual; the video form is blank for each model's own length.
 #}
 {% macro words_box(side, w) %}<div class="words-box" id="{{ side }}WordsBox">
-  <div class="options-subtitle"><label for="{{ side }}Words">Words per prompt</label><span class="options-subtitle-what"> · <span id="{{ side }}WordsValue">{{ w.usual }}</span></span></div>
+  <div class="options-subsub"><label for="{{ side }}Words">Word count</label><span class="options-subsub-value"> · <span id="{{ side }}WordsValue">{{ w.usual }}</span></span></div>
   <div class="hint words-tokens" id="{{ side }}WordsTokens"></div>
   <div class="words-slider" style="--lo: {{ '%.1f' % ((w.suggested[0] - w.least) * 100 / (w.most - w.least)) }}%; --hi: {{ '%.1f' % ((w.suggested[1] - w.least) * 100 / (w.most - w.least)) }}%">
     <input type="range" id="{{ side }}Words" name="words" min="{{ w.least }}" max="{{ w.most }}" step="10" value="{{ w.usual }}"{% if side == 'video' %} data-auto="{{ w.least }}"{% endif %} data-per-word="{{ w.per_word }}" data-per-version="{{ w.per_version }}" data-spread="{{ w.spread }}" data-suggested="{{ w.suggested[0] }}-{{ w.suggested[1] }}" aria-label="Words per prompt">
     <div class="words-band" aria-hidden="true"><span>suggested</span></div>
   </div>
 </div>{% endmacro %}
-{% macro explicit_box(side) %}<div class="explicit-box">
-  <label class="check"><input type="checkbox" id="{{ side }}Explicit" name="explicit"><span class="options-subtitle">Explicit content</span></label>
+{% macro explicit_box(side) %}<div class="explicit-box" id="{{ side }}ExplicitBox">
+  <label class="check"><input type="checkbox" id="{{ side }}Explicit" name="explicit"><span>Explicit content</span></label>
 </div>{% endmacro %}
 {% macro hint_button(target, label) %}<button type="button" class="hint-toggle" data-hint-target="{{ target }}" aria-controls="{{ target }}" aria-expanded="false" aria-label="About {{ label }}"><span class="res-info-mark" aria-hidden="true">i</span></button>{% endmacro %}
 {% macro field_heading(field, label, target) %}<div class="field-heading"><label for="{{ field }}">{{ label }}</label>{{ hint_button(target, label) }}</div>{% endmacro %}
@@ -54,10 +54,12 @@
 {% endmacro %}
 {% macro preset_controls(side) %}
 <dialog id="{{ side }}PresetDialog" class="panel-dialog preset-dialog" aria-labelledby="{{ side }}PresetTitle">
-<h2 id="{{ side }}PresetTitle">{{ side|capitalize }} presets</h2>
+<div class="panel-dialog-title" id="{{ side }}PresetTitle">{{ side|capitalize }} presets</div>
+<div class="panel-dialog-body">
+<!-- Each preset a line, as Finished lists what's done: a tap applies it (presets.js drawPresetList). -->
+<div class="preset-list" id="{{ side }}PresetList" role="listbox" aria-labelledby="{{ side }}PresetTitle"></div>
 <div class="preset-controls">
-  <label for="{{ side }}Preset">Preset</label>
-  <select id="{{ side }}Preset" data-preset-side="{{ side }}" aria-label="Preset" title="Selecting a preset replaces settings and clears the prompt"><option value="">None</option></select>
+  <select id="{{ side }}Preset" data-preset-side="{{ side }}" data-native hidden aria-label="Preset" title="Selecting a preset replaces settings and clears the prompt"><option value="">None</option></select>
   <button type="button" class="preset-save" data-preset-save="{{ side }}" title="Save as preset" aria-label="Save as preset" hidden><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h12l4 4v12a2 2 0 0 1-2 2Z"/><path d="M17 21v-8H7v8M7 3v5h8V3"/></svg></button>
   <button type="button" class="preset-default" data-preset-default="{{ side }}" aria-pressed="false" hidden><svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M12 2.5l2.9 6 6.6.9-4.8 4.6 1.2 6.5L12 17.4l-5.9 3.1 1.2-6.5L2.5 9.4l6.6-.9z"/></svg></button>
   <button type="button" class="ghost icon-btn preset-delete" data-preset-delete="{{ side }}" title="Delete this preset" aria-label="Delete this preset" hidden>{{ trash_icon() }}</button>
@@ -68,11 +70,13 @@
   </span>
   <span id="{{ side }}PresetFeedback" class="preset-feedback" role="status" aria-live="polite"></span>
 </div>
-<button type="button" class="plain" data-preset-close="{{ side }}">Close</button>
+</div>
+<button type="button" class="panel-close" data-preset-close="{{ side }}">Close</button>
 </dialog>
 {% endmacro %}
 <style>
-  .connection-notice { position: fixed; top: 3px; left: 0; right: 0; z-index: 999; display: flex; align-items: center; justify-content: center; gap: 12px; padding: 8px 16px; background: var(--panel-2); color: var(--warn); font-size: .8rem; box-shadow: 0 6px 18px #0005; opacity: 1; transform: translateY(0); visibility: visible; transition: opacity .25s ease, transform .25s ease, visibility 0s; }
+  /* Under the header, not over it (--top-h, the header's height, kept by navigation.js). */
+  .connection-notice { position: fixed; top: calc(var(--top-h, 0px) + 4px); left: 0; right: 0; z-index: 999; display: flex; align-items: center; justify-content: center; gap: 12px; padding: 8px 16px; background: var(--panel-2); color: var(--warn); font-size: .8rem; box-shadow: 0 6px 18px #0005; opacity: 1; transform: translateY(0); visibility: visible; transition: opacity .25s ease, transform .25s ease, visibility 0s; }
   .connection-notice[hidden] { display: flex; opacity: 0; transform: translateY(-100%); visibility: hidden; pointer-events: none; transition: opacity .25s ease, transform .25s ease, visibility 0s .25s; }
   .connection-notice > span { min-width: 0; overflow-wrap: anywhere; }
   .connection-notice button { width: auto; flex: none; padding: 4px 8px; margin: 0; font-size: inherit; }
@@ -361,8 +365,6 @@
   .workflow-actions .use-default { display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 24px; border-radius: 6px; }
   .workflow-actions .use-default[hidden] { display: none; }
   .preset-dialog { --accent: var(--side); width: min(420px, calc(100vw - 32px)); padding: 16px; }
-  .preset-dialog h2 { margin-bottom: 14px; }
-  .preset-dialog > .plain { margin-top: 16px; }
   .preset-dialog .preset-controls { justify-content: flex-start; }
   .preset-dialog .preset-controls select { flex: 1; width: auto; }
   /* About the model, under the workflow: just quiet underlined text that opens the guide. */
@@ -381,6 +383,11 @@
   .tests-line { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 4px; }
   .tests-line > .check { margin: 0; flex: 1; min-width: 0; }
   .tests-line > .count-stepper { flex: none; margin: 0; }
+  /* A setting's name and its stepper on one line (Amount, Denoise): the name on the left, the stepper on the right. */
+  .stepper-line { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 12px; }
+  .stepper-line[hidden] { display: none; }
+  .stepper-line > label { margin: 0; }
+  .stepper-line > .count-stepper { flex: none; margin: 0; }
   .tests-group > .options-subtitle + .check, .tests-group > .options-subtitle + .tests-line { margin-top: 4px; }
   .tests-group > .hint:empty { display: none; }
   /* Sampling: under its heading, no box. Names in one column, settings lined up in the next, each the same width (a
@@ -395,7 +402,15 @@
      the names' column to its whole sentence, and never wrap. It wraps inside what the names and settings take. */
   .options-sampling .option-hint { grid-column: 1 / -1; margin: 0; contain: inline-size; overflow-wrap: anywhere; }
   .option-hint { font-size: .8rem; color: var(--muted); }
-  .options-subtitle { font-size: .68rem; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); font-weight: 700; margin-bottom: 2px; }
+  /* Sub headers (Sampling, Style LoRA, Variety...): all alike, set apart from the settings under them and their labels. */
+  .options-subtitle { font-size: .7rem; letter-spacing: .09em; text-transform: uppercase; color: var(--text); font-weight: 800; margin-bottom: 4px; }
+  /* A sub-sub header (Word count): a setting's own name, as its label is, its value beside it. */
+  .options-subsub { margin: 0 0 4px; color: var(--muted); font-size: .72rem; font-weight: 600; }
+  .options-subsub label { display: inline; margin: 0; font: inherit; color: inherit; text-transform: none; letter-spacing: 0; }
+  .options-subsub-value { color: var(--text); font-variant-numeric: tabular-nums; }
+  /* A quiet line between the workflow's groups of settings: Sampling, LoRA, the rest, its files. */
+  :is(#imageOptionsBox, #videoOptionsBox, #shortsOptionsBox) > :is(.options-section, .options-lora) + :is(.options-section, .options-lora) {
+    margin-top: 10px; padding-top: 10px; border-top: 1px solid color-mix(in srgb, var(--line) 70%, transparent); }
   .options-subtitle .hint-toggle { vertical-align: middle; }
   .check { display: flex; gap: 10px; align-items: flex-start; margin-top: 14px; cursor: pointer; text-transform: none; letter-spacing: 0; font-size: .95rem; color: var(--text); }
   .check input { width: 20px; height: 20px; margin: 2px 0 0; flex: none; accent-color: var(--accent); }
@@ -612,6 +627,16 @@
   .settings-actions .settings-menu > #forceRestartPanel { border-color: var(--err); color: var(--err); background: color-mix(in srgb, var(--err) 14%, var(--panel)); }
   .settings-actions .settings-menu > #forceRestartPanel.armed { background: var(--err); color: #fff; }
   .settings-body { display: flex; flex-direction: column; gap: 10px; }
+  /* Its sections: one shown at a time, named in a bar over them (the section bar's quiet buttons and line). */
+  /* A comparison's hint says something only once it's ticked: empty, it takes no room. */
+  .tests-group .hint:empty { display: none; }
+  .settings-tabs { position: relative; display: flex; flex: none; padding: 2px 0 6px; border-bottom: 1px solid var(--line); }
+  .settings-tabs button { flex: 1 1 0; min-width: 0; margin: 0; padding: 4px 2px; background: none; border: 0; color: var(--muted);
+    font-size: .74rem; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; transition: color .2s ease; }
+  .settings-tabs button[aria-selected="true"] { color: var(--text); }
+  .settings-tabs .section-glider { background: var(--accent); }
+  .settings-section { display: flex; flex-direction: column; gap: 10px; touch-action: pan-y; }
+  .settings-section[hidden] { display: none; }
   /* Free RAM: the stepper centred, as Generate's; Set to its left, there only while a change waits to be set. */
   .reserve-row { position: relative; display: flex; justify-content: center; }
   .reserve-row .mp-field { min-width: 80px; font-variant-numeric: tabular-nums; }
@@ -747,8 +772,6 @@
   /* Variety's chips: what changes (accent, ↻) and what stays (filled, =) from one image or clip to the next. */
   .variety-box { margin-top: 8px; }
   .words-box { margin-top: 8px; }
-  .words-box > .options-subtitle { margin: 0 0 4px; }
-  .words-box > .options-subtitle label { display: inline; margin: 0; font: inherit; color: inherit; letter-spacing: inherit; }
   .words-slider { position: relative; padding-bottom: 7px; }
   .words-slider input[type=range] { display: block; width: 100%; height: 16px; margin: 0; padding: 0; border: 0; background: none; -webkit-appearance: none; appearance: none; }
   .words-slider input::-webkit-slider-runnable-track { height: 4px; border-radius: 2px; background: var(--line); }
@@ -781,6 +804,16 @@
   /* Explicit content: only in Private mode, and its text only while it is ticked. */
   .explicit-box { display: none; margin-top: 8px; }
   body.private-mode .explicit-box { display: block; }
+  /* On the Prompt line, at its right end: the side's colour while it's on, grey while it's off. */
+  .prompt-label-row > .prompt-actions { margin-left: auto; }
+  .prompt-label-row > .explicit-box { flex: none; margin: 0; }
+  .prompt-label-row > .explicit-box[hidden], .prompt-label-row > .explicit-box.hidden { display: none; }
+  .explicit-box .check { position: relative; display: inline-flex; align-items: center; margin: 0; padding: 2px 0; border: 0; background: none;
+    color: var(--muted); font-size: .7rem; font-weight: 600; text-transform: none; letter-spacing: 0; cursor: pointer; transition: color .2s ease; }
+  /* Just the words: the box is still there for the form, out of sight; a tap on the words ticks it. */
+  .explicit-box .check input[type=checkbox] { position: absolute; width: 1px; height: 1px; margin: 0; opacity: 0; pointer-events: none; }
+  .explicit-box .check:has(input:checked) { color: var(--side); }
+  .explicit-box .check:has(input:focus-visible) { outline: 2px solid var(--side); outline-offset: 2px; border-radius: 4px; }
   .switch.segmented { position: relative; display: grid; grid-auto-flow: column; grid-auto-columns: 1fr; gap: 0; width: 100%; margin: 4px 0 10px; --kind: var(--side, var(--shared)); }
   .switch.segmented button { position: relative; z-index: 1; padding: 6px 12px; transition: color .3s ease; }
   .switch.segmented button.active { background: transparent; border-color: transparent; color: var(--kind); }
@@ -832,17 +865,54 @@
   /* Phones (below 1000px, where the footer's page buttons are): the header's icons are on demand (showHead), in a box
      that grows up out of the footer's last button over the page. The header keeps only the progress bars, and no room
      at all while there are none. */
+  /* On a phone the header holds the pages (Status, Generate, Output) and the dots, pinned at the top of the screen:
+     the pages on a line of their own, the progress bars under them. The dots' icons grow down out of it. */
   @media (max-width: 999px) {
-    .top:has(> .top-main[hidden]) { margin: 0; }
-    .top-icons { position: fixed; right: 12px; bottom: calc(var(--head, 60px) + 6px); z-index: 12; gap: 20px;
+    .top { position: sticky; top: 0; z-index: 12; flex-wrap: wrap; gap: 0; margin: -10px -8px var(--page-gap); padding: env(safe-area-inset-top) 8px 0;
+      background: var(--bg); border-bottom: 1px solid var(--line); }
+    .top > .jump { flex: 1 0 100%; order: -1; }
+    .top-icons { position: absolute; right: 12px; top: calc(100% + 6px); z-index: 12; gap: 20px;
       padding: 10px 16px; background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
-      box-shadow: 0 -8px 24px rgba(0, 0, 0, .4); transform-origin: bottom right;
-      opacity: 0; transform: translateY(8px) scale(.6); visibility: hidden; pointer-events: none;
+      box-shadow: 0 8px 24px rgba(0, 0, 0, .4); transform-origin: top right;
+      opacity: 0; transform: translateY(-8px) scale(.6); visibility: hidden; pointer-events: none;
       transition: opacity .18s ease, transform .22s cubic-bezier(.2, .8, .2, 1), visibility 0s .22s; }
+    /* Nothing at the bottom (no Add to queue off Generate): no line there either. */
+    .stick:not(:has(> .go-bar:not([hidden]), > .section-bar:not([hidden]))) { border-top: 0; }
     body.head-shown .top-icons { opacity: 1; transform: none; visibility: visible; pointer-events: auto; transition-delay: 0s; }
     .top-icons a, .top-icons button { opacity: .85; }
   }
   @media (max-width: 999px) and (prefers-reduced-motion: reduce) { .top-icons { transition: none; } }
+  /* The box the dots open: the power buttons first, at their size (Restart, Comfy, Power, each with its menu), the
+     other icons under them, half as tall; and under those, what a power button last said. */
+  .top-icons .power-row { flex: none; margin: 0; padding: 0; border-top: 0; }
+  .top-icons .power-row .settings-power > button, .top-icons .power-row > button { min-width: 0; }
+  .top-icons-row { display: flex; align-items: center; gap: 12px; }
+  .top-icons .power-note { margin: 0; font-size: .72rem; }
+  .top-icons .power-note[hidden] { display: none; }
+  /* Their menus grow down out of them here, at the top of the screen. */
+  .top-icons .settings-menu { top: calc(100% + 6px); bottom: auto; animation: power-menu-down .2s ease; }
+  .top-icons .settings-menu.closing { animation: power-menu-up .15s ease forwards; }
+  @keyframes power-menu-down { from { opacity: 0; transform: translateY(-10px); } to { opacity: 1; transform: none; } }
+  @keyframes power-menu-up { to { opacity: 0; transform: translateY(-10px); } }
+  /* Comfy's Force, red as the panel's is, since it stops what's going. */
+  .settings-actions .settings-menu > #forceRestartComfy { border-color: var(--err); color: var(--err); background: color-mix(in srgb, var(--err) 14%, var(--panel)); }
+  .settings-actions .settings-menu > #forceRestartComfy.armed { background: var(--err); color: #fff; }
+  @media (max-width: 999px) {
+    .top-icons { flex-direction: column; align-items: stretch; gap: 8px; width: min(320px, calc(100vw - 24px)); box-sizing: border-box; padding: 10px; }
+    .top-icons .power-row { padding-bottom: 8px; border-bottom: 1px solid var(--line); }
+    /* Half the power buttons' height: the icons of the box's second row. */
+    .top-icons-row { justify-content: space-around; }
+    .top-icons-row > a, .top-icons-row > button { display: inline-flex; align-items: center; justify-content: center; height: 22px; min-width: 22px; padding: 0; }
+    .top-icons-row svg { width: 14px; height: 14px; }
+  }
+  @media (min-width: 1000px) {
+    /* In the header line: the power buttons compact, beside the other icons. */
+    .top-icons .power-row { gap: 4px; }
+    .top-icons .power-row button { flex: none; flex-direction: row; gap: 4px; padding: 3px 8px; font-size: .64rem; }
+    .top-icons .power-row svg { width: 12px; height: 12px; }
+    .top-icons .power-row .settings-power { flex: none; }
+    .top-icons .power-note { position: absolute; top: 100%; right: 0; }
+  }
   details summary { cursor: pointer; font-size: .95rem; font-weight: 600; }
   .hidden { display: none !important; }
   .dashboard { display: flex; flex-direction: column; }
@@ -895,17 +965,23 @@
      the loading bar), is the side's while you are in Generate and violet elsewhere. */
   /* The colours, once: each side's, and the theme's own colour (violet in Standard) that the rest shares. Everything else reads these. */
   :root { --c-shorts: #ff0033; --c-video: #4c8dff; --c-image: #2fbf71; --shared: var(--accent); }
+  /* The room every page leaves under the header and over the footer, on a phone: Generate's box, Status and Output. */
+  :root { --page-gap: 8px; }
+  /* Held down, a stepper keeps stepping (shared.js): no text selection or callout on a long press. */
+  .count-stepper button, button[data-lora-step] { touch-action: manipulation; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; }
+  /* A hint scrolled into sight (revealHint) clears the header pinned at the top and the footer. */
+  .hint, .res-hint, .option-hint, .field-help { scroll-margin-top: 64px; scroll-margin-bottom: calc(var(--head, 60px) + var(--page-gap)); }
   body { --accent: var(--shared); --page-accent: var(--shared); }
   body.on-shorts { --side: var(--c-shorts); }
   body.on-video { --side: var(--c-video); }
   body.on-image { --side: var(--c-image); }
   body.in-generate { --page-accent: var(--side); }
   #optionsCard, #goBar, .jump a[data-page="generate"] { --accent: var(--side); }
-  /* A LoRA, workflow or LLM comparison on: Generate in the theme's own colour, not the side's, so it isn't mistaken for a usual set. */
-  body.on-image:has(#imageLoraStrengthTest:checked:not(:disabled), #imageLoraStyleTest:checked:not(:disabled), #imageWorkflowTestT2i:checked, #imageWorkflowTestEdit:checked, #imageLlmTest:checked) :is(#go, #goStick),
+  /* Any comparison on (LoRA, model files, workflow or LLM): Generate in the theme's own colour, not the side's, so it isn't mistaken for a usual set. */
+  body.on-image:has(#imageLoraStrengthTest:checked:not(:disabled), #imageLoraStyleTest:checked:not(:disabled), #imageWorkflowTestT2i:checked, #imageWorkflowTestEdit:checked, #imageLlmTest:checked, #imageModelTest:checked:not(:disabled), #imageEncoderTest:checked:not(:disabled), #imageVaeTest:checked:not(:disabled)) :is(#go, #goStick),
   body.on-video:has(#videoLoraStrengthTest:checked:not(:disabled), #videoLoraStyleTest:checked:not(:disabled)) :is(#go, #goStick) { --accent: var(--shared); }
   /* And it flashes, a glow coming and going, so a comparison isn't started for a usual set by mistake. */
-  body.on-image:has(#imageLoraStrengthTest:checked:not(:disabled), #imageLoraStyleTest:checked:not(:disabled), #imageWorkflowTestT2i:checked, #imageWorkflowTestEdit:checked, #imageLlmTest:checked) :is(#go, #goStick):not(:disabled),
+  body.on-image:has(#imageLoraStrengthTest:checked:not(:disabled), #imageLoraStyleTest:checked:not(:disabled), #imageWorkflowTestT2i:checked, #imageWorkflowTestEdit:checked, #imageLlmTest:checked, #imageModelTest:checked:not(:disabled), #imageEncoderTest:checked:not(:disabled), #imageVaeTest:checked:not(:disabled)) :is(#go, #goStick):not(:disabled),
   body.on-video:has(#videoLoraStrengthTest:checked:not(:disabled), #videoLoraStyleTest:checked:not(:disabled)) :is(#go, #goStick):not(:disabled) { animation: test-flash 1.4s ease-in-out infinite; }
   @keyframes test-flash { 0%, 100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--shared) 0%, transparent); filter: none; }
     50% { box-shadow: 0 0 0 4px color-mix(in srgb, var(--shared) 45%, transparent); filter: brightness(1.18); } }
@@ -956,7 +1032,7 @@
   .field-help[hidden] { display: none; }
   .res-hint { margin: 6px 0 2px; padding: 8px 10px; border-radius: 8px; background: var(--panel-2); }
   .res-hint[hidden] { display: none; }
-  .res-note { margin-top: 8px; color: var(--warn, #e0a84a); }
+  .res-note { margin-top: 8px; color: var(--warn, #e0a84a); text-align: center; }
   .res-note[hidden] { display: none; }
   /* Latent upscale's own settings, for Custom: folded under its stepper. */
   .latent-custom { margin-top: 8px; border: 1px solid var(--line); border-radius: 10px; padding: 0 10px; }
@@ -1109,6 +1185,11 @@
   /* A prompt box shows two lines; a tap opens the whole of it in the prompt editor. */
   textarea[data-prompt] { height: calc(2.8em + 18px); min-height: 0; resize: none; overflow: hidden; cursor: pointer; line-height: 1.4; caret-color: transparent; }
   textarea[data-prompt].more { -webkit-mask-image: linear-gradient(to bottom, #000 55%, transparent 100%); mask-image: linear-gradient(to bottom, #000 55%, transparent 100%); }
+  /* The prompt box: only its text fades out at the bottom, into the box's own colour, inside its border, so the box
+     itself keeps its edge and corners. */
+  .prompt-writing > textarea[data-prompt].more { -webkit-mask-image: none; mask-image: none; }
+  .prompt-writing:has(> textarea[data-prompt].more)::after { content: ""; position: absolute; left: 1px; right: 1px; bottom: 1px; height: 45%;
+    border-radius: 0 0 9px 9px; background: linear-gradient(to bottom, transparent, var(--panel-2) 85%); pointer-events: none; }
   .prompt-writing.busy textarea[data-prompt] { height: auto; min-height: 84px; }
   /* The editor fills what the keyboard leaves of the screen (sized from visualViewport), its buttons always in reach. */
   dialog.prompt-editor { position: fixed; inset: 8px 0 auto; margin: 0 auto; width: min(720px, calc(100vw - 16px)); height: calc(100dvh - 16px);
@@ -1155,6 +1236,26 @@
   #promptEditorReset { flex: none; color: var(--accent); }
   .prompt-writer-wrap.has-selection #promptEditorEnhance, .prompt-writer-wrap.has-selection #promptEditorEnhance.working { color: #9864bd; opacity: 1; }
   .prompt-writer-menu button.selected { color: #9864bd; border-color: #9864bd; box-shadow: 0 0 0 1px #9864bd; }
+  /* The presets, a line each as Finished's are: the one in use outlined, the favourite starred. */
+  .preset-list { display: flex; flex-direction: column; gap: 6px; margin-bottom: 10px; }
+  .preset-list:empty::before { content: "No presets yet: set the form as you like it, then save it here."; color: var(--muted); font-size: .8rem; }
+  .preset-row { display: flex; align-items: center; gap: 8px; width: 100%; margin: 0; padding: 7px 10px; background: none;
+    border: 1px solid var(--line); border-radius: 10px; color: inherit; font: inherit; font-size: .85rem; text-align: left; cursor: pointer; }
+  .preset-row[aria-selected="true"] { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+  .preset-row .preset-row-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .preset-row .preset-row-star { flex: none; color: var(--warn); font-size: .8rem; }
+  .preset-row:hover .preset-row-name { text-decoration: underline; }
+  /* Every dropdown's list, as the Enhance menu: under (or over) the select it opens from (output.js openSelectMenu). */
+  /* Inpaint's paint button: low, and it says itself whether something is painted. */
+  #paintInpaint { min-height: 0; padding: 4px 12px; font-size: .78rem; }
+  #paintInpaint.painted { color: var(--side); border-color: var(--side); }
+  .paint-pop.select-menu { position: fixed; bottom: auto; min-width: 0; max-height: 320px; z-index: 60; transform-origin: top center; animation: select-menu-in .16s ease; }
+  .paint-pop.select-menu.upward { transform-origin: bottom center; }
+  /* It grows straight down from its select, or straight up. */
+  @keyframes select-menu-in { from { opacity: 0; transform: scaleY(.4); } to { opacity: 1; transform: none; } }
+  @media (prefers-reduced-motion: reduce) { .paint-pop.select-menu { animation: none; } }
+  .select-menu button:disabled { opacity: .45; cursor: default; }
+  .select-menu-group { align-self: end; padding: 0 4px; color: var(--muted); font-size: .66rem; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .prompt-copy[hidden] { display: none; }
   .prompt-editor-foot .panel-close { align-self: auto; }
   /* While a writer runs: a bar along the inside top of the box, and the write button pulsing. */
@@ -1645,44 +1746,60 @@
   .strip-sub { display: flex; justify-content: space-between; gap: 10px; }
   .strip-sub span:first-child { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
   .strip-sub span:last-child { flex: none; white-space: nowrap; font-variant-numeric: tabular-nums; }
-  .wrap { padding-bottom: calc(var(--head, 130px) + 16px); }
+  .wrap { padding-bottom: calc(var(--head, 130px) + var(--page-gap)); }
   .stick { transition: opacity .2s ease, transform .2s ease; }
   /* Low, to leave the page as much of the screen as it can. */
-  .jump { position: relative; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)) 34px; gap: 5px; padding: 4px 12px; }
-  /* The outline round the section shown, gliding from one button to the next (placeJumpGlider): the buttons' own
-     outline gives way to it, in the colour each has. */
-  .jump-glider { position: absolute; box-sizing: border-box; border: 1px solid var(--shared); border-radius: 9px; pointer-events: none; z-index: 1;
-    transition: left .28s cubic-bezier(.3, .7, .3, 1), width .28s cubic-bezier(.3, .7, .3, 1), border-color .28s ease; }
+  /* Low and quiet: the page's name in small text, a short line under the one shown (placeJumpGlider). */
+  .jump { position: relative; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)) 28px; gap: 0; padding: 2px 12px 5px; }
+  .jump-glider { position: absolute; height: 2px; border-radius: 1px; background: var(--shared); pointer-events: none; z-index: 1;
+    transition: left .28s cubic-bezier(.3, .7, .3, 1), width .28s cubic-bezier(.3, .7, .3, 1), background-color .28s ease; }
   .jump-glider.still { transition: none; }
-  .jump-glider[data-at="generate"] { border-color: var(--side); }
-  body.on-shorts .jump-glider[data-at="output"] { border-color: var(--c-shorts); }
-  .jump.glides a.active, body:not(.on-shorts) .jump.glides a#jumpResults.active, .jump.glides a.run.active { border-color: var(--line); }
+  .jump-glider[data-at="generate"] { background: var(--side); }
+  body.on-shorts .jump-glider[data-at="output"] { background: var(--c-shorts); }
   @media (prefers-reduced-motion: reduce) { .jump-glider { transition: none; } }
-  .jump-more { position: relative; display: flex; align-items: center; justify-content: center; width: 34px; min-height: 30px;
-    margin: 0; padding: 0; background: var(--panel-2); border: 1px solid var(--line); border-radius: 9px; color: var(--muted); }
-  .jump-more[aria-expanded="true"] { color: var(--text); border-color: var(--accent); }
+  .jump-more { position: relative; display: flex; align-items: center; justify-content: center; width: 28px; min-height: 14px;
+    margin: 0; padding: 0; background: none; border: 0; color: var(--muted); }
+  .jump-more svg { width: 14px; height: 14px; }
+  .jump-more[aria-expanded="true"] { color: var(--text); }
+  /* On a phone, the generation sections over Generate: one shown at a time, the same quiet buttons and line. */
+  /* Over Add to queue, at the bottom of the screen. */
+  .section-bar { position: relative; order: -2; padding: 4px 12px 5px; border-top: 1px solid var(--line); }
+  .section-bar[hidden] { display: none; }
+  .section-tabs { display: flex; gap: 0; }
+  .section-tabs button { flex: 1 1 0; min-width: 0; min-height: 17px; margin: 0; padding: 0 4px; background: none; border: 0; color: var(--muted);
+    font-size: .64rem; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; transition: color .2s ease; }
+  .section-tabs button[aria-selected="true"] { color: var(--text); }
+  .section-glider { background: var(--side); }
+  body.section-tabs-on #optionsCard details.section.tab-hidden { display: none; }
+  /* The bar names them: a header keeps only its buttons (Shorts' Clear), and doesn't fold. */
+  body.section-tabs-on #optionsCard details.section { border-top: 0; }
+  body.section-tabs-on #optionsCard summary.section-title { min-height: 0; padding: 0; font-size: 0; pointer-events: none; }
+  body.section-tabs-on #optionsCard summary.section-title::after { display: none; }
+  body.section-tabs-on #optionsCard summary.section-title .clear-prompt { font-size: .7rem; pointer-events: auto; }
   /* How many in Finished failed, while its icon is tucked away: nothing when none did. */
   .jump-more::after { content: attr(data-count); position: absolute; top: -5px; right: -5px; min-width: 15px; height: 15px; padding: 0 3px;
     border-radius: 8px; background: var(--err, #d9534f); color: #fff; font-size: .62rem; font-weight: 700; line-height: 15px; text-align: center; }
   .jump-more:not([data-count])::after, .jump-more[data-count=""]::after { display: none; }
   .jump a {
-    display: flex; align-items: center; justify-content: center; gap: 6px; min-height: 30px;
-    background: var(--panel-2); border: 1px solid var(--line); border-radius: 9px; overflow: hidden;
-    color: var(--muted); font-size: .76rem; font-weight: 600; text-decoration: none; white-space: nowrap;
+    display: flex; align-items: center; justify-content: center; gap: 6px; min-height: 14px;
+    background: none; border: 0; border-radius: 4px; overflow: hidden;
+    color: var(--muted); font-size: .66rem; font-weight: 500; text-decoration: none; white-space: nowrap;
   }
-  .jump a.active { background: var(--panel); color: var(--text); border-color: var(--accent); }
+  .jump a.active { background: none; color: var(--text); }
   /* Progress in the Status button (Settings): it fills from the left as the run goes, its percentage small in the corner. */
   .jump a.filling { position: relative; background: linear-gradient(to right,
-    color-mix(in srgb, var(--ok) 30%, transparent) var(--fill, 0%), transparent var(--fill, 0%)) var(--panel-2); }
-  .jump a.filling.active { background-color: var(--panel); }
+    color-mix(in srgb, var(--ok) 30%, transparent) var(--fill, 0%), transparent var(--fill, 0%)) transparent; }
+  .jump a.filling.active { background-color: transparent; }
   .jump a.filling::after { content: attr(data-pct); position: absolute; right: 5px; bottom: 1px;
-    color: var(--muted); font-size: .55rem; font-weight: 600; line-height: 1; }
-  /* Tap the page you're on again: the same page on the other sides, growing up out of its button. */
-  .side-menu { position: absolute; z-index: 11; display: flex; flex-direction: column; gap: 4px; padding: 5px;
+    color: var(--muted); font-size: .5rem; font-weight: 600; line-height: 1; }
+  /* Tap the page you're on again: the same page on the other sides, growing down out of its button. */
+  .side-menu { position: absolute; z-index: 13; display: flex; flex-direction: column; gap: 4px; padding: 5px;
     background: var(--panel); border: 1px solid var(--line); border-radius: 12px; box-shadow: 0 8px 24px rgba(0, 0, 0, .45);
-    transform-origin: bottom center; animation: menu-in .2s ease; }
+    transform-origin: top center; animation: side-menu-in .2s ease; }
+  @keyframes side-menu-in { from { opacity: 0; transform: translateY(-8px) scale(.94); } to { opacity: 1; transform: none; } }
+  @keyframes side-menu-out { to { opacity: 0; transform: translateY(-6px) scale(.96); } }
   .side-menu[hidden] { display: none; }
-  .side-menu.closing { animation: menu-out .15s ease forwards; pointer-events: none; }
+  .side-menu.closing { animation: side-menu-out .15s ease forwards; pointer-events: none; }
   .side-menu button { width: 100%; margin: 0; padding: 9px 14px; font-size: .85rem; font-weight: 600; text-align: left;
     background: var(--panel-2); border: 1px solid var(--line); border-radius: 9px; color: var(--text); }
   .side-menu button .side-dot { display: inline-block; width: 8px; height: 8px; margin-right: 8px; border-radius: 50%; }
@@ -1731,12 +1848,18 @@
   .go-under { display: flex; justify-content: space-between; align-items: center; gap: 10px; margin-top: 8px; }
   .start-later { width: auto; margin: 0; padding: 2px 8px; background: none; border: 0; color: var(--muted); font-size: .8rem; font-weight: 600; }
   /* Under the button, centred: leaving an edit puts the job back where it was. */
+  /* Over everything else in the footer: what's being edited, and Cancel editing at its right. */
+  .edit-row { order: -3; display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 4px 16px;
+    border-bottom: 1px solid var(--line); color: var(--muted); font-size: .72rem; }
+  .edit-row[hidden] { display: none; }
+  .edit-row #cancelQueueEdit { display: inline-block; margin: 0; padding: 2px 10px; font-size: .72rem; }
   #cancelQueueEdit { display: block; margin: 6px auto 0; }
   #cancelQueueEdit[hidden] { display: none; }
   body.on-shorts .not-shorts { display: none !important; }
   .log-box { margin-top: 8px; font-size: .85rem; }
-  .current-work { display: block; width: auto; margin: 0 0 8px; padding: 0; background: none; border: 0; border-radius: 0; color: var(--text);
-    font-size: .95rem; font-weight: 600; text-align: left; overflow-wrap: anywhere; cursor: pointer; }
+  /* One line, cut with ... where it's longer: a tap shows all of it, and what it renders with (runFacts). */
+  .current-work { display: block; box-sizing: border-box; width: 100%; max-width: 100%; margin: 0 0 8px; padding: 0; background: none; border: 0; border-radius: 0; color: var(--text);
+    font-size: .95rem; font-weight: 600; text-align: left; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: pointer; }
   .current-work[hidden] { display: none; }
   .current-work-wrap { position: relative; }
   .current-work-wrap .work-privacy { top: 0; right: 0; }
@@ -1749,7 +1872,7 @@
   #currentResolution { margin-left: auto; white-space: nowrap; font-variant-numeric: tabular-nums; }
   /* What the run renders with: a small box over the blurred page. */
   dialog.run-facts { width: min(360px, calc(100vw - 24px)); }
-  .run-facts-list { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 6px 14px; margin: 0; font-size: .88rem; }
+  .run-facts-list { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 6px 14px; margin: 0; font-size: .88rem; min-height: 0; overflow: auto; align-content: start; }
   .run-facts-list dt { color: var(--muted); }
   .run-facts-list dd { margin: 0; overflow-wrap: anywhere; }
   .run-card .btns:empty { display: none; }
@@ -1841,8 +1964,15 @@
   .go-bar { order: -1; display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; padding: 6px 16px 2px; }
   .go-bar { max-height: 240px; opacity: 1; overflow: hidden; transition: max-height .28s ease, opacity .22s ease, padding .28s ease; }
   .go-bar[hidden] { display: flex; max-height: 0; opacity: 0; padding-top: 0; padding-bottom: 0; pointer-events: none; }
+  @media (max-width: 999px) {
+    /* The footer is drawn whole at once, so what sizes itself to it (Generate's box) does so once, not as it grows. */
+    .go-bar { transition: none; }
+    /* Every page as far from the header and the footer (--page-gap): no switch row over Generate's box (it has no
+       switch on a phone), no card's own margin under the last one. */
+    .generation-header { display: none; }
+    .dashboard > [data-page], .dashboard > [data-page] > .card:last-child { margin-bottom: 0; }
+  }
   .go-bar > .hint { flex-basis: 100%; margin: 0; max-height: 4em; overflow: auto; }
-  .go-bar #cancelQueueEdit { margin: 0; padding: 2px 6px; font-size: .75rem; }
   /* Small, quick movements as you get around: pages slide up into place, and what's chosen fades across. */
   .jump a, .switch button, .tabs button { transition: background-color .2s ease, color .2s ease, border-color .2s ease, box-shadow .2s ease; }
   .jump a:active { transform: scale(.97); }
@@ -1903,7 +2033,7 @@
      screen. Narrower desktops put the videos underneath. Phones keep one column. */
   @media (min-width: 1000px) {
     .stick { display: flex; }
-    .stick > .jump { display: none; }
+    .jump { display: none; }
     .go-bar { padding: 8px 20px; }
     .go-count { margin-left: 0; }  /* No buttons under it to line up with */
     .wrap { padding-bottom: calc(var(--head, 60px) + 20px); }
@@ -2004,14 +2134,14 @@
   @media (min-width: 1000px) { .dashboard { gap: 10px; } }
   #keepSectionsOpen { flex: none; display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; margin: 0; padding: 5px; background: none; border: 0; }
   #keepSectionsOpen[aria-pressed="true"] { color: var(--side); opacity: 1; }
-  .go-bar:has(#cancelQueueEdit:not([hidden])) #cancelQueueEdit { order: 1; }
   .go-bar:has(#cancelQueueEdit:not([hidden])) #goStick { order: 2; }
-  #optionsCard { display: flex; flex-direction: column; min-height: 0; height: calc(100dvh - var(--head, 60px) - var(--generate-top, 36px)); overflow: hidden; }
+  #optionsCard { display: flex; flex-direction: column; min-height: 0; height: calc(100dvh - var(--head, 60px) - var(--generate-top, 36px) - var(--page-gap)); overflow: hidden; }
   .generation-header { flex: none; flex-direction: row; justify-content: space-between; margin-bottom: 6px; }
   .generation-header .generate-switch { flex: 1; }
   #optionsCard > .pipeline-form { display: flex; flex-direction: column; flex: 1; min-height: 0; margin: 0; padding: 8px 12px 0; overflow: hidden; }
   #formShorts > .form-col { display: contents; }
-  #optionsCard .workflow-in { flex: none; margin: 0 0 6px; }
+  /* A quiet line under the model and preset part, between it and the sections. */
+  #optionsCard .workflow-in { flex: none; margin: 0 0 6px; padding-bottom: 8px; border-bottom: 1px solid color-mix(in srgb, var(--line) 60%, transparent); }
   #optionsCard details.section { position: relative; flex: none; margin: 0; padding: 0; border-top: 1px solid var(--line); overflow: hidden; }
   #optionsCard details.section[open], #optionsCard details.section.section-closing { flex: 1 1 0; min-height: 0; display: flex; flex-direction: column; }
   #optionsCard details.section::details-content { display: contents; }
@@ -2019,7 +2149,12 @@
   .section-body { flex: 1 1 0; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 0 2px 8px; }
   details:not([open]) > .section-body { display: none; }
   #optionsCard details.section.section-closing > .section-body { display: block; }
-  #optionsCard details.section.scroll-below::after { content: ""; position: absolute; bottom: 0; left: 0; right: 0; height: 28px; background: linear-gradient(transparent, var(--panel)); pointer-events: none; }
+  /* What scrolls past the top or the bottom of a section fades out there: the content itself, not a band over it. */
+  #optionsCard details.section > .section-body {
+    -webkit-mask-image: linear-gradient(to bottom, transparent 0, #000 var(--fade-top, 0px), #000 calc(100% - var(--fade-bottom, 0px)), transparent 100%);
+    mask-image: linear-gradient(to bottom, transparent 0, #000 var(--fade-top, 0px), #000 calc(100% - var(--fade-bottom, 0px)), transparent 100%); }
+  #optionsCard details.section.scroll-above > .section-body { --fade-top: 24px; }
+  #optionsCard details.section.scroll-below > .section-body { --fade-bottom: 28px; }
   #optionsCard .pipeline-form select, #optionsCard .pipeline-form input:not([type=checkbox]):not([type=range]):not([type=file]) { height: 28px; padding: 3px 6px; font-size: .75rem; border-radius: 7px; }
   #optionsCard .pipeline-form label { margin: 7px 0 3px; font-size: .7rem; }
   #optionsCard .pipeline-form .check { align-items: center; font-size: .78rem; }
@@ -2052,15 +2187,15 @@
   #optionsCard .audio-line .field-heading, #optionsCard .audio-line label { margin: 0; }
   .audio-line select { flex: 1; min-width: 0; }
   #queueBox { display: flex; flex-direction: column; overflow: hidden; min-height: 0; max-height: 60dvh; }
-  #queueBox:has(> .queue.queue-open) { height: 60dvh; }
+  /* As tall as what's in it, up to its most (60dvh): a section of one or two waits isn't stretched to fill it. */
   #queueBox > .queue { flex: none; min-height: 0; margin-top: 4px; padding-top: 0; }
-  #queueBox > .queue.queue-open, #queueBox > .queue.queue-closing { display: flex; flex-direction: column; flex: 1 1 0; overflow: hidden; }
-  #queueBox .stopped-fold[open], #queueBox .queue-closing > .stopped-fold { display: flex; flex-direction: column; flex: 1; min-height: 0; overflow: hidden; }
+  #queueBox > .queue.queue-open, #queueBox > .queue.queue-closing { display: flex; flex-direction: column; flex: 0 1 auto; min-height: 0; overflow: hidden; }
+  #queueBox .stopped-fold[open], #queueBox .queue-closing > .stopped-fold { display: flex; flex-direction: column; flex: 0 1 auto; min-height: 0; overflow: hidden; }
   #queueBox .stopped-fold::details-content { display: contents; }
   #queueBox .stopped-fold:not([open]) > .stopped-body { display: none; }
   #queueBox .queue-closing .stopped-fold:not([open]) > .stopped-body, #queueBox .queue-closing > .queue-list[hidden] { display: block; }
   #queueBox .queue-head, #queueBox summary, #queueBox .queue-foot { flex: none; }
-  #queueBox .queue-list, #queueBox .stopped-body { flex: 1; min-height: 0; max-height: none; overflow-y: auto; overscroll-behavior: auto; }
+  #queueBox .queue-list, #queueBox .stopped-body { flex: 0 1 auto; min-height: 0; max-height: none; overflow-y: auto; overscroll-behavior: auto; }
   @media (max-width: 999px) {
     .dashboard > #optionsCard { display: none; }
     body[data-page="generate"] .dashboard > #optionsCard { display: flex; }
@@ -2072,6 +2207,15 @@
 </style>
 
 <div class="top">
+  <!-- The pages (Status, Generate, Output) and the rest behind the dots, at the top: on a phone, pinned there. -->
+  <div class="side-menu" id="sideMenu" role="menu" hidden></div>
+  <nav class="jump" id="jump" aria-label="Sections">
+    <span class="jump-glider" id="jumpGlider" aria-hidden="true" hidden></span>
+    <a href="#runCard" data-page="status" class="run">Status</a>
+    <a href="#optionsCard" data-page="generate">Generate</a>
+    <a href="#videosCard" data-page="output" id="jumpResults">Output</a>
+    <button type="button" class="jump-more" id="headToggle" aria-expanded="false" aria-controls="topIcons" aria-label="Finished, Private mode, log, temperatures and settings" title="Finished, Private mode, log, temperatures and settings"><svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor" aria-hidden="true"><circle cx="5" cy="12" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="19" cy="12" r="1.8"/></svg></button>
+  </nav>
   <div class="top-main" id="topMain" hidden>
     <div class="head-strips" id="headStrips">
       <div class="strip" id="runStrip" role="button" tabindex="0" aria-expanded="false" hidden>
@@ -2091,30 +2235,49 @@
     </div>
   </div>
   <div class="top-icons" id="topIcons">
-    <a href="#" id="privateToggle" role="button" aria-pressed="false" aria-label="Private mode" title="Private mode: off"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="2" fill="currentColor"/></svg></a>
-    <a href="#" id="settingsBtn" role="button" aria-haspopup="dialog" aria-label="Settings" title="Settings"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg></a>
+  <!-- Power first (Restart with Force, Comfy with Force, Power with Log out), the other icons under it, smaller. -->
+    <div class="settings-actions power-row" id="powerRow">
+      <div class="settings-power settings-restart">
+        <button type="button" id="restartPanel" data-short-label="Restart" aria-label="Restart panel" aria-haspopup="menu" aria-expanded="false" title="First tap opens Force restart; tap again to restart the panel, to load new code. Not while a run or upload is going."><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 11a8 8 0 1 0-2.3 5.7"/><path d="M20 4v7h-7"/></svg><span>Restart</span></button>
+        <div class="settings-menu" id="restartMenu" role="menu" aria-label="Restart options" hidden>
+          <button type="button" id="forceRestartPanel" data-short-label="Force" role="menuitem" title="Stops the run or upload going (the run waits in the queue, on hold) and restarts the panel at once. Tap twice. For when a run is stuck."><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M13 2 4 14h7l-1 8 9-12h-7z"/></svg><span>Force</span></button>
+        </div>
+      </div>
+      <div class="settings-power settings-comfy">
+        <button type="button" id="restartComfy" aria-haspopup="menu" aria-expanded="false" aria-label="Restart ComfyUI" title="Start fresh: closes local ComfyUI processes, including work started outside the panel. Not while a panel run is going."><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="2"/><rect x="9.5" y="9.5" width="5" height="5" rx=".5"/><path d="M9 2.5v3M15 2.5v3M9 18.5v3M15 18.5v3M2.5 9h3M2.5 15h3M18.5 9h3M18.5 15h3"/></svg><span>Comfy</span></button>
+        <div class="settings-menu" id="comfyMenu" role="menu" aria-label="ComfyUI restart options" hidden>
+          <button type="button" id="forceRestartComfy" role="menuitem" data-short-label="Force" aria-label="Force restart ComfyUI" title="Force restart ComfyUI (three taps): closes ComfyUI and starts it again even while a run is going or the panel thinks one is: that run fails, and is tried once more once ComfyUI is back. Use it when ComfyUI is stuck or has died."><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M13 2 4 14h7l-1 8 9-12h-7z"/></svg><span>Force</span></button>
+        </div>
+      </div>
+      <div class="settings-power">
+        <button type="button" id="shutdown" aria-label="Shut down" aria-haspopup="menu" aria-expanded="false" title="First click opens Log out; click again to confirm shut down."><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M12 3v9"/><path d="M6.3 7.3a8 8 0 1 0 11.4 0"/></svg><span>Power</span></button>
+        <div class="settings-menu" id="shutdownMenu" role="menu" aria-label="Power options" hidden>
+          <a href="/logout" id="logout" role="menuitem" title="Log out on this device; the panel keeps running."><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="m16 17 5-5-5-5"/><path d="M21 12H9"/></svg><span>Log out</span></a>
+        </div>
+      </div>
+    </div>
+    <div class="top-icons-row" id="topIconsRow">
+      <a href="#" id="privateToggle" role="button" aria-pressed="false" aria-label="Private mode" title="Private mode: off"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="2" fill="currentColor"/></svg></a>
+      <a href="#" id="settingsBtn" role="button" aria-haspopup="dialog" aria-label="Settings" title="Settings"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg></a>
+    </div>
+    <div class="hint power-note" id="powerNote" role="status" hidden></div>
   </div>
 </div>
 
 <div class="stick" id="stick">
-  <div class="side-menu" id="sideMenu" role="menu" hidden></div>
-  <nav class="jump" id="jump" aria-label="Sections">
-    <span class="jump-glider" id="jumpGlider" aria-hidden="true" hidden></span>
-    <a href="#runCard" data-page="status" class="run">Status</a>
-    <a href="#optionsCard" data-page="generate">Generate</a>
-    <a href="#videosCard" data-page="output" id="jumpResults">Output</a>
-    <button type="button" class="jump-more" id="headToggle" aria-expanded="false" aria-controls="topIcons" aria-label="Finished, Private mode, log, temperatures and settings" title="Finished, Private mode, log, temperatures and settings"><svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor" aria-hidden="true"><circle cx="5" cy="12" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="19" cy="12" r="1.8"/></svg></button>
-  </nav>
+  <!-- Editing a queued job: a little row on top of the footer, to put it back unchanged. -->
+  <div class="edit-row" id="editRow" hidden><span>Editing a queued job</span><button type="button" class="start-later" id="cancelQueueEdit" title="Put it back where it was, unchanged" hidden>Cancel editing</button></div>
   <div class="go-bar" id="goBar" hidden>
     <div class="go-error" id="goError" role="alert" hidden></div>
     <div class="go-eta" id="goBarEta"></div>
     <button type="button" class="go-icon" id="goStickTop" aria-label="Add to top of queue" title="Add to top of queue: ahead of everything waiting"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 4h14"/><path d="M12 20V9"/><path d="m7 13 5-5 5 5"/></svg></button>
     <button type="button" class="go-icon" id="goStickLater" aria-label="Add to pending" title="Add to pending: waits until you start it"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="8"/><path d="M12 8v4l3 2"/></svg></button>
     <button type="button" id="goStick">Generate</button>
-    <button type="button" class="start-later" id="cancelQueueEdit" title="Put it back where it was, unchanged" hidden>Cancel editing</button>
     <div class="hint" id="formNote" hidden></div>
     <div class="hint" id="estimateContinues" hidden></div>
   </div>
+  <!-- On a phone, the generation sections, one shown at a time (accordions.js syncSectionBar). -->
+  <nav class="section-bar" id="sectionBar" aria-label="Generation sections" hidden><span class="jump-glider section-glider" id="sectionGlider" aria-hidden="true" hidden></span><div class="section-tabs" id="sectionTabs" role="tablist"></div></nav>
 </div>
 
 <div class="dashboard">
@@ -2282,7 +2445,7 @@
       <div id="shortsNegativeSlot" class="negative-slot"></div>
     </details>
     <details class="section" id="shortsOptions" hidden>
-      <summary class="section-title">Workflow specific</summary>
+      <summary class="section-title">Workflow</summary>
       <div id="shortsOptionsBox"></div>
     </details>
   </div>
@@ -2509,7 +2672,7 @@
       </select>
     </div>
     </div>
-    <div class="prompt-label-row"><span class="field-heading"><label for="prompt" id="videoPromptLabel">Prompt</label>{{ hint_button('videoPromptHelp', 'prompt') }}</span><span class="prompt-actions" hidden><button type="button" id="clearVideoPrompt" aria-label="Clear video prompt">Clear</button><button type="button" class="prompt-write" id="writeVideoPrompt" aria-label="Write video prompt" title="Write prompt" disabled></button></span></div>
+    <div class="prompt-label-row"><span class="field-heading"><label for="prompt" id="videoPromptLabel">Prompt</label>{{ hint_button('videoPromptHelp', 'prompt') }}</span><span class="prompt-actions" hidden><button type="button" id="clearVideoPrompt" aria-label="Clear video prompt">Clear</button><button type="button" class="prompt-write" id="writeVideoPrompt" aria-label="Write video prompt" title="Write prompt" disabled></button></span>{{ explicit_box('video') }}</div>
     <div class="field-help" id="videoPromptHelp" hidden><div class="hint" id="videoPromptHint">A sentence or two is enough.</div></div>
     <div class="prompt-writing" id="videoPromptWriting"><textarea id="prompt" name="prompt" data-prompt inputmode="none" placeholder="e.g. A storm rolls in over the harbour and the fishing boats race home"></textarea><div class="prompt-progress-track"><div class="prompt-progress" id="videoPromptProgress" hidden></div></div><div class="prompt-eta" id="videoPromptEta" role="status" hidden></div></div>
     <div class="err" id="videoPromptWriteError" role="alert" hidden></div>
@@ -2533,16 +2696,16 @@
         </select>
       </div>
     </div>
-    <div id="videoNegativeSlot" class="negative-slot"></div>
+    <!-- Words per prompt and Variety, then the negative prompt under them. -->
     <div id="videoWriterExtras" class="writer-extras">
       {{ words_box('video', video_words) }}
       {{ variety_box('video', 'clip') }}
-      {{ explicit_box('video') }}
     </div>
+    <div id="videoNegativeSlot" class="negative-slot"></div>
   </details>
 
   <details class="section" id="videoOptions" hidden>
-    <summary class="section-title">Workflow specific</summary>
+    <summary class="section-title">Workflow</summary>
     <div id="videoOptionsBox"></div>
   </details>
 
@@ -2576,25 +2739,39 @@
 <form class="card pipeline-form only-image" id="formImage">
   <input type="hidden" id="imagePromptWriterModel" name="prompt_writer_model" value="">
     <div class="workflow-in">
-      <div class="workflow-head"><span class="field-heading"><label for="imageWorkflow">Workflow</label>{{ workflow_hint('image') }}</span>{{ workflow_actions('image', 'imageOptionsBox') }}</div>
-      <div class="field-help" id="imageWorkflowHelp" hidden><div class="hint">Choose a saved ComfyUI image workflow, or let Automatic select one for the attached images.</div><div class="hint" id="imageWorkflowHint" hidden></div></div>
-      <select id="imageWorkflow" name="workflow">
+      <div class="workflow-head"><span class="field-heading"><label for="imageModel">Image model</label>{{ workflow_hint('image') }}</span>{{ workflow_actions('image', 'imageOptionsBox') }}</div>
+      <div class="field-help" id="imageWorkflowHelp" hidden><div class="hint">Choose the model; Mode, at the top of Setup, picks what it does. A look of one of its workflows is a preset.</div><div class="hint" id="imageWorkflowHint" hidden></div></div>
+      <select id="imageModel" aria-label="Model"></select>
+      <!-- The workflow itself, as runs, presets and comparisons name it: Model and Mode set it. -->
+      <div hidden><select id="imageWorkflow" name="workflow" aria-label="Workflow">
         <option value="">Automatic: edits if you give it an image, otherwise from text</option>
-      </select>
+      </select></div>
     </div>
 
   <details class="section" id="imageGeneration" open>
     <summary class="section-title">Setup</summary>
+    <div id="imageWorkflowModeBox" hidden>
+      <div id="imageFamilyModeRow" hidden><label for="imageFamilyMode">Mode <button type="button" class="hint-toggle" data-hint-target="imageFamilyModeHint" aria-controls="imageFamilyModeHint" aria-expanded="false" aria-label="About Mode"><span class="res-info-mark" aria-hidden="true">i</span></button></label>
+        <div class="hint" id="imageFamilyModeHint" hidden>T2I: a picture from the prompt alone. I2I: image 1 redrawn as a whole, Denoise saying how far. Inpaint: only what you paint on image 1 is redrawn. Edit: the model changes image 1 as the prompt tells it. R2I: a new picture that uses your images as references. Expand: image 1 grown past its edges.</div>
+        <div id="imageFamilyModeSlot"></div></div>
+      <!-- The workflow's own way of working (text2image, image2image, inpaint), as Mode sets it. -->
+      <div id="imageWorkflowModeSlot" hidden></div>
+    </div>
     <div id="imageSourcesHome"><div id="imageSources"></div></div>
     <button type="button" class="ghost" id="addSource" aria-label="Add another image" title="Add another image" hidden>+</button>
+    <!-- Inpaint: what to redraw, painted on image 1, under its box. -->
+    <div id="inpaintBox" hidden style="margin-top:8px">
+      <button type="button" class="ghost" id="paintInpaint">Paint what to redraw</button>
+      <input type="file" name="inpaint_mask" id="inpaintMask" accept="image/png" hidden>
+    </div>
     <div id="imageModeBox" hidden>
       {{ field_heading('imageMode', 'What to do with the images', 'imageModeHelp') }}
       <div class="field-help" id="imageModeHelp" hidden><div class="hint" id="imageModeHint"></div></div>
       <select id="imageMode" name="image_mode">
-        <option value="edit">Edit image 1</option>
-        <option value="compose">Make a new picture from them</option>
-        <option value="areas">Change painted parts of image 1</option>
-        <option value="expand">Expand image 1</option>
+        <option value="edit">Edit</option>
+        <option value="compose">R2I</option>
+        <option value="areas">Inpaint</option>
+        <option value="expand">Expand</option>
       </select>
     </div>
     <div id="areasBox" hidden>
@@ -2670,12 +2847,24 @@
         </div>
     <div class="hint res-note" id="imageResNote" hidden></div>
     </div>
-    <label for="imageCount">Amount</label>
-    <div class="count-stepper">
-      <button type="button" id="imageCountDown" aria-label="Fewer images">−</button>
-      <input id="imageCount" name="count" type="number" min="1" max="{{ image_most_written }}" value="1" inputmode="numeric" data-most="{{ image_most }}" data-most-written="{{ image_most_written }}">
-      <button type="button" id="imageCountUp" aria-label="More images">+</button>
+    <!-- Amount and Denoise: each its name and its stepper on one line. -->
+    <div class="stepper-line">
+      <label for="imageCount">Amount</label>
+      <div class="count-stepper">
+        <button type="button" id="imageCountDown" aria-label="Fewer images">−</button>
+        <input id="imageCount" name="count" type="number" min="1" max="{{ image_most_written }}" value="1" inputmode="numeric" data-most="{{ image_most }}" data-most-written="{{ image_most_written }}">
+        <button type="button" id="imageCountUp" aria-label="More images">+</button>
+      </div>
     </div>
+    <!-- I2I's Denoise, last in Setup, where the Mode is I2I or Inpaint (workflow-options.js syncImageWorkflowMode). -->
+    <div class="stepper-line" id="imageWorkflowDenoiseRow" hidden><label for="imageWorkflowDenoise">Denoise <button type="button" class="hint-toggle" data-hint-target="imageWorkflowDenoiseHint" aria-controls="imageWorkflowDenoiseHint" aria-expanded="false" aria-label="About Denoise"><span class="res-info-mark" aria-hidden="true">i</span></button></label>
+      <div class="count-stepper">
+        <button type="button" id="imageWorkflowDenoiseDown" aria-label="Less denoise">−</button>
+        <input type="number" id="imageWorkflowDenoise" inputmode="decimal" disabled>
+        <button type="button" id="imageWorkflowDenoiseUp" aria-label="More denoise">+</button>
+      </div>
+    </div>
+    <div class="hint" id="imageWorkflowDenoiseHint" hidden>How far I2I strays from image 1: about 0.3 keeps its layout and colours, 0.6 keeps the composition and redraws the rest, 1 makes a new picture. Inpaint uses it for the painted part.</div>
   </details>
 
   <details class="section" id="imagePromptSection">
@@ -2696,7 +2885,7 @@
       </div>
       <div id="imageToPromptSlot"></div>
     </div>
-    <div class="prompt-label-row"><span class="field-heading"><label for="imagePrompt" id="imagePromptLabel">Prompt</label>{{ hint_button('imagePromptHelp', 'prompt') }}</span><span class="prompt-actions" hidden><button type="button" id="clearImagePrompt" aria-label="Clear image prompt">Clear</button><button type="button" class="prompt-write" id="writeImagePrompt" aria-label="Write image prompt" title="Write prompt" disabled></button></span></div>
+    <div class="prompt-label-row"><span class="field-heading"><label for="imagePrompt" id="imagePromptLabel">Prompt</label>{{ hint_button('imagePromptHelp', 'prompt') }}</span><span class="prompt-actions" hidden><button type="button" id="clearImagePrompt" aria-label="Clear image prompt">Clear</button><button type="button" class="prompt-write" id="writeImagePrompt" aria-label="Write image prompt" title="Write prompt" disabled></button></span>{{ explicit_box('image') }}</div>
     <div class="field-help" id="imagePromptHelp" hidden>
       <div class="hint" id="imagePromptHint"></div>
       <div class="hint" id="imageHowDirect" hidden>Your prompt goes in as it is, so each image differs only by its seed.</div>
@@ -2704,17 +2893,17 @@
     <div class="prompt-writing" id="imagePromptWriting"><textarea id="imagePrompt" name="prompt" data-prompt inputmode="none"></textarea><div class="prompt-progress-track"><div class="prompt-progress" id="imagePromptProgress" hidden></div></div><div class="prompt-eta" id="imagePromptEta" role="status" hidden></div></div>
     <div class="err" id="imagePromptWriteError" role="alert" hidden></div>
     <button type="button" class="generated-prompts" data-generated-prompts hidden></button>
-    <div id="imageNegativeSlot" class="negative-slot"></div>
+    <!-- Words per prompt and Variety, then the negative prompt under them. -->
     <div id="imageWriterExtras" class="writer-extras">
       {{ words_box('image', image_words) }}
       {{ variety_box('image', 'image') }}
-      {{ explicit_box('image') }}
     </div>
+    <div id="imageNegativeSlot" class="negative-slot"></div>
   </details>
 
 
   <details class="section" id="imageOptions" hidden>
-    <summary class="section-title">Workflow specific</summary>
+    <summary class="section-title">Workflow</summary>
     <div id="imageOptionsBox"></div>
   </details>
 
@@ -2730,6 +2919,14 @@
         </div></div>
         <label class="check"><input type="checkbox" name="lora_style_test" id="imageLoraStyleTest"><span>LoRA Style test</span></label>
         <div class="hint" data-lora-test-hint></div>
+      </div>
+      <!-- The files it runs, each installed one in turn (core/file_tests.py): offered for those the workflow can switch. -->
+      <div class="tests-group" id="imageFileTests">
+        <div class="options-subtitle">Model files</div>
+        <label class="check"><input type="checkbox" name="model_test" id="imageModelTest"><span>Model test</span></label>
+        <label class="check"><input type="checkbox" name="encoder_test" id="imageEncoderTest"><span>Text encoder test</span></label>
+        <label class="check"><input type="checkbox" name="vae_test" id="imageVaeTest"><span>VAE test</span></label>
+        <div class="hint" id="imageFileTestHint"></div>
       </div>
       <div class="tests-group" id="imageWorkflowTests">
         <div class="options-subtitle">Workflows</div>
@@ -2853,8 +3050,11 @@
   <div class="settings-head" id="settingsHead">
     <div class="panel-dialog-title" id="settingsTitle">Settings</div>
   </div>
+  <!-- Its sections, one shown at a time: a tap on one, or a swipe left or right (settings.js). -->
+  <div class="settings-tabs" id="settingsTabs" role="tablist" aria-label="Settings sections"><span class="jump-glider section-glider" id="settingsTabGlider" aria-hidden="true" hidden></span><button type="button" role="tab" data-settings-tab="general" aria-selected="true">General</button><button type="button" role="tab" data-settings-tab="models" aria-selected="false">Models</button><button type="button" role="tab" data-settings-tab="machine" aria-selected="false">Machine</button><button type="button" role="tab" data-settings-tab="connection" aria-selected="false">Connection</button></div>
   <div class="panel-dialog-body settings-body">
   <div class="hint settings-note" id="settingsNote" hidden></div>
+  <div class="settings-section" id="settingsSectionGeneral" data-settings-section="general" role="tabpanel" aria-label="General">
   <div class="settings-group" id="themeSettingTitle">Theme</div>
   <button type="button" class="theme-picker" id="themePicker" aria-haspopup="dialog" aria-labelledby="themeSettingTitle themePicker"></button>
   <label class="settings-check"><input type="checkbox" id="themeBoxes"><span>A box around each section<small>Off: the sections sit straight on the background, with no box of their own.</small></span></label>
@@ -2869,6 +3069,8 @@
   <div class="hint" id="titleSourceHint" hidden>Each new film and image set gets a short descriptive title from its prompt; its files are named by it too. With titles enabled, a local model selected for generation or used in the prompt editor also supplies the title. Without one, the choice below applies. Gemini uses one call per run; if it rejects the prompt, the local model titles it instead. Gemini, the local model for private runs asks Gemini only for what isn't made in Private mode, so private prompts never leave the PC for titling. Local model only never sends a prompt to Gemini. Either way the local model first frees ComfyUI's models and takes a little longer. If every one asked fails, it keeps its usual title.</div>
   <div class="settings-row"><select id="titleSource" aria-labelledby="titlesTitle"><option value="off">Off: keep its usual title</option><option value="gemini">Gemini, the local model as fallback</option><option value="gemini_sfw">Gemini, the local model for private runs</option><option value="local">Local model only</option></select></div>
   <label class="settings-check"><input type="checkbox" id="poweroff"><span>Shut down the PC when the queue is empty<small id="poweroffNote">This session only: it isn't saved. You get a minute to cancel it.</small></span></label>
+  </div>
+  <div class="settings-section" id="settingsSectionModels" data-settings-section="models" role="tabpanel" aria-label="Models" hidden>
   <div class="settings-group" id="localLlmTitle">Local LLM model</div>
   <div class="settings-row"><select id="localLlmModel" aria-labelledby="localLlmTitle">{% for model in local_models %}<option value="{{ model.id }}">{{ model.label }}{% if model.vision %}-v{% endif %}</option>{% endfor %}</select></div>
   <div class="settings-group"><span id="h3ModelTitle">OpenH3-IR model</span>{{ hint_button('h3ModelHelp', 'OpenH3-IR models') }}</div>
@@ -2883,6 +3085,8 @@
   <div class="settings-row"><select id="editPreset" aria-labelledby="editPresetTitle"></select></div>
   <div class="settings-group" id="editVideoPresetTitle">Video from image (the pen in the viewer)</div>
   <div class="settings-row"><select id="editVideoPreset" aria-labelledby="editVideoPresetTitle"></select></div>
+  </div>
+  <div class="settings-section" id="settingsSectionMachine" data-settings-section="machine" role="tabpanel" aria-label="Machine" hidden>
   <div class="settings-group" id="reserveTitle">Reserve free RAM</div>
   <div class="reserve-row" role="group" aria-labelledby="reserveTitle">
     <button type="button" id="reserveSet" hidden>Set</button>
@@ -2899,26 +3103,13 @@
   <div class="settings-row gpu-guard-actions"><span class="afterburner-state" id="afterburnerState" aria-live="polite"><span class="dot" id="afterburnerDot"></span><span id="afterburnerText">Afterburner: checking…</span></span><span class="afterburner-buttons"><button type="button" id="startAfterburner" title="Start MSI Afterburner with the chosen profile, if it isn't running. Never asks for administrator rights on the PC.">Start</button><button type="button" id="restartAfterburner" title="Close MSI Afterburner and start it again now with the chosen profile, whatever the temperature. Tap twice.">Restart Afterburner</button></span></div>
   <div class="settings-group">Storage</div>
   <div class="disk" id="diskBox"><div class="hint">Checking…</div></div>
+  </div>
+  <div class="settings-section" id="settingsSectionConnection" data-settings-section="connection" role="tabpanel" aria-label="Connection" hidden>
   <div class="settings-group">URL's</div>
   <div class="settings-row url-row"><span class="url-name">Local</span><code>{{ phone_url }}</code><button type="button" class="copy-url" data-url="{{ phone_url }}">Copy</button></div>
   {% if tailscale_url %}<div class="settings-row url-row"><span class="url-name">Tailscale</span><code>{{ tailscale_url }}</code><button type="button" class="copy-url" data-url="{{ tailscale_url }}">Copy</button></div>{% endif %}
   {% if tailscale_problem %}<div class="hint">Tailscale: {{ tailscale_problem }}</div>{% endif %}
   </div>
-  <div class="settings-actions">
-    <div class="settings-power settings-restart">
-      <button type="button" id="restartPanel" data-short-label="Restart" aria-label="Restart panel" aria-haspopup="menu" aria-expanded="false" title="First tap opens Force restart; tap again to restart the panel, to load new code. Not while a run or upload is going."><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 11a8 8 0 1 0-2.3 5.7"/><path d="M20 4v7h-7"/></svg><span>Restart</span></button>
-      <div class="settings-menu" id="restartMenu" role="menu" aria-label="Restart options" hidden>
-        <button type="button" id="forceRestartPanel" data-short-label="Force" role="menuitem" title="Stops the run or upload going (the run waits in the queue, on hold) and restarts the panel at once. Tap twice. For when a run is stuck."><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M13 2 4 14h7l-1 8 9-12h-7z"/></svg><span>Force</span></button>
-      </div>
-    </div>
-    <button type="button" id="restartComfy" aria-label="Restart ComfyUI" title="Start fresh: closes local ComfyUI processes, including work started outside the panel. Not while a panel run is going."><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="2"/><rect x="9.5" y="9.5" width="5" height="5" rx=".5"/><path d="M9 2.5v3M15 2.5v3M9 18.5v3M15 18.5v3M2.5 9h3M2.5 15h3M18.5 9h3M18.5 15h3"/></svg><span>Comfy</span></button>
-    <button type="button" id="forceRestartComfy" data-short-label="Force" aria-label="Force restart ComfyUI" title="Force restart ComfyUI (three taps): closes ComfyUI and starts it again even while a run is going or the panel thinks one is: that run fails, and is tried once more once ComfyUI is back. Use it when ComfyUI is stuck or has died."><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M13 2 4 14h7l-1 8 9-12h-7z"/></svg><span>Force</span></button>
-    <div class="settings-power">
-      <button type="button" id="shutdown" aria-label="Shut down" aria-haspopup="menu" aria-expanded="false" title="First click opens Log out; click again to confirm shut down."><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M12 3v9"/><path d="M6.3 7.3a8 8 0 1 0 11.4 0"/></svg><span>Power</span></button>
-      <div class="settings-menu" id="shutdownMenu" role="menu" aria-label="Power options" hidden>
-        <a href="/logout" id="logout" role="menuitem" title="Log out on this device; the panel keeps running."><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="m16 17 5-5-5-5"/><path d="M21 12H9"/></svg><span>Log out</span></a>
-      </div>
-    </div>
   </div>
   <button type="button" class="panel-close" id="settingsClose">Close</button>
 </dialog>
@@ -2949,7 +3140,7 @@
 <dialog id="runFacts" class="panel-dialog run-facts" aria-labelledby="runFactsTitle">
   <div class="panel-dialog-title" id="runFactsTitle"></div>
   <dl class="run-facts-list" id="runFactsList"></dl>
-  <button type="button" class="panel-close" id="runFactsClose">Close</button>
+  <button type="button" class="panel-close" id="runFactsClose" autofocus>Close</button>
 </dialog>
 <dialog id="workflowDialog" class="panel-dialog run-facts workflow-view" aria-labelledby="workflowTitle">
   <div class="panel-dialog-title" id="workflowTitle">Workflow</div>
@@ -3164,6 +3355,7 @@
 {{ preset_controls('shorts') }}
 {{ preset_controls('video') }}
 {{ preset_controls('image') }}
+<div class="paint-pop prompt-writer-menu select-menu" id="selectMenu" role="menu" hidden></div>
 <script id="panelConfig" type="application/json">
 {{ {
   'settings': settings,

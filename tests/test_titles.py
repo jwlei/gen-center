@@ -71,7 +71,7 @@ class TitlesTest(unittest.TestCase):
             self.assertEqual(settings.update({"title_source": "local"})["title_source"], "local")
             self.assertEqual(settings.load()["title_source"], "local")
             with self.assertRaises(ValueError):
-                settings.update({"title_source": "claude"})
+                settings.update({"title_source": "unknown"})
         with tempfile.TemporaryDirectory() as folder, mock.patch.object(settings, "PATH", os.path.join(folder, "settings.json")):
             with open(settings.PATH, "w", encoding="utf-8") as f:
                 f.write('{"gemini_titles": true}')

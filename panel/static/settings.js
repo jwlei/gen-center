@@ -2,9 +2,13 @@
 const SETTINGS_BUILTIN = { shorts: 'LTX23_I2V_T2V_shorts', video: 'LTX23_I2V_T2V', image: 'Automatic' };
 const settingsDialog = $('settingsDialog');
 function settingsNote(text, bad) {
-  $('settingsNote').hidden = !text;
-  $('settingsNote').textContent = text || '';
-  $('settingsNote').style.color = bad ? 'var(--err)' : '';
+  // In Settings, and under the power buttons in the box the dots open, where Restart, Comfy and Power are now.
+  for (const id of ['settingsNote', 'powerNote']) {
+    if (!$(id)) continue;
+    $(id).hidden = !text;
+    $(id).textContent = text || '';
+    $(id).style.color = bad ? 'var(--err)' : '';
+  }
 }
 async function saveSettings(changes, note = settingsNote) {
   try {
@@ -127,7 +131,8 @@ async function fillSettings() {
   for (const side of ['shorts', 'video', 'image']) {
     const select = document.getElementById('default' + side[0].toUpperCase() + side.slice(1));
     const chosen = (SETTINGS.default_workflow || {})[side] || '';
-    select.innerHTML = `<option value="">Last one used</option><option value="@builtin">${SETTINGS_BUILTIN[side]}</option>`;
+    // The image side has no built-in one any more (Automatic is gone): the model used last, or a workflow named here.
+    select.innerHTML = `<option value="">Last one used</option>${side === 'image' ? '' : `<option value="@builtin">${SETTINGS_BUILTIN[side]}</option>`}`;
     select.value = chosen;
     workflowList(side).then(data => {
       const usable = data.workflows.filter(w => !w.problem);
@@ -148,7 +153,55 @@ $('settingsBtn').addEventListener('click', e => {
   settingsNote('');
   fillSettings();
   settingsDialog.showModal();
+  // On the section it was last on, its line under its name.
+  $('settingsTabGlider').dataset.place = '';
+  showSettingsSection(settingsSection, 0);
 });
+// --- Its sections: General, Models, Machine, Connection, one at a time ---
+// A tap on one's name shows it; a swipe left or right goes to the next or the one before. It comes in from the side
+// it's on, as Generate's sections do, and the line under the names glides to it. Kept for this browser.
+const SETTINGS_SECTIONS = ['general', 'models', 'machine', 'connection'], SETTINGS_SECTION_KEY = 'gen-center.settings-section';
+let settingsSection = 'general';
+try { if (SETTINGS_SECTIONS.includes(localStorage.getItem(SETTINGS_SECTION_KEY))) settingsSection = localStorage.getItem(SETTINGS_SECTION_KEY); }
+catch (e) {}
+function showSettingsSection(name, direction) {
+  if (!SETTINGS_SECTIONS.includes(name)) return;
+  settingsSection = name;
+  try { localStorage.setItem(SETTINGS_SECTION_KEY, name); } catch (e) {}
+  for (const section of document.querySelectorAll('[data-settings-section]')) section.hidden = section.dataset.settingsSection !== name;
+  const buttons = [...$('settingsTabs').querySelectorAll('[data-settings-tab]')];
+  for (const button of buttons) button.setAttribute('aria-selected', String(button.dataset.settingsTab === name));
+  if (typeof placeUnderline === 'function') placeUnderline($('settingsTabGlider'), buttons.find(b => b.dataset.settingsTab === name), $('settingsTabs'));
+  const shown = document.querySelector(`[data-settings-section="${name}"]`), body = shown && shown.parentNode;
+  if (body) body.scrollTop = 0;
+  if (direction && shown && shown.animate && !window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+    shown.animate([{ transform: `translateX(${direction > 0 ? '24%' : '-24%'})`, opacity: 0 }, { transform: 'none', opacity: 1 }],
+                  { duration: 260, easing: 'cubic-bezier(.3, .7, .3, 1)' });
+  }
+}
+$('settingsTabs').addEventListener('click', e => {
+  const button = e.target.closest && e.target.closest('[data-settings-tab]');
+  if (!button || button.dataset.settingsTab === settingsSection) return;
+  showSettingsSection(button.dataset.settingsTab, SETTINGS_SECTIONS.indexOf(button.dataset.settingsTab) - SETTINGS_SECTIONS.indexOf(settingsSection));
+});
+// A swipe across its sections, not one along a slider or a box being typed in, and more across than down.
+let settingsSwipe = null;
+settingsDialog.addEventListener('touchstart', e => {
+  const target = e.target;
+  const own = target.closest && target.closest('input[type=range], textarea, input[type=text], .settings-tabs');
+  settingsSwipe = e.touches.length === 1 && !own ? { x: e.touches[0].clientX, y: e.touches[0].clientY } : null;
+}, { passive: true });
+settingsDialog.addEventListener('touchend', e => {
+  const start = settingsSwipe, end = e.changedTouches && e.changedTouches[0];
+  settingsSwipe = null;
+  if (!start || !end) return;
+  const dx = end.clientX - start.x, dy = end.clientY - start.y;
+  if (Math.abs(dx) < 60 || Math.abs(dx) < Math.abs(dy) * 1.5) return;
+  const at = SETTINGS_SECTIONS.indexOf(settingsSection), next = at + (dx < 0 ? 1 : -1);
+  if (next < 0 || next >= SETTINGS_SECTIONS.length) return;
+  showSettingsSection(SETTINGS_SECTIONS[next], dx < 0 ? 1 : -1);
+});
+window.addEventListener('resize', () => { if (settingsDialog.open) { $('settingsTabGlider').dataset.place = ''; showSettingsSection(settingsSection, 0); } });
 $('settingsClose').addEventListener('click', () => settingsDialog.close());
 settingsDialog.addEventListener('click', e => { if (e.target === settingsDialog) settingsDialog.close(); });
 $('lowPriority').addEventListener('change', () => saveSettings({ low_priority: $('lowPriority').checked }));
@@ -361,6 +414,30 @@ function syncComfyButton(c) {
   }
   if (comfyOff) $('restartComfy').classList.remove('pulse');
 }
+// Comfy's first tap grows a menu down from it with Force, as Restart's does; a second tap on Comfy restarts it.
+let comfyMenuTimer = null;
+function openComfyMenu() {
+  const menu = $('comfyMenu');
+  menu.classList.remove('closing');
+  menu.hidden = false;
+  $('restartComfy').setAttribute('aria-expanded', 'true');
+  clearTimeout(comfyMenuTimer);
+  comfyMenuTimer = setTimeout(closeComfyMenu, 6000);
+}
+function closeComfyMenu() {
+  const menu = $('comfyMenu');
+  clearTimeout(comfyMenuTimer);
+  if (menu.hidden || menu.classList.contains('closing')) return;
+  menu.classList.add('closing');
+  $('restartComfy').setAttribute('aria-expanded', 'false');
+  setTimeout(() => {
+    if (menu.classList.contains('closing')) { menu.hidden = true; menu.classList.remove('closing'); }
+  }, 150);
+}
+document.addEventListener('click', e => {
+  if (!$('comfyMenu').hidden && !(e.target.closest && e.target.closest('#comfyMenu, #restartComfy'))) closeComfyMenu();
+});
+document.addEventListener('keydown', e => { if (e.key === 'Escape') closeComfyMenu(); });
 $('restartComfy').addEventListener('click', async () => {
   if (comfyOff) {
     const button = $('restartComfy'), failed = () => { button.disabled = false; button.classList.remove('restarting'); };
@@ -373,7 +450,8 @@ $('restartComfy').addEventListener('click', async () => {
     } catch (error) { settingsNote('Could not reach the panel. Try again.', true); failed(); }
     return;
   }
-  if (!confirmTap('restartComfy', 'Restart ComfyUI')) return;
+  if (!confirmTap('restartComfy', 'Restart ComfyUI')) { openComfyMenu(); return; }
+  closeComfyMenu();
   $('restartComfy').classList.remove('pulse');
   const body = await (await fetch('/restart/comfyui', { method: 'POST' })).json();
   settingsNote(body.ok ? '' : body.error || 'Could not restart it.', !body.ok);
@@ -381,7 +459,9 @@ $('restartComfy').addEventListener('click', async () => {
 // Force: ComfyUI closed and started again at once, even while a run is going or the panel believes one is. That run
 // fails and is tried once more (exit code 1 restarts and retries it).
 $('forceRestartComfy').addEventListener('click', async () => {
-  if (!confirmTap('forceRestartComfy', 'Force restart ComfyUI', 3)) return;
+  // Its taps keep the menu up while they're asked for.
+  if (!confirmTap('forceRestartComfy', 'Force restart ComfyUI', 3)) { openComfyMenu(); return; }
+  closeComfyMenu();
   $('restartComfy').classList.remove('pulse');
   try {
     const body = await (await fetch('/restart/comfyui', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ force: true }) })).json();

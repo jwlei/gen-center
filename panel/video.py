@@ -979,7 +979,7 @@ def captions():
 def context():
     return {
         "stages": STAGES,
-        "llms": [{"name": name, "label": label, "ready": planner.llm_configured(name)} for name, label in planner.LLMS if name != "claude"],
+        "llms": [{"name": name, "label": label, "ready": planner.llm_configured(name)} for name, label in planner.LLMS],
         "default_llm": "local",
         "film_limits": [planner.MIN_FILM_SECONDS, planner.MAX_FILM_SECONDS, DEFAULT_FILM_SECONDS],
         "most_images": MOST_IMAGES,

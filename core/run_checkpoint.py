@@ -93,7 +93,7 @@ def validate(data, path, fields):
 @lru_cache(maxsize=1)
 def package_versions():
     versions = {}
-    for name in ("google-genai", "anthropic", "openai", "requests", "ffmpeg-python"):
+    for name in ("google-genai", "openai", "requests", "ffmpeg-python"):
         try:
             versions[name] = metadata.version(name)
         except metadata.PackageNotFoundError:

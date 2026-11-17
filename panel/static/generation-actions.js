@@ -79,9 +79,9 @@ function syncContinued() {
 function queueSaves() { return !!queueEdit && !queueEdit.fresh; }
 function queueEditLabel() {
   syncContinued();
-  $('cancelQueueEdit').hidden = !queueEdit;
+  $('cancelQueueEdit').hidden = $('editRow').hidden = !queueEdit;
   $('goLater').hidden = $('goTop').hidden = $('goStickLater').hidden = $('goStickTop').hidden = queueSaves();
-  if (!submitting) $('go').textContent = $('goStick').textContent = queueSaves() ? 'Save to queue' : goLabel(wasRunning);
+  if (!submitting) $('go').textContent = $('goStick').textContent = queueSaves() ? 'Save' : goLabel(wasRunning);
 }
 async function editQueued(id, button) {
   const epoch = workspaceEpoch;
@@ -278,7 +278,7 @@ async function startJob(url, later = false, top = false) {
   if (body.ok && queueEdit) queueEdit = null;
   queueEditLabel();
   $('queuePending').hidden = true;
-  $('go').textContent = $('goStick').textContent = queueSaves() ? 'Save to queue' : goLabel(wasRunning);
+  $('go').textContent = $('goStick').textContent = queueSaves() ? 'Save' : goLabel(wasRunning);
   $('formNote').hidden = !body.continued;
   if (body.continued) $('formNote').textContent = `Continuing what was already paid for: ${body.continued}`;
   if (!body.ok) {
@@ -421,7 +421,7 @@ function clearPrompt(side) {
 for (const [id, side] of [['clearShortsPrompt', 'shorts'], ['clearVideoPrompt', 'video'], ['clearImagePrompt', 'image']]) {
   $(id).addEventListener('click', e => { e.preventDefault(); e.stopPropagation(); clearPrompt(side); });
 }
-for (const [id, down, up, steps] of [['runs', 'runsDown', 'runsUp', 1], ['imageCount', 'imageCountDown', 'imageCountUp', 1], ['duration', 'durationDown', 'durationUp', 5]]) {
+for (const [id, down, up, steps] of [['runs', 'runsDown', 'runsUp', 1], ['imageCount', 'imageCountDown', 'imageCountUp', 1], ['duration', 'durationDown', 'durationUp', 5], ['imageWorkflowDenoise', 'imageWorkflowDenoiseDown', 'imageWorkflowDenoiseUp', 1]]) {
   for (const [button, direction] of [[down, -1], [up, 1]]) {
     $(button).addEventListener('click', () => {
       const field = $(id);

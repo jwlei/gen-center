@@ -51,21 +51,139 @@ async function loadImageWorkflows(fresh) {
   // Each knows its name, so what you set for it is remembered under it, Automatic's pick too.
   imageWorkflows = Object.fromEntries(usable.map(w => [w.name, { ...w.takes, name: w.name }]));
   imageWorkflowList = usable.map(w => ({ ...w.takes, name: w.name }));
+  imageWorkflowLabels = Object.fromEntries(data.workflows.map(w => [w.name, w.label]));
+  drawImageModels();
   setGuides('image', data);
   const notes = stuck.map(w => `${w.label}: ${w.problem}`);
   if (!data.workflows.length) notes.push('Save one in ComfyUI with a name starting image_ and it appears here.');
   $('imageWorkflowHint').hidden = !notes.length;
   $('imageWorkflowHint').textContent = notes.join(' ');
   syncImageForm();
+  // No model chosen (Automatic, as it was, or a workflow that's gone): the one used last, or the first.
+  if (!select.value && pickableWorkflows().length) {
+    const families = pickableWorkflows().map(familyOf), last = familyMemory()._last;
+    chooseImageWorkflow(families.includes(last) ? last : families[0], null);
+  }
+  // Remembered from before it was retired: the model's own workflow for that mode instead. A set opened again, or a
+  // preset, that names one still runs it.
+  if ((SETTINGS.retired_workflows || []).includes(select.value) && imageWorkflows[select.value]) {
+    const takes = imageWorkflows[select.value];
+    chooseImageWorkflow(familyOf(takes), currentImageMode(takes));
+  }
   queuePlan();
   applyDefaultPreset('image');
 }
 $('imageWorkflow').addEventListener('focus', loadImageWorkflows);
+$('imageModel').addEventListener('focus', loadImageWorkflows);
+
+// --- Model and Mode: the saved workflows by the model they run, and what it does ---
+// Workflows of one model, by the model each runs: MiniMax H3's and Qwen-Image 2.1's text and edit ones are one model.
+// Another model is its own, and a workflow whose model isn't known, its own too.
+const IMAGE_FAMILIES = { minimax_h3_image_edit: 'minimax_h3_image', qwen_image_21_edit: 'qwen_image_21' };
+// T2I, I2I and the workflow's own Inpaint; Edit, R2I (a new picture from references), the painted Inpaint and Expand
+// are what the form does with the images (image_mode), where the model does them.
+const MODE_ORDER = ['text', 'image2image', 'inpaint', 'edit', 'compose', 'areas', 'expand'];
+const MODE_LABELS = { text: 'T2I', image2image: 'I2I', inpaint: 'Inpaint', edit: 'Edit', compose: 'R2I', areas: 'Inpaint', expand: 'Expand' };
+const IMAGE_MODE_OF = { edit: 'edit', compose: 'compose', areas: 'areas', expand: 'expand' };
+const FAMILY_KEY = 'comfyui-auto-gen.image-family.v1';
+let imageWorkflowLabels = {};
+function familyOf(takes) { return takes.model ? (IMAGE_FAMILIES[takes.model] || takes.model) : `workflow:${takes.name}`; }
+function familyLabel(family) {
+  if (family.startsWith('workflow:')) return imageWorkflowLabels[family.slice(9)] || family.slice(9);
+  return (IMAGE_MODELS[family] && IMAGE_MODELS[family].label) || family;
+}
+// What a workflow does: its own way of working where it has one (text2image, image2image, inpaint), else by the images
+// it takes: none, text; one it must have, an edit; one it may have (Fibo 2.0), both.
+function modesOf(takes) {
+  const own = (takes.options || []).find(option => option.one_of && option.takes_by);
+  if (own) return own.choices.map(choice => ({ mode: choice === 'inpaint' ? 'inpaint' : (own.takes_by[choice] || {}).max_images ? 'image2image' : 'text', choice }));
+  const can = IMAGE_MODELS[takes.model] || {}, edits = takes.max_images > 0;
+  return [...(takes.min_images === 0 ? [{ mode: 'text' }] : []), ...(edits ? [{ mode: 'edit' }] : []),
+          ...(edits && can.compose ? [{ mode: 'compose' }] : []), ...(edits && can.regions ? [{ mode: 'areas' }, { mode: 'expand' }] : [])];
+}
+// Those the picker offers: a retired one (Settings' retired_workflows) is left out, though a preset or a set made with it
+// still opens it.
+function pickableWorkflows() { const retired = SETTINGS.retired_workflows || []; return imageWorkflowList.filter(takes => !retired.includes(takes.name)); }
+function familyWorkflows(family) { return pickableWorkflows().filter(takes => familyOf(takes) === family); }
+function familyModes(family) {
+  const found = new Set(familyWorkflows(family).flatMap(takes => modesOf(takes).map(entry => entry.mode)));
+  return MODE_ORDER.filter(mode => found.has(mode));
+}
+function variantsFor(family, mode) { return familyWorkflows(family).filter(takes => modesOf(takes).some(entry => entry.mode === mode)); }
+function familyMemory() { try { return JSON.parse(draftRead(FAMILY_KEY)) || {}; } catch (e) { return {}; } }
+function rememberFamily(family, mode, workflow) {
+  const all = familyMemory();
+  all[family] = { ...(all[family] || {}), mode, [mode]: workflow };
+  all._last = family;
+  try { draftWrite(FAMILY_KEY, JSON.stringify(all)); } catch (e) {}
+}
+function drawImageModels() {
+  const families = [...new Set(pickableWorkflows().map(familyOf))];
+  const key = JSON.stringify(families.map(family => [family, familyLabel(family)]));
+  if ($('imageModel').dataset.key === key) return;
+  $('imageModel').dataset.key = key;
+  $('imageModel').innerHTML = families.map(family => `<option value="${esc(family)}">${esc(familyLabel(family))}</option>`).join('');
+}
+// The mode the form is in now: the workflow's own choice where it has one, else what Mode says, if the workflow does it.
+function currentImageMode(takes) {
+  const modes = modesOf(takes), own = $('imageWorkflowMode');
+  if (own && modes.some(entry => entry.choice)) return (modes.find(entry => entry.choice === own.value) || modes[0]).mode;
+  // R2I, painted parts or Expand, as the form is set to do with the images (a set opened again comes back so).
+  const doing = $('imageMode').value;
+  if (doing !== 'edit' && modes.some(entry => entry.mode === doing)) return doing;
+  const shown = $('imageFamilyMode') && $('imageFamilyMode').value;
+  return modes.some(entry => entry.mode === shown) ? shown : (modes[0] || {}).mode;
+}
+// Model and Mode as the workflow chosen says: drawn again only when what they hold changes. Which of a model's
+// workflows does a mode isn't a choice here: the looks of those it stands for are presets.
+function syncImageFamily() {
+  const takes = imageWorkflows[$('imageWorkflow').value];
+  const family = takes ? familyOf(takes) : '';
+  if ($('imageModel').value !== family) $('imageModel').value = family;
+  const modes = takes ? familyModes(family) : [];
+  const mode = takes ? currentImageMode(takes) : '';
+  const key = JSON.stringify([family, modes]);
+  if ($('imageFamilyModeSlot').dataset.key !== key) {
+    $('imageFamilyModeSlot').dataset.key = key;
+    $('imageFamilyModeSlot').innerHTML = modes.length > 1
+      ? `<select id="imageFamilyMode" aria-label="Mode" data-segmented>${modes.map(m => `<option value="${m}">${MODE_LABELS[m]}</option>`).join('')}</select>` : '';
+    if (modes.length > 1) segmentSelect($('imageFamilyMode'));
+  }
+  if ($('imageFamilyMode') && mode && $('imageFamilyMode').value !== mode) $('imageFamilyMode').value = mode;
+  $('imageFamilyModeRow').hidden = modes.length < 2;
+}
+// The workflow for this model and mode: the one asked for, the one last used for them, the one in use, or the first.
+function chooseImageWorkflow(family, mode, wanted) {
+  if (!family) return applyImageWorkflow('', null);
+  if (!mode || !familyModes(family).includes(mode)) mode = (familyMemory()[family] || {}).mode;
+  if (!mode || !familyModes(family).includes(mode)) mode = familyModes(family)[0];
+  const variants = variantsFor(family, mode), names = variants.map(v => v.name);
+  const name = [wanted, (familyMemory()[family] || {})[mode], $('imageWorkflow').value].find(n => names.includes(n)) || names[0];
+  applyImageWorkflow(name, mode);
+  rememberFamily(family, mode, name);
+}
+function applyImageWorkflow(name, mode) {
+  $('imageWorkflow').value = name || '';
+  syncImageForm();
+  // The workflow's own choice that does this mode, such as image2image.
+  const takes = imageWorkflows[name], entry = takes && modesOf(takes).find(e => e.mode === mode && e.choice);
+  if (entry && $('imageWorkflowMode')) $('imageWorkflowMode').value = entry.choice;
+  // What it does with the images: an edit, R2I, painted parts or Expand.
+  $('imageMode').value = IMAGE_MODE_OF[mode] || 'edit';
+  $('imageWorkflow').dispatchEvent(new Event('change', { bubbles: true }));
+}
+function shownImageMode() {
+  const takes = imageWorkflows[$('imageWorkflow').value];
+  return $('imageFamilyMode') && !$('imageFamilyModeRow').hidden ? $('imageFamilyMode').value : takes ? currentImageMode(takes) : null;
+}
+// Each says what it changed, and the workflow chosen from them goes on as any other change does.
+$('imageModel').addEventListener('change', e => { e.stopPropagation(); chooseImageWorkflow($('imageModel').value, shownImageMode()); });
+$('imageFamilyModeSlot').addEventListener('change', e => { e.stopPropagation(); chooseImageWorkflow($('imageModel').value, $('imageFamilyMode').value); });
 function sourceBoxes() { return [...$('imageSources').querySelectorAll('.image-box')]; }
 // As the server picks on Automatic (panel/image.py): one made for what you gave it, then any that fits.
 function automaticTakes(count) {
   const need = MODE_NEEDS[imageMode()];
-  const usable = need ? imageWorkflowList.filter(t => IMAGE_MODELS[t.model] && IMAGE_MODELS[t.model][need]) : imageWorkflowList;
+  const usable = need ? pickableWorkflows().filter(t => IMAGE_MODELS[t.model] && IMAGE_MODELS[t.model][need]) : pickableWorkflows();
   const fits = usable.filter(t => t.min_images <= count && count <= t.max_images);
   const madeFor = fits.filter(t => count ? t.min_images >= 1 : t.max_images === 0);
   return madeFor[0] || fits[0] || null;
@@ -73,9 +191,21 @@ function automaticTakes(count) {
 // What the form is for now: the workflow chosen, or the one Automatic would pick with the images given.
 // With image to prompt, the workflow takes the picture it describes.
 function imageTakes() {
-  const takes = baseImageTakes(), role = imageRole();
+  let takes = baseImageTakes();
+  // T2I takes no image, though the workflow can edit too (Fibo 2.0); image to prompt below still takes its picture.
+  const chosen = imageWorkflows[$('imageWorkflow').value];
+  if (chosen && currentImageMode(chosen) === 'text') takes = { ...takes, min_images: 0, max_images: 0 };
+  const role = imageRole();
   const found = role && (takes.options || []).find(option => option.id === role);
-  return found && found.takes ? { ...takes, ...found.takes } : takes;
+  if (found && found.takes) takes = { ...takes, ...found.takes };
+  // A choice such as text2image or image2image takes images of its own: as it's set on the form now.
+  for (const option of takes.options || []) {
+    if (!option.takes_by) continue;
+    const select = $('formImage').querySelector(`[name="opt_${CSS.escape(option.id)}"]`);
+    const picked = select ? select.value : option.default;
+    if (option.takes_by[picked]) takes = { ...takes, ...option.takes_by[picked] };
+  }
+  return takes;
 }
 function baseImageTakes() {
   const chosen = imageWorkflows[$('imageWorkflow').value];
@@ -251,7 +381,11 @@ $('addSource').addEventListener('click', () => {
 
 // --- What to do with the images: edit image 1, a new picture from them, change painted parts of it, or expand it ---
 const MODE_NEEDS = { compose: 'compose', areas: 'regions', expand: 'regions' };
-function imageMode() { return $('imageModeBox').hidden ? 'edit' : $('imageMode').value || 'edit'; }
+// With a model chosen, Mode at the top of Setup sets it; on Automatic, its own select once there are images.
+function imageMode() {
+  if (imageWorkflows[$('imageWorkflow').value]) return $('imageMode').value || 'edit';
+  return $('imageModeBox').hidden ? 'edit' : $('imageMode').value || 'edit';
+}
 // Whether the workflow chosen can, or on Automatic any workflow can.
 function modeSupport() {
   const chosen = imageWorkflows[$('imageWorkflow').value];
@@ -269,7 +403,7 @@ function syncImageMode() {
   const can = modeSupport();
   for (const option of [...($('imageMode').options || [])]) option.disabled = !can[option.value];
   if (!can[$('imageMode').value]) $('imageMode').value = 'edit';
-  $('imageModeBox').hidden = !chosenSources() || !(can.compose || can.areas || can.expand);
+  $('imageModeBox').hidden = !!imageWorkflows[$('imageWorkflow').value] || !chosenSources() || !(can.compose || can.areas || can.expand);
   const mode = imageMode();
   $('imageModeHint').textContent = MODE_HINTS[mode] || '';
   $('areasBox').hidden = mode !== 'areas';

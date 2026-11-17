@@ -122,6 +122,8 @@ function syncImageForm() {
   // whatever How says, so its words and Explicit show with it too: to test what each model writes.
   const comparingLlms = $('imageLlmTest').checked;
   $('imageWriterExtras').classList.toggle('hidden', direct && !comparingLlms);
+  // Explicit, on the Prompt line now, goes with them.
+  $('imageExplicitBox').classList.toggle('hidden', direct && !comparingLlms);
   const local = !direct && $('imageLlm').value === 'local' && mode !== 'areas' && mode !== 'expand';
   $('imageLocalModelBox').hidden = !local;
   $('imageLocalModel').disabled = !local;
@@ -154,6 +156,7 @@ function syncImageForm() {
   if (mode === 'expand') {
     $('imageLlmBox').classList.add('hidden');
     $('imageWriterExtras').classList.add('hidden');
+    $('imageExplicitBox').classList.add('hidden');
     $('imageHowDirect').hidden = true;
     $('imagePromptMode').disabled = true;
     $('imagePromptLabel').textContent = 'What the new parts show (optional)';

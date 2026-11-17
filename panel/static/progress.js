@@ -62,6 +62,9 @@ $('currentWork').addEventListener('click', () => {
     + '<dt>Details</dt><dd><button type="button" id="runFactsWorkflow">Show the workflow</button></dd>';
   $('runFactsWorkflow').addEventListener('click', () => showWorkflow());
   $('runFacts').showModal();
+  // From its top: opening focuses Close (outside the list), not Show the workflow at the end of it.
+  $('runFactsList').scrollTop = 0;
+  $('runFacts').scrollTop = 0;
 });
 $('runFactsClose').addEventListener('click', () => $('runFacts').close());
 $('runFacts').addEventListener('click', e => { if (e.target === $('runFacts')) $('runFacts').close(); });
@@ -222,11 +225,18 @@ window.addEventListener('scroll', syncPin, { passive: true });
 // the footer's last button over the page. That button again, an icon in it, Escape or a tap anywhere else puts it away.
 function showHead(on) {
   document.body.classList.toggle('head-shown', on);
+  // Closed, so are its power menus, and what they last said.
+  if (!on) {
+    for (const close of [typeof closeRestartMenu === 'function' && closeRestartMenu, typeof closeComfyMenu === 'function' && closeComfyMenu,
+                         typeof closeShutdownMenu === 'function' && closeShutdownMenu]) if (close) close();
+    if ($('powerNote')) $('powerNote').hidden = true;
+  }
   $('headToggle').setAttribute('aria-expanded', String(on));
 }
 $('headToggle').addEventListener('click', () => showHead(!document.body.classList.contains('head-shown')));
 // Once one of its icons has done what it does (opened Settings, switched Private mode), it goes.
-$('topIcons').addEventListener('click', e => { if (e.target.closest && e.target.closest('a, button')) showHead(false); });
+// An icon taken closes it; the power buttons don't, as their first tap opens their menu or asks for another.
+$('topIcons').addEventListener('click', e => { if (e.target.closest && e.target.closest('a, button') && !e.target.closest('#powerRow')) showHead(false); });
 // Before the tap does what it does, so the page under it still gets it.
 document.addEventListener('pointerdown', e => {
   if (document.body.classList.contains('head-shown') && !(e.target.closest && e.target.closest('#topIcons, #headToggle'))) showHead(false);

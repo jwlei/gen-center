@@ -23,8 +23,10 @@ function releaseHeight() {
 }
 function updateSectionFade(section) {
   const body = section.querySelector('.section-body');
-  section.classList.toggle('scroll-below', (section.open || section.classList.contains('section-closing'))
-    && body.scrollHeight - body.clientHeight - body.scrollTop > 1);
+  const shown = section.open || section.classList.contains('section-closing');
+  section.classList.toggle('scroll-below', shown && body.scrollHeight - body.clientHeight - body.scrollTop > 1);
+  // And at the top, once it's scrolled down: what went up under the edge fades out there too.
+  section.classList.toggle('scroll-above', shown && body.scrollTop > 1);
 }
 function animateAccordionSections(sections, change, onFinish = null) {
   const before = sections.map(section => {
@@ -220,3 +222,61 @@ if (window.ResizeObserver) {
     lastHeight = height;
   }).observe(document.body);
 }
+// --- On a phone: one generation section at a time, chosen in the bar over Generate ---
+// The model and preset part stays on top; the bar names the sections (their headers keep only their buttons), and the
+// one chosen slides in from the side of its button. A wide screen keeps them all, as headers that fold.
+const SECTION_TABS = window.matchMedia('(max-width: 999.98px)'), SECTION_TAB_KEY = 'gen-center.section-tab.';
+function sectionLabel(section) {
+  const summary = section.querySelector(':scope > summary');
+  return summary ? [...summary.childNodes].filter(node => node.nodeType === 3).map(node => node.textContent).join('').trim() : '';
+}
+function shownForm() { return [...document.querySelectorAll('#optionsCard .pipeline-form')].find(form => form.getClientRects().length) || null; }
+function tabSections(form) { return [...form.querySelectorAll('details.section')].filter(section => !section.hidden); }
+function chosenTab(form, sections) {
+  if (!form._tab) try { form._tab = form.querySelector(`#${CSS.escape(localStorage.getItem(SECTION_TAB_KEY + form.id) || '')}`); } catch (e) {}
+  return sections.includes(form._tab) ? form._tab : sections[0];
+}
+function syncSectionBar() {
+  const phone = SECTION_TABS.matches, form = phone ? shownForm() : null;
+  document.body.classList.toggle('section-tabs-on', phone);
+  $('sectionBar').hidden = !form || document.body.dataset.page !== 'generate';
+  if (!form) return;
+  const sections = tabSections(form), current = chosenTab(form, sections);
+  const key = JSON.stringify([form.id, sections.map(section => section.id || sectionLabel(section))]);
+  if ($('sectionTabs').dataset.key !== key) {
+    $('sectionTabs').dataset.key = key;
+    $('sectionTabs').innerHTML = sections.map((section, index) =>
+      `<button type="button" role="tab" data-tab="${index}">${esc(sectionLabel(section))}</button>`).join('');
+  }
+  for (const section of form.querySelectorAll('details.section')) section.classList.toggle('tab-hidden', section !== current);
+  // Others closed first, so opening this one has nothing to fold away.
+  for (const section of sections) if (section !== current && section.open) section.open = false;
+  if (current && !current.open) current.open = true;
+  const buttons = [...$('sectionTabs').querySelectorAll('button')];
+  buttons.forEach((button, index) => button.setAttribute('aria-selected', String(sections[index] === current)));
+  placeUnderline($('sectionGlider'), buttons[sections.indexOf(current)], $('sectionBar'));
+}
+$('sectionTabs').addEventListener('click', e => {
+  const button = e.target.closest && e.target.closest('[data-tab]');
+  const form = shownForm();
+  if (!button || !form) return;
+  const sections = tabSections(form), next = sections[+button.dataset.tab], before = sections.indexOf(chosenTab(form, sections));
+  if (!next || before === +button.dataset.tab) return;
+  form._tab = next;
+  if (next.id) try { localStorage.setItem(SECTION_TAB_KEY + form.id, next.id); } catch (error) {}
+  syncSectionBar();
+  // In from the side of its button: from the right when it's further along, the left when it's back.
+  if (!window.matchMedia('(prefers-reduced-motion: reduce)').matches && next.animate) {
+    const from = +button.dataset.tab > before ? '24%' : '-24%';
+    next.animate([{ transform: `translateX(${from})`, opacity: 0 }, { transform: 'none', opacity: 1 }],
+                 { duration: 260, easing: 'cubic-bezier(.3, .7, .3, 1)' });
+  }
+});
+SECTION_TABS.addEventListener('change', () => { $('sectionGlider').dataset.place = ''; syncSectionBar(); });
+window.addEventListener('resize', () => { $('sectionGlider').dataset.place = ''; syncSectionBar(); });
+if (window.MutationObserver) {
+  // Another page or side, or a section shown or hidden (Workflow has none to show for some workflows).
+  new MutationObserver(syncSectionBar).observe(document.body, { attributes: true, attributeFilter: ['class', 'data-page'] });
+  new MutationObserver(syncSectionBar).observe($('optionsCard'), { subtree: true, attributes: true, attributeFilter: ['hidden'] });
+}
+requestAnimationFrame(syncSectionBar);

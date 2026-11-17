@@ -1,6 +1,6 @@
 """
 The panel in-process, starting the real main.py as a real process, which talks to
-a fake ComfyUI and a fake Claude and runs real ffmpeg. Stop really kills it.
+a fake ComfyUI and a fake Gemini and runs real ffmpeg. Stop really kills it.
 """
 import gzip
 import io
@@ -22,7 +22,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from fakes import (OBJECT_INFO, close, fake_claude, fake_comfy, make_clip, plan_reply, reference_workflow, saved_workflow,
+from fakes import (OBJECT_INFO, close, fake_comfy, fake_gemini, gemini_env, make_clip, plan_reply, reference_workflow, saved_workflow,
                    text_only_workflow)
 
 import ffmpeg
@@ -37,7 +37,7 @@ from pipelines.shorts import topic_history
 from pipelines.video import h3_prompt, media, paths
 from pipelines.video import output_metadata, upscale as video_upscale
 from pipelines.video import main as video_main
-from core import variety
+from core import variety, workflow_options
 from pipelines.video.run_state import RunState, list_runs
 
 
@@ -52,7 +52,12 @@ def png_bytes(color=(10, 200, 30)):
 
 
 SAVED_OPTIONS = [{"id": "steps", "kind": "number", "label": "Steps", "default": "20", "min": 1, "max": 150, "step": 1, "advanced": True},
-                 {"id": "negative", "kind": "text", "label": "Negative prompt", "default": "saved negative", "advanced": True}]
+                 {"id": "negative", "kind": "text", "label": "Negative prompt", "default": "saved negative", "advanced": True,
+                  "hint": workflow_options.HINTS["negative"]},
+                 # The model's file, always offered: greyed out where it's the only one installed that fits.
+                 {"id": "model_file", "kind": "choice", "label": "Model", "default": "model.safetensors", "choices": ["model.safetensors"],
+                  "labels": {"model.safetensors": "model"}, "model": True, "problem": "No other model that fits is installed.",
+                  "hint": workflow_options.HINTS["model_file"]}]
 
 
 class RestartReasonTest(unittest.TestCase):
@@ -63,7 +68,7 @@ class RestartReasonTest(unittest.TestCase):
         self.assertEqual(webapp.restart_reason(self.job("   🖼️ Image 5/24", "Traceback (most recent call last):"), 1), "exit code 1")
 
     def test_a_failure_before_comfyui_does_not_restart_it(self):
-        planning = self.job("▶ Stage 1/3: Prompts", "🧠 claude is writing 4 prompts...", "❌ Set ANTHROPIC_API_KEY in .env")
+        planning = self.job("▶ Stage 1/3: Prompts", "🧠 gemini is writing 4 prompts...", "❌ GEMINI_API_KEY is not set.")
         self.assertIsNone(webapp.restart_reason(planning, 1), "a fresh ComfyUI can't fix a missing key")
         self.assertEqual(webapp.restart_reason(self.job("🎛️ ComfyUI · started a workflow of 35 nodes", "Traceback"), 1), "exit code 1")
 
@@ -130,7 +135,7 @@ class QueueTopTest(unittest.TestCase):
         self.assertEqual(item["argv"][item["argv"].index("--seed") + 1], "0")
         self.assertIn("--direct", item["argv"])
         # Named as what it is in the queue, not "exact prompt"; one queued before it was, the same once read.
-        self.assertIn(" · LoRA comparison", item["detail"])
+        self.assertIn(" · LoRA style and strength test", item["detail"], "named as the test it is, not by its LoRAs")
         self.assertNotIn("exact prompt", item["detail"])
         older = {**item, "detail": item["detail"].replace("LoRA comparison", "exact prompt")}
         webapp.named_comparison(older)
@@ -160,7 +165,7 @@ class QueueTopTest(unittest.TestCase):
         self.assertIn("--direct", item["argv"], "your prompt as written")
         self.assertIn("--seed", item["argv"], "one seed for all")
         self.assertNotIn("--option", item["argv"], "each at its own defaults")
-        self.assertIn("workflow comparison · All T2I workflows", item["detail"])
+        self.assertIn("Workflow test · All T2I workflows", item["detail"])
 
     def test_an_llm_comparison_queues_one_image_for_each_prompt_model(self):
         from core import llm_tests
@@ -188,7 +193,7 @@ class QueueTopTest(unittest.TestCase):
         self.assertNotIn("--plan-only", argv, "nothing to read first")
         self.assertIn("--seed", argv, "one seed for all")
         self.assertTrue(item["label"].startswith("3 images"))
-        self.assertIn("LLM comparison", item["detail"])
+        self.assertIn("LLM test", item["detail"])
         # With an image, only those that can see it; and never beside a comparison that uses your prompt as written.
         with webapp.app.test_request_context("/", method="POST", data={"llm_test": "on"}), \
              mock.patch.object(image_panel.settings, "local_models", return_value=models), \
@@ -196,17 +201,135 @@ class QueueTopTest(unittest.TestCase):
             self.assertEqual([test["label"] for test in image_panel.compared_llms(webapp.request.form, 1)[0]], [image_panel.settings.short_name("gemma-4-12b")])
         self.assertIn("can't go with", image_panel.compared_llms({"llm_test": "on", "workflow_test_t2i": "on"}, 0)[1])
 
+    def test_the_mode_chosen_decides_the_images_a_run_takes(self):
+        # Krea-2's Mode: text2image by default takes none, image2image the one it starts from. The choice made is what counts.
+        mode = {"id": "one_of_t2i", "kind": "choice", "label": "Mode", "default": "text2image", "one_of": True,
+                "choices": ["text2image", "image2image"],
+                "takes_by": {"text2image": {"min_images": 0, "max_images": 0}, "image2image": {"min_images": 1, "max_images": 1}}}
+        takes = {"min_images": 0, "max_images": 0, "size": True, "options": [mode]}
+
+        def generate(**fields):
+            form = {"prompt": "a harbour", "count": "1", "prompt_mode": "direct", "start_later": "1", **fields}
+            with webapp.app.test_request_context("/generate/image", method="POST", data=form), \
+                 mock.patch.object(image_panel, "chosen_workflow", return_value=({}, takes, None)), \
+                 mock.patch.object(image_panel, "run_queue", self.queue), mock.patch.object(webapp, "run_queue", self.queue), \
+                 mock.patch.object(image_panel, "private_mode", return_value=False), mock.patch.object(webapp, "private_mode", return_value=False), \
+                 mock.patch.object(image_panel, "clean_inputs"), mock.patch.object(image_panel, "RunEta") as eta:
+                eta.return_value.plan.return_value = {"total": 10}
+                reply = image_panel.generate.__wrapped__()
+            return reply[0] if isinstance(reply, tuple) else reply
+
+        reply = generate(opt_one_of_t2i="image2image", image=(io.BytesIO(png_bytes()), "harbour.png"))
+        self.assertTrue(reply["ok"], reply)
+        self.assertIn("one_of_t2i=image2image", self.queue.items[-1]["argv"])
+        self.assertIn("leave the image out", generate(opt_one_of_t2i="text2image", image=(io.BytesIO(png_bytes()), "harbour.png"))["error"])
+        self.assertIn("choose one", generate(opt_one_of_t2i="image2image")["error"])
+
+    def file_comparison(self, form, options):
+        takes = {"min_images": 0, "max_images": 0, "size": True, "options": options}
+        form = {"prompt": "same prompt", "count": "15", "seed": "0", "start_later": "1", **form}
+        with webapp.app.test_request_context("/generate/image", method="POST", data=form), \
+             mock.patch.object(image_panel, "chosen_workflow", return_value=({}, takes, None)), \
+             mock.patch.object(image_panel, "run_queue", self.queue), mock.patch.object(webapp, "run_queue", self.queue), \
+             mock.patch.object(image_panel, "private_mode", return_value=False), mock.patch.object(webapp, "private_mode", return_value=False), \
+             mock.patch.object(image_panel, "clean_inputs"), mock.patch.object(image_panel, "RunEta") as eta:
+            eta.return_value.plan.return_value = {"total": 10}
+            reply = image_panel.generate.__wrapped__()
+        return reply[0] if isinstance(reply, tuple) else reply
+
+    FILE_OPTIONS = [{"id": "model_file", "kind": "choice", "label": "Model", "default": "a.safetensors", "model": True,
+                     "choices": ["a.safetensors", "b.safetensors", "c.safetensors"]},
+                    {"id": "vae_file", "kind": "choice", "label": "VAE", "default": "real.safetensors", "model": True,
+                     "choices": ["real.safetensors", "qwen.safetensors"]}]
+
+    def test_model_file_comparisons_run_every_combination_on_one_seed(self):
+        from core import lora_tests
+        result = self.file_comparison({"model_test": "1", "vae_test": "1"}, self.FILE_OPTIONS)
+        self.assertTrue(result["ok"], result)
+        item = self.queue.items[0]
+        tests = lora_tests.in_env(item["env"])
+        self.assertEqual(len(tests), 6, "each model with each VAE")
+        self.assertIn({"model_file": "b.safetensors", "vae_file": "qwen.safetensors"}, tests)
+        self.assertTrue(item["label"].startswith("6 images"))
+        self.assertEqual(item["argv"][item["argv"].index("--seed") + 1], "0")
+        self.assertIn("--direct", item["argv"], "your prompt as written, so only the files differ")
+        self.assertIn(" · Model + VAE test", item["detail"])
+
+    def test_model_file_comparison_takes_a_lora_comparison_in_each(self):
+        from core import lora_tests, workflow_options
+        loras = workflow_options.lora_options("0", "krea_a.safetensors", 1, ["krea_a.safetensors", "krea_b.safetensors"])
+        result = self.file_comparison({"vae_test": "1", "lora_style_test": "1"}, self.FILE_OPTIONS + loras)
+        self.assertTrue(result["ok"], result)
+        tests = lora_tests.in_env(self.queue.items[0]["env"])
+        self.assertEqual(len(tests), 4, "both LoRAs with both VAEs")
+        self.assertEqual({(t["lora_name"], t["vae_file"]) for t in tests},
+                         {(l, v) for l in ("krea_a.safetensors", "krea_b.safetensors") for v in ("real.safetensors", "qwen.safetensors")})
+        self.assertIn("LoRA style + VAE test", self.queue.items[0]["detail"])
+
+    def test_a_model_file_comparison_needs_files_to_compare_and_stays_small(self):
+        result = self.file_comparison({"model_test": "1"}, [])
+        self.assertIn("no other model", result["error"])
+        # Up to as many as a set of your own prompt takes (50): 8 models with 8 VAEs is past it.
+        many = [{**self.FILE_OPTIONS[0], "default": "m0.safetensors", "choices": [f"m{n}.safetensors" for n in range(8)]},
+                {**self.FILE_OPTIONS[1], "default": "v0.safetensors", "choices": [f"v{n}.safetensors" for n in range(8)]}]
+        self.assertIn("(up to 50)", self.file_comparison({"model_test": "1", "vae_test": "1"}, many)["error"])
+
+    def test_model_file_comparison_images_say_what_they_ran(self):
+        from core import file_tests, lora_tests
+        tests = [{"model_file": "KREA\\krea2_turbo_fp8_scaled.safetensors", "vae_file": v}
+                 for v in ("krea2RealVae_v10.safetensors", "qwen_image_vae.safetensors")]
+        shots = lora_tests.shots({"prompt": "p", "title": "t"}, tests, 7)
+        self.assertEqual(shots[1]["title"], "Model Krea-2 Turbo fp8 · VAE Qwen-Image", "short names: the model all ran said whole")
+        self.assertEqual(lora_tests.shot_lora(shots[0], shots), "Model Krea-2 Turbo fp8 · VAE Krea2Real", "its pill: the files it ran")
+        self.assertEqual(file_tests.tested(shots), [("vae", "VAEs: Krea2Real, Qwen-Image")], "the set: only what it compared")
+        self.assertEqual(lora_tests.title_of({**shots[0], "title": "an old long title"}, shots), "Model Krea-2 Turbo fp8 · VAE Krea2Real",
+                         "one made before: its title said as a new one's is")
+        # Three Krea-2 Turbos: what they share said once, each by what tells it apart.
+        from core import model_files
+        names = ["Krea2_Turbo_convrot_int8mixed.safetensors", "krea2_turbo_fp8_scaled.safetensors", "krea2_turbo_int8_convrot.safetensors"]
+        self.assertEqual(model_files.several("model", names), "Models: int8 mixed, fp8, int8")
+        self.assertEqual(model_files.friendly("qwen3VL4BAbliteratedComfyui_v10_full_fp8.safetensors"), "Qwen3-VL 4B abliterated")
+        self.assertEqual(lora_tests.in_env({lora_tests.ENV: json.dumps(tests)}), tests, "files alone are a comparison too")
+        with self.assertRaises(ValueError):
+            lora_tests.in_env({lora_tests.ENV: json.dumps([{"steps": "40"}])})
+
+    def test_a_number_setting_left_empty_is_its_default(self):
+        from werkzeug.datastructures import MultiDict
+        options = [{"id": "one_of_x.denoise", "kind": "number", "label": "Denoise", "default": "0.6", "min": 0.2, "max": 1, "step": 0.02}]
+        chosen, error = webapp.form_options(MultiDict({"opt_one_of_x.denoise": ""}), {"options": options})
+        self.assertIsNone(error)
+        self.assertEqual(chosen["one_of_x.denoise"], "0.6")
+
+    def test_a_lora_strength_test_stops_at_the_top_of_its_range(self):
+        from core import lora_tests, workflow_options
+        known, unknown = "Krea2_PornMaster_Uncensored_V1_NSFW.safetensors", "krea_b.safetensors"
+        options = workflow_options.lora_options("0", known, 1, [known, unknown])
+        tests = lora_tests.variations({"lora_strength_test": "1", "lora_style_test": "1", "lora_test_step": "0.25"}, options, True)
+        strengths = lambda name: [t["lora_strength"] for t in tests if t["lora_name"] == name]
+        self.assertEqual(strengths(known), ["0.50", "0.75", "1.00"], "PornMaster's range is 0.5-1: from 0.5 up to 1")
+        self.assertEqual(strengths(unknown)[-1], "2.00", "one with no range: up to 2, as before")
+        # Ours first; where there's none of ours, the author's.
+        with mock.patch.dict(lora_tests.lora_hints.RANGES, {"krea_b": {"ours": None, "author": "0.6-0.8"}}):
+            tests = lora_tests.variations({"lora_strength_test": "1", "lora_style_test": "1", "lora_test_step": "0.25"}, options, True)
+            self.assertEqual(strengths(unknown), ["0.60"], "the author's 0.6-0.8, where we have no range: 0.85 is past it")
+            self.assertEqual(strengths(known)[-1], "1.00", "ours, though the author has one too")
+        # An increment past a LoRA's range still tests it once, at the bottom of it.
+        tests = lora_tests.variations({"lora_strength_test": "1", "lora_test_step": "1.5", "opt_lora_name": known}, options, True)
+        self.assertEqual([t["lora_strength"] for t in tests], ["0.5"])
+
     def test_lora_image_comparison_pills_name_the_loras_tested(self):
         from types import SimpleNamespace
         from core import lora_tests, pills
         tests = [{"lora": "1", "lora_name": name, "lora_strength": strength}
                  for name in ("Krea2_a.safetensors", "Krea2_b.safetensors") for strength in ("0.5", "1.0", "2.0")]
         shots = lora_tests.shots({"prompt": "p", "title": "t"}, tests, 7)
-        # The set's own LoRA setting (on, another file) is none of those tested: it isn't what its pills say.
+        # A comparison's LoRAs aren't the set's pills (its test pill says it's one), nor is its own LoRA setting.
         state = SimpleNamespace(shots=shots, workflow="w.json", options={"lora": "1", "lora_name": "other.safetensors"})
         with mock.patch.object(pills.workflow_options, "loras_used", return_value=["other (1)"]) as used:
-            self.assertEqual(pills.image_loras(state), ["a (0.5-2)", "b (0.5-2)"])
+            self.assertEqual(pills.image_loras(state), [])
             used.assert_not_called()
+            from core import test_names
+            self.assertEqual(test_names.of_shots(shots), "LoRA style and strength test")
             self.assertEqual(lora_tests.shot_lora(shots[1]), "a (1)", "each image: its own LoRA and strength")
             self.assertIsNone(lora_tests.shot_lora({"prompt": "p"}))
             state.shots = [{"prompt": "p"}]
@@ -680,10 +803,10 @@ class PanelTest(unittest.TestCase):
         self.addCleanup(timing_path.stop)
         self.comfy = fake_comfy(self.temp)
         self.addCleanup(close, self.comfy)
-        self.claude = fake_claude()
-        self.addCleanup(close, self.claude)
+        self.llm = fake_gemini()
+        self.addCleanup(close, self.llm)
         patcher = mock.patch.dict(os.environ, {
-            "COMFYUI_URL": self.comfy.url, "ANTHROPIC_BASE_URL": self.claude.url, "ANTHROPIC_API_KEY": "test"})
+            "COMFYUI_URL": self.comfy.url, **gemini_env(self.llm)})
         patcher.start()
         self.addCleanup(patcher.stop)
         webapp._comfyui_cache["at"] = 0.0
@@ -731,7 +854,7 @@ class PanelTest(unittest.TestCase):
         self.wait_until(idle, "the job to end")
 
     def generate(self, **fields):
-        form = {"prompt": "a storm rolls in", "duration": "60", "llm": "claude", "size": "64x64",
+        form = {"prompt": "a storm rolls in", "duration": "60", "llm": "gemini", "size": "64x64",
                 "image": (io.BytesIO(png_bytes()), "harbour.png"), **fields}
         return self.client.post("/generate/video", data={k: v for k, v in form.items() if v is not None},
                                 content_type="multipart/form-data")
@@ -887,7 +1010,7 @@ class PanelTest(unittest.TestCase):
             self.assertIs(find(flags), state)
             self.assertIsNone(find(["--duration", "30", "--start", "director", "--clip-seconds", "8-8", "--fixed-clips"]))
             self.assertIs(find(flags + ["--llm", "gemini"]), state)
-            self.assertIsNone(find(flags + ["--llm", "claude"]), "a different prompt model needs a new plan")
+            self.assertIsNone(find(flags + ["--llm", "local"]), "a different prompt model needs a new plan")
             self.assertIsNone(find(["--duration", "32", "--start", "chain"]))
             self.assertIsNone(find(["--duration", "30", "--start", "chain", "--clip-seconds", "10-10", "--fixed-clips"]))
 
@@ -1093,7 +1216,8 @@ class PanelTest(unittest.TestCase):
         self.assertTrue(any("Invalid prompt writer timing" in entry for entry in logs.output))
         self.assertTrue(any("disk full" in entry for entry in logs.output))
 
-    def test_prompt_writer_choices_exclude_claude_and_use_valid_default(self):
+    def test_prompt_writer_choices_are_gemini_and_local_with_a_valid_default(self):
+        # "claude", from an old .env: no longer one, so the default.
         for provider, key in (("gemini", "key"), ("claude", ""), ("", "key")):
             with self.subTest(provider=provider), mock.patch.dict(os.environ, {"LLM_PROVIDER": provider, "GEMINI_API_KEY": key}):
                 html = self.client.get("/").get_data(as_text=True)
@@ -1107,7 +1231,7 @@ class PanelTest(unittest.TestCase):
                     self.assertNotRegex(select, r'value="gemini"[^>]* selected>')
                 config = json.loads(html.split('<script id="panelConfig" type="application/json">', 1)[1].split("</script>", 1)[0])
                 self.assertEqual(config["default_llm"], "local")
-        self.assertIn("claude", dict(video_panel.planner.LLMS))
+        self.assertEqual([name for name, _ in video_panel.planner.LLMS], ["gemini", "local"])
 
     def test_local_qwen_rejects_attached_images_before_queuing(self):
         with mock.patch.object(video_panel.h3_refiner, "local_llm_model", return_value="qwen3-14b"):
@@ -1172,7 +1296,7 @@ class PanelTest(unittest.TestCase):
         self.assertEqual(self.comfy.prompts, [], "reviewing first renders nothing")
         self.assertEqual(status["progress"]["stage"][:2], [1, 1])
         self.assertIn("--plan-only", status["command"])
-        self.assertEqual(self.claude.requests[0]["body"]["messages"][0]["content"][0]["type"], "image")
+        self.assertIn("image", self.llm.requests[0]["parts"][0])
 
         run_id = status["progress"]["run_id"]
         self.assertEqual([run["id"] for run in status["stopped_runs"]], [run_id])
@@ -1182,7 +1306,7 @@ class PanelTest(unittest.TestCase):
 
         detail = self.client.get(f"/runs/{run_id}").get_json()
         self.assertEqual(detail["title"], "The Harbour Storm")
-        self.assertEqual(detail["llm"], "claude")
+        self.assertEqual(detail["llm"], "gemini")
         self.assertEqual(len(detail["shots"]), 8)
         self.assertFalse(detail["shots"][0]["rendered"])
         self.assertEqual(self.client.get(f"/runs/{run_id}/image").status_code, 200)
@@ -1297,13 +1421,13 @@ class PanelTest(unittest.TestCase):
         self.assertTrue(self.generate(review="1").get_json()["ok"])
         self.wait_idle()
         run_id = self.only_run().id
-        asked = len(self.claude.requests)
+        asked = len(self.llm.requests)
 
         # Asked to read the prompts again: they're there, and nothing starts.
         reply = self.generate(review="1").get_json()
         self.assertEqual(reply["shots"], run_id)
         self.assertEqual(reply["continued"], self.only_run().title)
-        self.assertEqual(len(self.claude.requests), asked)
+        self.assertEqual(len(self.llm.requests), asked)
 
         # Generate, with a stopped run on the same brief and image: that run, and no new plan.
         reply = self.generate().get_json()
@@ -1311,27 +1435,27 @@ class PanelTest(unittest.TestCase):
         self.wait_idle()
         status = self.status()
         self.assertEqual(status["returncode"], 0, status["lines"])
-        self.assertEqual(len(self.claude.requests), asked, "the plan was already paid for")
+        self.assertEqual(len(self.llm.requests), asked, "the plan was already paid for")
         self.assertEqual(len(status["videos"]["video"]), 1)
 
     def test_generate_plans_anew_when_the_film_differs(self):
         self.assertTrue(self.generate(review="1").get_json()["ok"])
         self.wait_idle()
-        asked = len(self.claude.requests)
+        asked = len(self.llm.requests)
         for change in ({"prompt": "something else"}, {"duration": "90"},
                        {"image": (io.BytesIO(png_bytes((200, 10, 10))), "other.png")}):
             self.assertNotIn("continued", self.generate(review="1", **change).get_json(), change)
             self.wait_idle()
-        self.assertGreaterEqual(len(self.claude.requests), asked + 3, "each one needed its own plan")
+        self.assertGreaterEqual(len(self.llm.requests), asked + 3, "each one needed its own plan")
 
     def test_generate_keeps_the_plan_when_the_size_changes(self):
         self.assertTrue(self.generate(review="1").get_json()["ok"])
         self.wait_idle()
-        asked = len(self.claude.requests)
+        asked = len(self.llm.requests)
         reply = self.generate(size="96x96").get_json()
         self.assertIn("continued", reply)
         self.wait_idle()
-        self.assertEqual(len(self.claude.requests), asked)
+        self.assertEqual(len(self.llm.requests), asked)
         self.assertEqual(self.status()["returncode"], 0)
 
     def audio_file(self, seconds=20):
@@ -1341,7 +1465,7 @@ class PanelTest(unittest.TestCase):
             return io.BytesIO(f.read()), "song.wav"
 
     def test_a_film_with_audio_is_as_long_as_it(self):
-        self.claude.reply = plan_reply(shots=3, seconds=7)
+        self.llm.reply = plan_reply(shots=3, seconds=7)
         reply = self.generate(duration="60", audio_mode="file", audio_file=self.audio_file()).get_json()
         self.assertTrue(reply["ok"], reply)
         self.wait_idle()
@@ -1353,15 +1477,15 @@ class PanelTest(unittest.TestCase):
         self.assertEqual(sorted(stream["codec_type"] for stream in streams), ["audio", "video"])
 
     def test_the_same_audio_keeps_the_plan_and_other_audio_does_not(self):
-        self.claude.reply = plan_reply(shots=3, seconds=7)
+        self.llm.reply = plan_reply(shots=3, seconds=7)
         self.assertTrue(self.generate(review="1", audio_mode="file", audio_file=self.audio_file()).get_json()["ok"])
         self.wait_idle()
-        asked = len(self.claude.requests)
+        asked = len(self.llm.requests)
         self.assertIn("continued", self.generate(review="1", audio_mode="file", audio_file=self.audio_file()).get_json())
-        self.assertEqual(len(self.claude.requests), asked)
+        self.assertEqual(len(self.llm.requests), asked)
         self.assertNotIn("continued", self.generate(review="1", audio_mode="file", audio_file=self.audio_file(21)).get_json())
         self.wait_idle()
-        self.assertEqual(len(self.claude.requests), asked + 1)
+        self.assertEqual(len(self.llm.requests), asked + 1)
 
     def test_audio_options_are_checked(self):
         self.assertIn("Write the text", self.generate(audio_mode="text").get_json()["error"])
@@ -1369,7 +1493,7 @@ class PanelTest(unittest.TestCase):
         self.assertIn("Unknown voice", self.generate(audio_mode="text", narration="Hello", voice="nobody").get_json()["error"])
 
     def test_a_film_of_one_clip(self):
-        self.claude.reply = plan_reply(shots=1, seconds=5)
+        self.llm.reply = plan_reply(shots=1, seconds=5)
         self.assertTrue(self.generate(duration="5").get_json()["ok"])
         self.wait_idle()
         status = self.status()
@@ -1397,7 +1521,7 @@ class PanelTest(unittest.TestCase):
 
     def test_a_preset_is_what_gets_rendered(self):
         self.comfy.script = []
-        self.claude.reply = plan_reply(shots=1, seconds=5)
+        self.llm.reply = plan_reply(shots=1, seconds=5)
         self.assertTrue(self.generate(duration="5", size="352x640").get_json()["ok"])
         self.wait_idle()
         run = self.only_run()
@@ -1407,7 +1531,7 @@ class PanelTest(unittest.TestCase):
 
     def test_a_short_film_says_so_in_the_queue(self):
         self.comfy.script = ["hang"]
-        self.claude.reply = plan_reply(shots=1, seconds=5)
+        self.llm.reply = plan_reply(shots=1, seconds=5)
         self.assertTrue(self.generate(duration="5").get_json()["ok"])
         self.wait_until(lambda: self.comfy.hanging, "the clip to start")
         self.assertTrue(self.generate(duration="150", review="1").get_json()["queued"])
@@ -1454,7 +1578,7 @@ class PanelTest(unittest.TestCase):
         self.comfy.script = ["ok"] * 8
         self.assertFalse(self.generate().get_json()["queued"])
         self.assertTrue(self.generate(prompt="next film", review="1").get_json()["queued"])
-        self.wait_until(lambda: len(self.claude.requests) == 2, "the second film to start")
+        self.wait_until(lambda: len(self.llm.requests) == 2, "the second film to start")
         self.wait_idle()
         self.assertEqual(len(list_runs()), 2)
         self.assertEqual({run.brief for run in list_runs()}, {"a storm rolls in", "next film"})
@@ -1474,7 +1598,7 @@ class PanelTest(unittest.TestCase):
 
         self.assertEqual(self.client.post("/skip").get_json(), {"ok": True, "error": None})
         self.assertIn(("/interrupt", {"prompt_id": "p2"}), self.comfy.cancels)
-        self.wait_until(lambda: len(self.claude.requests) == 2, "the next film to start by itself")
+        self.wait_until(lambda: len(self.llm.requests) == 2, "the next film to start by itself")
         self.wait_idle()
         status = self.status()
         self.assertFalse(status["queue"]["held"])
@@ -1483,6 +1607,25 @@ class PanelTest(unittest.TestCase):
         self.assertEqual(status["returncode"], 0)
         self.assertEqual(len(self.comfy.prompts), 9, "only the cut-off clip and those after it were rendered")
         self.assertNotIn(skipped, [run["id"] for run in status["stopped_runs"]])
+
+    def test_a_job_stopped_before_its_run_saved_anything_starts_over_from_the_queue(self):
+        # An image set's run is named as it starts, but saved only once its prompts are written: stopped before then,
+        # it isn't lost, it goes back in the queue to start over with its settings, and leaves no Stopped line.
+        queue = webapp.run_queue
+        saved = (list(queue.items), list(queue.results), queue.held, queue.next_id)
+        try:
+            queue.items[:] = []
+            item = {"id": 655, "pipeline": "image", "label": "37 images: a medium shot", "argv": ["main.py", "--count", "37"]}
+            queue.results[:] = [{"job_id": 655, "outcome": "stopped", "run_id": "image_20261117_211845"}]
+            with mock.patch.object(webapp.PIPELINES["image"], "load_run", return_value=None):
+                queue._rejoin_stopped(item, "image_20261117_211845", True, save=False)
+            self.assertEqual([(again["label"], again["argv"], again.get("resume")) for again in queue.items],
+                             [("37 images: a medium shot", ["main.py", "--count", "37"], None)], "back in the queue, as it was asked for")
+            self.assertEqual(queue.results, [], "no Stopped line naming a run that isn't there")
+            self.assertTrue(queue.held, "alone, it waits rather than starting again at once")
+        finally:
+            queue.items[:], queue.results[:] = saved[0], saved[1]
+            queue.held, queue.next_id = saved[2], saved[3]
 
     def test_a_paused_job_with_nothing_after_it_rejoins_a_held_queue(self):
         # Alone in the queue, a pause doesn't start it again at once: it waits at the bottom, the queue on hold.
@@ -1512,7 +1655,7 @@ class PanelTest(unittest.TestCase):
             self.assertTrue(self.status()["cancelling"])
             self.assertEqual(self.client.post("/skip").get_json(), {"ok": True, "cancelling": True}, "asked twice, still once")
             saved["yet"] = True
-            self.wait_until(lambda: len(self.claude.requests) == 2, "the next in the queue to start once it is cancelled")
+            self.wait_until(lambda: len(self.llm.requests) == 2, "the next in the queue to start once it is cancelled")
         self.wait_idle()
         status = self.status()
         self.assertFalse(status["queue"]["held"])
@@ -1529,7 +1672,7 @@ class PanelTest(unittest.TestCase):
             self.assertTrue(self.client.post("/skip").get_json()["ok"])
         self.wait_idle()
         self.assertTrue(self.status()["queue"]["held"], "held before, held after")
-        self.assertEqual(len(self.claude.requests), 1, "the next one waits for Resume")
+        self.assertEqual(len(self.llm.requests), 1, "the next one waits for Resume")
 
     def test_presets_are_kept_by_name_per_side(self):
         if os.path.exists(webapp.PRESETS_PATH):
@@ -1569,11 +1712,10 @@ class PanelTest(unittest.TestCase):
                 webapp.run_facts(image)
             self.assertEqual((facts["loras"], facts["explicit"]), (["realism_v2 (0.7)"], True))
             used.assert_called_once_with(workflow, {"lora_strength": "0.7"}, "image")  # Worked out once: the queue is drawn every poll
-        # A LoRA comparison: each LoRA with the strengths it tries.
+        # A LoRA comparison lists none: its line names the test ("LoRA strength test"), each image its own.
         tried = [{"lora": "1", "lora_name": "Krea2_realism-V2.safetensors", "lora_strength": strength} for strength in ("0.5", "1.5")]
         compared = {"pipeline": "image", "argv": [], "env": {webapp.LORA_TEST_ENV: json.dumps(tried)}}
-        self.assertEqual(len(webapp.run_facts(compared)["loras"]), 1)
-        self.assertTrue(webapp.run_facts(compared)["loras"][0].endswith("(0.5-1.5)"))
+        self.assertNotIn("loras", webapp.run_facts(compared))
         self.assertNotIn("explicit", webapp.run_facts(compared))
 
     def test_a_side_has_one_default_preset_at_most(self):
@@ -1797,7 +1939,7 @@ class PanelTest(unittest.TestCase):
         self.assertTrue(self.generate(prompt_mode="direct", prompt="A red kite over a grey sea", duration="20").get_json()["ok"])
         self.wait_idle()
         run = self.only_run()
-        self.assertEqual(self.claude.requests, [], "no LLM is asked")
+        self.assertEqual(self.llm.requests, [], "no LLM is asked")
         self.assertTrue(run.shots and all(shot["prompt"] == "A red kite over a grey sea" for shot in run.shots))
         self.assertEqual(sum(shot["seconds"] for shot in run.shots), 20)
 
@@ -1816,18 +1958,18 @@ class PanelTest(unittest.TestCase):
         self.assertEqual(len(os.listdir(paths.INPUTS_DIR)), 1, "only the last one, until the next film")
 
     def test_failed_plan_says_why_and_leaves_nothing(self):
-        self.claude.status = 401
+        self.llm.status = 401
         self.assertTrue(self.generate(review="1").get_json()["ok"])
         self.wait_idle()
         status = self.status()
         self.assertEqual(status["returncode"], 1)
-        self.assertTrue(any("ANTHROPIC_API_KEY" in line["text"] for line in status["lines"]), status["lines"])
+        self.assertTrue(any("Gemini failed" in line["text"] for line in status["lines"]), status["lines"])
         self.assertEqual(list_runs(), [])
         self.assertIsNone(status["queue"]["results"][-1]["run_id"])
         self.assertIsNotNone(status["queue"]["results"][-1]["job_id"])
 
     def test_a_failure_without_a_saved_run_keeps_its_settings(self):
-        self.claude.status = 401
+        self.llm.status = 401
         self.assertTrue(self.generate(review="1", prompt="a fox crossing the snow").get_json()["ok"])
         self.wait_idle()
         failure = self.status()["queue"]["results"][-1]
@@ -1863,7 +2005,7 @@ class PanelTest(unittest.TestCase):
             reply = self.generate(**fields)
             self.assertEqual(reply.status_code, 400, fields)
             self.assertIn(expected, reply.get_json()["error"])
-        self.assertEqual(self.claude.requests, [])
+        self.assertEqual(self.llm.requests, [])
 
     def test_chosen_llm_without_a_key_is_refused(self):
         with mock.patch.object(video_panel.planner, "llm_configured", return_value=False):
@@ -1915,7 +2057,7 @@ class PanelTest(unittest.TestCase):
         self.wait_idle()
         run = self.only_run()
         self.assertTrue(run.final, [l["text"] for l in webapp.job.lines][-15:])
-        self.assertEqual(run.options, {"steps": "12"})
+        self.assertEqual(run.options, {"steps": "12", "negative": "saved negative", "model_file": "model.safetensors"}, "what was chosen, and the rest as the workflow has it")
         self.assertTrue(all(p["prompt"]["6"]["inputs"]["steps"] == 12 for p in self.comfy.prompts), "every clip")
         clips = len(self.comfy.prompts)
         film = os.path.basename(run.final)
@@ -1927,7 +2069,7 @@ class PanelTest(unittest.TestCase):
         self.assertEqual(listed["llm"], run.llm)
         # The same again: what it was made with, and the image it was given.
         settings = self.client.get(f"/runs/{run.id}").get_json()["settings"]
-        self.assertEqual((settings["workflow"], settings["options"], settings["images"]), ("wan.json", {"steps": "12"}, 1))
+        self.assertEqual((settings["workflow"], settings["options"], settings["images"]), ("wan.json", {"steps": "12", "negative": "saved negative", "model_file": "model.safetensors"}, 1))
         # Every field of the form it was queued with, so it reopens exactly as it was made.
         self.assertEqual((settings["form"]["workflow"], settings["form"]["opt_steps"]), ("wan.json", "12"))
         self.assertEqual((settings["prompt_mode"], settings["llm"]), ("llm", run.llm))
@@ -2008,7 +2150,7 @@ class PanelTest(unittest.TestCase):
             self.assertEqual(sorted(name for name in sent["6"]["inputs"] if name.startswith("ref_images")),
                              ["ref_images.ref_image_0", "ref_images.ref_image_1"])
         self.assertTrue(os.path.exists(run.image_paths[1]))
-        guide = self.claude.requests[0]["body"]["messages"][0]["content"][-1]["text"]
+        guide = self.llm.requests[0]["parts"][-1]["text"]
         self.assertIn("<Picture 2> adds to it", guide, "extra context, by default")
         self.assertNotIn("for you alone", guide, "the video model sees this one")
 
@@ -2025,7 +2167,7 @@ class PanelTest(unittest.TestCase):
             self.assertEqual(reply.status_code, 400, workflow)
             self.assertIn("in order", reply.get_json()["error"])
         self.assertEqual(self.generate(workflow="t2v.json", image_2=image()).status_code, 400)
-        self.assertEqual(self.claude.requests, [])
+        self.assertEqual(self.llm.requests, [])
 
     def test_an_unknown_role_for_image_2_is_refused(self):
         reply = self.generate(image_2_role="villain")
@@ -2041,8 +2183,8 @@ class PanelTest(unittest.TestCase):
         self.assertEqual((run.image_count, run.start), (1, "chain"), "still a continuous take from image 1")
         self.assertEqual(len(run.image_paths), 1)
 
-        content = self.claude.requests[0]["body"]["messages"][0]["content"]
-        self.assertEqual([part["type"] for part in content], ["image", "image", "text"], "the LLM sees both")
+        content = self.llm.requests[0]["parts"]
+        self.assertEqual([next(iter(part)) for part in content], ["image", "image", "text"], "the LLM sees both")
         self.assertIn("for you alone", content[-1]["text"])
         self.assertIn("It shows a place", content[-1]["text"], "extra context, by default")
         # Every clip after the first starts on the last frame, and none of them starts on image 2.
@@ -2056,7 +2198,7 @@ class PanelTest(unittest.TestCase):
     def test_image_2_can_be_another_character(self):
         self.assertTrue(self.generate(image_2=(io.BytesIO(png_bytes()), "b.png"), image_2_role="character").get_json()["ok"])
         self.wait_idle()
-        guide = self.claude.requests[0]["body"]["messages"][0]["content"][-1]["text"]
+        guide = self.llm.requests[0]["parts"][-1]["text"]
         self.assertIn("another character", guide)
         self.assertIn("describe how they look in full", guide)
         self.assertNotIn("It shows a place", guide)
@@ -2839,7 +2981,9 @@ class PanelTest(unittest.TestCase):
         for side in ("shorts", "video", "image"):
             with self.subTest(side=side):
                 self.assertIn(f'<dialog id="{side}PresetDialog"', html)
-                self.assertIn(f'<label for="{side}Preset">Preset</label>', html)
+                # The presets as a list in the box (as Finished lists), the select behind it out of sight.
+                self.assertIn(f'<div class="preset-list" id="{side}PresetList" role="listbox"', html)
+                self.assertIn(f'<select id="{side}Preset" data-preset-side="{side}" data-native hidden', html)
                 self.assertEqual(html.count(f'id="{side}Preset"'), 1)
                 self.assertNotIn(f'id="{side}Preset"', header)
                 self.assertIn(f'data-preset-open="{side}" aria-haspopup="dialog"', html)

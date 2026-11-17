@@ -195,3 +195,48 @@ function syncWords(side, count = 1) {
   out.textContent = `${round5(words * (1 - spread))}–${round5(words * (1 + spread))} words, ~${each} tokens each`
     + (count > 1 ? `, ~${(each * count).toLocaleString('en-US')} total` : '');
 }
+// --- Steppers (− and +): held down, they keep stepping, faster and faster ---
+// One step as it's pressed, as a tap does; held past HOLD_DELAY_MS, it steps again and again, each wait shorter than the
+// last, down to HOLD_FASTEST_MS. Each step is the button's own click, so every stepper goes on doing what it does.
+// The click the browser sends as it's let go is the one already counted, not one more.
+const HOLD_DELAY_MS = 400, HOLD_FIRST_MS = 180, HOLD_FASTEST_MS = 25, HOLD_SPEEDUP = .82;
+let heldStepper = null;
+function stepperOf(target) {
+  const button = target && target.closest && target.closest('.count-stepper button, button[data-lora-step]');
+  return button && !button.disabled ? button : null;
+}
+function releaseStepper() {
+  if (!heldStepper) return;
+  clearTimeout(heldStepper.timer);
+  heldStepper = null;
+}
+document.addEventListener('pointerdown', e => {
+  const button = stepperOf(e.target);
+  if (!button || (e.pointerType === 'mouse' && e.button !== 0)) return;
+  releaseStepper();
+  const held = heldStepper = { button, repeated: false, wait: HOLD_FIRST_MS, timer: 0 };
+  const step = () => {
+    if (heldStepper !== held || button.disabled) { releaseStepper(); return; }
+    held.repeated = true;
+    held.synthetic = true;
+    button.click();
+    held.synthetic = false;
+    held.wait = Math.max(HOLD_FASTEST_MS, held.wait * HOLD_SPEEDUP);
+    held.timer = setTimeout(step, held.wait);
+  };
+  held.timer = setTimeout(step, HOLD_DELAY_MS);
+});
+for (const name of ['pointerup', 'pointercancel', 'blur']) (name === 'blur' ? window : document).addEventListener(name, () => {
+  // Let go after it repeated: its own click, coming next, isn't a step more.
+  if (heldStepper && heldStepper.repeated) heldStepper.swallow = true, clearTimeout(heldStepper.timer);
+  else releaseStepper();
+});
+document.addEventListener('pointerout', e => { if (heldStepper && e.target === heldStepper.button && !heldStepper.button.contains(e.relatedTarget)) releaseStepper(); });
+document.addEventListener('click', e => {
+  if (!heldStepper || !heldStepper.swallow || heldStepper.synthetic || stepperOf(e.target) !== heldStepper.button) return;
+  e.stopImmediatePropagation();
+  e.preventDefault();
+  heldStepper = null;
+}, true);
+// A long press on a stepper is a hold, not a phone's text selection or menu.
+document.addEventListener('contextmenu', e => { if (stepperOf(e.target)) e.preventDefault(); });

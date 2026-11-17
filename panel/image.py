@@ -10,7 +10,7 @@ from types import SimpleNamespace
 from flask import abort, request, send_file
 from PIL import Image
 
-from core import h3_refiner, llm_tests, lora_tests, pills, prompt_words, run_form, seeds, variety, workflow_options, workflow_tests
+from core import file_tests, h3_refiner, llm_tests, lora_tests, test_names, pills, prompt_words, run_form, seeds, variety, workflow_options, workflow_tests
 from core.upscale_eta import UpscaleEta
 from core.saved_workflows import display_label, shorthand
 from panel import settings
@@ -48,7 +48,10 @@ def chosen_workflow(form, image_count=None):
         if "problem" in entry:
             return None, None, f"{display_label(entry['label'])} can't run: {entry['problem']}"
         return {"COMFYUI_WORKFLOW": entry["path"]}, entry["takes"], None
-    entry = automatic([entry for entry in entries if "problem" not in entry], image_count or 0, form.get("image_mode") or "edit")
+    # A retired workflow (Settings) is only run when asked for by name, as a preset or a set it made does.
+    retired = set(settings.load().get("retired_workflows") or [])
+    entry = automatic([entry for entry in entries if "problem" not in entry and entry["name"] not in retired], image_count or 0,
+                      form.get("image_mode") or "edit")
     if entry:
         return {"COMFYUI_WORKFLOW": entry["path"]}, entry["takes"], None
     if image_count is None:
@@ -144,6 +147,24 @@ def region_flags(form, files, source_size):
     return [], None
 
 
+def inpaint_flags(flags, files, takes):
+    """
+    For a workflow's inpaint mode (core/workflow_options.py): the mask painted over image 1, saved under inputs, as
+    --inpaint-mask. Returns (flags, error); none when inpaint wasn't chosen.
+    """
+    chosen = dict(value.split("=", 1) for flag, value in zip(flags, flags[1:]) if flag == "--option" and "=" in value)
+    mode = next((option for option in takes.get("options") or [] if option.get("inpaint")), None)
+    if not mode or chosen.get(mode["id"], mode["default"]) != workflow_options.INPAINT:
+        return [], None
+    mask = files.get("inpaint_mask")
+    if not (mask and mask.filename):
+        return None, "Paint what to redraw on image 1 first."
+    os.makedirs(video_paths.INPUTS_DIR, exist_ok=True)
+    path = os.path.join(video_paths.INPUTS_DIR, secrets.token_hex(8) + "_inpaint.png")
+    mask.save(path)
+    return ["--inpaint-mask", path], None
+
+
 def model_problem(flags, takes, source):
     """Why the chosen workflow's model shouldn't make this: too big, or too many prompts for the LLM. None if it's fine."""
     model = takes.get("model")
@@ -200,11 +221,11 @@ def image_files(state):
             except OSError as error:
                 app.logger.warning("Could not read image metadata for %s: %s", path, error)
                 resolution = None
-            files.append({"position": position, "file": shot["file"], "title": shot["title"], "version": version,
+            files.append({"position": position, "file": shot["file"], "title": lora_tests.title_of(shot, state.shots), "version": version,
                           "resolution": resolution, "size_bytes": stat.st_size, "mtime": stat.st_mtime,
                           "upscaled": upscaled_with(shot) or upscaled_in_generation(state),
                           "prompt_llm": prompt_llm_pill(state.shot_setup(shot)),
-                          **({"lora": lora_tests.shot_lora(shot)} if shot.get("lora_test") else {}),
+                          **({"lora": lora_tests.shot_lora(shot, state.shots)} if shot.get("lora_test") else {}),
                           **({"workflow": workflow_tests.shot_workflow(shot)} if shot.get("workflow_test") else {})})
     return files
 
@@ -257,8 +278,8 @@ def describe_run(state):
             "_facts": facts,
             "_sibling": pills.sibling_key("image", state.brief),
             # A comparison: the pill of what it compares in the theme's colour, as Generate is while one is set up.
-            "_comparison": [kind for kind, on in (("workflow", lora_tests.tested(state.shots) or workflow_tests.kind_of(state.shots)),
-                                                  ("prompt", llm_tests.compared(state.shots))) if on],
+            # A comparison: its test pill ("VAE test") in the theme's colour.
+            "_comparison": bool(test_names.of_shots(state.shots)),
             "when": saved_at(state.path), "mtime": max((image["mtime"] for image in files), default=0), "clips": done, "finished": state.finished, "total": total, "images": files,
             "size": f"{state.width}x{state.height}", "estimate": RunEta(resume_argv(state), env, IMAGE_TIMINGS).plan()["total"]}
 
@@ -292,9 +313,16 @@ def size_flags(form):
     return ["--aspect", aspect, "--megapixels", megapixels], None
 
 
+def comparison_name(tests):
+    """What a comparison of one workflow's settings compares, as the queue says it: its LoRA, its files, or both."""
+    lora = any(test.get("lora_name") for test in tests)
+    files = any(key in file_tests.FILES for test in tests for key in test)
+    return "LoRA and model files comparison" if lora and files else "model files comparison" if files else "LoRA comparison"
+
+
 def testing(form):
     """A LoRA or workflow comparison: your prompt as written, on one seed, at the comparison's own number of images."""
-    return lora_tests.requested(form) or bool(workflow_tests.requested(form))
+    return lora_tests.requested(form) or file_tests.requested(form) or bool(workflow_tests.requested(form))
 
 
 def compared_workflows(form, image_count):
@@ -448,7 +476,8 @@ def estimate():
         env = {**env, llm_tests.ENV: json.dumps(llms)}
     if not error and not compared:
         try:
-            tests = lora_tests.variations(request.form, takes.get("options") or [], private_mode())
+            tests = file_tests.combine(lora_tests.variations(request.form, takes.get("options") or [], private_mode()),
+                                       file_tests.variations(request.form, takes.get("options") or []))
             if tests:
                 env = {**env, lora_tests.ENV: json.dumps(tests)}
         except ValueError as problem:
@@ -519,6 +548,14 @@ def generate():
             return {"ok": False, "error": f"{found['label']} can't run: {found['problem']}"}, 400
         # Image to prompt needs the picture it describes.
         takes = {**takes, **found.get("takes", {})}
+    # The workflow's own settings, first: a choice such as text2image or image2image takes images of its own, and what
+    # follows (the images it takes, Inpaint's mask) goes by the one chosen, not the workflow's default.
+    # A workflow comparison runs each workflow at its own defaults; a LoRA comparison with it is in each one's images.
+    option_flags, problem = ([], None) if compared else chosen_options(request.form, takes)
+    if problem:
+        return {"ok": False, "error": problem}, 400
+    flags += option_flags
+    takes = workflow_options.takes_for(takes, dict(value.split("=", 1) for flag, value in zip(flags, flags[1:]) if flag == "--option" and "=" in value))
     if len(uploads) < takes["min_images"]:
         return {"ok": False, "error": "This workflow edits an image: choose one." if takes["min_images"] == 1 else f"This workflow needs {takes['min_images']} images."}, 400
     if len(uploads) > takes["max_images"]:
@@ -536,19 +573,20 @@ def generate():
     if error:
         return {"ok": False, "error": error}, 400
     flags += extra
+    inpaint, error = inpaint_flags(flags, request.files, takes)
+    if error:
+        return {"ok": False, "error": error}, 400
+    flags += inpaint
     # What made the images given, so an edit never starts from the noise that made one (core/seeds.py avoid).
     for upload in uploads:
         flags += [flag for seed in sorted(media.seeds_in(upload.stream)) for flag in ("--source-seed", str(seed))]
     problem = model_problem(flags, takes, images[0].size if images else None)
     if problem:
         return {"ok": False, "error": problem}, 400
-    # A workflow comparison runs each workflow at its own defaults; a LoRA comparison with it is in each one's images.
-    option_flags, problem = ([], None) if compared else chosen_options(request.form, takes)
-    if problem:
-        return {"ok": False, "error": problem}, 400
-    flags += option_flags
     try:
-        tests = [] if compared else lora_tests.variations(request.form, takes.get("options") or [], private_mode())
+        # A LoRA comparison, a comparison of the files it runs (Model, Text encoder, VAE), or each in the other.
+        tests = [] if compared else file_tests.combine(lora_tests.variations(request.form, takes.get("options") or [], private_mode()),
+                                                       file_tests.variations(request.form, takes.get("options") or []))
     except ValueError as error:
         return {"ok": False, "error": str(error)}, 400
     if tests:
@@ -581,6 +619,8 @@ def generate():
     if "--areas" in extra:
         areas_file = extra[extra.index("--areas") + 1]
         region_files = [areas_file, areas_file.replace("_areas.json", "_mask.png")]
+    # So does what an inpaint mode redraws.
+    region_files += inpaint[1:]
     clean_inputs(keep=region_files)
     image_paths = [os.path.join(video_paths.INPUTS_DIR, f"{secrets.token_hex(8)}.png") for _ in images]
     for image, path in zip(images, image_paths):
@@ -593,10 +633,9 @@ def generate():
         mode, "edits an image" if images else None)
     # A comparison is your prompt as written, whatever writes prompts otherwise: named as what it is.
     writer = ("its own instruction" if mode in ("areas", "expand")
-              else "LLM comparison" if llms
-              else "workflow and LoRA comparison" if compared and any("lora_test" in test for test in compared)
-              else "workflow comparison" if compared
-              else "LoRA comparison" if tests else ROLE_NAMES.get(role) or llm or "exact prompt")
+              else "LLM test" if llms
+              else test_names.of_shots(workflow_tests.shots({}, compared, 0)) if compared
+              else test_names.of_tests(tests) or "exact prompt" if tests else ROLE_NAMES.get(role) or llm or "exact prompt")
     fixed_seed = seed_fixed(request.form)
     detail = [f"{count} {'image' if count == 1 else 'images'}", *([what] if what else []), writer,
               *(["fixed seed"] if fixed_seed else []), *(["review the prompts first"] if plan_only else [])]
@@ -1094,7 +1133,7 @@ def delete_image_set(run_id):
 
 def context():
     return {
-        "image_llms": [{"name": name, "label": label, "ready": planner.llm_configured(name)} for name, label in planner.LLMS if name != "claude"],
+        "image_llms": [{"name": name, "label": label, "ready": planner.llm_configured(name)} for name, label in planner.LLMS],
         "image_stages": STAGES,
         "image_most": image_planner.MAX_IMAGES,
         "image_most_written": image_planner.MAX_WRITTEN,

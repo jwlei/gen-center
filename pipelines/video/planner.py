@@ -1,4 +1,3 @@
-import base64
 import math
 import os
 import re
@@ -13,14 +12,7 @@ from core.llm_reply import CutOff
 from pipelines.video import h3_prompt, roles, wan_prompt
 
 # Who can write the plan: (name, what the panel calls it).
-LLMS = (("gemini", "Gemini (free tier)"), ("claude", "Claude Opus 5.5 (API)"),
-        ("local", "Local model"))
-
-DEFAULT_CLAUDE_MODEL = "claude-opus-5-5"
-# Its default is 'medium'. A film's worth of prompts that have to fit together earns more thought.
-CLAUDE_EFFORT = "high"
-# Long replies are streamed, so a high ceiling can't run into a request timeout.
-CLAUDE_MAX_TOKENS = 64000
+LLMS = (("gemini", "Gemini (free tier)"), ("local", "Local model"))
 
 # A whole film's prompts come back in one reply: about 75 of them at the longest,
 # which takes a while. A model that says nothing for this long is overloaded or
@@ -104,7 +96,7 @@ class Plan(BaseModel):
     shots: list[Shot]
 
 
-# Claude's structured output needs every object closed and every field required.
+# The local model's structured output: every object closed and every field required.
 PLAN_SCHEMA = {
     "type": "object",
     "properties": {
@@ -130,13 +122,10 @@ def default_llm():
 
 
 def llm_configured(llm):
-    """Whether this LLM has credentials. Claude's can also be an `ant auth login` profile on disk."""
+    """Whether this LLM can be asked: Gemini with its key; the local model always."""
     if llm == "gemini":
         return bool(os.getenv("GEMINI_API_KEY"))
-    if llm == "local":
-        return True
-    return bool(os.getenv("ANTHROPIC_API_KEY") or os.getenv("ANTHROPIC_AUTH_TOKEN") or os.getenv("ANTHROPIC_PROFILE")
-                or os.path.isdir(os.path.expanduser(os.path.join("~", ".config", "anthropic"))))
+    return llm == "local"
 
 
 def clip_seconds(video_model=None, chosen=None):
@@ -382,57 +371,11 @@ def _ask_gemini(prompt, model, image_jpeg=None):
     return response.text or ""
 
 
-# --- Claude ---
-
-def _ask_claude(prompt, schema, image_jpeg=None):
-    """
-    Returns the reply's JSON text. Asks for the server-side fallback: a request one
-    model's safety classifier declines is run on another instead of failing the plan.
-    """
-    content = [{"type": "image", "source": {"type": "base64", "media_type": "image/jpeg",
-                                            "data": base64.standard_b64encode(image).decode("utf-8")}}
-               for image in _image_list(image_jpeg)] + [{"type": "text", "text": prompt}]
-    import anthropic  # Here, not at the top: two seconds to load, and most runs never ask Claude
-    try:
-        with anthropic.Anthropic().beta.messages.stream(
-            model=os.getenv("CLAUDE_MODEL") or DEFAULT_CLAUDE_MODEL,
-            max_tokens=CLAUDE_MAX_TOKENS,
-            betas=["server-side-fallback-2026-07-01"],
-            fallbacks="default",
-            output_config={"effort": CLAUDE_EFFORT, "format": {"type": "json_schema", "schema": schema}},
-            messages=[{"role": "user", "content": content}],
-        ) as stream:
-            response = stream.get_final_message()
-    except anthropic.AuthenticationError:
-        raise RuntimeError("Claude refused the API key. Check ANTHROPIC_API_KEY in .env.")
-    except anthropic.PermissionDeniedError as e:
-        raise RuntimeError(f"Claude doesn't allow this key to do that: {e.message}")
-    except anthropic.RateLimitError:
-        raise RuntimeError("Claude is rate limiting this key. Try again in a minute.")
-    except anthropic.APIStatusError as e:
-        raise RuntimeError(f"Claude returned an error ({e.status_code}): {e.message}")
-    except anthropic.APIConnectionError:
-        raise RuntimeError("Could not reach Claude. Check the internet connection.")
-    except TypeError:  # What the SDK raises when it finds no credentials at all
-        raise RuntimeError("No Claude credentials. Put ANTHROPIC_API_KEY in .env (see .env.example).")
-
-    log_api_call("Claude", response.model)
-    if response.stop_reason == "refusal":
-        raise RuntimeError("Claude declined this image or prompt. Try Gemini, or change the prompt.")
-    if response.stop_reason == "max_tokens":
-        raise CutOff("Claude's reply was cut off.")
-    # After a fallback the reply can hold the declined model's partial text first: the last block is the answer.
-    texts = [block.text for block in response.content if block.type == "text"]
-    return texts[-1] if texts else ""
-
-
 def _ask(llm, prompt, model, schema, image_jpeg=None, refiner=None):
     if llm == "local":
         if refiner is None:
             raise RuntimeError("The local model is not running.")
         return refiner.plan(prompt, schema, _image_list(image_jpeg))
-    if llm == "claude":
-        return _ask_claude(prompt, schema, image_jpeg)
     return _ask_gemini(prompt, model, image_jpeg)
 
 

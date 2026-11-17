@@ -40,3 +40,21 @@ def range_of(name):
 def author_range_of(name):
     """The author's own range for a LoRA, or None where none was found."""
     return (RANGES.get(key(name)) or {}).get("author")
+
+
+def bounds_of(name):
+    """
+    The range a strength test of a LoRA runs over, as (low, high): ours (0.5, 1.5 for "0.5–1.5"), or where there's
+    none, the author's; None where neither is known.
+    """
+    found = re.split(r"[–-]", range_of(name) or author_range_of(name) or "")
+    try:
+        return (float(found[0]), float(found[1])) if len(found) == 2 else None
+    except ValueError:
+        return None
+
+
+def top_of(name):
+    """Where a strength test of a LoRA stops: the top of bounds_of, or None."""
+    bounds = bounds_of(name)
+    return bounds[1] if bounds else None

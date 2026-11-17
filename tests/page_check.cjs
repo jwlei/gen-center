@@ -546,7 +546,7 @@ assert.strictEqual(run('fmtEta(9300)'), '~2h 35m');
 
 // A film's shots: the text people and models write can hold anything.
 const shots = {
-  id: 'run_20261101_120000', title: 'A <b>storm</b>', brief: 'say "hi"', start: 'chain', llm: 'claude', busy: false, finished: false,
+  id: 'run_20261101_120000', title: 'A <b>storm</b>', brief: 'say "hi"', start: 'chain', llm: 'gemini', busy: false, finished: false,
   shots: [
     { title: 'One', seconds: 8, prompt: 'She says </textarea><script>alert(1)</script>', rendered: true },
     { title: 'Two', seconds: 7, prompt: 'Plain', rendered: false },
@@ -871,7 +871,10 @@ assert(setHtml.includes('data-grid-set="image_20261102_120000"') && /<button typ
 }
 // Private mode's key in the top bar, by Settings: lit while on, and a tap turns it the other way.
 {
-  assert(/<div class="top-icons" id="topIcons">\s*<a href="#" id="privateToggle" role="button" aria-pressed="false"[^>]*><svg[\s\S]*?<\/a>\s*<a href="#" id="settingsBtn"/.test(html), 'the key, before Settings');
+  // In the box's second row now, under its power buttons.
+  assert(/<div class="top-icons-row" id="topIconsRow">\s*<a href="#" id="privateToggle" role="button" aria-pressed="false"[^>]*><svg[\s\S]*?<\/a>\s*<a href="#" id="settingsBtn"/.test(html), 'the key, before Settings');
+  assert(html.indexOf('id="powerRow"') > html.indexOf('id="topIcons"') && html.indexOf('id="powerRow"') < html.indexOf('id="topIconsRow"')
+    && /id="comfyMenu"[^>]*>\s*<button type="button" id="forceRestartComfy"/.test(html), "the power buttons first in it, Comfy's Force in a menu");
   assert(html.includes('aria-label="Private mode" title="Private mode: off"'), 'the initial control uses Private mode branding');
   assert(html.includes('<option value="gemini_sfw">Gemini, the local model for private runs</option>'),
     'private titling is rebranded without changing the saved setting value');
@@ -1116,7 +1119,7 @@ assert(once.includes('2 of 3'));
 els.imageSets.innerHTML = 'untouched';
 run('renderImageSets()');
 assert.strictEqual(els.imageSets.innerHTML, 'untouched', 'a poll with nothing new reloads no pictures');
-const imageRun = { id: 'image_1', is_image: true, title: 'T', brief: 'b', llm: 'claude', direct: false, size: '1024x1024', busy: false, finished: false,
+const imageRun = { id: 'image_1', is_image: true, title: 'T', brief: 'b', llm: 'gemini', direct: false, size: '1024x1024', busy: false, finished: false,
   shots: [{ title: 'One', prompt: '</textarea><script>x</script>', rendered: true, version: 1 }, { title: 'Two', prompt: 'p', rendered: false, version: 0 }] };
 context.imageRun = imageRun;
 const imageDialog = run('shotsHtml(imageRun)');
@@ -1224,29 +1227,33 @@ run(`syncOptions('testOptions', 'testOptionsBox', [{ id: 'group_x', kind: 'switc
     { id: 'switch_lightning_lora_name', kind: 'choice', label: 'LoRA', parent: 'switch_lightning_lora', default: 't.safetensors', choices: ['t.safetensors', 'u.safetensors'], labels: { 't.safetensors': 't' }, advanced: true, speed: true },
     { id: 'switch_lightning_lora_strength', kind: 'number', label: 'Strength', parent: 'switch_lightning_lora', default: '1', min: -2, max: 2, step: 0.05, advanced: true, speed: true }], 'w')`);
 const laidOut = els.testOptionsBox.innerHTML;
-assert(/^<div class="options-section"><div class="options-subtitle">Sampling<span class="options-subtitle-what"> · how each picture is worked<\/span><\/div><div class="options-sampling"><div class="option-row sampling-line"><button type="button" class="res-info option-info"[^>]*><span>Steps<\/span>[\s\S]*?<span>Sampler<\/span>[\s\S]*?<span>CFG<\/span>[\s\S]*?<\/div><div class="options-lora options-speed"><div class="options-subtitle">Turbo LoRA<span class="options-subtitle-what"> · fewer steps, faster<\/span><\/div>[\s\S]*?<div class="options-lora"><div class="options-subtitle">Style LoRA<button[^>]*data-style-lora-guide[^>]*>[\s\S]*?<\/button><span class="options-subtitle-what"> · changes the look<\/span><\/div>/.test(laidOut)
+assert(/^<div class="options-section"><div class="options-subtitle">Sampling<\/div><div class="options-sampling"><div class="option-row sampling-line"><button type="button" class="res-info option-info"[^>]*><span>Steps<\/span>[\s\S]*?<span>Sampler<\/span>[\s\S]*?<span>CFG<\/span>[\s\S]*?<\/div><div class="options-lora options-speed"><div class="options-subtitle">Turbo LoRA<\/div>[\s\S]*?<div class="options-lora"><div class="options-subtitle">Style LoRA<button[^>]*data-style-lora-guide[^>]*>[\s\S]*?<\/button><\/div>/.test(laidOut)
   && !laidOut.includes('Advanced') && laidOut.indexOf('opt_group_x') > laidOut.indexOf('name="opt_lora"'), 'the four first, in their order, then the turbo LoRA, then Use LoRA, then the rest; no Advanced');
 assert(/\.options-sampling \{ display: grid; grid-template-columns: max-content minmax\(0, 13em\);/.test(html) && /\.options-sampling \.sampling-line \{ display: contents; \}/.test(html)
   && !laidOut.includes('options-box options-sampling'), 'under a heading, no box; names and settings in two lined-up columns');
 assert(/\.options-sampling \.option-hint \{ grid-column: 1 \/ -1; margin: 0; contain: inline-size;/.test(html), 'a hint wraps inside the columns, not widening them');
-assert(/<div class="options-lora options-speed"><div class="options-subtitle">Turbo LoRA<span class="options-subtitle-what"> · fewer steps, faster<\/span><\/div><div class="lora-line"><label class="check">[^]*?name="opt_switch_lightning_lora"[^]*?<select name="opt_switch_lightning_lora_name"[^>]*><option value="t.safetensors" selected>t<\/option>[^]*?<input type="number" class="option-strength" name="opt_switch_lightning_lora_strength"/.test(laidOut)
+assert(/<div class="options-lora options-speed"><div class="options-subtitle">Turbo LoRA<\/div><div class="lora-line"><label class="check">[^]*?name="opt_switch_lightning_lora"[^]*?<select name="opt_switch_lightning_lora_name"[^>]*><option value="t.safetensors" selected>t<\/option>[^]*?<input type="number" class="option-strength" name="opt_switch_lightning_lora_strength"/.test(laidOut)
   && laidOut.indexOf('options-speed') < laidOut.indexOf('name="opt_lora"'), 'the turbo LoRA first, with the same compact row as style LoRA');
 assert(laidOut.includes('<div class="res-hint option-hint" hidden>How many times') && script.includes("const info = e.target.closest && e.target.closest('.option-info');"), 'each name drops its hint');
 assert(laidOut.includes('<button type="button" class="hint-toggle" data-style-lora-guide aria-label="About style LoRA"')
   && script.includes("openModelGuide('style_lora')"), 'style LoRA offers its guide from a heading hint icon');
 // Which model runs: last of all, under its own heading; outside Private mode an NSFW one isn't offered, and with only
 // the workflow's own left there's nothing to pick.
-const modelOption = { id: 'model_file', kind: 'choice', label: 'Diffusion model', model: true, default: 'moss_base.safetensors',
+const modelOption = { id: 'model_file', kind: 'choice', label: 'Model', model: true, default: 'moss_base.safetensors',
   choices: ['moss_base.safetensors', 'Moss_SFT_NSFW.safetensors', 'moss_tuned.safetensors'], labels: { 'moss_base.safetensors': 'moss_base' } };
 run(`privateMode = true; syncOptions('testOptions', 'testOptionsBox', [{ id: 'group_x', kind: 'switch', label: 'X', default: '0' }, ${JSON.stringify(modelOption)}], 'm')`);
 const modelLaidOut = els.testOptionsBox.innerHTML;
-assert(modelLaidOut.indexOf('options-model') > modelLaidOut.indexOf('opt_group_x') && modelLaidOut.includes('<div class="options-subtitle">Model</div>') && !modelLaidOut.includes('what makes the picture')
-  && modelLaidOut.includes('name="opt_model_file"') && modelLaidOut.includes('Moss_SFT_NSFW'), 'the model picker is the last of the settings');
+assert(modelLaidOut.indexOf('options-model') > modelLaidOut.indexOf('opt_group_x') && !modelLaidOut.includes('<div class="options-subtitle">Model</div>') && !modelLaidOut.includes('what makes the picture')
+  && modelLaidOut.includes('name="opt_model_file"') && modelLaidOut.includes('Moss_SFT_NSFW'), 'the model picker is the last of the settings, under no heading of its own');
 const shown = run(`visibleLoraOptions([${JSON.stringify(modelOption)}])`);
 run('privateMode = false');
 const hidden = run(`visibleLoraOptions([${JSON.stringify(modelOption)}])`);
 assert.strictEqual(JSON.stringify(hidden[0].choices), '["moss_base.safetensors","moss_tuned.safetensors"]', 'no NSFW model outside Private mode');
-assert.strictEqual(run(`visibleLoraOptions([${JSON.stringify({ ...modelOption, choices: modelOption.choices.slice(0, 2) })}])`).length, 0, 'nothing left to pick, no picker');
+{
+  // Nothing else left to pick outside Private mode: still shown, in its place, greyed out with why.
+  const alone = run(`visibleLoraOptions([${JSON.stringify({ ...modelOption, choices: modelOption.choices.slice(0, 2) })}])`);
+  assert(alone.length === 1 && alone[0].choices.length === 1 && /Private mode/.test(alone[0].problem), 'nothing left to pick: greyed out, not gone');
+}
 assert.strictEqual(shown[0].choices.length, 3);
 // The negative prompt goes to the bottom of the Prompt section, not the options; with only it, there are no options to show.
 run(`syncOptions('testOptions', 'testOptionsBox', [{ id: 'negative', kind: 'text', label: 'Negative prompt', default: 'blurry' }], 'n')`);
@@ -1254,10 +1261,10 @@ assert(/<textarea id="opt_negative" name="opt_negative"[^>]*>blurry<\/textarea>/
 assert(!els.testOptionsBox.innerHTML.includes('opt_negative') && els.testOptions.hidden, 'not in the options, which have nothing else to show');
 run(`syncOptions('testOptions', 'testOptionsBox', [{ id: 'steps', kind: 'number', label: 'Steps', default: '8', min: 1, max: 150, step: 1 }], 'm')`);
 assert(els.testNegativeSlot.innerHTML === '' && els.testNegativeSlot.hidden && !els.testOptions.hidden, 'a workflow without one leaves the place empty');
-// Under the prompt, then only what the LLM is told (Variety, Explicit) below it, at the end of the Prompt section.
-assert(/<div id="imageNegativeSlot" class="negative-slot"><\/div>\s*<div id="imageWriterExtras" class="writer-extras">[\s\S]*?<\/div>\s*<\/details>\s*<details class="section" id="imageOptions"/.test(html)
-  && /<div id="videoNegativeSlot" class="negative-slot"><\/div>\s*<div id="videoWriterExtras" class="writer-extras">[\s\S]*?<\/div>\s*<\/details>\s*<details class="section" id="videoOptions"/.test(html)
-  && /<div id="shortsNegativeSlot" class="negative-slot"><\/div>\s*<\/details>\s*<details class="section" id="shortsOptions"/.test(html), 'at the end of each Prompt section, above Variety');
+// Under the prompt: words per prompt and Variety, then the negative prompt, at the end of the Prompt section.
+assert(/<div id="imageWriterExtras" class="writer-extras">[\s\S]*?<\/div>\s*<div id="imageNegativeSlot" class="negative-slot"><\/div>\s*<\/details>\s*<details class="section" id="imageOptions"/.test(html)
+  && /<div id="videoWriterExtras" class="writer-extras">[\s\S]*?<\/div>\s*<div id="videoNegativeSlot" class="negative-slot"><\/div>\s*<\/details>\s*<details class="section" id="videoOptions"/.test(html)
+  && /<div id="shortsNegativeSlot" class="negative-slot"><\/div>\s*<\/details>\s*<details class="section" id="shortsOptions"/.test(html), 'at the end of each Prompt section, under words per prompt and Variety');
 {
   const box = els.imageOptionsBox, savedQuery = box.querySelectorAll, workflow = box.dataset.workflow;
   const savedWrite = run('draftWrite');
@@ -1356,7 +1363,8 @@ run('renderStopped([])');
 for (const form of ['formShorts', 'formVideo', 'formImage']) {
   const start = html.indexOf(`id="${form}"`), section = html.indexOf('<details class="section"', start);
   assert(!html.slice(start, section).includes('data-preset-side'), `${form}: no full-size preset row`);
-  assert(/<div class="workflow-in"[^>]*>\s*<div class="workflow-head">(?:<span class="field-heading">)?<label for="\w+">Workflow<\/label>/.test(html.slice(start, section)),
+  // The image side picks by model first (Image model, Mode, Variant), the workflow behind them.
+  assert(/<div class="workflow-in"[^>]*>\s*<div class="workflow-head">(?:<span class="field-heading">)?<label for="\w+">(?:Workflow|Image model)<\/label>/.test(html.slice(start, section)),
     `${form}: Workflow remains above the accordion`);
 }
 assert(html.includes('border-top: 1px solid var(--line); overflow: hidden;'), 'section boundaries have a hard divider');
@@ -1372,7 +1380,10 @@ assert.strictEqual(context.document.body.dataset.page, 'status');
 run("showPage('generate')");
 assert.strictEqual(context.document.body.dataset.page, 'generate');
 // The progress bars: in the header, left of its icons; a tap grows one down over the page.
-assert(/<div class="top">\s*<div class="top-main" id="topMain" hidden>\s*<div class="head-strips" id="headStrips">\s*<div class="strip" id="runStrip"[\s\S]*?id="uploadStrip"/.test(html)
+// The pages and the dots come first in the header now, the bars under them.
+assert(html.indexOf('id="jump"') > html.indexOf('<div class="top">') && html.indexOf('id="jump"') < html.indexOf('id="topMain"')
+  && html.indexOf('id="jump"') < html.indexOf('id="stick"'), 'the pages are in the header');
+assert(/<div class="top">[\s\S]*?<\/nav>\s*<div class="top-main" id="topMain" hidden>\s*<div class="head-strips" id="headStrips">\s*<div class="strip" id="runStrip"[\s\S]*?id="uploadStrip"/.test(html)
   && !/<div class="stick" id="stick">[\s\S]*?id="runStrip"[\s\S]*?<\/nav>/.test(html) && html.indexOf('id="runStrip"') < html.indexOf('id="stick"'), 'in the header, not the footer');
 assert(/\.head-strips \{ position: absolute; top: 0; left: 0; right: 0; z-index: 30;/.test(html)
   && /\.head-strips\.opened \{ background: var\(--bg\); box-shadow:/.test(html) && !/\.head-strips \.strip\.open \{ background/.test(html),
@@ -1508,12 +1519,12 @@ for (const id of ['logToggle', 'finishedToggle', 'quotaToggle']) {
 {
   const moved = [];
   for (const id of ['settingsHead', 'runActions', 'statusToggles']) context.document.getElementById(id).appendChild = el => moved.push(`${id}:${el.id}`);
-  els.topIcons.insertBefore = (el, before) => moved.push(`topIcons:${el.id}:before:${before ? before.id : 'end'}`);
+  els.topIconsRow.insertBefore = (el, before) => moved.push(`topIconsRow:${el.id}:before:${before ? before.id : 'end'}`);
   context.document.getElementById('privateToggle').nextSibling = { id: 'settingsBtn' };
   wide.matches = false;
   run('placePanelControls()');
-  assert.deepStrictEqual(moved.splice(0), ['topIcons:finishedToggle:before:privateToggle', 'topIcons:logToggle:before:settingsBtn', 'topIcons:openTemperatures:before:settingsBtn', 'settingsHead:quotaToggle'],
-    'in the header: Finished, privacy, then the log, the temperatures, then the gear');
+  assert.deepStrictEqual(moved.splice(0), ['topIconsRow:finishedToggle:before:privateToggle', 'topIconsRow:logToggle:before:settingsBtn', 'topIconsRow:openTemperatures:before:settingsBtn', 'settingsHead:quotaToggle'],
+    'in the second row of the box: Finished, privacy, then the log, the temperatures, then the gear');
   assert(!els.runActions.hidden && els.skip.hidden && els.stop.hidden, 'idle: no run controls');
   assert(/\.top-icons \.panel-icon \{ width: auto; height: auto; padding: 0; gap: 3px; color: var\(--muted\); opacity: \.7;/.test(html)
     && /\.top-icons #finishedToggle\.empty \{ display: none; \}/.test(html), "the header's icons all one quiet grey; Finished only with something in it");
@@ -1658,7 +1669,7 @@ run("tapStrip('run')");
 assert.strictEqual(context.document.body.dataset.page, 'status', 'a tap while open goes to Status');
 assert(!els.runStrip.classList.contains('open'));
 context.setTimeout = () => 0;
-assert(/\.go-bar button \{[^}]*padding: 5px 12px; font-size: \.85rem;/.test(html) && /\.jump a \{[^}]*min-height: 30px;/.test(html)
+assert(/\.go-bar button \{[^}]*padding: 5px 12px; font-size: \.85rem;/.test(html) && /\.jump a \{[^}]*min-height: 14px;/.test(html)
   && /\.go-bar \.go-icon \{[^}]*padding: 5px;/.test(html), 'the footer is low, leaving the page the screen');
 {
   // The footer: how long, the tokens under it with no dot before them, and an image set's count in a badge beside both.
@@ -1681,8 +1692,8 @@ assert(run("tokensDetail({ each: 290, written: 8700, rounds: 2, context: 5457 })
   === 'Prompts: ~290 tokens each, ~8,700 written in 2 requests; largest request ~5.5k tokens of context', 'the tokens in full on hover');
 assert(/<input type="range" id="imageWords" name="words" min="40" max="400" step="10" value="200"/.test(html) && html.includes('<div class="words-band" aria-hidden="true"><span>suggested</span></div>'),
   'words per prompt is a slider, 40-400, with its suggested range marked');
-assert(/<label for="imageWords">Words per prompt<\/label><span class="options-subtitle-what">/.test(html) && !html.includes('WordsHelp')
-  && html.indexOf('id="imageWordsTokens"') < html.indexOf('id="imageWords" name="words"'), 'no hint by its name; what it asks for above the line');
+assert(/<div class="options-subsub"><label for="imageWords">Word count<\/label><span class="options-subsub-value">/.test(html) && !html.includes('WordsHelp')
+  && html.indexOf('id="imageWordsTokens"') < html.indexOf('id="imageWords" name="words"'), 'Word count, a sub-sub header, no hint by its name; what it asks for above the line');
 assert(/<input type="range" id="videoWords" name="words" min="30" max="500" step="10" value="30" data-auto="30"/.test(html),
   "the video's starts on Auto, a step below 40: each model's own length");
 
@@ -2029,10 +2040,11 @@ assert(/id="viewerVariations"[^>]*><\/button>\s*<button type="button" class="ico
 // Variety: the same switch as LLM or Exact, and its chips, under the prompt and negative prompt on both sides, in a box
 // that goes with the LLM's (hidden for Exact prompt); saved with the form (named).
 for (const side of ['image', 'video']) {
-  const box = new RegExp(`<div id="${side}NegativeSlot" class="negative-slot"></div>\\s*<div id="${side}WriterExtras" class="writer-extras">(?:\\s*<div class="words-box" id="${side}WordsBox">[\\s\\S]*?)?\\s*<div class="variety-box" id="${side}VarietyBox">\\s*<div class="options-subtitle"><label for="${side}Variety">Variety</label><button type="button" class="hint-toggle" data-hint-target="${side}VarietyHelp"[^>]*>[\\s\\S]*?</button><span class="options-subtitle-what"> · how different they are</span></div>\\s*`
+  const box = new RegExp(`<div id="${side}WriterExtras" class="writer-extras">(?:\\s*<div class="words-box" id="${side}WordsBox">[\\s\\S]*?)?\\s*<div class="variety-box" id="${side}VarietyBox">\\s*<div class="options-subtitle"><label for="${side}Variety">Variety</label><button type="button" class="hint-toggle" data-hint-target="${side}VarietyHelp"[^>]*>[\\s\\S]*?</button></div>\\s*`
     + `<div class="field-help variety-help" id="${side}VarietyHelp" hidden>[\\s\\S]*?</div>\\s*`
     + `<select id="${side}Variety" name="variety" data-segmented>\\s*<option value="slight">Slight</option><option value="mixed" selected>Mixed</option><option value="wide">Wide</option>`);
-  assert(box.test(html), `${side}: Variety (Slight, Mixed, Wide) under the negative prompt`);
+  assert(box.test(html) && html.indexOf(`id="${side}WriterExtras"`) < html.indexOf(`id="${side}NegativeSlot"`),
+    `${side}: Variety (Slight, Mixed, Wide) above the negative prompt`);
   assert(html.indexOf(`id="${side}VarietyBox"`) > html.indexOf(`id="${side}PromptWriting"`), `${side}: below the prompt, no longer in the LLM's box above it`);
   assert(script.includes(`$('${side}WriterExtras').classList.toggle('hidden', direct${side === 'image' ? ' && !comparingLlms' : ''});`), `${side}: hidden with Exact prompt, as the LLM's box is (but for an LLM comparison)`);
 }
@@ -2063,8 +2075,8 @@ assert(/id="imageCount"[^>]*max="30"[^>]*data-most="50" data-most-written="30"/.
   && script.includes("$('imageVarietyBox').hidden = count < 2 || !!imageRole() || comparingLlms;"),
   'up to 30 images an LLM writes, 50 with your own prompt; Variety only for a set it writes');
 for (const side of ['image', 'video']) {
-  assert(new RegExp(`<div class="variety-box" id="${side}VarietyBox">[\\s\\S]*?<div class="explicit-box">\\s*<label class="check"><input type="checkbox" id="${side}Explicit" name="explicit"><span class="options-subtitle">Explicit content</span></label>\\s*</div>`).test(html),
-    `${side}: Explicit content under Variety, with no hint beside it or under it`);
+  assert(new RegExp(`<div class="prompt-label-row">[^\\n]*<div class="explicit-box" id="${side}ExplicitBox">\\s*<label class="check"><input type="checkbox" id="${side}Explicit" name="explicit"><span>Explicit content</span></label>\\s*</div></div>`).test(html),
+    `${side}: Explicit content at the right end of the Prompt line, with no hint beside it or under it`);
 }
 assert(/\.explicit-box \{ display: none;/.test(html) && /body\.private-mode \.explicit-box \{ display: block; \}/.test(html)
   && !html.includes('explicit-text') && !html.includes('the writer is told the prompts are meant to be explicit'), 'only in Private mode');
@@ -2117,7 +2129,8 @@ run('openSideMenu(genLink)');
 assert.strictEqual(els.sideMenu.hidden, false);
 assert(els.sideMenu.innerHTML.includes('data-side="video"') && els.sideMenu.innerHTML.includes('data-side="image"') && !els.sideMenu.innerHTML.includes('data-side="shorts"'),
   'the other two sides, not the one you are on');
-assert(/\.side-menu \{[^}]*animation: menu-in/.test(html) && /@keyframes menu-in \{ from \{ opacity: 0; transform: translateY\(8px\) scale\(\.94\)/.test(html), 'grows and fades in, upwards');
+assert(/\.side-menu \{[^}]*animation: side-menu-in/.test(html) && /@keyframes side-menu-in \{ from \{ opacity: 0; transform: translateY\(-8px\) scale\(\.94\)/.test(html),
+  'grows and fades in, downwards from the header');
 assert(/if \(page === document\.body\.dataset\.page && SIDE_PAGES\.includes\(page\)\)/.test(script) && /const SIDE_PAGES = \['status', 'generate', 'output'\]/.test(script), 'Status, Generate and Output; not Quota');
 // Status, tapped again while on it, as the others: a menu of Finished, the log and Quota, each opening its box.
 context.statusLink = { ...genLink, dataset: { page: 'status' } };
@@ -2251,10 +2264,10 @@ assert(run("filmHtml({ name: 'f.mp4', model: 'wan', resolution: '864x480', durat
     context.document.body.classList = stubClasses;
     assert(/<a href="#videosCard" data-page="output" id="jumpResults">Output<\/a>\s*<button type="button" class="jump-more" id="headToggle" aria-expanded="false" aria-controls="topIcons"/.test(html),
       'the button right of Output');
-    assert(/\.jump \{ position: relative; display: grid; grid-template-columns: repeat\(3, minmax\(0, 1fr\)\) 34px;/.test(html) && !/\.jump::before/.test(html),
+    assert(/\.jump \{ position: relative; display: grid; grid-template-columns: repeat\(3, minmax\(0, 1fr\)\) 28px;/.test(html) && !/\.jump::before/.test(html),
       'the three page buttons the same width, filling the footer up to it');
-    assert(/@media \(max-width: 999px\) \{[\s\S]*?\.top-icons \{ position: fixed; right: 12px; bottom: calc\(var\(--head, 60px\) \+ 6px\);[\s\S]*?transform-origin: bottom right;/.test(html)
-      && /body\.head-shown \.top-icons \{ opacity: 1; transform: none; visibility: visible;/.test(html), 'over the page, growing up out of the footer');
+    assert(/@media \(max-width: 999px\) \{[\s\S]*?\.top-icons \{ position: absolute; right: 12px; top: calc\(100% \+ 6px\);[\s\S]*?transform-origin: top right;/.test(html)
+      && /body\.head-shown \.top-icons \{ opacity: 1; transform: none; visibility: visible;/.test(html), 'over the page, growing down out of the header');
     assert(script.includes("if (document.body.classList.contains('head-shown') && !(e.target.closest && e.target.closest('#topIcons, #headToggle'))) showHead(false);")
       && script.includes("$('headToggle').dataset.count = failed ? String(failed) : '';"), "a tap elsewhere puts it away; only what failed shows on the button");
     // Progress at the top can be turned off; the Status button can fill instead, its percentage in the corner.
@@ -2550,8 +2563,8 @@ run('resetZoom(); viewing = null');
     assert(html.includes(`<option value="${kind}">`), `${kind} in Settings`);
   }
   assert(html.includes('<select id="pageSpeed" aria-label="Page animation speed"><option value="slow">Slow</option><option value="normal">Normal</option><option value="fast">Fast</option></select>'));
-  assert(/\.jump-glider \{ position: absolute;[^}]*transition: left \.28s/.test(html) && /\.jump-glider\[data-at="generate"\] \{ border-color: var\(--side\); \}/.test(html)
-    && script.includes('placeJumpGlider(here);'), 'one outline, gliding between the buttons in their colours');
+  assert(/\.jump-glider \{ position: absolute;[^}]*transition: left \.28s/.test(html) && /\.jump-glider\[data-at="generate"\] \{ background: var\(--side\); \}/.test(html)
+    && script.includes('placeJumpGlider(here);'), 'one line under the page shown, gliding between the buttons in their colours');
 }
 // Closing the preview brings the batch it was on to the middle of Output (the top if it's taller than the screen),
 // smoothly; not from a collection, and not when Output isn't on screen.
@@ -2653,7 +2666,7 @@ assert(/if \(shot\) Object\.assign\(s, \{ prompt: shot\.prompt, direct: true, co
 
 // Workflow's preset label opens management; the reset icon restores workflow defaults.
 assert(/<dialog id="imagePresetDialog"[\s\S]*?<select id="imagePreset"/.test(html));
-assert(/<div class="workflow-head"><span class="field-heading"><label for="imageWorkflow">Workflow<\/label>[\s\S]*?data-preset-open="image"[\s\S]*?class="use-default" data-defaults="imageOptionsBox"/.test(html),
+assert(/<div class="workflow-head"><span class="field-heading"><label for="imageModel">Image model<\/label>[\s\S]*?data-preset-open="image"[\s\S]*?class="use-default" data-defaults="imageOptionsBox"/.test(html),
   'the workflow header has preset management and a reset icon at its right');
 assert(['shortsOptionsBox', 'videoOptionsBox'].every(box => html.includes(`data-defaults="${box}"`)), 'each side has one');
 // Use default: each setting back to how the workflow is saved, and what was remembered for it forgotten.
@@ -2832,7 +2845,10 @@ assert.strictEqual(run("roleLabel({id: 'prompt_enhancer', label: 'Prompt enhance
 assert(!script.includes("select.value = 'prompt_enhancer'"), 'a workflow with a prompt enhancer offers it, and never picks it by itself');
 assert(!html.includes('id="imageResolution"') && /id="imageGeneration"[\s\S]*?id="imageAspect"[\s\S]*?<\/details>/.test(html), 'Resolution in Generation');
 assert(/id="imageHow">[\s\S]*?id="imageReview"[\s\S]*?id="imageSeed"/.test(html) && /id="videoHow">[\s\S]*?id="review"[\s\S]*?id="videoSeed"/.test(html), 'review and seed under Tests & misc');
-for (const [field, down, up, min, max, step] of [['runs', 'runsDown', 'runsUp', 1, 10, 1], ['imageCount', 'imageCountDown', 'imageCountUp', 1, 20, 1], ['duration', 'durationDown', 'durationUp', 5, 600, 5]]) {
+assert(/<div class="stepper-line">\s*<label for="imageCount">Amount<\/label>\s*<div class="count-stepper">/.test(html)
+  && /<div class="stepper-line" id="imageWorkflowDenoiseRow" hidden><label for="imageWorkflowDenoise">Denoise [\s\S]*?<\/label>\s*<div class="count-stepper">\s*<button type="button" id="imageWorkflowDenoiseDown"[^>]*>−<\/button>\s*<input type="number" id="imageWorkflowDenoise"/.test(html),
+  'Amount and Denoise: each its name and its stepper (−, the value centred, +) on one line');
+for (const [field, down, up, min, max, step] of [['runs', 'runsDown', 'runsUp', 1, 10, 1], ['imageCount', 'imageCountDown', 'imageCountUp', 1, 20, 1], ['duration', 'durationDown', 'durationUp', 5, 600, 5], ['imageWorkflowDenoise', 'imageWorkflowDenoiseDown', 'imageWorkflowDenoiseUp', 0, 1, 1]]) {
   const input = context.document.getElementById(field), events = [];
   input.value = String(min);
   input.stepDown = n => { input.value = String(Math.max(min, Number(input.value) - n)); };
@@ -2932,9 +2948,12 @@ assert(/\.switch button\.active \{[^}]*color: var\(--accent\)/.test(html) && /bo
 // The side switch is Generate's, at its top; the header has no title, only the progress bars and the gear; shut down is in the settings box.
 assert(html.indexOf('id="switchShorts"') > html.indexOf('id="optionsCard"') && !/<h1>/.test(html.slice(0, html.indexOf('<script>'))));
 assert(/id="settingsBtn"[^>]*aria-label="Settings"/.test(html) && !/Sign out/.test(html));
-assert(/<dialog id="settingsDialog"[\s\S]*id="themePicker"[\s\S]*id="poweroff"[\s\S]*id="localLlmModel"[\s\S]*id="h3Model"[\s\S]*id="defaultShorts"[\s\S]*id="reserveTitle"[\s\S]*id="lowPriority"[\s\S]*id="gpuGuard"[\s\S]*id="diskBox"[\s\S]*class="copy-url"[\s\S]*<div class="settings-actions">[\s\S]*id="restartPanel"[\s\S]*id="restartComfy"[\s\S]*id="forceRestartComfy"[\s\S]*class="settings-power"[\s\S]*id="shutdown"[\s\S]*id="shutdownMenu"[\s\S]*href="\/logout" id="logout"[\s\S]*id="settingsClose"/.test(html)
-  && !html.includes('settings-tabs') && /\.settings-dialog select, \.settings-dialog input\[type=number\] \{ height: 28px;[^}]*font-size: \.75rem;/.test(html),
-  'settings on one page (general, models, machine, connection), its drop-downs as small as Generate\'s; at the foot short restart controls and Power with Log out');
+assert(/<dialog id="settingsDialog"[\s\S]*id="themePicker"[\s\S]*id="poweroff"[\s\S]*id="localLlmModel"[\s\S]*id="h3Model"[\s\S]*id="defaultShorts"[\s\S]*id="reserveTitle"[\s\S]*id="lowPriority"[\s\S]*id="gpuGuard"[\s\S]*id="diskBox"[\s\S]*class="copy-url"[\s\S]*id="settingsClose"/.test(html)
+  && /<div class="settings-actions power-row" id="powerRow">[\s\S]*id="restartPanel"[\s\S]*id="restartComfy"[\s\S]*id="forceRestartComfy"[\s\S]*class="settings-power"[\s\S]*id="shutdown"[\s\S]*id="shutdownMenu"[\s\S]*href="\/logout" id="logout"[\s\S]*id="topIconsRow"/.test(html)
+  && /id="settingsTabs"[\s\S]*data-settings-tab="general"[\s\S]*data-settings-tab="models"[\s\S]*data-settings-tab="machine"[\s\S]*data-settings-tab="connection"/.test(html)
+  && ['General', 'Models', 'Machine', 'Connection'].every(name => html.includes(`id="settingsSection${name}"`))
+  && /\.settings-dialog select, \.settings-dialog input\[type=number\] \{ height: 28px;[^}]*font-size: \.75rem;/.test(html),
+  'settings in sections (general, models, machine, connection) to tap or swipe between, its drop-downs as small as Generate\'s; the restart controls and Power with Log out first in the box the dots open');
 assert(/\.settings-actions \{ display: flex; gap: 6px; flex: none;/.test(html), 'the buttons stay at the foot, smaller');
 assert(/<div class="go-bar" id="goBar" hidden>[\s\S]*?id="goStickTop" aria-label="Add to top of queue"[\s\S]*?id="goStickLater" aria-label="Add to pending"[\s\S]*?id="goStick">/.test(html)
   && script.includes("$('goStickTop').addEventListener('click', () => $('goTop').click());") && script.includes("$('goStickLater').addEventListener('click', () => $('goLater').click());")
@@ -3142,24 +3161,35 @@ assert(queue.innerHTML.includes('aria-label="Expand queue"'), 'the chevron refle
   liveQueue.listeners.click({ target: { closest: selector => selector === 'button[data-fold-queue]' ? controls[0] : null } });
   assert(list.hidden && attrs.every(a => a['aria-expanded'] === 'false') && attrs[1]['aria-label'] === 'Expand queue', 'clicking the title updates the chevron and its accessible state');
   assert(liveQueue.dataset.html.includes('aria-label="Expand queue"') && liveQueue.dataset.html.includes('tabindex="0" hidden'), 'polling retains the animated controls instead of replacing them');
+  // Opened, it is scrolled just so its end shows over the footer, its header never under the pinned header: the
+  // stub's header ends at 100 (+8), the footer is 90 high (+8) in an 800 high window.
   let reveal;
-  liveQueue.scrollIntoView = options => { reveal = options; };
+  const savedScrollBy = context.window.scrollBy;
+  context.window.scrollBy = options => { reveal = options; };
+  liveQueue.getBoundingClientRect = () => ({ top: 300, bottom: 1200 });
   liveQueue.closest = selector => selector === '#queueBox, #optionsCard' ? els.queueBox : null;
   liveQueue.listeners.click({ target: { closest: selector => selector === 'button[data-fold-queue]' ? controls[0] : null } });
-  assert.strictEqual(reveal.block, 'start', 'opening the queue reveals its header');
+  assert.strictEqual(reveal.top, 192, 'too tall for the room: scrolled until its header is under the pinned one');
+  reveal = null;
+  run('revealQueueSection({ closest: () => null, getBoundingClientRect: () => ({ top: 300, bottom: 650 }) })');
+  assert.strictEqual(reveal, null, 'all of it in sight already: not scrolled');
+  run('revealQueueSection({ closest: () => null, getBoundingClientRect: () => ({ top: 300, bottom: 760 }) })');
+  assert.strictEqual(reveal.top, 58, 'its end under the footer: scrolled just so far that it shows');
   for (const id of ['stoppedRuns', 'failedRuns']) {
     let options;
     els[id]._open = false;
     const fold = { open: true, matches: selector => selector === '.stopped-fold',
       closest: selector => selector === '#queueBox, #optionsCard' ? els.queueBox : null,
       querySelector: () => null,
-      scrollIntoView: value => { options = value; } };
+      getBoundingClientRect: () => ({ top: 300, bottom: 1200 }) };
+    context.window.scrollBy = value => { options = value; };
     els[id].listeners.toggle({ target: fold });
-    assert.strictEqual(options.block, 'start', `${id} reveals its header when opened`);
+    assert.strictEqual(options.top, 192, `${id} is brought into sight when opened`);
     options = null;
     els[id].listeners.toggle({ target: fold });
     assert.strictEqual(options, null, `${id} does not scroll again after a redraw`);
   }
+  context.window.scrollBy = savedScrollBy;
 }
 {
   const rows = [0, 60, 170, 265].map((top, index) => ({ offsetTop: top, offsetHeight: [54, 104, 89, 80][index], getClientRects: () => [1] }));
@@ -4299,8 +4329,8 @@ for (const fn of ['sameAgain', 'sameAgainFilm', 'sameAgainShorts', 'editQueued',
 }
 
 // With a LoRA comparison on, Generate (the form's and the footer's) is in the theme's colour, not the side's.
-assert(/body\.on-image:has\(#imageLoraStrengthTest:checked:not\(:disabled\), #imageLoraStyleTest:checked:not\(:disabled\), #imageWorkflowTestT2i:checked, #imageWorkflowTestEdit:checked, #imageLlmTest:checked\) :is\(#go, #goStick\),\s*body\.on-video:has\(#videoLoraStrengthTest[^{]+\{ --accent: var\(--shared\); \}/.test(html),
-  'a LoRA or workflow comparison turns Generate the theme colour');
+assert(/body\.on-image:has\(#imageLoraStrengthTest:checked:not\(:disabled\), #imageLoraStyleTest:checked:not\(:disabled\), #imageWorkflowTestT2i:checked, #imageWorkflowTestEdit:checked, #imageLlmTest:checked, #imageModelTest:checked:not\(:disabled\), #imageEncoderTest:checked:not\(:disabled\), #imageVaeTest:checked:not\(:disabled\)\) :is\(#go, #goStick\),\s*body\.on-video:has\(#videoLoraStrengthTest[^{]+\{ --accent: var\(--shared\); \}/.test(html),
+  'any comparison (LoRA, model files, workflow) turns Generate the theme colour');
 assert(html.includes('name="workflow_test_t2i" id="imageWorkflowTestT2i"') && html.includes('name="workflow_test_edit" id="imageWorkflowTestEdit"'),
   'Tests & misc: all text-to-image workflows, and all edit workflows');
 assert(html.includes('.pill.comparison { --pill: var(--shared);') && run("pillsHtml([{ kind: 'workflow', text: 'Krea2', comparison: true }])") === '<span class="pill workflow comparison">Krea2</span>',
@@ -4381,7 +4411,7 @@ assert(/:is\(#go, #goStick\):not\(:disabled\) \{ animation: test-flash 1\.4s eas
   const order = ['id="imageLoraTests"', '>LoRA<', 'id="imageWorkflowTests"', '>Workflows<', 'id="imageLlmTests"', '>Prompt models<', 'name="llm_test" id="imageLlmTest"'].map(part => box.indexOf(part));
   assert(order.every((at, i) => at > 0 && (!i || at > order[i - 1])), `the image comparisons, grouped in one box: ${order}`);
   assert(/class="options-box tests-box" id="videoComparisons"[\s\S]*?id="videoLoraTests"/.test(html), "the video form's LoRA comparison in its own box too");
-  assert(html.includes('#imageWorkflowTestEdit:checked, #imageLlmTest:checked) :is(#go, #goStick)'), 'an LLM comparison turns Generate the theme colour too');
+  assert(html.includes('#imageWorkflowTestEdit:checked, #imageLlmTest:checked, #imageModelTest:checked:not(:disabled), #imageEncoderTest:checked:not(:disabled), #imageVaeTest:checked:not(:disabled)) :is(#go, #goStick)'), 'an LLM comparison turns Generate the theme colour too');
 }
 // A LoRA comparison shows its own number of images in Amount, locked; switched off, Amount has yours back. Reopening a
 // set or a queued job asks for a new estimate, as the values it sets send no input event.

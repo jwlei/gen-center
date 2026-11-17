@@ -55,7 +55,7 @@ async function sameAgain(id, position = null, exact = null, from = null) {
   offerSameSeed('imageSeed', picked ? picked.used_seed ?? picked.seed : null);
   saveImageForm();
   reopened('image');
-  showFormError('');
+  showFormError(($('imageOptionsBox').unavailable || []).join(' '));
   $('imageGeneration').open = $('imagePromptSection').open = true;
   $('imageOptions').open = !$('imageOptions').hidden;
   if (WIDE.matches) $('optionsCard').scrollIntoView({ behavior: 'smooth' }); else showPage('generate');

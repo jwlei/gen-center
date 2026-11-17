@@ -221,7 +221,12 @@ gets them, on Shorts and Video too, where a run keeps them for Continue and redo
 | In the workflow | On the form |
 |---|---|
 | A group that an rgthree Fast Groups Bypasser switches, by title or colour | A tickbox: on or off. LatentHeart's Krea2 SFW/NSFW has 2nd pass, Noise (grain), Color correction, Sharpen and the SeedVR2 upscaler. |
+| A Fast Groups Muter's group | A tickbox too. Off, it's muted, as the Muter does, and a group saved muted starts off. |
+| Groups a switcher keeps one of on (rgthree's "always one") | **Mode**, at the top of Setup: FoxFurEssence's picks text2image or image2image, and image2image opens its image box. Where one of them holds the Width and Height the pipeline fills (Aspect Ratio or Custom Size), it isn't offered: that group is kept on, so the size chosen is the size made. |
+| A group with a full mask (Solid Mask) beside an image-to-image choice | A third Mode, **inpaint**: **Paint what to redraw** on image 1, and only that is redrawn from the prompt. What's painted becomes the image's transparency, which Load Image gives as its mask. Image to image's own Denoise (a slider titled Denoise) is under Mode for both. |
 | A choice on a switched group's subgraph | Beside its tickbox: the SeedVR2 upscaler's resolution, 720p to 4K. |
+| A number titled Denoise inside a switched group's subgraph | **Strength**, beside its tickbox: Krea-2's 2nd pass, 0.2 in LatentHeart's and 0.25 in FoxFurEssence's. Its steps follow it. |
+| A Krea-2 workflow with no 2nd pass (ComfyUI's template) | **2nd pass**, off, with its Strength (0.2): the image refined at its size as the others do, RES4LYF's res_2s over bong_tangent. |
 | A switch on a subgraph's face, as ComfyUI's templates have | A tickbox, with what goes with it by name beside it: Krea-2's Enable LoRA with the LoRA and its strength, Qwen-Image-Edit's Enable turbo mode. |
 | A LoRA in rgthree's Power Lora Loader | A tickbox and its strength. Saved under a folder of the author's, it's found where it's installed. |
 | The Krea2T Enhancer | A tickbox and its prompt-adherence strength, 0 to 2. |
@@ -244,7 +249,34 @@ any of these, and may decline an explicit brief: your own prompt, word for word,
 
 ## Workflows
 
-**Workflow**, at the top of the form, lists what you saved in ComfyUI for images: a name starting `image_`, or any other that saves or previews images
+**Image model**, at the top of the form, groups the workflows you saved by the model they run: Krea-2, MiniMax H3,
+Qwen-Image 2.1 and so on (MiniMax H3's and Qwen-Image 2.1's text and edit workflows are one model). **Mode**, at the top
+of Setup, is what it does, from all of that model's workflows: T2I, I2I, Inpaint, Edit, R2I (a new picture from
+references) or Expand. Which of a model's workflows does a mode isn't a choice on the form: one per model and mode,
+the looks of others as presets (the last one used is picked again, should there be two). Runs, presets and comparisons
+still name the workflow itself.
+
+Krea-2 is one workflow, `image_Krea2`: FoxFurEssence's graph (T2I, I2I, Inpaint, its 2nd pass and the Krea2T Enhancer;
+its NegPiP and Misc Quality Functions are off and not offered) with LatentHeart's colour correction, grain and sharpen, all as settings: Model, Text (its text encoder), VAE, Enhancer
+and its Strength, Sampler, Colour correction, Noise and its str, Sharpen and its px and str, and 2nd pass and its Strength. The three it came from are
+presets on it (Krea2 - LatentHeart look, Template look, FoxFurEssence look), and those workflows are **retired**
+(Settings' `retired_workflows` in `logs/settings.json`): left out of the picker and Automatic, but still there for
+the presets that name them and for opening or continuing what they made. A form that remembered one switches to
+`image_Krea2` as it loads. They differ from their looks a little: LatentHeart's first pass runs in RES4LYF's sampler, which starts
+from other noise for the same seed.
+
+LatentHeart's **Prompt enhancer** and **Image to prompt** are in it too, picked under Prompt as the others' are: Qwen3-VL 4B
+(its text encoder) writes the prompt in ComfyUI from yours, and for Image to prompt from a picture you give it, at
+about 2 MP. Each is a group of its own, off unless chosen; an Any Switch takes the one that's on, else your prompt as
+it is. One that's off isn't sent to ComfyUI at all, so a run without them never loads the model to write.
+
+A run keeps every workflow setting it was made with, those left as the workflow had them too, so its sliders open it
+again as it was made after the workflow's defaults change. The ETA still tells runs apart by what differs.
+
+On a phone, the generation sections are tabs in a bar over Generate: one shown at a time, sliding in from the side of
+its button, with the model and preset part always on top. A wide screen keeps them as headers that fold.
+
+The workflows are what you saved in ComfyUI for images: a name starting `image_`, or any other that saves or previews images
 and no video, such as `Fibo2_turbo_edit_test`. Renamed in ComfyUI, a workflow shows under its new name within half a
 minute, still on the Image side; runs made under its old name can't be continued, as its converted copy goes with it. One that can't run is greyed out, and the hint under the list says why, such as a
 model that isn't installed. Automatic tries them in name order, those made for what you gave it first.
@@ -277,7 +309,7 @@ Load Image nodes to its `image2` and `image3` in ComfyUI and each becomes a requ
 ## The command line
 
 ```
-python -m pipelines.image.main "recreate her with different outfits and hairstyles" --image woman.png --count 15 --llm claude
+python -m pipelines.image.main "recreate her with different outfits and hairstyles" --image woman.png --count 15 --llm gemini
 ```
 
 Set `COMFYUI_WORKFLOW` to the workflow it runs: the panel keeps its conversions in `logs/workflows/`.
@@ -287,7 +319,7 @@ Set `COMFYUI_WORKFLOW` to the workflow it runs: the panel keeps its conversions 
 | `--image FILE` | The image to edit, repeatable if the workflow takes several. |
 | `--count` | How many images, 1 to 100. Default 1. |
 | `--direct` | Uses the prompt word for word, with no LLM. |
-| `--llm` | `local`, `gemini` or `claude`. Default: `LLM_PROVIDER`, else `local`. |
+| `--llm` | `local` or `gemini`. Default: `LLM_PROVIDER`, else `local`. |
 | `--aspect` | Such as `16:9`, or `image` for the source's (the default, square without one). |
 | `--megapixels` | Such as `1.5` (default 1), or `image` for the source's. |
 | `--size 1920x1080` | An exact size, in place of those two. |
@@ -306,3 +338,41 @@ Set `COMFYUI_WORKFLOW` to the workflow it runs: the panel keeps its conversions 
 | `--check` | Checks the LLM key, the workflow and ComfyUI, and makes nothing. |
 
 The prompts are in `runs/image/<run>/state.json`: edit any there and `--resume` uses it.
+
+## Comparisons (Tests & misc)
+
+Each makes one set on one seed, with your prompt as written, so only what's compared differs: Amount shows how many.
+
+| Comparison | What changes from image to image |
+|---|---|
+| LoRA Strength / Style test | The style LoRA's strength in steps, or each style LoRA installed |
+| **Model files**: Model, Text encoder, VAE test | Each installed one of that file the workflow can switch (its Model, Text encoder and VAE settings), everything else as set. Several ticked make every combination, up to 50 images, as many as a set of your own prompt; a LoRA test with it runs in each. Each image's pill says the files it ran. |
+| All text-to-image / All edit workflows | Each workflow of that kind, at its own defaults |
+| LLM comparison | Who writes the prompt: Gemini and each local model |
+
+A workflow comparison goes with neither an LLM nor a model files comparison, as each compared workflow runs its own files.
+
+## Pills: the files a set ran
+
+Each set's pills say the files it ran, in short (core/model_files.py): **Model** (Krea-2 Turbo int8 mixed), **Encoder**
+(Qwen3-VL 4B abliterated) and **VAE** (Krea2Real), right after its workflow. They come from the set's settings, which
+keep them all since Nov 2026, or for an older set from what ComfyUI wrote into its first image (the workflow it ran),
+never from the workflow as it is now. A comparison is named, not listed: its second pill, in the theme's colour, and
+its line in the queue say what kind it is (Model test, VAE test, Model + VAE test, Text encoder test, LoRA strength
+test, LoRA style test, Workflow test, LLM test), and each of its images says its own ("Model int8 mixed · Encoder
+abliterated · VAE Krea2Real"), titles of those made before the names were short included. An image cropped to the
+size asked for keeps what ComfyUI wrote into it.
+
+## Model, Text and VAE (every workflow)
+
+Last in each workflow's settings, the files it runs, to pick from what's installed, found afresh as files are put in
+ComfyUI's folders (drop one in, and it's offered once the workflow list refreshes):
+
+| Picker | What it offers |
+|---|---|
+| **Model** | The model files of its kind by name: Krea2, Qwen-Image 2.1, Qwen-Image-Edit, MiniMax H3 (image, or its video kind), MOSS, Fibo, LTX. |
+| **Text** | The copies of its text encoder: the same model and size by name, any precision or tune (Qwen3-VL 4B as bf16, fp8, int8 or abliterated). Another size, or a prompt enhancer tuned from one, isn't offered. |
+| **VAE** | VAEs of the same layers at the same sizes, read from each file's header, whatever they're called: Krea2Real, Qwen-Image's and WAN 2.1's are one kind; Qwen-Image 2.1's texture fix another. |
+
+A workflow that loads two of a kind has a picker for each: a film's **VAE** and **Audio VAE**, LTX's **Text** and
+**Text 2**. With only one that fits installed, the picker is still shown, greyed out in its place, saying so.

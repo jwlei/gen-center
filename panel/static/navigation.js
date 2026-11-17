@@ -256,10 +256,12 @@ function openSideMenu(link) {
   }
   menu.classList.remove('closing');
   menu.hidden = false;
-  // Over the button it came from, at least as wide.
+  // Under the button it came from, in the header, at least as wide.
+  const bar = $('jump'), within = menu.offsetParent || bar.parentElement || { offsetWidth: window.innerWidth };
   menu.style.minWidth = `${link.offsetWidth}px`;
-  menu.style.left = `${Math.max(8, Math.min(link.offsetLeft, $('stick').offsetWidth - menu.offsetWidth - 8))}px`;
-  menu.style.bottom = `${$('stick').offsetHeight - link.offsetTop + 6}px`;
+  menu.style.left = `${Math.max(8, Math.min(bar.offsetLeft + link.offsetLeft, within.offsetWidth - menu.offsetWidth - 8))}px`;
+  menu.style.top = `${bar.offsetTop + link.offsetTop + link.offsetHeight + 6}px`;
+  menu.style.bottom = '';
   link.setAttribute('aria-expanded', 'true');
 }
 function closeSideMenu() {
@@ -321,25 +323,54 @@ function markJump() {
   document.body.classList.toggle('in-generate', WIDE.matches ? desktopGenerateActive : document.body.dataset.page === 'generate');
   JUMPS.forEach(a => a.classList.toggle('active', a === here));
   placeJumpGlider(here);
-  $('goBar').hidden = !WIDE.matches && document.body.dataset.page !== 'generate';
+  syncFooterBar(!WIDE.matches && document.body.dataset.page !== 'generate');
   syncStrips();
 }
-// The footer's outline round the section shown: one, gliding from the button it was on to the next, in that one's
-// colour (the CSS's .jump-glider[data-at]). Placed at once the first time, and when the footer changes size.
-const jumpGlider = $('jumpGlider');
-function placeJumpGlider(here) {
-  if (!here || !here.offsetWidth) { jumpGlider.hidden = true; return; }
-  const place = `${here.offsetLeft},${here.offsetTop},${here.offsetWidth},${here.offsetHeight}`;
-  jumpGlider.hidden = false;
-  jumpGlider.dataset.at = here.dataset.page;
-  if (jumpGlider.dataset.place === place) return;
-  const first = !jumpGlider.dataset.place;
-  jumpGlider.dataset.place = place;
-  jumpGlider.classList.toggle('still', first);
-  Object.assign(jumpGlider.style, { left: `${here.offsetLeft}px`, top: `${here.offsetTop}px`, width: `${here.offsetWidth}px`, height: `${here.offsetHeight}px` });
-  $('jump').classList.add('glides');
-  if (first) requestAnimationFrame(() => jumpGlider.classList.remove('still'));
+// On a phone, Generate's footer (Add to queue, and its sections over it) slides up out of the bottom as Generate comes,
+// and down into it as Generate goes. Moved, never resized while it moves: what sizes itself to it (Generate's box) has
+// it at its size at once, and the page it leaves for keeps its room until it's gone.
+let footerLeaving = null;
+function syncFooterBar(hide) {
+  const bar = $('goBar'), stick = $('stick');
+  const still = WIDE.matches || !stick.animate || window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  if (!hide) {
+    if (footerLeaving) { footerLeaving.cancel(); footerLeaving = null; }
+    const arriving = bar.hidden;
+    bar.hidden = false;
+    if (arriving && !still) stick.animate([{ transform: 'translateY(100%)', opacity: 0 }, { transform: 'none', opacity: 1 }],
+                                          { duration: 240, easing: 'cubic-bezier(.3, .7, .3, 1)' });
+    return;
+  }
+  if (bar.hidden || footerLeaving) return;
+  if (still) { bar.hidden = true; return; }
+  const leaving = footerLeaving = stick.animate([{ transform: 'none', opacity: 1 }, { transform: 'translateY(100%)', opacity: 0 }],
+                                                { duration: 200, easing: 'ease-in' });
+  leaving.onfinish = () => {
+    if (footerLeaving !== leaving) return;
+    footerLeaving = null;
+    bar.hidden = true;
+    leaving.cancel();
+  };
 }
+// A short line under the button of what's shown, gliding from the one it was under to the next: the footer's pages
+// (in that page's colour, the CSS's .jump-glider[data-at]) and the generation sections' bar above it. Placed at once
+// the first time, and when the bar changes size.
+function placeUnderline(glider, here, bar) {
+  if (!here || !here.offsetWidth) { glider.hidden = true; return; }
+  const width = Math.min(28, Math.round(here.offsetWidth * .5));
+  const place = `${here.offsetLeft},${here.offsetTop},${here.offsetWidth},${here.offsetHeight}`;
+  glider.hidden = false;
+  glider.dataset.at = here.dataset.page || '';
+  if (glider.dataset.place === place) return;
+  const first = !glider.dataset.place;
+  glider.dataset.place = place;
+  glider.classList.toggle('still', first);
+  Object.assign(glider.style, { left: `${here.offsetLeft + (here.offsetWidth - width) / 2}px`, top: `${here.offsetTop + here.offsetHeight}px`, width: `${width}px` });
+  bar.classList.add('glides');
+  if (first) requestAnimationFrame(() => glider.classList.remove('still'));
+}
+const jumpGlider = $('jumpGlider');
+function placeJumpGlider(here) { placeUnderline(jumpGlider, here, $('jump')); }
 window.addEventListener('resize', () => {
   jumpGlider.dataset.place = '';
   placeJumpGlider(JUMPS.find(a => a.classList.contains('active')));
@@ -395,6 +426,22 @@ document.addEventListener('touchend', e => {
 document.addEventListener('touchcancel', () => { pageSwipe = null; }, { passive: true });
 // The footer's height, once its bars have eased in or out.
 $('stick').addEventListener('transitionend', () => document.documentElement.style.setProperty('--head', `${$('stick').offsetHeight}px`));
+// Its height as soon as it changes, before the frame is drawn: Generate's box fits under it at once, not after it.
+if (window.ResizeObserver) new ResizeObserver(() => document.documentElement.style.setProperty('--head', `${$('stick').offsetHeight}px`)).observe($('stick'));
 window.addEventListener('scroll', markJump, { passive: true });
 
 for (const section of document.querySelectorAll('details.section')) section.addEventListener('toggle', markJump);
+
+// The header's height, for what sits just under it (the connection notice): kept as it changes, before it's drawn.
+{
+  const header = document.querySelector && document.querySelector('.top');
+  const keep = () => {
+    if (!header || !header.getBoundingClientRect) return;
+    // Pinned on a phone it's always at the top; on a wide screen, only as far as it's still in sight.
+    const bottom = Math.max(0, Math.round(header.getBoundingClientRect().bottom));
+    document.documentElement.style.setProperty('--top-h', `${bottom}px`);
+  };
+  if (header && window.ResizeObserver) new ResizeObserver(keep).observe(header);
+  window.addEventListener('scroll', keep, { passive: true });
+  keep();
+}

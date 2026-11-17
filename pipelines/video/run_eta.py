@@ -252,7 +252,7 @@ class RunEta:
     # --- Learning ---
 
     def _plan_keys(self):
-        """Planning is timed per LLM model (local:gemma-4-12b, gemini:..., claude:...), then per LLM, then at all."""
+        """Planning is timed per LLM model (local:gemma-4-12b, gemini:...), then per LLM, then at all."""
         if self.direct:
             return ["Plan | direct"]
         return [*llm_keys("Plan", self.llm, self.local_model), "Plan"]

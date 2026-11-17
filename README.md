@@ -243,7 +243,7 @@ closes when they finish.
 Finished, batch ordering and crash/heat recovery. **prompt-feature-tests** covers prompt writing, clip planning and H3 modes.
 All three are ordinary Python unittest tasks with output in VS Code's integrated terminal; no standalone windows open.
 
-They use a fake ComfyUI and Claude on localhost, real ffmpeg, and a throwaway folder. Nothing costs anything.
+They use a fake ComfyUI and Gemini on localhost, real ffmpeg, and a throwaway folder. Nothing costs anything.
 
 ## History
 
