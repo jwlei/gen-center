@@ -279,21 +279,35 @@ function syncVideoForm() {
   const seconds = +$('duration').value, [shortest] = videoClips();
   const adjusted = $('videoClipFixed').checked
     ? Math.min(Math.floor(+$('duration').max / shortest), Math.max(1, Math.floor(seconds / shortest + .5))) * shortest : seconds;
-  const single = $('audioMode').value === 'none' && $('duration').value && Number.isInteger(seconds)
-    && seconds >= +$('duration').min && seconds <= +$('duration').max && shotCount(adjusted) === 1;
-  // One clip has nothing to connect to: it shows as Separate moments, and goes as one.
-  $('startSingle').disabled = !single;
-  if (single) {
-    $('start').disabled = $('start').hidden = true;
-    $('startUnavailable').hidden = false;
+  // Variations: the clip made again, each its own video. One fixed clip length, each starting on the image, no film
+  // audio, and Variety for how they differ; the story and related scenes say that themselves, so never get it.
+  const variations = $('clipRelationship').value === 'variations';
+  if (variations && !$('videoClipFixed').checked) {
+    const [, , usual] = videoClips();
+    $('videoClipFixed').checked = true;
+    $('videoClipSeconds').value = `${usual}-${usual}`;
   }
-  const multishot = !single && $('start').value === 'multishot' && !!workflowMultishot[$('videoWorkflow').value];
+  if (variations && $('audioMode').value !== 'none') { $('audioMode').value = 'none'; syncAudio(); }
+  $('variationsBox').hidden = !variations;
+  $('videoVariations').disabled = !variations;
+  $('startVariations').hidden = !variations;
+  $('videoVarietyBox').hidden = !variations;
+  for (const field of $('videoVarietyBox').querySelectorAll('select')) field.disabled = !variations;
+  const single = !variations && $('audioMode').value === 'none' && $('duration').value && Number.isInteger(seconds)
+    && seconds >= +$('duration').min && seconds <= +$('duration').max && shotCount(adjusted) === 1;
+  // One clip has nothing to connect to: it shows as Separate moments, and goes as one. Variations go as separate.
+  $('startSingle').disabled = !single && !variations;
+  if (single || variations) {
+    $('start').disabled = $('start').hidden = true;
+    $('startUnavailable').hidden = variations;
+  }
+  const multishot = !single && !variations && $('start').value === 'multishot' && !!workflowMultishot[$('videoWorkflow').value];
   if (multishot && !$('videoClipFixed').checked) {
     const [, , usual] = videoClips();
     $('videoClipFixed').checked = true;
     $('videoClipSeconds').value = `${usual}-${usual}`;
   }
-  $('videoClipFixedButton').disabled = multishot;
+  $('videoClipFixedButton').disabled = multishot || variations;
   $('multishotOptions').hidden = !multishot;
   $('h3FirstFrame').disabled = !multishot;
   $('h3MultishotSteps').disabled = !multishot;
@@ -301,10 +315,10 @@ function syncVideoForm() {
   syncVideoClips();
   // Your prompt as it is, for every clip, or the LLM writing one per clip from it.
   const direct = $('videoPromptMode').value === 'direct';
-  const infinite = !single && $('start').value === 'infinite' && !!workflowMultishot[$('videoWorkflow').value];
+  const infinite = !single && !variations && $('start').value === 'infinite' && !!workflowMultishot[$('videoWorkflow').value];
   // It makes its own sound, from the clip before's: no narration, audio file or reference media.
   if (infinite && $('audioMode').value !== 'none') { $('audioMode').value = 'none'; syncAudio(); }
-  $('audioMode').disabled = infinite;
+  $('audioMode').disabled = infinite || variations;
   syncH3Controls('video', !multishot && !infinite && !!workflowH3[$('videoWorkflow').value]);
   $('videoLlmBox').classList.toggle('hidden', direct);
   $('videoWriterExtras').classList.toggle('hidden', direct);  // Words and Variety, under the prompts: for the LLM
@@ -319,6 +333,9 @@ function syncVideoForm() {
   syncMediaInput();
   syncSize();
   syncAudio();
+  // Variations stand in for the film's length, and no film is rounded to whole clips.
+  if (variations) { $('durationBox').classList.add('hidden'); $('videoClipFixedHint').hidden = true; }
+  $('duration').disabled = variations;
   const [low] = videoClips();
   const estimate = $('videoClipFixed').checked
     ? Math.min(Math.floor(+$('duration').max / low), Math.max(1, Math.floor(seconds / low + .5))) * low : seconds;

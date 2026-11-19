@@ -82,6 +82,17 @@ def _model_file_stem(folder):
     return names[0][:-len(".gguf")] if names else ""
 
 
+def llm_pill(llm, model=None):
+    """Which LLM wrote the prompts, as its pill says it: the local model as the model pickers name it, else the LLM."""
+    if llm != "local" or not model:
+        return llm
+    try:
+        model_family(model)
+    except ValueError:
+        return model
+    return short_name(model)
+
+
 def short_name(model_id, file_stem=None):
     """
     "gemma-4-12b:gemma-4-12B-it-qat-q4_0-unquantized-heretic-Q4_K_M" -> "Gemma 4 QAT-H Q4_K_M". file_stem: the built-in

@@ -142,8 +142,15 @@ def image_rule(count, variety=DEFAULT, vary=(), keep=()):
     {rule}{' ' + chips if chips else ''}"""
 
 
+def variations_rule(count, seconds):
+    """What a video model's writer is told when the clips are variations of one clip, not a film."""
+    return f"""These are {count} variations of one {seconds}-second clip, not a film. Each is rendered on its own and
+    saved as a video of its own: none comes before or after another, so none continues, answers or refers to another.
+    Each is a complete take on the whole brief, and no two are the same take."""
+
+
 def film_rule(variety=DEFAULT, vary=(), keep=()):
-    """The writer's paragraph on how a film's clips differ from each other."""
+    """The writer's paragraph on how variations of a clip differ from each other (only variations get one)."""
     if variety == "slight":
         change = f"only the {_listed(vary)}, a little" if vary else "only what the action needs"
         rule = f"""Keep the clips close together: the same subject, outfit, setting, light and style throughout,

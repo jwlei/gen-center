@@ -107,9 +107,27 @@ class ImageClient(ComfyClient):
         workflow = copy.deepcopy(self.workflow)
         self._set(workflow, "prompt", prompt)
         self._fill_images(workflow, images)
-        self._set(workflow, "width", width)
-        self._set(workflow, "height", height)
+        self._set_shared(workflow, "width", width)
+        self._set_shared(workflow, "height", height)
+        # MiniMax H3 Image's harshness fix reads the prompt a second time, at the same size.
+        from core.workflow_options import mirror_steering
+        mirror_steering(workflow)
         return workflow
+
+    def _set_shared(self, workflow, field, value):
+        """
+        Sets a field, and every other input of its name that read the same node as it did: MiniMax H3 Image's steering
+        copy of its conditioning takes its size from the same Resolution Selector, and has to be made at the same size.
+        """
+        if field not in self.fields:
+            return
+        node_id, name = self.fields[field]
+        was = workflow[node_id]["inputs"].get(name)
+        self._set(workflow, field, value)
+        if isinstance(was, list):
+            for node in workflow.values():
+                if node.get("inputs", {}).get(name) == was:
+                    node["inputs"][name] = value
 
     def enhancer_unchosen(self):
         """

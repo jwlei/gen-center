@@ -29,6 +29,13 @@ On a phone, the navigation shows one section at a time: Status, Generate or the 
 for what's running when you're elsewhere. Log and Quota are icons at the top of Settings; Finished is beside the
 run controls in Status.
 
+Chat (tap Status again, or its icon beside the log) talks with one of the local models. Conversations are kept on the
+server (`logs/chats.json`), so they are the same on every device: the new-chat button starts another with an empty
+context, Clear empties the open one (the others stay), and Sessions opens an earlier one to carry on (or deletes it). The top right shows how much of the model's context the
+conversation takes; tap it for the parts (instruction, conversation, room kept for the reply, free). A local model and a generation can't share the GPU,
+so a message sent while one runs goes next in line: the queue starts nothing new, and the reply begins as soon as that
+generation is done, ahead of whatever waits in the queue. While a reply is being written, the queue waits for it.
+
 Generate keeps its compact footer controls and estimate visible, including at the end of the form; the former
 full-size bottom controls are hidden. Explanatory hints open from small information icons beside their field headings.
 The footer estimate shows its label on the first line and the time on the second.

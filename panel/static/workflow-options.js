@@ -313,6 +313,13 @@ function imageOptionHtml(option, all) {
     // Its range worth using beside the strength, and the room the extra LoRAs' trash takes, so the strengths line up.
     return `<div class="lora-line"><label class="check"><input type="hidden" name="${esc(name)}" value="0"><input type="checkbox" name="${esc(name)}" aria-label="${esc(option.label)}" value="1"${option.default === '1' ? ' checked' : ''}${locked}></label>${under}<span class="lora-range"></span><span class="lora-gap" aria-hidden="true"></span></div>`;
   }
+  if (option.kind === 'switch' && option.rows) {
+    // What goes with it under it, each on a line of its own with its name, folded away until it's ticked (Reduce harshness).
+    const on = option.default === '1';
+    return `<label class="check"><input type="hidden" name="${esc(name)}" value="0"><input type="checkbox" name="${esc(name)}" value="1"${on ? ' checked' : ''}${locked}>
+      <span>${esc(option.label)}${problem}</span></label>`
+      + `<div class="option-reveal option-rows${on ? ' open' : ''}" data-below="${esc(name)}"><div class="option-reveal-in">${group.map(child => withHint(child, optionRowHtml(child))).join('')}</div></div>`;
+  }
   if (option.kind === 'switch') {
     // What goes with it, such as a LoRA's file and strength with Enable LoRA, beside it.
     const choices = all.filter(other => other.parent === option.id).map(child => child.kind === 'choice'
@@ -327,6 +334,16 @@ function imageOptionHtml(option, all) {
       <span>${esc(option.label)} <input type="number" class="option-strength" name="${esc(name)}_strength" aria-label="Strength" min="${option.min}" max="${option.max}" step="${option.step}" value="${esc(on ? option.default : option.usual || '1')}"${locked}>${problem}</span></label>`;
   }
   return '';
+}
+// One setting under a switch that has them in rows: its name, then its box, choice or tickbox, lined up with the rest.
+function optionRowHtml(child) {
+  const id = `opt_${child.id}`, off = child.problem ? ' disabled' : '';
+  const control = child.kind === 'choice'
+    ? `<select id="${esc(id)}" name="${esc(id)}" class="option-choice"${off}>${choiceOptions(child)}</select>`
+    : child.kind === 'switch'
+      ? `<input type="hidden" name="${esc(id)}" value="0"><input type="checkbox" id="${esc(id)}" name="${esc(id)}" value="1"${child.default === '1' ? ' checked' : ''}${off}>`
+      : `<input type="number" id="${esc(id)}" name="${esc(id)}" class="option-strength" min="${child.min}" max="${child.max}" step="${child.step}" value="${esc(child.default)}"${off}>`;
+  return `<div class="option-row"><label for="${esc(id)}">${esc(child.label)}</label>${control}</div>`;
 }
 // Steps, Sampler, Scheduler and CFG: each on its line, its name a button that drops a short hint under it.
 const SAMPLING_OPTIONS = ['steps', 'sampler', 'scheduler', 'cfg'];
@@ -355,7 +372,10 @@ function withHint(option, html) {
   // After its name where it's shown (a tag's text, never an attribute such as aria-label), in its line or row.
   const named = html.indexOf(`>${esc(option.label)}`);
   const at = named >= 0 ? named + 1 + esc(option.label).length : -1;
-  return at >= 0 ? html.slice(0, at) + button + html.slice(at) + hint : html + hint;
+  if (at < 0) return html + hint;
+  // A switch's own hint goes under the switch, above the settings that fold out under it.
+  const rows = html.indexOf('<div class="option-reveal option-rows');
+  return rows > at ? html.slice(0, at) + button + html.slice(at, rows) + hint + html.slice(rows) : html.slice(0, at) + button + html.slice(at) + hint;
 }
 // A tap on its name drops its hint down; the next folds it away.
 document.addEventListener('click', e => {
@@ -432,17 +452,20 @@ function syncOptions(section, box, options, workflow = '') {
   const draw = list => list.map(option => withHint(option, imageOptionHtml(option, options))).join('');
   const sampling = SAMPLING_OPTIONS.map(id => options.find(option => option.id === id)).filter(Boolean);
   const lora = options.filter(option => option.id === 'lora' || option.parent === 'lora' || option.kind === 'lora_stack');
+  // What changes how the sampling runs (Reduce harshness), and what goes under it: just below Sampling.
+  const tuning = options.filter(option => option.under_sampling || options.some(other => other.under_sampling && other.id === option.parent));
   const speed = options.filter(option => option.speed);
   // Last of all: which files it runs, Model (another of its kind installed in ComfyUI, such as a fine-tune), its
   // text encoder and VAE.
   const models = options.filter(option => option.model);
-  const rest = options.filter(option => !sampling.includes(option) && !lora.includes(option) && !speed.includes(option) && !models.includes(option) && option !== negative);
+  const rest = options.filter(option => !sampling.includes(option) && !tuning.includes(option) && !lora.includes(option) && !speed.includes(option) && !models.includes(option) && option !== negative);
   // Two kinds of LoRA, each under a word on what it does: a turbo one (lightning, n-step) makes it in fewer steps, and
   // comes first, as it sets the steps; a style one changes the look.
   // Each group's name alone, the same way in every group (what it's for is in its hint where it has one).
   const heading = (text, what, hint = '') => `<div class="options-subtitle">${text}${hint}</div>`;
   const loraHint = '<button type="button" class="hint-toggle" data-style-lora-guide aria-label="About style LoRA" aria-haspopup="dialog" aria-controls="modelGuide"><span class="res-info-mark" aria-hidden="true">i</span></button>';
   $(box).innerHTML = (sampling.length ? `<div class="options-section">${heading('Sampling', 'how each picture is worked')}<div class="options-sampling">${sampling.map(samplingHtml).join('')}</div></div>` : '')
+    + (tuning.length ? `<div class="options-section options-tuning">${draw(tuning)}</div>` : '')
     + (speed.length ? `<div class="options-lora options-speed">${heading('Turbo LoRA', 'fewer steps, faster')}${draw(speed)}</div>` : '')
     + (lora.length ? `<div class="options-lora">${heading('Style LoRA', 'changes the look', loraHint)}${draw(lora)}</div>` : '')
     + (rest.length ? `<div class="options-section options-misc">${draw(rest.filter(option => !option.advanced)) + draw(rest.filter(option => option.advanced))}</div>` : '')

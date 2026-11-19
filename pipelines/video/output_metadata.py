@@ -3,8 +3,8 @@ import json
 import os
 import tempfile
 
-from core import workflow_options
-from core.saved_workflows import shorthand
+from core import pills, workflow_options
+from core.saved_workflows import picker_label, shorthand
 from pipelines.video.main import BUILT_IN
 from pipelines.video.run_state import UPSCALED, films_of_runs, run_of_film
 
@@ -38,12 +38,20 @@ def write(path, data):
 
 
 def from_run(state):
-    # The brief: an upscaled copy stays a sibling of what its prompt made (core/pills.py).
+    """
+    What an upscaled copy shows of the film it came from: every pill the original has, kept beside it so it still has
+    them should that run go. The brief: an upscaled copy stays a sibling of what its prompt made (core/pills.py).
+    """
     return {"origin_run": state.id, "title": state.title or state.brief, "brief": state.brief,
-            "model": shorthand(state.workflow, BUILT_IN), "llm": state.llm,
+            "model": shorthand(state.workflow, BUILT_IN), "workflow_label": picker_label(state.workflow, BUILT_IN),
+            "llm": state.llm, "local_model": getattr(state, "h3_model", None),
             "h3_mode": state.h3_mode, "h3_creativity": state.h3_creativity,
             "connection": state.connection_mode or state.start, "direct": bool(state.direct),
-            "loras": workflow_options.loras_used(state.workflow, state.options, "video")}
+            "loras": workflow_options.loras_used(state.workflow, state.options, "video"),
+            "mode": pills.video_mode(state), "writer": pills.video_writer(state),
+            "sampling": workflow_options.sampling_used(state.workflow, state.options, "video"),
+            "cfg": workflow_options.cfg_used(state.workflow, state.options, "video"),
+            "latent": pills.latent_description(state.options)}
 
 
 def resolve(path, films=None):

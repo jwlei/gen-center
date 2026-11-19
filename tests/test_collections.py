@@ -68,7 +68,37 @@ class CollectionsTest(unittest.TestCase):
         self.assertEqual([i["file"] for i in collections._read()[0]["items"]], ["cat_1.png"])
         os.remove(os.path.join(state.output_dir, "cat_1.png"))
         collections.apply({"image_sets": [], "videos": {"video": []}})
-        self.assertEqual(collections._read()[0]["items"], [], "its file deleted: it goes")
+        self.assertEqual(collections._read(), [], "its file deleted: it goes, and its collection with it, as it was the last")
+
+    def test_deleting_the_last_item_deletes_its_collection(self):
+        state = self.make_set(3)
+        home = self.move(kind="image", run=state.id, file="cat_1.png", new="Two").get_json()["collection"]["id"]
+        self.move(kind="image", run=state.id, file="cat_2.png", to=home)
+        waiting = self.client.post("/api/collections", json={"name": "New"}).get_json()["collection"]["id"]
+        moved_out = self.move(kind="image", run=state.id, file="cat_3.png", new="Moved").get_json()["collection"]["id"]
+        self.move(kind="image", run=state.id, file="cat_3.png", to=home)
+        ids = lambda: [c["id"] for c in collections._read()]
+        position = lambda file: next(i for i, s in enumerate(RunState.load(state.id).shots, 1) if s["file"] == file)
+        for file in ("cat_1.png", "cat_2.png"):
+            self.assertTrue(self.client.post(f"/image-runs/{state.id}/delete/{position(file)}").get_json()["ok"])
+            collections.apply({"image_sets": [], "videos": {"video": []}})
+            self.assertIn(home, ids(), "one left in it: it stays")
+        self.assertTrue(self.client.post(f"/image-runs/{state.id}/delete/{position('cat_3.png')}").get_json()["ok"])
+        collections.apply({"image_sets": [], "videos": {"video": []}})
+        self.assertNotIn(home, ids(), "its last item deleted: the collection goes")
+        self.assertIn(waiting, ids(), "one just made, waiting for its first item, stays")
+        self.assertNotIn(moved_out, ids(), "one whose items moved elsewhere goes too")
+
+    def test_empty_collections_left_from_before_are_cleared(self):
+        state = self.make_set()
+        full = self.move(kind="image", run=state.id, file="cat_1.png", new="Full").get_json()["collection"]["id"]
+        old = collections._read() + [{"id": "c_old", "name": "Old", "items": []}]
+        collections._write(old)
+        collections.apply({"image_sets": [], "videos": {"video": []}})
+        self.assertEqual([c["id"] for c in collections._read()], [full], "the old empty one goes at the next refresh")
+        waiting = self.client.post("/api/collections", json={"name": "New"}).get_json()["collection"]["id"]
+        self.move(kind="image", run=state.id, file="cat_2.png", to=waiting)
+        self.assertNotIn("fresh", collections._find(collections._read(), waiting), "no longer waiting once it has an item")
 
     def test_one_collection_to_another_and_a_film_too(self):
         state = self.make_set()
@@ -81,7 +111,7 @@ class CollectionsTest(unittest.TestCase):
         payload = self.payload(state, films=["Film.mp4"])
         collections.apply(payload)
         shown = {c["id"]: c for c in payload["collections"]}
-        self.assertEqual(shown[first]["items"], [], "it left the first")
+        self.assertNotIn(first, shown, "it left the first, which went with its last item")
         self.assertEqual([item["kind"] for item in shown[second]["items"]], ["image", "film"], "in the order they came")
         self.assertTrue(shown[second]["nsfw"], "an NSFW film makes the collection NSFW")
         self.assertEqual(payload["videos"]["video"][0]["collection"], second)

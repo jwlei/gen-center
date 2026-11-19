@@ -84,7 +84,11 @@ def parse_args(argv=None):
                              "infinite: H3 Infinite Continuation Suite, each clip continuing the one before's video and "
                              "audio; image 1 is the first frame and each image after it where the next clip ends.")
     parser.add_argument("--clip-relationship", choices=planner.CLIP_RELATIONSHIPS, default="progressive",
-                        help="How LLM-planned clips relate: build one story (default), or make related but self-contained scenes.")
+                        help="How LLM-planned clips relate: build one story (default), make related but self-contained "
+                             "scenes, or variations of one clip, each saved as a video of its own (with --variations).")
+    parser.add_argument("--variations", type=int, metavar=f"1-{planner.MOST_VARIATIONS}",
+                        help="With --clip-relationship variations: how many variations to make, each as long as the fixed "
+                             "--clip-seconds N-N. Each starts on the image (or its prompt alone), and none is stitched.")
     parser.add_argument("--h3-first-frame", action="store_true", help="Use image 1 as the Multishot first frame as well as a reference.")
     parser.add_argument("--h3-multishot-steps", type=int, default=20, choices=range(1, 51), metavar="1-50",
                         help="Sampling steps for H3 Multishot (default: 20).")
@@ -101,7 +105,8 @@ def parse_args(argv=None):
     parser.add_argument("--words", type=int, default=None,
                         help=f"How long each clip's prompt is, in words ({prompt_words.LEAST}-{prompt_words.MOST['video']}; "
                              "default: the video model's own).")
-    parser.add_argument("--variety", choices=variety.VARIETIES, default=None, help="How different the clips are: slight, mixed or wide (default: as the film needs).")
+    parser.add_argument("--variety", choices=variety.VARIETIES, default=None,
+                        help="With variations: how different they are, slight, mixed or wide (default: as the writer sees fit).")
     parser.add_argument("--vary", default="", help=f"What changes from one clip to the next, comma-separated: {', '.join(variety.NAMES)}.")
     parser.add_argument("--keep", default="", help="What stays the same in every clip, from the same list.")
     parser.add_argument("--explicit", action="store_true", help="Tell the prompt writer the film is meant to be explicit (Private mode).")
@@ -123,6 +128,23 @@ def parse_args(argv=None):
 
     if args.redo is not None and not args.resume:
         parser.error("--redo needs --resume.")
+    variations = args.clip_relationship == planner.VARIATIONS
+    # Variety only says how variations differ: a story or related scenes say how their clips differ themselves.
+    if not variations and (args.variety or args.vary or args.keep):
+        parser.error("--variety, --vary and --keep are only for --clip-relationship variations.")
+    if variations and not args.resume:
+        if args.variations is None or not 1 <= args.variations <= planner.MOST_VARIATIONS:
+            parser.error(f"Variations need --variations 1-{planner.MOST_VARIATIONS}.")
+        if not args.clip_seconds or args.clip_seconds[0] != args.clip_seconds[1]:
+            parser.error("Variations need one clip length: --clip-seconds N-N.")
+        if args.start in ("multishot", "director", "infinite"):
+            parser.error("Variations are separate clips: they start on the image, not on each other.")
+        if args.audio or args.narration:
+            parser.error("Variations have no film to give --audio or --narration to.")
+        # N clips of one fixed length, each starting on the image.
+        args.start, args.fixed_clips, args.duration = "image", True, args.variations * args.clip_seconds[0]
+    elif args.variations is not None:
+        parser.error("--variations needs --clip-relationship variations.")
     try:
         args.vary, args.keep = variety.parse_names(args.vary), variety.parse_names(args.keep)
     except ValueError as e:
@@ -334,7 +356,7 @@ def plan_run(args, stages):
     if args.fixed_clips and planner.clip_seconds(video_model, args.clip_seconds)[:2] != args.clip_seconds:
         raise RuntimeError("The fixed clip length is outside this video model's supported range.")
     rounded = planner.fixed_film_seconds(state.seconds, video_model, args.clip_seconds) if args.fixed_clips else state.seconds
-    if rounded != state.seconds:
+    if rounded != state.seconds and state.clip_relationship != planner.VARIATIONS:
         print(f"🎞️ Fixed clip length adjusts the film from {state.seconds}s to {rounded}s."
               + (" The audio will be trimmed or padded with silence." if audio else ""))
         state.seconds = rounded
@@ -362,8 +384,11 @@ def plan_run(args, stages):
         state.update(title=titles.titled(title, state.brief, "a short film", comfy.url, None,
                                        model_id=local_model or state.h3_model), shots=shots)
         return state
-    print(f"🧠 {llm} is writing {planner.shot_count(state.seconds, video_model, args.clip_seconds)} prompts for a {state.seconds}s film at "
-          f"{width}x{height}, {shortest}-{longest}s a clip...")
+    count = planner.shot_count(state.seconds, video_model, args.clip_seconds)
+    if state.clip_relationship == planner.VARIATIONS:
+        print(f"🧠 {llm} is writing {count} variations of a {longest}s clip at {width}x{height}...")
+    else:
+        print(f"🧠 {llm} is writing {count} prompts for a {state.seconds}s film at {width}x{height}, {shortest}-{longest}s a clip...")
     if image_2_in_words:
         print("🖼️ This workflow's clips take one image, so image 2 only reaches them through what the prompts say.")
     varied = {"variety": getattr(args, "variety", None), "vary": getattr(args, "vary", []), "keep": getattr(args, "keep", []),
@@ -650,6 +675,42 @@ def stitch_film(state):
     return output
 
 
+def variation_names(state):
+    """Each variation's name, chosen once as a film's is: <title words>_<workflow>[_tag]_v<n>. A redo keeps them."""
+    if state.variations and len(state.variations) == len(state.shots):
+        return state.variations
+    taken = claimed_films(state.id)
+    workflow = shorthand(state.workflow, BUILT_IN)
+    name = f"{title_words(state.title, 'clip')}_{workflow}"
+    tag = film_tag(state, workflow)
+    base = f"{name}_{tag}" if tag else name
+    names = []
+    for number in range(1, len(state.shots) + 1):
+        names.append(unique_name(paths.OUTPUT_DIR, f"{base}_v{number}", ".mp4", taken | set(names)))
+    state.update(variations=names)
+    return names
+
+
+def save_variations(state):
+    """Variations aren't stitched: each clip is copied out as a video of its own. Returns their paths."""
+    print(f"💾 Saving {len(state.shots)} variations...")
+    os.makedirs(paths.OUTPUT_DIR, exist_ok=True)
+    outputs = []
+    for index, name in enumerate(variation_names(state)):
+        output = os.path.join(paths.OUTPUT_DIR, f"{name}.mp4")
+        temp = os.path.join(paths.OUTPUT_DIR, f".{name}.{uuid.uuid4().hex}.mp4")
+        try:
+            shutil.copyfile(state.clip_path(index), temp)
+            os.replace(temp, output)
+        finally:
+            if os.path.exists(temp):
+                os.remove(temp)
+        outputs.append(output)
+    # The first stands for the run, as a film does: it is finished once every variation is saved.
+    state.update(final=outputs[0])
+    return outputs
+
+
 def render_take(state, comfy):
     if len({shot["seconds"] for shot in state.shots}) != 1:
         raise RuntimeError("H3 Multishot requires every shot to have the same duration.")
@@ -765,6 +826,10 @@ def run(args):
             return 0
 
     print_stage("Stitching", stages)
+    if state.clip_relationship == planner.VARIATIONS:
+        outputs = save_variations(state)
+        print(f"✅ {len(outputs)} variations saved: " + ", ".join(os.path.basename(path) for path in outputs))
+        return 0
     output = stitch_film(state)
     print(f"✅ {media.duration(output):.0f}s film saved: {output}")
 

@@ -876,13 +876,11 @@ class JobQueue:
                 if not old or not edit_token or old.get("edit_token") != edit_token or old.get("pipeline") != item.get("pipeline"):
                     item["error"] = "That queued job changed or is no longer being edited. Open its setup again."
                     return True
-                self.items.remove(old)
                 if old.get("private"):
                     item["private"] = True
                 item["id"] = edit_id
                 item["waited"] = True
-                # A continued run's setup reopened as a new run can go to Pending (the end) or the top; a plain edit keeps its place at the front.
-                self.items.insert(len(self.items) if item.get("later") else 0, item)
+                self.put_back_edited(old, item, later=bool(item.get("later")), top=to_top)
                 if generating and to_top and not self.job.running:
                     self.held = True
                 self._save()
@@ -923,6 +921,26 @@ class JobQueue:
             item["waited"] = item in self.items
             self._save()
             return item["waited"]
+
+    def put_back_edited(self, old, item, later=False, top=False):
+        """
+        An edited job, saved in place of old: Add to pending puts it at Pending's end, Add to top first in the queue,
+        and Save back where it was, at its place in the list, in the queue or in Pending as it was before editing.
+        """
+        at = self.items.index(old)
+        was_queued = old.get("edit_from_queue", not old.get("later"))
+        self.items.remove(old)
+        for key in ("edit_token", "edit_from_queue"):
+            item.pop(key, None)
+        if later:
+            item["later"] = True
+            self.items.append(item)
+            return
+        if top or was_queued:
+            item.pop("later", None)
+        else:
+            item["later"] = True
+        self.items.insert(0 if top else at, item)
 
     def _watch(self):
         while True:
@@ -1264,11 +1282,16 @@ class JobQueue:
             return True
 
     def run_now(self, item_id):
-        """Runs one waiting job while nothing is running, ahead of the rest: a paused queue stays paused."""
+        """
+        Runs one waiting job while nothing is running, ahead of the rest: a paused queue stays paused. Held up for a
+        moment (a warm local model closing, ComfyUI being cleared): it goes first in line and starts once that's done
+        ("waiting"). Before, the warm model began closing but the answer was that something was running, and it took a
+        second tap.
+        """
         with self.lock:
             if self.current and self.job.idle:
                 self._finish_current()
-            if not self.job.idle or self.current or self.blocked():
+            if not self.job.idle or self.current:
                 return "not_ready", None
             item = next((item for item in self.items if item["id"] == item_id), None)
             if not item:
@@ -1278,6 +1301,12 @@ class JobQueue:
             self._approve_prompt_warning(item)
             self.items.remove(item)
             item.pop("later", None)
+            if self.blocked():
+                item["start_next"] = True  # Started by _advance as soon as nothing holds it up; the rest stay held
+                self.items.insert(0, item)
+                self.held = True
+                self._save()
+                return "waiting", None
             self.held = self.held and bool(self.items)
             self._start(item)
             if self.current is item:
@@ -2472,6 +2501,8 @@ def prepare_upload(item):
 
 
 _writing_prompt = False
+# A chat message waiting for the GPU (panel/chat.py): next in line, so the queue starts nothing new until it has replied.
+_chat_waiting = False
 _prompt_refiner = None
 _panel_closing = False
 _comfy_restarting = False
@@ -2487,9 +2518,9 @@ _warm = None  # (refiner, timer) while a model is kept loaded
 _warm_closing = False
 
 
-def keep_warm(refiner):
+def keep_warm(refiner, seconds=WARM_SECONDS):
     global _warm
-    timer = threading.Timer(WARM_SECONDS, close_warm_writer, kwargs={"only": refiner})
+    timer = threading.Timer(seconds, close_warm_writer, kwargs={"only": refiner})
     timer.daemon = True
     with _warm_lock:
         old, _warm = _warm, (refiner, timer)
@@ -2573,8 +2604,8 @@ def exit_soon():
 
 atexit.register(close_warm_writer)
 # A ComfyUI restart going (after an aimdo error) holds the next run back until it is done.
-run_queue = JobQueue(job, prepare_run, blocked=lambda: _writing_prompt or _panel_closing or _comfy_restarting or _comfy_freeing
-                     or warm_writer_in_the_way(), path=os.path.join(LOGS_DIR, "queue_runs.json"))
+run_queue = JobQueue(job, prepare_run, blocked=lambda: _writing_prompt or _chat_waiting or _panel_closing or _comfy_restarting
+                     or _comfy_freeing or warm_writer_in_the_way(), path=os.path.join(LOGS_DIR, "queue_runs.json"))
 # A run's own upload step is waited out, when its video sits in Ready with no topic recorded yet.
 upload_queue = JobQueue(uploads, prepare_upload, blocked=lambda: job.uploading,
                         path=os.path.join(LOGS_DIR, "queue_uploads.json"))
@@ -3058,9 +3089,25 @@ def stop_upload():
 @app.route("/queue/<lane>/remove/<int:item_id>", methods=["POST"])
 @password_required
 def queue_remove(lane, item_id):
+    """
+    Trash deletes, wherever it is tapped. A stopped or paused run queued to continue goes with what it still had to
+    do, as Pending's trash does: taken out of the queue alone, it showed up under Pending, to be deleted a second time.
+    What it made stays. A redo or an upscale only works on its run, so the run is left as it is.
+    """
     if lane not in QUEUES:
         abort(404)
-    return {"ok": QUEUES[lane].remove(item_id)}
+    queue = QUEUES[lane]
+    with queue.lock:
+        item = next((item for item in queue.items if item["id"] == item_id), None)
+        continues = queue is run_queue and item and item.get("resume") and item.get("pipeline") in PIPELINES \
+            and "--redo" not in (item.get("argv") or []) and not upscale_queue_settings(item)
+        if not queue.remove(item_id):
+            return {"ok": False}
+        if continues and item["resume"] not in busy_runs():
+            reply = PIPELINES[item["pipeline"]].discard_run(item["resume"])
+            if isinstance(reply, tuple):  # Gone already, say: the job is out of the queue all the same
+                app.logger.warning("Removed %s from the queue, but could not discard its run: %s", item["resume"], reply[0].get("error"))
+    return {"ok": True}
 
 
 @app.route("/queue/finished/clear", methods=["POST"])
@@ -3318,14 +3365,10 @@ def queue_edit_continue(item_id):
                        "resolution": f"{state.width}x{state.height}",
                        # Its new size and options take another time: estimated again, as the run will be made.
                        "estimate": pipeline.estimate(argv, old.get("env") or {})}
-        for key in ("later", "edit_token", "edit_from_queue"):
-            replacement.pop(key, None)
-        if request.form.get("start_later"):
-            replacement["later"] = True
-        else:
+        later, top = bool(request.form.get("start_later")), bool(request.form.get("queue_top"))
+        run_queue.put_back_edited(old, replacement, later=later, top=top and not later)
+        if not replacement.get("later"):
             run_queue._approve_prompt_warning(replacement)
-        run_queue.items.remove(old)
-        run_queue.items.insert(len(run_queue.items) if replacement.get("later") else 0, replacement)
         run_queue._save()
         run_queue._advance()
         _runs_cache["at"] = 0.0
@@ -3427,10 +3470,7 @@ def queue_edit_upscale(item_id):
             new_argv = [*video_panel.UPSCALE, "--film", name, "--scale", f"{scale:g}", "--quality", quality]
             estimate = UpscaleEta(new_argv, VIDEO_TIMINGS).plan()["total"]
         replacement = {**old, "argv": new_argv, "detail": how, "estimate": estimate, "waited": True}
-        replacement.pop("later", None)
-        replacement.pop("edit_token", None)
-        run_queue.items.remove(old)
-        run_queue.items.insert(0, replacement)
+        run_queue.put_back_edited(old, replacement)
         run_queue._save()
         run_queue._advance()
         return {"ok": True, "queued": replacement in run_queue.items}
@@ -3500,7 +3540,7 @@ def queue_run_now(lane, item_id):
         return {"ok": False, "error": "That job is no longer in the queue."}, 404
     if result == "failed":
         return {"ok": False, "error": error}, 500
-    return {"ok": True}
+    return {"ok": True, "waiting": result == "waiting"}
 
 
 @app.route("/queue/<lane>/order", methods=["POST"])
@@ -3556,6 +3596,38 @@ def api_settings():
 @password_required
 def api_local_models():
     return {"ok": True, "models": settings.local_models()}
+
+
+def streamed_prompt(write):
+    """
+    write(on_text) run on a thread, the prompt sent to the page as it is written: a JSON object a line, {"text": piece}
+    for each piece, then write's answer as it would have been ({"ok": true, "prompt": ...} or {"ok": false, ...}).
+    """
+    import queue as queue_module
+    pieces = queue_module.Queue()
+
+    def run():
+        try:
+            reply = write(pieces.put)
+        except Exception as error:  # write answers what it expects itself: the page must still hear the end
+            app.logger.exception("The prompt writer failed")
+            reply = {"ok": False, "error": str(error)}
+        pieces.put((reply[0] if isinstance(reply, tuple) else reply,))
+
+    threading.Thread(target=run, daemon=True).start()
+
+    def lines():
+        while True:
+            piece = pieces.get()
+            if isinstance(piece, tuple):
+                yield json.dumps(piece[0], ensure_ascii=False) + "\n"
+                return
+            yield json.dumps({"text": piece}, ensure_ascii=False) + "\n"
+
+    response = Response(lines(), mimetype="application/x-ndjson")
+    response.headers["Cache-Control"] = "no-store"
+    response.headers["X-Accel-Buffering"] = "no"
+    return response
 
 
 @app.route("/api/write-prompt", methods=["GET", "POST"])
@@ -3614,109 +3686,119 @@ def write_prompt():
         if _writing_prompt or _panel_closing or _comfy_restarting or _comfy_freeing or job.running or (run_queue.pending() and not run_queue.held):
             return {"ok": False, "error": "Wait for the current generation or prompt writer to finish."}, 409
         _writing_prompt = True
-    warm = False
-    try:
-        started = time.monotonic()
-        if writer == "local":
-            refiner = take_warm(model)
-            warm = refiner is not None
-            if warm:
-                # Something may have used ComfyUI since (its own page): it lets go of what it loaded again first.
+
+    def write(on_text=None):
+        """Writes it, the writer's turn over at the end however it went. on_text: each piece, as a local model writes it."""
+        global _prompt_refiner, _writing_prompt
+        warm = False
+        try:
+            started = time.monotonic()
+            if writer == "local":
+                refiner = take_warm(model)
+                warm = refiner is not None
+                if warm:
+                    # Something may have used ComfyUI since (its own page): it lets go of what it loaded again first.
+                    try:
+                        refiner._release_comfy_models()
+                    except BaseException:
+                        refiner.__exit__(None, None, None)
+                        raise
+                else:
+                    url = (os.getenv("COMFYUI_URL") or "http://127.0.0.1:8188").rstrip("/")
+                    # Writing from words alone: no vision projector, which leaves its memory to the model.
+                    refiner = h3_refiner.Refiner(url, require_compiler=False, model_id=model, vision=False)
+                    if refiner.model_id != model:
+                        return {"ok": False, "error": "The selected model changed. Try writing the prompt again."}, 409
+                with run_queue.lock:
+                    _prompt_refiner = refiner
                 try:
-                    refiner._release_comfy_models()
+                    if not warm:
+                        refiner.__enter__()
+                    prompt = refiner.write_prompt(text.strip(), side, **({"on_text": on_text} if on_text else {}))
                 except BaseException:
                     refiner.__exit__(None, None, None)
                     raise
+                keep_warm(refiner)
+            elif writer == "gemini":
+                from google.genai import types
+                from core import gemini, prompt_writer_instructions
+                response = gemini._generate(
+                    text.strip(),
+                    config=types.GenerateContentConfig(system_instruction=prompt_writer_instructions.INSTRUCTIONS[side]))
+                prompt = getattr(response, "text", None)
+                if not isinstance(prompt, str) or not prompt.strip():
+                    raise RuntimeError("Gemini returned an empty prompt.")
+                prompt = prompt.strip()
             else:
-                url = (os.getenv("COMFYUI_URL") or "http://127.0.0.1:8188").rstrip("/")
-                # Writing from words alone: no vision projector, which leaves its memory to the model.
-                refiner = h3_refiner.Refiner(url, require_compiler=False, model_id=model, vision=False)
-                if refiner.model_id != model:
-                    return {"ok": False, "error": "The selected model changed. Try writing the prompt again."}, 409
-            with run_queue.lock:
-                _prompt_refiner = refiner
+                # The workflow's enhancer runs in ComfyUI, which needs the memory a warm local model holds.
+                close_warm_writer()
+                from panel import image as image_panel
+                from pipelines.image.comfy import ImageClient
+                uploads = image_panel.form_uploads(request.files)
+                env, takes, error = image_panel.chosen_workflow(request.form, len(uploads))
+                if error:
+                    return {"ok": False, "error": error}, 400
+                enhancer = next((option for option in takes.get("options", []) if option.get("id") == "prompt_enhancer"), None)
+                if not enhancer:
+                    return {"ok": False, "error": "The selected image workflow has no prompt enhancer."}, 400
+                if enhancer.get("problem"):
+                    return {"ok": False, "error": f"{enhancer['label']} can't run: {enhancer['problem']}"}, 400
+                from core import workflow_options
+                takes = workflow_options.takes_for(takes, form_options(request.form, takes)[0])
+                if not takes["min_images"] <= len(uploads) <= takes["max_images"]:
+                    return {"ok": False, "error": "Choose the number of source images this workflow needs."}, 400
+                workflow_path = env.get("COMFYUI_WORKFLOW")
+                if not workflow_path:
+                    return {"ok": False, "error": "Choose an image workflow with a prompt enhancer."}, 400
+                options, error = form_options(request.form, takes)
+                if error:
+                    return {"ok": False, "error": error}, 400
+                options["prompt_enhancer"] = "1"
+                comfy = ImageClient(options, workflow_path=workflow_path)
+                if not comfy.wait_until_reachable():
+                    raise RuntimeError(f"ComfyUI isn't running at {comfy.url}. Start it first.")
+                images = []
+                for upload in uploads:
+                    try:
+                        video_media.load_image(upload.stream)
+                    except RuntimeError:
+                        return {"ok": False, "error": "That file isn't an image this can read."}, 400
+                    upload.stream.seek(0)
+                    extension = os.path.splitext(upload.filename)[1].lower()
+                    extension = extension if re.fullmatch(r"\.[a-z0-9]{1,5}", extension) else ""
+                    images.append(comfy._send_image(upload.stream, f"prompt-editor-{secrets.token_hex(8)}{extension}"))
+                prompt = comfy.enhance(text.strip(), images)
+                if not prompt or not prompt.strip():
+                    raise RuntimeError("The workflow's prompt enhancer returned no text.")
+            timings = eta_keys.Timings(PROMPT_WRITER_TIMINGS, {})
+            key = f"{model} | {side}" + (" | warm" if warm else "")
+            old = timings.timed_step(key)
+            if old is not None and (not math.isfinite(old) or old <= 0):
+                app.logger.warning("Discarding invalid prompt writer timing for %s: %s", key, old)
+                timings.timed_steps.discard(key)
+            timings.learn_step(key, time.monotonic() - started)
             try:
-                if not warm:
-                    refiner.__enter__()
-                prompt = refiner.write_prompt(text.strip(), side)
-            except BaseException:
-                refiner.__exit__(None, None, None)
-                raise
-            keep_warm(refiner)
-        elif writer == "gemini":
-            from google.genai import types
-            from core import gemini, prompt_writer_instructions
-            response = gemini._generate(
-                text.strip(),
-                config=types.GenerateContentConfig(system_instruction=prompt_writer_instructions.INSTRUCTIONS[side]))
-            prompt = getattr(response, "text", None)
-            if not isinstance(prompt, str) or not prompt.strip():
-                raise RuntimeError("Gemini returned an empty prompt.")
-            prompt = prompt.strip()
-        else:
-            # The workflow's enhancer runs in ComfyUI, which needs the memory a warm local model holds.
-            close_warm_writer()
-            from panel import image as image_panel
-            from pipelines.image.comfy import ImageClient
-            uploads = image_panel.form_uploads(request.files)
-            env, takes, error = image_panel.chosen_workflow(request.form, len(uploads))
-            if error:
-                return {"ok": False, "error": error}, 400
-            enhancer = next((option for option in takes.get("options", []) if option.get("id") == "prompt_enhancer"), None)
-            if not enhancer:
-                return {"ok": False, "error": "The selected image workflow has no prompt enhancer."}, 400
-            if enhancer.get("problem"):
-                return {"ok": False, "error": f"{enhancer['label']} can't run: {enhancer['problem']}"}, 400
-            from core import workflow_options
-            takes = workflow_options.takes_for(takes, form_options(request.form, takes)[0])
-            if not takes["min_images"] <= len(uploads) <= takes["max_images"]:
-                return {"ok": False, "error": "Choose the number of source images this workflow needs."}, 400
-            workflow_path = env.get("COMFYUI_WORKFLOW")
-            if not workflow_path:
-                return {"ok": False, "error": "Choose an image workflow with a prompt enhancer."}, 400
-            options, error = form_options(request.form, takes)
-            if error:
-                return {"ok": False, "error": error}, 400
-            options["prompt_enhancer"] = "1"
-            comfy = ImageClient(options, workflow_path=workflow_path)
-            if not comfy.wait_until_reachable():
-                raise RuntimeError(f"ComfyUI isn't running at {comfy.url}. Start it first.")
-            images = []
-            for upload in uploads:
-                try:
-                    video_media.load_image(upload.stream)
-                except RuntimeError:
-                    return {"ok": False, "error": "That file isn't an image this can read."}, 400
-                upload.stream.seek(0)
-                extension = os.path.splitext(upload.filename)[1].lower()
-                extension = extension if re.fullmatch(r"\.[a-z0-9]{1,5}", extension) else ""
-                images.append(comfy._send_image(upload.stream, f"prompt-editor-{secrets.token_hex(8)}{extension}"))
-            prompt = comfy.enhance(text.strip(), images)
-            if not prompt or not prompt.strip():
-                raise RuntimeError("The workflow's prompt enhancer returned no text.")
-        timings = eta_keys.Timings(PROMPT_WRITER_TIMINGS, {})
-        key = f"{model} | {side}" + (" | warm" if warm else "")
-        old = timings.timed_step(key)
-        if old is not None and (not math.isfinite(old) or old <= 0):
-            app.logger.warning("Discarding invalid prompt writer timing for %s: %s", key, old)
-            timings.timed_steps.discard(key)
-        timings.learn_step(key, time.monotonic() - started)
-        try:
-            os.makedirs(os.path.dirname(PROMPT_WRITER_TIMINGS), exist_ok=True)
-            temporary = PROMPT_WRITER_TIMINGS + ".tmp"
-            with open(temporary, "w", encoding="utf-8") as file:
-                json.dump(timings.as_dict(), file, indent=2)
-            os.replace(temporary, PROMPT_WRITER_TIMINGS)
-        except OSError as e:
-            app.logger.warning("Could not save local prompt writer timings: %s", e)
-        return {"ok": True, "prompt": prompt}
-    except (RuntimeError, OSError, ValueError, APIError) as e:
-        return {"ok": False, "error": str(e)}, 500
-    finally:
-        with run_queue.lock:
-            _writing_prompt = False
-            _prompt_refiner = None
-        run_queue._advance_locked()
+                os.makedirs(os.path.dirname(PROMPT_WRITER_TIMINGS), exist_ok=True)
+                temporary = PROMPT_WRITER_TIMINGS + ".tmp"
+                with open(temporary, "w", encoding="utf-8") as file:
+                    json.dump(timings.as_dict(), file, indent=2)
+                os.replace(temporary, PROMPT_WRITER_TIMINGS)
+            except OSError as e:
+                app.logger.warning("Could not save local prompt writer timings: %s", e)
+            return {"ok": True, "prompt": prompt}
+        except (RuntimeError, OSError, ValueError, APIError) as e:
+            return {"ok": False, "error": str(e)}, 500
+        finally:
+            with run_queue.lock:
+                _writing_prompt = False
+                _prompt_refiner = None
+            run_queue._advance_locked()
+
+    # A local model's prompt shown as it is written (the editor asks for it): the writing goes on on a thread, so a
+    # page that stops reading leaves it to finish, its model kept loaded, rather than cut off.
+    if writer == "local" and str(data.get("stream") or "") == "1":
+        return streamed_prompt(write)
+    return write()
 
 
 _disk_cache = {"at": 0.0, "value": None}

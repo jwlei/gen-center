@@ -9,7 +9,9 @@ Kept in logs/collections.json:
     {"collections": [{"id": "c_20261109_181500", "name": "Portraits", "items": [
         {"kind": "image", "run": "image_20261109_121447", "file": "..._004.png"}, {"kind": "film", "name": "Film.mp4"}],
         "cover": {"kind": "image", "run": "...", "file": "..."}}]}
-A collection is shown by its cover, one of its own items, or its first image when none is chosen.
+A collection is shown by its cover, one of its own items, or its first image when none is chosen. There are no empty
+collections: once its last item is deleted or moved out, the collection goes. Only one just made ("fresh": true) waits
+empty for its first item.
 """
 import json
 import os
@@ -82,7 +84,11 @@ def apply(payload):
             if len(kept) != len(collection["items"]):
                 collection["items"] = kept
                 changed = True
-        if changed:
+        # No empty collections: one whose last item was deleted or moved out goes. Only one just made, waiting for its
+        # first item ("fresh"), stays empty.
+        kept_collections = _without_empty(collections)
+        if changed or len(kept_collections) != len(collections):
+            collections = kept_collections
             _write(collections)
     shown = []
     for collection in collections:
@@ -115,6 +121,11 @@ def _cover_of(collection, items):
     return None
 
 
+def _without_empty(collections):
+    """The collections that still hold something, or are just made and waiting for their first item."""
+    return [collection for collection in collections if collection["items"] or collection.get("fresh")]
+
+
 def _gone(item):
     """Whether an item's own file is gone from the disk (deleted, or its set with it): asked of the disk, not a list."""
     from panel import image as image_panel
@@ -144,7 +155,7 @@ def create_collection():
         return {"ok": False, "error": str(e)}, 400
     with _lock:
         collections = _read()
-        collection = {"id": f"c_{datetime.now():%Y%m%d_%H%M%S_%f}", "name": name, "items": []}
+        collection = {"id": f"c_{datetime.now():%Y%m%d_%H%M%S_%f}", "name": name, "items": [], "fresh": True}
         collections.append(collection)
         _write(collections)
     return {"ok": True, "collection": collection}
@@ -252,7 +263,8 @@ def move_to_collection():
             for collection in collections:
                 collection["items"] = [i for i in collection["items"] if _key(i) != _key(item)]
             target["items"].append(item)
-            _write(collections)
+            target.pop("fresh", None)
+            _write(_without_empty(collections))
     _runs_cache["at"] = 0.0
     return {"ok": True, "collection": {"id": target["id"], "name": target["name"]}}
 

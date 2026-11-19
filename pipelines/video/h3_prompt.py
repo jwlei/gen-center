@@ -9,7 +9,7 @@ answer questions, there is no source video, and a film is many separate renders.
 import re
 import statistics
 
-from core import prompt_words
+from core import prompt_words, variety
 from pipelines.video import roles as image_role
 
 MODEL = "minimax_h3"
@@ -204,11 +204,14 @@ def _format(images, low, high, roles=()):
 
 def instructions(brief, seconds, count, images, shortest, longest, second_image="", roles=(), references=None, start="image",
                  first_frame=False, clip_relationship="progressive", words=None):
-    clips = "one clip" if count == 1 else f"{count} clips"
-    shots = "one shot" if count == 1 else f"{count} shots in order"
-    together = f"Use {seconds}." if count == 1 else f"All of them together add up to {seconds}."
+    # Variations (planner.VARIATIONS): one clip made several times over, each a video of its own, not a film.
+    variations = clip_relationship == "variations" and count > 1
+    clips = "one clip" if count == 1 else f"{count} separate variations of one clip" if variations else f"{count} clips"
+    shots = "one shot" if count == 1 else f"{count} shots" if variations else f"{count} shots in order"
+    together = f"Use {seconds}." if count == 1 else f"Each one is {longest}." if variations else f"All of them together add up to {seconds}."
     low, high = _detail_words(count, words)
     shape = ("Show one clear moment that feels complete." if count == 1 else
+             "Make each variation a complete moment on its own." if variations else
              "Make every clip a distinct, self-contained moment in the same world." if clip_relationship == "related" else
              f"Give the film a beginning, a development and a real ending, rather than {count} versions of the same moment.")
     separate = "" if count == 1 else """Every clip is a separate render that knows nothing of the others, joined to the next with a fade. So
@@ -223,7 +226,9 @@ def instructions(brief, seconds, count, images, shortest, longest, second_image=
         separate += """
     Keep the clips physically continuous, but do not invent a larger escalating story arc. Give each a distinct
     action that picks up naturally from the previous clip."""
-    if count > 1 and start in ("chain", "multishot", "infinite"):
+    if variations:
+        separate = variety.variations_rule(count, longest)
+    elif count > 1 and start in ("chain", "multishot", "infinite"):
         separate = """The clips form one continuous take. Each clip starts from the previous clip's final frame,
     without a cut or fade, and H3 is also told to keep the subject, the place and the light the same. So whatever
     the words of a clip do not change, stays as it was, and two clips with similar words come out as the same clip.
@@ -240,7 +245,7 @@ def instructions(brief, seconds, count, images, shortest, longest, second_image=
     return f"""
     You are a director and prompt engineer for MiniMax H3, an open-weight video model that makes picture and
     stereo sound together in one pass, at {FPS} frames per second. You are turning a short brief into a
-    {seconds}-second film made of {clips}. Nobody can answer questions, so where the brief leaves something open,
+    {f"{longest}-second clip" if variations else f"{seconds}-second film"} made of {clips}. Nobody can answer questions, so where the brief leaves something open,
     decide.
 
     {_what_you_get(images, first_frame)}

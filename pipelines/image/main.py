@@ -66,6 +66,8 @@ def parse_args(argv=None):
     parser = argparse.ArgumentParser(description="Makes a set of images with ComfyUI, from text or by editing an image.")
     parser.add_argument("prompt", nargs="?", help="What you want, in a sentence or two. With --direct, the exact prompt.")
     parser.add_argument("--image", action="append", default=[], metavar="FILE", help="The image to edit, repeatable if the workflow takes several. Without one, it makes them from text.")
+    parser.add_argument("--look-at", action="append", default=[], metavar="FILE",
+                        help="A picture the LLM looks at to write more like it, repeatable. The workflow never gets it.")
     parser.add_argument("--count", type=parse_count, default=1, help=f"How many images, 1-{image_planner.MAX_IMAGES} (default 1).")
     parser.add_argument("--direct", action="store_true", help="Use the prompt word for word. No LLM: each image only gets a new seed.")
     parser.add_argument("--llm", choices=[name for name, _ in planner.LLMS], default=None, help="Who writes the prompts (default: LLM_PROVIDER in .env, else local).")
@@ -123,6 +125,8 @@ def parse_args(argv=None):
         parser.error(f"--words is from {image_planner.LEAST_WORDS} to {image_planner.MOST_WORDS}.")
     if args.plan_only and (args.resume or args.direct):
         parser.error("--plan-only stops after writing prompts: with --resume or --direct none get written.")
+    if args.look_at and (args.direct or args.areas or args.expand):
+        parser.error("--look-at is shown to the LLM writing the prompts: leave out --direct, --areas and --expand.")
     if (args.areas or args.expand) and not args.image:
         parser.error("--areas and --expand work on an image: give it with --image.")
     if args.areas and args.expand:
@@ -136,8 +140,8 @@ def parse_args(argv=None):
             parser.error("--expand takes four whole numbers of pixels: left, top, right and bottom, such as 0,0,400,0.")
     if (args.areas or args.expand) and (args.compose or args.plan_only):
         parser.error("--areas and --expand write their own prompt: leave out --compose and --plan-only.")
-    if not (args.resume or args.list or args.check or args.prompt or args.areas or args.expand):
-        parser.error("give a prompt, or --resume RUN, --list or --check.")
+    if not (args.resume or args.list or args.check or args.prompt or args.areas or args.expand or args.look_at):
+        parser.error("give a prompt (or --look-at a picture to make more like it), or --resume RUN, --list or --check.")
     return args
 
 
@@ -183,6 +187,8 @@ def check_setup(args):
 
 def plan_run(args, stages):
     images = [video_media.load_image(path) for path in args.image]
+    # Shown to the LLM alone, to write more like it (image_planner._look_rule).
+    seen = [video_media.preview_jpeg(video_media.load_image(path)) for path in getattr(args, "look_at", None) or []]
     region_edit = bool(args.areas or args.expand)
     inputs = video_media.inputs_fingerprint(images, [])
     if region_edit:
@@ -210,7 +216,7 @@ def plan_run(args, stages):
     direct = args.direct or region_edit
     llm = None if direct else args.llm or planner.default_llm()
     local_model = getattr(args, "local_model", None) or (h3_refiner.local_llm_model() if llm == "local" else None)
-    if llm == "local" and local_model and images and panel_settings.model_family(local_model) == "qwen3-14b":
+    if llm == "local" and local_model and (images or seen) and panel_settings.model_family(local_model) == "qwen3-14b":
         raise RuntimeError("Qwen3 14B is text-only and cannot analyze attached images. Choose a Gemma 4 model.")
     if llm and not planner.llm_configured(llm):
         raise RuntimeError(f"{llm} has no credentials: see .env.example.")
@@ -225,6 +231,7 @@ def plan_run(args, stages):
     brief = args.prompt or ""
     state = RunState.new(brief, args.count, direct, width, height, llm, os.getenv("COMFYUI_WORKFLOW") or None, len(images))
     state.local_model = local_model
+    state.looked = bool(seen) and not direct
     state.inputs = inputs
     state.options = options or None
     state.compose, state.transparent, state.detail = args.compose, args.transparent, args.reference_detail
@@ -249,7 +256,7 @@ def plan_run(args, stages):
     if region_edit:
         title, versions = plan_region(state, args, model)
     elif llm_compared:
-        title, versions = write_with_each(llm_compared, args, images, model, comfy)
+        title, versions = write_with_each(llm_compared, args, images, model, comfy, seen)
     elif args.direct:
         title = " ".join(args.prompt.split()[:6])
         versions = [{"title": f"Version {number}", "prompt": args.prompt} for number in range(1, args.count + 1)]
@@ -257,9 +264,9 @@ def plan_run(args, stages):
         print(f"🧠 {llm} is writing {args.count} {'prompt' if args.count == 1 else 'prompts'}...")
         plan_args = ([video_media.preview_jpeg(image) for image in images], args.prompt, args.count, llm, model)
         varied = {"variety": args.variety, "vary": args.vary, "keep": args.keep, "explicit": args.explicit,
-                  "words": args.words}
+                  "words": args.words, "seen": seen}
         if llm == "local":
-            with h3_refiner.Refiner(comfy.url, require_compiler=False, model_id=local_model, vision=bool(plan_args[0])) as refiner:
+            with h3_refiner.Refiner(comfy.url, require_compiler=False, model_id=local_model, vision=bool(plan_args[0] or seen)) as refiner:
                 title, versions = image_planner.write_prompts(*plan_args, compose=args.compose,
                                                               transparent=args.transparent, refiner=refiner, **varied)
         else:
@@ -308,20 +315,20 @@ def plan_run(args, stages):
     return state
 
 
-def write_with_each(tests, args, images, model, comfy):
+def write_with_each(tests, args, images, model, comfy, seen=()):
     """
     An LLM comparison's prompts: the brief written into one prompt by each prompt model in turn, each a version named
     after it. One that fails costs its own image, not the rest.
     """
     jpegs = [video_media.preview_jpeg(image) for image in images]
-    varied = {"explicit": args.explicit, "words": args.words}
+    varied = {"explicit": args.explicit, "words": args.words, "seen": seen}
     title, versions = None, []
     for test in tests:
         print(f"🧠 {test['label']} is writing its prompt...")
         plan_args = (jpegs, args.prompt, 1, test["llm"], model)
         try:
             if test["llm"] == "local":
-                with h3_refiner.Refiner(comfy.url, require_compiler=False, model_id=test["local_model"], vision=bool(jpegs)) as refiner:
+                with h3_refiner.Refiner(comfy.url, require_compiler=False, model_id=test["local_model"], vision=bool(jpegs or seen)) as refiner:
                     written, made = image_planner.write_prompts(*plan_args, compose=args.compose, transparent=args.transparent,
                                                                 refiner=refiner, **varied)
             else:

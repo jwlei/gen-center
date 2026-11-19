@@ -189,14 +189,14 @@ function automaticTakes(count) {
   return madeFor[0] || fits[0] || null;
 }
 // What the form is for now: the workflow chosen, or the one Automatic would pick with the images given.
-// With image to prompt, the workflow takes the picture it describes.
+// Image to prompt's picture isn't one of these: it has its own box (promptImageBox).
 function imageTakes() {
   let takes = baseImageTakes();
-  // T2I takes no image, though the workflow can edit too (Fibo 2.0); image to prompt below still takes its picture.
+  // T2I takes no image, though the workflow can edit too (Fibo 2.0).
   const chosen = imageWorkflows[$('imageWorkflow').value];
   if (chosen && currentImageMode(chosen) === 'text') takes = { ...takes, min_images: 0, max_images: 0 };
   const role = imageRole();
-  const found = role && (takes.options || []).find(option => option.id === role);
+  const found = role && role !== 'image_to_prompt' && (takes.options || []).find(option => option.id === role);
   if (found && found.takes) takes = { ...takes, ...found.takes };
   // A choice such as text2image or image2image takes images of its own: as it's set on the form now.
   for (const option of takes.options || []) {
@@ -299,16 +299,67 @@ function syncImageSources() {
 }
 function chosenSources() { return sourceBoxes().filter(box => !box.hidden && box.querySelector('input').files.length).length; }
 
+// --- One picture box, in one of two places: under the prompt writer for the workflow's image to prompt (left empty,
+// image 1 is described), or in Prompt with I2P on, for an LLM to look at alone and write more like it ---
+$('imageToPromptSlot').innerHTML = `
+  <div class="image-box" id="promptImageBox">
+    <label for="promptImage"></label>
+    <div class="image-line">
+      <label class="thumb" for="promptImage" title="Choose another image"><img class="preview hidden" alt="Picture for the prompts"></label>
+      <input id="promptImage" name="prompt_image" type="file" accept="image/*">
+      <input type="hidden" name="source_seed" class="source-seed" value="">
+      <button type="button" class="pick-output" data-pick="1" aria-label="Select the picture from Output" title="Select from Output">${GALLERY_ICON}</button>
+      <button type="button" class="hidden" data-clear="1" aria-label="Remove the picture" title="Remove">✕</button>
+    </div>
+  </div>`;
+function promptImageBox() { return $('promptImageBox'); }
+// Every image box on the Image side: the ones to edit, and the prompts' picture.
+function imageSideBoxes() { return [...sourceBoxes(), promptImageBox()]; }
+// An LLM writes the prompts from what you say (Explicit's rule), not the workflow: I2P can show it a picture too.
+function llmWrites() {
+  const llm = $('imagePromptMode').value === 'llm' || $('imageLlmTest').checked;
+  return llm && !imageRole() && !['areas', 'expand'].includes(imageMode());
+}
+function syncPromptImage() {
+  const box = promptImageBox(), describes = imageRole() === 'image_to_prompt', looks = !describes && llmWrites() && $('imageI2p').checked;
+  $('imageI2pBox').classList.toggle('hidden', !llmWrites());
+  const slot = looks ? $('imageLookSlot') : $('imageToPromptSlot');
+  if (box.parentNode !== slot) slot.appendChild(box);
+  // Hidden, it's still sent (the server reads it only for these), so a queued job can always bring it back.
+  $('imageToPromptSlot').hidden = !describes;
+  $('imageLookSlot').hidden = !looks;
+  // In Prompt, under I2P, it needs no words of its own.
+  box.querySelector('label').textContent = !describes ? ''
+    : imageTakes().max_images ? 'Picture to describe (optional: without one, image 1 is described)' : 'Picture to describe';
+  box.querySelector('[data-clear]').classList.toggle('hidden', !box.querySelector('input').files.length);
+}
+$('imageI2p').addEventListener('change', () => syncImageForm());
+promptImageBox().addEventListener('change', () => {
+  promptImageBox().querySelector('.source-seed').value = '';
+  showSource(promptImageBox(), false);
+  syncImageForm();
+});
+promptImageBox().addEventListener('click', e => {
+  const button = e.target.closest && e.target.closest('button');
+  if (!button) return;
+  if (button.dataset.pick) { chooseFromOutput(promptImageBox()); return; }
+  if (!button.dataset.clear) return;
+  clearSource(promptImageBox(), false);
+  syncImageForm();
+  queuePlan();
+});
+
 // --- One of your images in a box: Output opens to choose it, and a tap there puts it in the box ---
 // The box and side to return to after choosing an image.
 let choosingFor = null;
 // kind: 'image' for an image box, 'media' for a reference box, which takes a film.
 function chooseFromOutput(box, side = 'image', kind = 'image') {
-  const boxes = kind === 'media' ? mediaBoxes() : side === 'video' ? imageBoxes() : sourceBoxes();
+  const boxes = kind === 'media' ? mediaBoxes() : side === 'video' ? imageBoxes() : imageSideBoxes();
   if (!boxes.includes(box) || box.hidden || box.querySelector('input').disabled) return;
   choosingFor = { box, side, kind, outputKind };
   resetOutputView();
   $('chooseBannerText').textContent = kind === 'media' ? `Open a film and press Use for reference ${boxes.indexOf(box) + 1}.`
+    : box === promptImageBox() ? `Open an image and press Use for the picture ${imageRole() === 'image_to_prompt' ? 'to describe' : 'for the LLM to look at'}.`
     : `Open an image and press Use for image ${boxes.indexOf(box) + 1}.`;
   $('chooseBanner').hidden = false;
   // Output shows only what goes in the box: images, or films for a reference. Generate stays on its side.
@@ -358,7 +409,7 @@ async function useOutput(box, id, position, side = 'image') {
       if (shot.used_seed !== null && shot.used_seed !== undefined) seed = String(shot.used_seed);
     }
     if (epoch !== workspaceEpoch) return;
-    const boxes = side === 'video' ? imageBoxes() : sourceBoxes();
+    const boxes = side === 'video' ? imageBoxes() : imageSideBoxes();
     if (!boxes.includes(box) || box.hidden || input.disabled || input.files[0] !== previous || pipeline !== side) {
       showFormError('The image box changed before the image was loaded. Choose it again.');
       return;

@@ -49,9 +49,15 @@ A workflow that writes its own prompts adds them to **Model**, beside Gemini and
 | Choice | What happens |
 |---|---|
 | **The workflow's own prompt enhancer, in ComfyUI** | Your prompt goes in, and the workflow's enhancer (Krea-2's Refine Prompt, or a Prompt enhancer group) expands it in ComfyUI. Each image's seed reaches the enhancer too, so a set's prompts differ. No LLM is asked. |
-| **The workflow, from your image (image to prompt)** | Where a workflow has an Image to prompt group, as LatentHeart's Krea2 does: it takes one image, describes it in ComfyUI and makes new images from that and your prompt. |
+| **The workflow, from your image (image to prompt)** | Where a workflow has an Image to prompt group, as LatentHeart's Krea2 does: it takes one image, describes it in ComfyUI and makes new images from that and your prompt. The picture goes on its own line under this choice. With image2image or Inpaint, image 1 (in Generation) is what's edited; leave the line empty and image 1 is described too. |
 
 Otherwise both stay off: the LLM or you write the prompt.
+
+With Gemini or the local model writing the prompts, **I2P** on the Prompt line (left of Explicit, and shown when it is)
+adds a **picture for the LLM to look at** under it: it writes the prompts to make more like it, with Variety and the
+chips as usual, and the workflow never gets it, so a text-to-image workflow stays one. The prompt can stay empty: the
+picture then says what to make. With I2P off, a picture left there isn't used. It isn't edited and isn't a reference: what carries over is what the
+prompts say. The local model needs Gemma for it (Qwen is text-only). From the command line it's `--look-at FILE`.
 
 For any image input a workflow accepts, use the gallery button beside the file chooser to select an image from
 Output instead. This includes additional reference images and the image-to-prompt input.
@@ -226,6 +232,7 @@ gets them, on Shorts and Video too, where a run keeps them for Continue and redo
 | A group with a full mask (Solid Mask) beside an image-to-image choice | A third Mode, **inpaint**: **Paint what to redraw** on image 1, and only that is redrawn from the prompt. What's painted becomes the image's transparency, which Load Image gives as its mask. Image to image's own Denoise (a slider titled Denoise) is under Mode for both. |
 | A choice on a switched group's subgraph | Beside its tickbox: the SeedVR2 upscaler's resolution, 720p to 4K. |
 | A number titled Denoise inside a switched group's subgraph | **Strength**, beside its tickbox: Krea-2's 2nd pass, 0.2 in LatentHeart's and 0.25 in FoxFurEssence's. Its steps follow it. |
+| A MiniMax H3 Image workflow, text or edit, that samples with one KSampler | **Reduce harshness** (EasyFix), off: its sampling split in two passes, the first steps with Sampler (SamplerCustomAdvanced; ticking it sets Sampler to euler_ancestral, the recipe's, and it can be changed), the rest with LCM re-noising at 0.95 (SamplerCustom, add_noise off). Steps, Scheduler and CFG still apply: at 6 simple steps the sigmas are the recipe's, otherwise the model's scheduler makes them (BasicScheduler, split after pass 1); CFG 1 guides with BasicGuider, above it with CFGGuider. **Empty image steering** (Kijai's), on: for the first step the prompt is read again beside a black picture, with no VAE, through Conditioning Set Timestep Range and Combine. An edit's copy reads the image being edited too, the black picture in the slot after it. Pass 1 steps, the re-noise and how long the steering lasts can be set. |
 | A Krea-2 workflow with no 2nd pass (ComfyUI's template) | **2nd pass**, off, with its Strength (0.2): the image refined at its size as the others do, RES4LYF's res_2s over bong_tangent. |
 | A switch on a subgraph's face, as ComfyUI's templates have | A tickbox, with what goes with it by name beside it: Krea-2's Enable LoRA with the LoRA and its strength, Qwen-Image-Edit's Enable turbo mode. |
 | A LoRA in rgthree's Power Lora Loader | A tickbox and its strength. Saved under a folder of the author's, it's found where it's installed. |

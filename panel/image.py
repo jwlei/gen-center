@@ -12,7 +12,7 @@ from PIL import Image
 
 from core import file_tests, h3_refiner, llm_tests, lora_tests, test_names, pills, prompt_words, run_form, seeds, variety, workflow_options, workflow_tests
 from core.upscale_eta import UpscaleEta
-from core.saved_workflows import display_label, shorthand
+from core.saved_workflows import display_label, map_field, picker_label, shorthand
 from panel import settings
 from panel.server import (read_outcome, IMAGE_TIMINGS, PIPELINES, _runs_cache, active_runs, app, busy_runs, form_options, job, password_required, run_queue, saved_at, queue_form_snapshot,
                           saved_workflows, private_mode)
@@ -192,15 +192,18 @@ def resume_argv(state, redo=None):
 def prompt_llm_pill(setup):
     if setup.get("direct") or not setup.get("llm"):
         return None
-    llm, model = setup["llm"], setup.get("local_model")
-    if llm != "local" or not model:
-        return llm
     # Named as the model pickers name it (panel/settings.py short_name): "Gemma 4 QAT-H Q4_K_M".
-    try:
-        settings.model_family(model)
-    except ValueError:
-        return model
-    return settings.short_name(model)
+    return settings.llm_pill(setup["llm"], setup.get("local_model"))
+
+
+def model_label(workflow):
+    """
+    An image workflow as Generate's Model picker names it: its model ("Krea-2"), its edit workflows the same model; a
+    workflow whose model isn't one it knows, as the Workflow picker names it.
+    """
+    model = map_field(workflow, "_model")
+    model = models.FAMILIES.get(model, model)
+    return models.LABELS.get(model) or picker_label(workflow, "image")
 
 
 def image_files(state):
@@ -224,7 +227,7 @@ def image_files(state):
             files.append({"position": position, "file": shot["file"], "title": lora_tests.title_of(shot, state.shots), "version": version,
                           "resolution": resolution, "size_bytes": stat.st_size, "mtime": stat.st_mtime,
                           "upscaled": upscaled_with(shot) or upscaled_in_generation(state),
-                          "prompt_llm": prompt_llm_pill(state.shot_setup(shot)),
+                          "prompt_llm": prompt_llm_pill(state.shot_setup(shot)) or "Exact prompt",
                           **({"lora": lora_tests.shot_lora(shot, state.shots)} if shot.get("lora_test") else {}),
                           **({"workflow": workflow_tests.shot_workflow(shot)} if shot.get("workflow_test") else {})})
     return files
@@ -260,14 +263,17 @@ def describe_run(state):
     upscaled = upscaled_in_generation(state) or ", ".join(dict.fromkeys(image["upscaled"] for image in files if image["upscaled"])) or None
     loras = pills.image_loras(state)
     writer = workflow_options.prompt_writer_used(state.workflow, state.options, state.form)
-    facts = pills.facts(workflow_tests.pill(state.shots) or shorthand(state.workflow, "image"), upscaled, loras=loras, llm=state.llm, direct=state.direct,
+    # The workflow as Generate's Model picker names it.
+    facts = pills.facts(workflow_tests.pill(state.shots) or model_label(state.workflow), upscaled, loras=loras,
+                        llm=llm_tests.pill(state.shots) or state.llm, direct=state.direct,
                         sampling=workflow_options.sampling_used(state.workflow, state.options, "image"),
                         cfg=workflow_options.cfg_used(state.workflow, state.options, "image"),
-                        prompt_writer=llm_tests.pill(state.shots) or (writer[1] if writer else None))
-    # An LLM comparison's own pill says "All LLMs": each image's model is in the viewer, on its own.
-    llms = [] if llm_tests.compared(state.shots) else ([image["prompt_llm"] for image in files] if files else [prompt_llm_pill(state.setup())])
-    facts = [fact for fact in facts if fact[0] != "llm"]
-    facts.extend(("llm", llm) for llm in dict.fromkeys(llms) if llm)
+                        prompt_writer=pills.image_writer(state), mode=pills.image_mode(state))
+    # Which LLM, named as the model pickers name it, for each one its images were written by. An LLM comparison's
+    # says "All LLMs": each image's model is in the viewer, on its own.
+    if not llm_tests.compared(state.shots):
+        llms = [image["prompt_llm"] for image in files] if files else [prompt_llm_pill(state.setup()) or "Exact prompt"]
+        facts = [fact for fact in facts if fact[0] != "llm"] + [("llm", llm) for llm in dict.fromkeys(llms) if llm]
     return {"id": state.id, "pipeline": "image", "label": state.title or state.brief, "detail": " · ".join(parts),
             "model": workflow_tests.pill(state.shots) or shorthand(state.workflow, "image"), "outcome": read_outcome(state.folder), "loras": loras,
             "llm": writer[0] if writer else state.llm, "size_bytes": size_bytes, "resolutions": resolutions,
@@ -516,6 +522,20 @@ def form_uploads(files):
     return [files[field(number)] for number in range(1, MOST_IMAGES_IN + 1) if field(number) in files and files[field(number)].filename]
 
 
+def looks_at_picture(form, files):
+    """Whether I2P is on, with a picture for the LLM to look at."""
+    return bool(form.get("i2p")) and described_image(files) is not None
+
+
+def described_image(files):
+    """
+    The prompts' picture, or None: for image to prompt, the one it describes (without one, image 1); with I2P on, one
+    the LLM looks at alone.
+    """
+    found = files.get("prompt_image")
+    return found if found and found.filename else None
+
+
 @app.route("/generate/image", methods=["POST"], endpoint="image_generate")
 @password_required
 def generate():
@@ -525,7 +545,8 @@ def generate():
         return {"ok": False, "error": error}, 400
     prompt = (request.form.get("prompt") or "").strip()
     mode = request.form.get("image_mode") or "edit"
-    if not prompt and mode not in ("areas", "expand"):
+    # With I2P, the picture alone says what to make more of: the prompt can stay empty.
+    if not prompt and mode not in ("areas", "expand") and not (looks_at_picture(request.form, request.files) and "--llm" in flags):
         return {"ok": False, "error": "Say what you want." if "--direct" not in flags else "Write the prompt to use."}, 400
     llm = option(flags, "--llm")
     role = role_of(flags)
@@ -533,7 +554,12 @@ def generate():
         return {"ok": False, "error": f"{llm} has no credentials. See .env.example, or use your own prompt."}, 400
 
     uploads = form_uploads(request.files)
-    if llm == "local" and uploads and settings.model_family(option(flags, "--local-model")) == "qwen3-14b":
+    # The prompts' picture: the one the workflow's image to prompt describes, or with I2P on, one the LLM looks at alone
+    # to write more like it, which the workflow never gets.
+    picture = described_image(request.files)
+    described = picture if role == "image_to_prompt" else None
+    looked = picture if looks_at_picture(request.form, request.files) and not role and "--llm" in flags and mode not in ("areas", "expand") else None
+    if llm == "local" and (uploads or looked) and settings.model_family(option(flags, "--local-model")) == "qwen3-14b":
         return {"ok": False, "error": "Qwen3 14B is text-only and cannot analyze attached images. Choose a Gemma 4 model."}, 400
     compared, env, takes, error = compared_workflows(request.form, len(uploads))
     if not compared and not error:
@@ -546,8 +572,9 @@ def generate():
             return {"ok": False, "error": f"This workflow has no {'prompt enhancer' if role == 'prompt_enhancer' else 'image to prompt'} of its own: choose Gemini or the local model, or another workflow."}, 400
         if found.get("problem"):
             return {"ok": False, "error": f"{found['label']} can't run: {found['problem']}"}, 400
-        # Image to prompt needs the picture it describes.
-        takes = {**takes, **found.get("takes", {})}
+        # The prompt enhancer may take images of its own. Image to prompt's picture has its own box (described_image).
+        if role != "image_to_prompt":
+            takes = {**takes, **found.get("takes", {})}
     # The workflow's own settings, first: a choice such as text2image or image2image takes images of its own, and what
     # follows (the images it takes, Inpaint's mask) goes by the one chosen, not the workflow's default.
     # A workflow comparison runs each workflow at its own defaults; a LoRA comparison with it is in each one's images.
@@ -560,8 +587,13 @@ def generate():
         return {"ok": False, "error": "This workflow edits an image: choose one." if takes["min_images"] == 1 else f"This workflow needs {takes['min_images']} images."}, 400
     if len(uploads) > takes["max_images"]:
         return {"ok": False, "error": "This workflow makes images from text alone: leave the image out." if not takes["max_images"] else f"This workflow takes at most {takes['max_images']} images."}, 400
+    if role == "image_to_prompt" and not described and not uploads:
+        return {"ok": False, "error": "Choose the picture for Image to prompt to describe."}, 400
     try:
         images = [video_media.load_image(upload.stream) for upload in uploads]
+        # Image to prompt's picture is the workflow's last: its own, else image 1 again (as I2I describes what it edits).
+        if role == "image_to_prompt":
+            images.append(video_media.load_image(described.stream) if described else images[0])
     except RuntimeError:
         return {"ok": False, "error": "That file isn't an image this can read."}, 400
     if mode in ("compose", "areas", "expand") and not images:
@@ -578,7 +610,7 @@ def generate():
         return {"ok": False, "error": error}, 400
     flags += inpaint
     # What made the images given, so an edit never starts from the noise that made one (core/seeds.py avoid).
-    for upload in uploads:
+    for upload in [*uploads, *([described] if described else [])]:
         flags += [flag for seed in sorted(media.seeds_in(upload.stream)) for flag in ("--source-seed", str(seed))]
     problem = model_problem(flags, takes, images[0].size if images else None)
     if problem:
@@ -626,7 +658,16 @@ def generate():
     for image, path in zip(images, image_paths):
         media.save_source(image, path)
 
-    argv = [*COMMAND, *flags, *[flag for path in image_paths for flag in ("--image", path)], *(["--", prompt] if prompt else [])]
+    look_path = None
+    if looked:
+        try:
+            look_image = video_media.load_image(looked.stream)
+        except RuntimeError:
+            return {"ok": False, "error": "That file isn't an image this can read."}, 400
+        look_path = os.path.join(video_paths.INPUTS_DIR, f"{secrets.token_hex(8)}.png")
+        media.save_source(look_image, look_path)
+    argv = [*COMMAND, *flags, *[flag for path in image_paths for flag in ("--image", path)],
+            *(["--look-at", look_path] if look_path else []), *(["--", prompt] if prompt else [])]
     plan_only = "--plan-only" in flags or "--enhance-only" in flags
     count = len(tests) if tests else int(option(flags, "--count"))
     what = {"compose": "a new picture from the images", "areas": "changes painted areas", "expand": "expands the image"}.get(
@@ -653,7 +694,9 @@ def generate():
             "resolution": f"{chosen_size[0]}x{chosen_size[1]}" if chosen_size else ("Expanded source size" if mode == "expand" else "Source image size"),
             "image": image_paths[0] if image_paths else None, "references": image_paths[1:] + region_files, "plan_only": plan_only, "first_only": "--first-only" in flags,
             "form": queue_form_snapshot(),
-            "form_files": {**{("image" if i == 0 else f"image_{i + 1}"): path for i, path in enumerate(image_paths)},
+            # Image to prompt's own picture goes back on its own line; image 1 described again isn't one.
+            "form_files": {**{("image" if i == 0 else f"image_{i + 1}"): path for i, path in enumerate(image_paths[:len(uploads)])},
+                           **({"prompt_image": image_paths[-1]} if described else {"prompt_image": look_path} if look_path else {}),
                            **({"areas_mask": region_files[1]} if region_files else {})},
             "estimate": RunEta(argv, env, IMAGE_TIMINGS).plan()["total"]}
     queued = run_queue.add(item)

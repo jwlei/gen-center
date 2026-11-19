@@ -48,6 +48,15 @@ const context = {
   confirm: () => true, alert() {}, console, Date, performance: { now: () => 0 }, Math, JSON, Set, Object, String,
 };
 vm.createContext(context);
+// Image to prompt's own picture line, as the page builds it.
+const promptBox = imageBox(1);
+promptBox.parts.input.name = 'prompt_image';
+promptBox.addEventListener = () => {};
+els.promptImageBox = promptBox;
+// I2P on the Prompt line, shown or hidden as Explicit is.
+els.imageI2pBox = { ...element('imageI2pBox'), classList: { on: {}, toggle(name, on) { this.on[name] = on; }, add() {}, remove() {}, contains: () => false } };
+// The picture box goes to whichever place it's used in.
+for (const id of ['imageToPromptSlot', 'imageLookSlot']) els[id] = { ...element(id), appendChild(child) { child.parentNode = this; } };
 for (const module of modules) vm.runInContext(module.source, context, { filename: module.name });
 const run = code => vm.runInContext(code, context);
 
@@ -1042,6 +1051,17 @@ assert(/#videos, #imageSets, #collections, #cnav \{ transition: opacity \.25s ea
   context.testLine = line;
   run('openPillsMenu(testLine)');
   assert(els.pillsMenu.open && els.pillsMenuBody.innerHTML.includes('>b<') && els.pillsMenuBody.className === 'pills image open', 'all of them, in their colour');
+  // Swiped on with the menu up: the preview steps to the next entry (sideways) or set (up), the menu stays for its pills.
+  run('oldStepViewer = stepViewer; oldStepSet = stepSet; oldViewing = viewing; stepped = []; stepViewer = by => stepped.push(["entry", by]); stepSet = by => stepped.push(["set", by]); viewing = { id: "s", position: 1 }');
+  const swipe = (dx, dy) => {
+    els.pillsMenu.listenersAll.touchstart.at(-1)({ touches: [{ clientX: 200, clientY: 300 }] });
+    els.pillsMenu.listenersAll.touchend.at(-1)({ changedTouches: [{ clientX: 200 + dx, clientY: 300 + dy }] });
+  };
+  swipe(-120, 5); swipe(90, -10); swipe(0, -150); swipe(10, 8);
+  assert.deepStrictEqual(JSON.parse(run('JSON.stringify(stepped)')), [['entry', 1], ['entry', -1], ['set', 1]], 'next, previous, next set; a tap is no swipe');
+  run('stepViewer = oldStepViewer; stepSet = oldStepSet; viewing = oldViewing');
+  assert(script.includes("if ($('pillsMenu').open && !$('pillsMenu').classList.contains('closing')) openPillsMenu(details.firstElementChild);")
+    && script.includes("if ($('pillsMenu').open) closePillsMenu();"), 'the menu shows the new entry\'s pills, or goes when it has none');
   run('placeOverPills = oldPlace; $("pillsMenu").close()');
   assert(script.includes('placeOverPills(box, line);') && script.includes("box.style.top = `${Math.max(8, at.bottom + 4 - box.getBoundingClientRect().height)}px`;"), 'grown up out of the pill line');
   assert(/<dialog id="pillsMenu" class="panel-dialog upscale-dialog pills-menu"/.test(html) && script.includes("if (line.closest('.viewer-meta-details')) {"), 'a box, growing as Move does');
@@ -1237,6 +1257,18 @@ assert(/<div class="options-lora options-speed"><div class="options-subtitle">Tu
 assert(laidOut.includes('<div class="res-hint option-hint" hidden>How many times') && script.includes("const info = e.target.closest && e.target.closest('.option-info');"), 'each name drops its hint');
 assert(laidOut.includes('<button type="button" class="hint-toggle" data-style-lora-guide aria-label="About style LoRA"')
   && script.includes("openModelGuide('style_lora')"), 'style LoRA offers its guide from a heading hint icon');
+// Reduce harshness changes how the sampling runs: just below Sampling, before the LoRAs and the rest, its settings with it.
+run(`syncOptions('testOptions', 'testOptionsBox', [{ id: 'group_x', kind: 'switch', label: 'X', default: '0' },
+    { id: 'lora', kind: 'switch', label: 'Use LoRA', default: '0', below: true },
+    { id: 'steps', kind: 'number', label: 'Steps', default: '6', min: 1, max: 150, step: 1 },
+    { id: 'h3_steer', kind: 'switch', label: 'Reduce harshness', default: '0', rows: true, under_sampling: true },
+    { id: 'h3_steer.split', kind: 'number', label: 'Pass 1 steps', parent: 'h3_steer', default: '2', min: 1, max: 149, step: 1 }], 's')`);
+{
+  const tuned = els.testOptionsBox.innerHTML;
+  assert(/<\/div><\/div><div class="options-section options-tuning"><label class="check">[^]*?name="opt_h3_steer"[^]*?Pass 1 steps[^]*?<\/div><div class="options-lora">/.test(tuned)
+    && tuned.indexOf('options-tuning') < tuned.indexOf('opt_group_x') && (tuned.match(/Pass 1 steps<\/label>/g) || []).length === 1,
+    'Reduce harshness right after Sampling, its settings with it once, then the LoRAs and the rest');
+}
 // Which model runs: last of all, under its own heading; outside Private mode an NSFW one isn't offered, and with only
 // the workflow's own left there's nothing to pick.
 const modelOption = { id: 'model_file', kind: 'choice', label: 'Model', model: true, default: 'moss_base.safetensors',
@@ -1294,6 +1326,17 @@ const stepsHtml = run(`(() => { const all = [{ id: 'steps', kind: 'number', labe
   return imageOptionHtml(all[0], all); })()`);
 assert(/<span class="option-line"><span class="option-sub">Sampler<\/span><select name="opt_sampler"[\s\S]*?<\/select><\/span><span class="option-line"><span class="option-sub">CFG<\/span><input[^>]*name="opt_cfg"[^>]*><\/span>/.test(stepsHtml)
   && /\.option-row \.option-line \{ flex: 1 0 100%;/.test(html), 'each setting with Steps on a line of its own');
+// Reduce harshness: its settings under it, each on a line with its name and hint, folded away until it's ticked.
+const steerHtml = run(`(() => { const all = [{ id: 'h3_steer', kind: 'switch', label: 'Reduce harshness', default: '0', rows: true, hint: 'What it does.' },
+  { id: 'h3_steer.split', kind: 'number', label: 'Pass 1 steps', parent: 'h3_steer', default: '2', min: 1, max: 149, step: 1, hint: 'How many.' },
+  { id: 'h3_steer.empty', kind: 'switch', label: 'Empty image steering', parent: 'h3_steer', default: '1' }];
+  return withHint(all[0], imageOptionHtml(all[0], all)); })()`);
+assert(/<div class="option-reveal option-rows" data-below="opt_h3_steer">/.test(steerHtml), 'folded away while Reduce harshness is off');
+assert(/<div class="option-row"><label for="opt_h3_steer\.split">Pass 1 steps<button[^>]*data-hint-target="hint_opt_h3_steer_split"[\s\S]*?<\/label><input type="number" id="opt_h3_steer\.split" name="opt_h3_steer\.split"[^>]*value="2">/.test(steerHtml),
+  'each setting on its own line: its name, its hint, its box');
+assert(/<label for="opt_h3_steer\.empty">Empty image steering<\/label><input type="hidden" name="opt_h3_steer\.empty" value="0"><input type="checkbox" id="opt_h3_steer\.empty" name="opt_h3_steer\.empty" value="1" checked>/.test(steerHtml),
+  'a switch among them is a tickbox, not a number');
+assert(steerHtml.indexOf('id="hint_opt_h3_steer"') < steerHtml.indexOf('option-rows'), "the switch's own hint is under it, above its settings");
 assert(!run("remembered({ name: 'opt_steps', type: 'number' })"), 'each workflow starts as it was saved');
 for (const size of ['1920x1080', '2560x1440', '3840x2160', '1272x2772']) assert(html.includes(`<option value="${size}">`), size);
 els.imageAspect.value = '1920x1080';
@@ -1523,7 +1566,7 @@ for (const id of ['logToggle', 'finishedToggle', 'quotaToggle']) {
   context.document.getElementById('privateToggle').nextSibling = { id: 'settingsBtn' };
   wide.matches = false;
   run('placePanelControls()');
-  assert.deepStrictEqual(moved.splice(0), ['topIconsRow:finishedToggle:before:privateToggle', 'topIconsRow:logToggle:before:settingsBtn', 'topIconsRow:openTemperatures:before:settingsBtn', 'settingsHead:quotaToggle'],
+  assert.deepStrictEqual(moved.splice(0), ['topIconsRow:finishedToggle:before:privateToggle', 'topIconsRow:logToggle:before:settingsBtn', 'topIconsRow:openTemperatures:before:settingsBtn', 'topIconsRow:chatToggle:before:settingsBtn', 'settingsHead:quotaToggle'],
     'in the second row of the box: Finished, privacy, then the log, the temperatures, then the gear');
   assert(!els.runActions.hidden && els.skip.hidden && els.stop.hidden, 'idle: no run controls');
   assert(/\.top-icons \.panel-icon \{ width: auto; height: auto; padding: 0; gap: 3px; color: var\(--muted\); opacity: \.7;/.test(html)
@@ -1533,7 +1576,7 @@ for (const id of ['logToggle', 'finishedToggle', 'quotaToggle']) {
   moved.length = 0;
   wide.matches = true;
   run('lastStatus = null; placePanelControls()');
-  assert.deepStrictEqual(moved, ['statusToggles:logToggle', 'statusToggles:openTemperatures', 'statusToggles:finishedToggle', 'statusToggles:quotaToggle']);
+  assert.deepStrictEqual(moved, ['statusToggles:logToggle', 'statusToggles:openTemperatures', 'statusToggles:finishedToggle', 'statusToggles:chatToggle', 'statusToggles:quotaToggle']);
   assert(els.runActions.hidden, 'desktop run controls remain hidden when idle');
   wide.matches = false;
   run('placePanelControls()');
@@ -2081,7 +2124,7 @@ for (const side of ['image', 'video']) {
 assert(/\.explicit-box \{ display: none;/.test(html) && /body\.private-mode \.explicit-box \{ display: block; \}/.test(html)
   && !html.includes('explicit-text') && !html.includes('the writer is told the prompts are meant to be explicit'), 'only in Private mode');
 assert(script.includes('if (film) sameAgainFilm(run); else sameAgain(id, null, null, position);'),
-  'More like this opens the generation the image came from (its Variety and chips too), not its prompt word for word');
+  'the viewer\'s sliders open what made that picture (sameAgain with from), a film\'s its settings');
 for (const id of ['promptDetail', 'promptDetailTitle', 'promptDetailText', 'promptDetailYours', 'promptDetailCopy']) context.document.getElementById(id);
 run("openPromptDetail('long version', 'my words', 'yours')");
 assert(els.promptDetailTitle.textContent === 'Your prompt' && els.promptDetailText.textContent === 'my words' && els.promptDetailYours.title === 'Detailed prompt'
@@ -2570,8 +2613,13 @@ run('resetZoom(); viewing = null');
 // smoothly; not from a collection, and not when Output isn't on screen.
 {
   const scrolled = [];
-  const cell = (key, shown = true, height = 100) => ({ dataset: { outputKey: key }, getClientRects: () => (shown ? [{}] : []),
-    getBoundingClientRect: () => ({ height }), scrollIntoView: options => scrolled.push([key, options.behavior, options.block]) });
+  const lit = [];
+  const cell = (key, shown = true, height = 100) => {
+    const classes = new Set();
+    return { dataset: { outputKey: key }, style: {}, getClientRects: () => (shown ? [{}] : []), addEventListener() {},
+      classList: { contains: name => classes.has(name), add: name => { classes.add(name); lit.push(key); }, remove: name => classes.delete(name) },
+      getBoundingClientRect: () => ({ height }), scrollIntoView: options => scrolled.push([key, options.behavior, options.block]) };
+  };
   const oldHeight = context.window.innerHeight;
   context.window.innerHeight = 800;
   const saved = els.imageSets.querySelectorAll;
@@ -2590,6 +2638,18 @@ run('resetZoom(); viewing = null');
   assert.deepStrictEqual(scrolled, [['image:b', 'smooth', 'center'], ['film:clip.mp4', 'smooth', 'center'], ['image:tall', 'smooth', 'start']],
     'its own batch, in the middle (a tall one at the top), smoothly; nothing from a collection, for a deleted batch, or with Output hidden');
   assert(/\.output-batch \{ scroll-margin-top: 8px; \}/.test(html) && script.includes('revealViewedBatch(viewing, viewerCollection);'));
+  assert.deepStrictEqual(lit, ['image:b', 'film:clip.mp4', 'image:tall'], 'each batch revealed lights up too; none that is not');
+  // Output drawn again within the 4 seconds: the new cell picks the fade up where it was; after them, nothing.
+  const redrawn = cell('image:b');
+  els.imageSets.querySelectorAll = () => [redrawn];
+  run("viewedGlow = { key: 'image:b', at: Date.now() - 1500 }; glowViewedBatch()");
+  assert(redrawn.classList.contains('viewed-glow') && /^-1[5-9]\d\dms$/.test(redrawn.style.animationDelay), redrawn.style.animationDelay);
+  const late = cell('image:b');
+  els.imageSets.querySelectorAll = () => [late];
+  run("viewedGlow = { key: 'image:b', at: Date.now() - 5000 }; glowViewedBatch()");
+  assert(!late.classList.contains('viewed-glow') && run('viewedGlow') === null, 'past the 4 seconds: not lit, and forgotten');
+  els.imageSets.querySelectorAll = saved;
+  assert(/\.output-batch\.viewed-glow \{[^}]*animation: viewed-glow 4s ease-out forwards/.test(html) && script.includes('glowViewedBatch();\n}'));
 }
 
 // Output: images and films in one list (Both), or either alone; NSFW only in the other view, and nothing of it elsewhere.
@@ -2881,7 +2941,7 @@ for (const [field, writer] of [['prompt', 'writeVideoPrompt'], ['imagePrompt', '
 assert(/<div class="go-under">\s*<button type="button" class="start-later" id="goTop"[^>]*>[^<]*<\/button>\s*<button type="button" class="start-later" id="goLater"/.test(html) && (html.match(/name="try_first"/g) || []).length === 1, 'Add to top of queue under the button, left of Add to pending');
 assert(/<details class="section" id="videoHow">[\s\S]*?id="review"[\s\S]*?<label class="check not-shorts" id="previewRunLabel">/.test(html) && script.includes(".after($('previewRunLabel'))"), 'Preview run in Tests & misc, moved to whichever form is showing');
 assert(/<select id="avatarSize" name="avatar_size">/.test(html), 'Shorts has a resolution');
-assert(/<div id="imageToPromptSlot"><\/div>/.test(html) && /imageRole\(\) === 'image_to_prompt' \? \$\('imageToPromptSlot'\)/.test(script), "image to prompt's image right under the choice");
+assert(/<div id="imageToPromptSlot"><\/div>/.test(html) && /name="prompt_image" type="file"/.test(script) && /\$\('imageToPromptSlot'\)\.hidden = !describes;/.test(script), "image to prompt's picture on its own line right under the choice");
 for (const n of [1, 2, 20]) {
   const imageInput = run(`sourceHtml(${n})`), videoInput = run(`imageBoxHtml(${n})`);
   for (const input of [imageInput, videoInput]) {
@@ -2957,9 +3017,10 @@ assert(/<dialog id="settingsDialog"[\s\S]*id="themePicker"[\s\S]*id="poweroff"[\
 assert(/\.settings-actions \{ display: flex; gap: 6px; flex: none;/.test(html), 'the buttons stay at the foot, smaller');
 assert(/<div class="go-bar" id="goBar" hidden>[\s\S]*?id="goStickTop" aria-label="Add to top of queue"[\s\S]*?id="goStickLater" aria-label="Add to pending"[\s\S]*?id="goStick">/.test(html)
   && script.includes("$('goStickTop').addEventListener('click', () => $('goTop').click());") && script.includes("$('goStickLater').addEventListener('click', () => $('goLater').click());")
-  && script.includes("$('goLater').hidden = $('goTop').hidden = $('goStickLater').hidden = $('goStickTop').hidden = queueSaves();")
+  && script.includes("function queueSaves() { return !!queueEdit; }")
+  && script.includes("const GO_EXTRA_LABELS = { goTop: ['Add to top of queue', 'Save to top of queue'], goLater: ['Add to pending', 'Save to pending'] };")
   && script.includes("fresh: true, continued: null") && script.includes('data.continued.image ? await sameAgain(data.continued.id) : await sameAgainFilm(data.continued.id)'),
-  'the footer bar has symbol buttons for top of queue and pending, beside Add to queue; a continued run reopens in full as a new run, with them');
+  'the footer bar has symbol buttons for top of queue and pending, beside Add to queue, and while editing a queued job they save it there (Save keeps its place); a continued run reopens in full as a new run, with them');
 assert(/\.tile-cover::after \{\s*content: ""; position: absolute; inset: 0; z-index: 1; border: 2px dotted var\(--accent\)/.test(html), 'a collection being moved: its outline over the picture');
 assert(/<div class="settings-group" id="reserveTitle">Reserve free RAM<\/div>\s*<div class="reserve-row"[^>]*>\s*<button type="button" id="reserveSet" hidden>Set<\/button>\s*<div class="count-stepper"><button type="button" id="reserveDown"/.test(html),
   'free RAM: its heading, then Set left of a stepper as Generate\'s');
@@ -3118,7 +3179,53 @@ assert(/\.queue-title \{ display: -webkit-box; -webkit-box-orient: vertical; -we
 run(`renderQueue(queue, { items: [{ id: 4, label: 'continue', detail: 'd', pipeline: 'video', resume: 'run_1' }], held: true }, 0)`);
 assert(/\.queue \.queue-item-actions button, \.queue \.stopped-actions button \{\s*flex: none; width: 34px; height: 28px; padding: 0;/.test(html), 'queue and pending action buttons use the same remove-button dimensions');
 assert(queue.innerHTML.includes('class="icon-btn" data-pause="4"') && queue.innerHTML.includes('class="icon-btn" data-remove="4"'), 'queue pause feedback and delete confirmation fit the fixed-size buttons');
-assert(queue.innerHTML.includes(`data-remove="4" aria-label="Remove from the queue" title="Remove from the queue (tap twice)">${run('ICONS.trash')}</button>`), 'queue removal uses the shared trash icon');
+assert(queue.innerHTML.includes(`data-remove="4" aria-label="Delete it" title="Delete it (tap twice)">${run('ICONS.trash')}</button>`), 'queue removal uses the shared trash icon');
+run(`renderQueue(queue, { items: [{ id: 4, label: 'continue', detail: 'd', pipeline: 'video', resume: 'run_1', continuation: true }], held: true }, 0)`);
+assert(queue.innerHTML.includes('data-remove="4" aria-label="Delete it" title="Delete it: what it has still to do goes, anything it made stays (tap twice)"'), 'trash on a continued run says it discards what it still had to do');
+// The chat: a reply's Markdown is drawn, but its HTML never runs; it says how it ended if it didn't finish.
+assert.strictEqual(run(`chatBubble({ role: 'assistant', content: '<img src=x onerror=alert(1)>', ended: 'stopped' })`),
+  '<div class="chat-msg assistant"><p>&lt;img src=x onerror=alert(1)&gt;</p><span class="chat-ended">Stopped</span></div>', 'a chat reply is escaped and marked stopped');
+assert.strictEqual(run(`chatBubble({ role: 'user', content: '**hi** <b>' })`), '<div class="chat-msg user">**hi** &lt;b&gt;</div>', 'your messages are drawn as you typed them');
+assert.strictEqual(run(`chatBubble({ role: 'user', content: 'look', images: ['0123456789abcdef.jpg', 'x"><script>'] })`),
+  '<div class="chat-msg user"><div class="chat-imgs"><img src="/api/chat/image/0123456789abcdef.jpg" alt="" loading="lazy">'
+  + '<img src="/api/chat/image/x%22%3E%3Cscript%3E" alt="" loading="lazy"></div>look</div>', "a message's images, from the server, above its text");
+{
+  const md = text => run(`renderMarkdown(${JSON.stringify(text)})`);
+  assert.strictEqual(md('# Title\nSome **bold**, *it*, `a<b>` and ~~old~~.\nNext line'),
+    '<h1>Title</h1><p>Some <strong>bold</strong>, <em>it</em>, <code>a&lt;b&gt;</code> and <del>old</del>.<br>Next line</p>', 'headings, inline marks, line breaks');
+  assert.strictEqual(md('- one\n- two\n  - nested\n\n1. first\n2. second'),
+    '<ul><li>one</li><li>two<ul><li>nested</li></ul></li></ul><ol><li>first</li><li>second</li></ol>', 'lists, nested and numbered');
+  assert.strictEqual(md('```js\nif (a < b) {}\n```\n> quoted'), '<pre><code>if (a &lt; b) {}</code></pre><blockquote><p>quoted</p></blockquote>', 'code blocks and quotes');
+  assert.strictEqual(md('```\nstill being written'), '<pre><code>still being written</code></pre>', 'a code block still being written');
+  assert.strictEqual(md('| a | b |\n|---|:-:|\n| 1 | **2** |'),
+    '<div class="chat-table"><table><thead><tr><th>a</th><th>b</th></tr></thead><tbody><tr><td>1</td><td><strong>2</strong></td></tr></tbody></table></div>', 'tables');
+  assert.strictEqual(md('[site](https://a.b/x_y_z) and [bad](javascript:alert(1)) and see https://c.d/e.'),
+    '<p><a href="https://a.b/x_y_z" target="_blank" rel="noopener noreferrer">site</a> and [bad](javascript:alert(1)) and see '
+    + '<a href="https://c.d/e" target="_blank" rel="noopener noreferrer">https://c.d/e</a>.</p>', 'only http(s) links, the full stop left outside');
+  assert(!md('"https://x.y/" <script>').includes('<script'), 'nothing it writes becomes a tag');
+  assert.strictEqual(md('snake_case_name and 2*3*4'), '<p>snake_case_name and 2*3*4</p>', 'underscores and stars inside words stay as they are');
+  // How much of the context the chat takes: "~" while estimated, exact once the model has counted it.
+  run(`renderChatContext({ window: 16384, instruction: 15, conversation: 5085, reply: 4096, free: 7188, measured: false, left_out: 0 })`);
+  assert.strictEqual(els.chatContext.textContent, '~5.1k / 16.4k', 'the context used, estimated');
+  run(`renderChatContext({ window: 16384, instruction: 15, conversation: 85, reply: 4096, free: 12188, measured: true, left_out: 2 })`);
+  assert.strictEqual(els.chatContext.textContent, '100 / 16.4k', 'the context used, as the model counted it');
+  assert(els.chatContextInfo.innerHTML.includes('Kept for the reply') && els.chatContextInfo.innerHTML.includes('2 older messages are left out'),
+    'tapped, its parts, and what the model no longer reads');
+}
+assert(/\['chat', 'Chat'\]/.test(script) && /if \(which === 'chat'\) \{ openChat\(\); return; \}/.test(script), "Status's menu opens the chat");
+{
+  // A message's menu: plain text without the Markdown marks, and only reading while it is still being written.
+  const plain = text => run(`chatPlainText(${JSON.stringify(text)})`);
+  assert.strictEqual(plain('# Title\n\nSome **bold** and *it* and `code`.\n- one\n- [site](https://a.b)\n\n\n> said'),
+    'Title\n\nSome bold and it and code.\n• one\n• site (https://a.b)\n\nsaid', 'Copy as plain text drops the Markdown marks');
+  assert.strictEqual(plain('```js\nlet a = 1;\n```\n| a | b |\n|---|---|\n| 1 | 2 |'), 'let a = 1;\na\tb\n1\t2', 'code and tables as plain text');
+  assert.strictEqual(plain('snake_case and 2*3*4'), 'snake_case and 2*3*4', 'marks inside words stay');
+  const actions = message => run(`chatMenuItems(${JSON.stringify(message)}).map(item => item[0]).join(',')`);
+  assert.strictEqual(actions({ index: 1, role: 'assistant' }), 'copy,plain,image,video,redo,delete', 'a reply: Regenerate');
+  assert.strictEqual(actions({ index: 0, role: 'user' }), 'copy,plain,image,video,edit,delete', 'your message: Edit and resend');
+  assert.strictEqual(actions({ role: 'assistant' }), 'copy,plain,image,video', 'still being written: only read');
+}
+assert(!/\$\('chatInput'\)\.focus\(/.test(script), "the chat never puts the cursor where you type by itself: the phone's keyboard opens only when you tap there");
 run(`renderQueue(queue, { items: [{ id: 1, label: 'new', detail: '', pipeline: 'image', continuation: false },
   { id: 2, label: 'continue', detail: '', pipeline: 'image', resume: 'image_1', continuation: true }], held: true }, 0, false, true)`);
 assert(queue.innerHTML.includes('class="run-item" data-run="1"') && queue.innerHTML.includes('class="run-item continue-item" data-run="2"'), 'only the continued queued job has a purple play control');
@@ -3230,7 +3337,14 @@ assert(queue.innerHTML.includes('aria-label="Expand queue"'), 'the chevron refle
   run('panelConnection.success()');
   windowListeners.error[0]({ message: 'ResizeObserver loop completed with undelivered notifications.' });
   assert(els.connectionNotice.hidden && warnings.length === 1, 'transient ResizeObserver notifications are logged, not shown as page failures');
+  const savedErrorTimeout = context.setTimeout, errorWaits = [];
+  context.setTimeout = (fn, ms) => { errorWaits.push([fn, ms]); return errorWaits.length; };
   windowListeners.error[0]({ message: 'A real page error', error: new Error('A real page error') });
+  assert(els.connectionNotice.hidden, 'a page error waits 30 s before it shows');
+  const errorShows = errorWaits.find(([, ms]) => ms === 30000);
+  assert(errorShows, 'it shows after 30 s');
+  errorShows[0]();
+  context.setTimeout = savedErrorTimeout;
   assert(!els.connectionNotice.hidden && els.connectionMessage.textContent.includes('A real page error'), 'genuine page errors remain visible');
   run('panelConnection.success()');
   context.console = savedConsole;
@@ -3239,7 +3353,7 @@ assert(/\.connection-notice > span \{ min-width: 0; overflow-wrap: anywhere; \}/
   && /\.connection-notice button \{ width: auto; flex: none;/.test(html), 'connection notices fit narrow screens');
 assert(/<div id="connectionNotice"[^>]*class="connection-notice" hidden style="position: fixed;/.test(html)
   && /const connecting = setTimeout\(\(\) => \{ if \(!lastSuccess\) show\('Connecting to the panel\.\.\.'\); \}, DISCONNECTED_AFTER_MS\);/.test(script),
-  'loading, the notice is hidden and over the page (never pushing it down), and says Connecting only after 5 s without an answer');
+  'loading, the notice is hidden and over the page (never pushing it down), and says Connecting only after 30 s without an answer');
 assert(html.includes('.queue-list, .stopped-body') && html.includes('max-height: min(var(--three-rows, 55dvh), 55dvh)'), 'queue, pending and failed scroll rather than growing past the viewport');
 assert(!/\.queue-list, \.stopped-body \{[^}]*overscroll-behavior:\s*contain/.test(html), 'scrolling at a list boundary can continue on the page');
 assert(/#queueBox \.queue-list, #queueBox \.stopped-body \{[^}]*overscroll-behavior:\s*auto/.test(html), 'the compact queue also hands boundary scrolling back to the page');
@@ -3826,13 +3940,31 @@ assert(els.comfyFacts.innerHTML.includes('Generating the image · 3/8') && els.c
   await run("chooseThis('set', 1)");
   assert.strictEqual(source2.parts.input.files[0].name, 'image_1.png', 'a second image workflow input accepts output');
   assert.strictEqual(seed2.value, '123');
-  run(`$('imageWorkflow').value = 'text'; $('imagePromptMode').value = 'llm'; $('imageLlm').value = 'image_to_prompt'; syncImageSources()`);
-  assert(!source.hidden && source2.hidden, 'image-to-prompt exposes its image even when the base workflow takes none');
-  run('chooseFromOutput(sourceBoxes()[0])');
-  assert.strictEqual(run('choosingFor.side'), 'image', 'image-to-prompt can use the picker');
-  els.chooseCancel.listeners.click();
+  run(`$('imageWorkflow').value = 'text'; $('imagePromptMode').value = 'llm'; $('imageLlm').value = 'image_to_prompt'; syncPromptImage(); syncImageSources()`);
+  assert(source.hidden && source2.hidden, "image-to-prompt's picture isn't one of the images to edit");
+  assert(!els.imageToPromptSlot.hidden && promptBox.parts.label.textContent === 'Picture to describe', 'its own line, under the choice');
+  run('chooseFromOutput(promptImageBox())');
+  assert.strictEqual(run('choosingFor.box'), promptBox, 'image-to-prompt can use the picker');
+  assert(els.chooseBannerText.textContent.includes('picture to describe'));
+  await run("chooseThis('set', 1)");
+  assert.strictEqual(promptBox.parts.input.files[0].name, 'image_1.png', 'the picture chosen goes on its line');
+  run(`imageWorkflows.text.max_images = 1; syncPromptImage()`);
+  assert(promptBox.parts.label.textContent.includes('image 1 is described'), 'beside an image to edit it can be left empty');
+  assert.strictEqual(promptBox.parentNode, els.imageToPromptSlot, "the workflow's image to prompt: under the choice");
+  run(`$('imageLlm').value = 'gemini'; $('imageI2p').checked = false; syncPromptImage()`);
+  assert(els.imageToPromptSlot.hidden && els.imageLookSlot.hidden && els.imageI2pBox.classList.on.hidden === false,
+    'an LLM writing the prompts offers I2P on the Prompt line, off to start with');
+  run(`$('imageI2p').checked = true; syncPromptImage()`);
+  assert(!els.imageLookSlot.hidden && promptBox.parentNode === els.imageLookSlot && els.imageToPromptSlot.hidden, 'I2P on: the picture in Prompt');
+  assert.strictEqual(promptBox.parts.label.textContent, '', 'under I2P it needs no words of its own');
+  run(`$('imageLlm').value = 'prompt_enhancer'; syncPromptImage()`);
+  assert(els.imageLookSlot.hidden && els.imageI2pBox.classList.on.hidden, "no I2P with the workflow's own enhancer");
+  run(`$('imagePromptMode').value = 'direct'; $('imageLlm').value = 'gemini'; syncPromptImage()`);
+  assert(els.imageLookSlot.hidden && els.imageI2pBox.classList.on.hidden, 'nor for an exact prompt, which no LLM writes, as Explicit');
+  run(`$('imagePromptMode').value = 'llm'; $('imageI2p').checked = false`);
   run(`imageWorkflows = {}; $('imageWorkflow').value = ''; $('imageLlm').value = ''; sourcesShown = 1`);
   els.imageSources.querySelectorAll = () => [source];
+  run('syncImageSources()');
   let releaseImage;
   context.fetch = () => new Promise(resolve => { releaseImage = resolve; });
   run('chooseFromOutput(sourceBoxes()[0])');
@@ -3978,21 +4110,21 @@ assert(els.comfyFacts.innerHTML.includes('Generating the image · 3/8') && els.c
     context.fetch = answer({ error: 'unavailable' }, { ok: false, status: 503 });
     await run('poll()');
     assert.strictEqual(els.connectionNotice.hidden, true, 'a failed poll is not shown straight away');
-    const notice = waits.find(([, ms]) => ms === 5000);
-    assert(notice, 'the disconnected notice waits 5 s');
+    const notice = waits.find(([, ms]) => ms === 30000);
+    assert(notice, 'the disconnected notice waits 30 s');
     notice[0]();
     assert(els.connectionMessage.textContent.includes('HTTP 503'), 'HTTP failures are visible even when the body is JSON');
-    // The phone unlocked: the notice goes, and comes back only after 5 s more without an answer, though the timer
+    // The phone unlocked: the notice goes, and comes back only after 30 s more without an answer, though the timer
     // that was frozen with the page goes off at once.
     waits.length = 0;
     run('panelConnection.wake()');
     assert.strictEqual(els.connectionNotice.hidden, true, 'back in sight: the notice goes while it reconnects');
-    const again = waits.find(([, ms]) => ms === 5000);
-    assert(again, 'and waits 5 s from waking');
+    const again = waits.find(([, ms]) => ms === 30000);
+    assert(again, 'and waits 30 s from waking');
     waits.length = 0;
     again[0]();
     assert.strictEqual(els.connectionNotice.hidden, true, 'gone off straight away, it waits out the rest');
-    assert(waits.length === 1 && waits[0][1] > 0 && waits[0][1] <= 5000, 'the rest of the 5 s');
+    assert(waits.length === 1 && waits[0][1] > 0 && waits[0][1] <= 30000, 'the rest of the 30 s');
     context.setTimeout = savedTimeout;
     context.fetch = savedFetch;
     await run('poll()');
@@ -4124,6 +4256,80 @@ assert(els.comfyFacts.innerHTML.includes('Generating the image · 3/8') && els.c
   } }) });
   await run("sameAgain('old')");
   assert.strictEqual(els.imageLlm.value, 'gemini', 'reopening images restores the prompt model they were made with');
+
+  // A set's sliders: its settings, its seed fixed only if it was. A picture's (the viewer): exactly what made it.
+  {
+    const set = (shots, form) => async () => ({ json: async () => ({ ok: true, shots, settings: {
+      prompt: 'a brief', direct: false, llm: 'gemini', size: '1024x1024', count: 4, inputs: 0, options: {}, form } }) });
+    els.imagePromptMode.options = [];
+    els.imageSeed.value = '777';
+    // A test's ticks: back with the test batch's sliders, never with one picture's from it.
+    const ticks = [{ type: 'checkbox', name: 'lora_strength_test', checked: false }, { type: 'checkbox', name: 'workflow_test_t2i', checked: false }];
+    ['imageComparisons', 'formImage'].forEach(id => context.document.getElementById(id));
+    const savedTicks = els.imageComparisons.querySelectorAll, savedElements = els.formImage.elements;
+    els.imageComparisons.querySelectorAll = selector => (selector === 'input[type=checkbox]' ? ticks : []);
+    els.formImage.elements = ticks;
+    const tested = { prompt: 'a brief', seed: '', lora_strength_test: 'on', workflow_test_t2i: 'on' };
+    context.fetch = set([], tested);
+    await run("sameAgain('old')");
+    assert(ticks.every(tick => tick.checked), "a test batch's sliders: the test ticked again");
+    context.fetch = set([{ prompt: 'p', seed: 5, used_seed: 5, settings: { prompt: 'a brief', count: 4, inputs: 0, options: { lora_strength: '1.50' }, form: tested } }], tested);
+    await run("sameAgain('old', null, null, 1)");
+    assert(ticks.every(tick => !tick.checked), "one picture from it: none, so its own LoRA strength isn't run over");
+    assert.strictEqual(els.imageSeed.value, '', "nor the seed the test fixed: random again");
+    const yours = { ...tested, seed: '42' };
+    context.fetch = set([{ prompt: 'p', seed: 42, used_seed: 42, settings: { prompt: 'a brief', count: 4, inputs: 0, options: {}, form: yours } }], yours);
+    await run("sameAgain('old', null, null, 1)");
+    assert.strictEqual(els.imageSeed.value, 42, 'a seed you fixed for the test stays');
+    els.imageComparisons.querySelectorAll = savedTicks;
+    els.formImage.elements = savedElements;
+    context.fetch = set([], { prompt: 'a brief', seed: '' });
+    await run("sameAgain('old')");
+    assert.strictEqual(els.imageSeed.value, '', 'a set made on random seeds opens on random seeds, whatever the box held');
+    assert.strictEqual(els.imagePrompt.value, 'a brief', 'a set opens with its brief');
+    context.fetch = set([], { prompt: 'a brief', seed: '1234' });
+    await run("sameAgain('old')");
+    assert.strictEqual(els.imageSeed.value, '1234', 'a set made on a fixed seed opens on it');
+    const picture = { prompt: 'what the LLM wrote', seed: null, used_seed: 98765, settings: null };
+    context.fetch = set([picture], { prompt: 'a brief', seed: '' });
+    els.imageSeed.value = '777';
+    await run("sameAgain('old', null, null, 1)");
+    assert.strictEqual(els.imagePrompt.value, 'what the LLM wrote', "a picture opens with its own prompt, word for word");
+    assert.strictEqual(els.imagePromptMode.value, 'direct', 'as your own prompt, so no LLM writes another');
+    assert.strictEqual(els.imageCount.value, 1, 'to make that one again');
+    assert.strictEqual(els.imageSeed.value, '', 'its random seed stays random');
+    context.fetch = set([{ ...picture, seed: 4321, enhanced_prompt: 'what the enhancer wrote' }], { prompt: 'a brief', seed: '' });
+    await run("sameAgain('old', null, null, 1)");
+    assert.strictEqual(els.imagePrompt.value, 'what the enhancer wrote', "the workflow's enhancer's prompt, as the model got it");
+    assert.strictEqual(els.imageSeed.value, 4321, 'a fixed seed comes back fixed');
+    // Brief / Detailed beside I2P: Detailed first; a tap puts the set's brief in the box, and back. Only the text.
+    const source = context.document.getElementById('imagePromptSource');
+    assert(!source.hidden && run('promptSources.current') === 'detailed', 'from a preview: shown, on Detailed');
+    source.listeners.click();
+    assert.deepStrictEqual([els.imagePrompt.value, els.imagePromptMode.value, +els.imageCount.value, els.imageSeed.value],
+      ['a brief', 'direct', 1, 4321], 'Brief: the brief in the box; Exact prompt, Amount and seed as they were');
+    source.listeners.click();
+    assert.deepStrictEqual([els.imagePrompt.value, els.imagePromptMode.value, +els.imageCount.value], ['what the enhancer wrote', 'direct', 1], 'and back');
+    els.imagePrompt.value = 'changed by hand';
+    context.confirm = () => false;
+    source.listeners.click();
+    assert.strictEqual(els.imagePrompt.value, 'changed by hand', 'a prompt changed by hand stays unless you say so');
+    context.confirm = () => true;
+    source.listeners.click();
+    assert.strictEqual(els.imagePrompt.value, 'a brief');
+    context.fetch = set([{ ...picture, prompt: 'a brief' }], { prompt: 'a brief', seed: '' });
+    await run("sameAgain('old', null, null, 1)");
+    assert(source.hidden, 'nothing to choose when the brief is the prompt');
+    context.fetch = set([picture], { prompt: 'a brief', seed: '' });
+    await run("sameAgain('old', null, null, 1)");
+    await run("sameAgain('old')");
+    assert(source.hidden, "a set's own sliders: none");
+    assert(/<span class="prompt-source" id="imagePromptSource" hidden><label class="check" role="button" tabindex="0"[^>]*><span data-source="brief">Brief<\/span>&nbsp;\/&nbsp;<span data-source="detailed">Detailed<\/span><\/label><\/span><span class="i2p-box" id="imageI2pBox">/.test(html)
+      && html.indexOf('id="imageI2pBox"') < html.indexOf('id="imageExplicitBox"'), 'right to left: Explicit, I2P, Brief / Detailed');
+    // In a box as I2P is, its words by I2P's own rule, so it sits on the line as I2P does.
+    assert(html.includes('.explicit-box .check, .i2p-box .check, .prompt-source .check {') && html.includes('.prompt-label-row > .prompt-source[hidden] { display: none; }'),
+      'styled as I2P, hidden when hidden');
+  }
 
   // A shot's seed: its icon opens the seed dialog; Save writes it back for saving and rendering again.
   {

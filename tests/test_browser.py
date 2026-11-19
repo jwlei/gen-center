@@ -54,7 +54,7 @@ class BrowserTest(unittest.TestCase):
                             self.assertNotIn("private browser draft", storage)
                             form_top = page.locator("#optionsCard").bounding_box()["y"]
                             page.route("**/api/status*", lambda route: route.abort())
-                            page.locator("#connectionNotice").wait_for(state="visible")
+                            page.locator("#connectionNotice").wait_for(state="visible", timeout=45000)  # Shown after 30 s down
                             self.assertEqual(page.locator("#optionsCard").bounding_box()["y"], form_top)
                             self.assertEqual(page.locator("#connectionNotice").evaluate(
                                 "el => getComputedStyle(el).position"), "fixed")

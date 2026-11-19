@@ -214,6 +214,23 @@ class PipelineTest(unittest.TestCase):
         self.assertEqual(kinds, ["audio", "video"])
         self.assertIn("Hello there", main.planner.plan_film.call_args.args[1], "the shots follow what is said")
 
+    def test_variations_are_saved_one_video_each_and_never_stitched(self):
+        planned = ("Storm", [{"title": f"Take {n}", "seconds": 5, "prompt": f"Take {n} prompt"} for n in (1, 2)])
+        with mock.patch.object(main.planner, "plan_film", return_value=planned) as plan,                 mock.patch.object(main, "stitch_film") as stitch:
+            self.assertEqual(self.film("--clip-relationship", "variations", "--variations", "2", "--clip-seconds", "5-5",
+                                       "--variety", "wide", "--keep", "outfit"), 0)
+        stitch.assert_not_called()
+        self.assertEqual(plan.call_args.args[2], 10, "two variations of 5 s")
+        self.assertEqual(plan.call_args.args[3], "image", "each starts on the image")
+        self.assertEqual((plan.call_args.kwargs["variety"], plan.call_args.kwargs["keep"]), ("wide", ["outfit"]))
+        state = self.only_run()
+        self.assertEqual(len(state.variations), 2)
+        self.assertTrue(all(name.endswith(f"_v{n}") for n, name in enumerate(state.variations, 1)))
+        saved = [os.path.join(paths.OUTPUT_DIR, f"{name}.mp4") for name in state.variations]
+        self.assertTrue(all(os.path.exists(path) for path in saved))
+        self.assertEqual(state.final, saved[0])
+        self.assertEqual(set(run_state.films_of_runs()), {os.path.basename(path) for path in saved})
+
     def test_narration_is_refused_past_the_longest_film(self):
         with self.fake_voice(601), mock.patch.object(main, "LOGS_DIR", self.temp):
             self.assertEqual(self.film("--narration", "Too long"), 1)
@@ -777,6 +794,23 @@ class PlanTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "Unknown clip relationship"):
             planner._instructions("brief", 20, "image", clip_relationship="unrelated")
 
+    def test_variations_are_told_they_are_not_a_film_on_every_model(self):
+        for model in (None, wan_prompt.MODEL, h3_prompt.MODEL):
+            with self.subTest(model=model):
+                guide = planner._instructions("brief", 15, "image", 1, model, chosen=(5, 5), clip_relationship="variations")
+                self.assertIn("3 variations of one 5-second clip, not a film", guide)
+                self.assertIn("Each one is 5", guide)
+                self.assertNotIn("a real ending", guide)
+
+    def test_variety_reaches_the_writer_only_for_variations(self):
+        reply = self.reply([{"title": "A", "seconds": 5, "prompt": "The door opens."},
+                            {"title": "B", "seconds": 5, "prompt": "She walks through."}])
+        for relationship, told in (("progressive", False), ("related", False), ("variations", True)):
+            with self.subTest(relationship=relationship), mock.patch.object(planner, "_ask", return_value=reply) as ask:
+                planner.plan_film(b"jpeg", "brief", 10, "image", chosen=(5, 5), clip_relationship=relationship,
+                                  variety="wide", keep=["outfit"])
+                self.assertEqual("How much the clips differ" in ask.call_args.args[1], told)
+
     def test_repeated_llm_prompts_are_retried_and_never_accepted(self):
         repeated = self.reply([{"title": f"S{i}", "seconds": 10, "prompt": "Same action" if i == 0 else " same  action "}
                                for i in range(2)])
@@ -1195,6 +1229,23 @@ class ArgsTest(unittest.TestCase):
         self.assertEqual(main.parse_args(["--clip-relationship", "related", "i.png", "p"]).clip_relationship, "related")
         with self.assertRaises(SystemExit), mock.patch("sys.stderr"):
             main.parse_args(["--clip-relationship", "unknown", "i.png", "p"])
+
+    def test_variety_is_only_for_variations(self):
+        for flags in (["--variety", "wide"], ["--vary", "pose"], ["--keep", "outfit"],
+                      ["--clip-relationship", "related", "--variety", "mixed"]):
+            with self.subTest(flags=flags), self.assertRaises(SystemExit), mock.patch("sys.stderr"):
+                main.parse_args([*flags, "i.png", "p"])
+
+    def test_variations_are_one_fixed_clip_length_each_on_the_image(self):
+        args = main.parse_args(["--clip-relationship", "variations", "--variations", "3", "--clip-seconds", "6-6",
+                                "--variety", "slight", "i.png", "p"])
+        self.assertEqual((args.duration, args.start, args.fixed_clips), (18, "image", True))
+        for flags in (["--variations", "3"], ["--clip-relationship", "variations", "--clip-seconds", "6-6"],
+                      ["--clip-relationship", "variations", "--variations", "3", "--clip-seconds", "5-8"],
+                      ["--clip-relationship", "variations", "--variations", "3", "--clip-seconds", "6-6", "--start", "infinite"],
+                      ["--clip-relationship", "variations", "--variations", "99", "--clip-seconds", "6-6"]):
+            with self.subTest(flags=flags), self.assertRaises(SystemExit), mock.patch("sys.stderr"):
+                main.parse_args([*flags, "i.png", "p"])
 
     def test_plan_only_cant_resume(self):
         with self.assertRaises(SystemExit), mock.patch("sys.stderr"):

@@ -541,6 +541,11 @@ class OutputH3MetadataTest(unittest.TestCase):
             for key in ("run", "title", "model", "llm", "loras", "h3_mode", "h3_creativity", "connection"):
                 self.assertEqual(item[key], original[key], (name, key))
             self.assertEqual(item["resolution"], "2048x1024")
+            # Every pill of the film it came from, in the same place, and its own upscale besides.
+            own = lambda listed_item: [(pill["kind"], pill["text"]) for pill in listed_item["pills"] if pill["kind"] != "upscale"]
+            self.assertEqual(own(item), own(original), name)
+            self.assertIn(("upscale", "Upscaled: RTX VSR"), [(pill["kind"], pill["text"]) for pill in item["pills"]])
+        self.assertIn(("mode", "I2V"), [(pill["kind"], pill["text"]) for pill in original["pills"]])
         self.assertEqual(original["connection"], "chain")
         self.assertIsNone(listed["unknown.mp4"]["model"])
 
@@ -570,6 +575,8 @@ class OutputH3MetadataTest(unittest.TestCase):
                              ("Film", "h3", "local", ["LoRA A"]))
             self.assertEqual((listed["h3_mode"], listed["h3_creativity"], listed["run"]), ("render", "bold", None))
             self.assertEqual(listed["connection"], "director", "kept in the upscale's own metadata")
+            self.assertIn(("mode", "I2V"), [(pill["kind"], pill["text"]) for pill in listed["pills"]],
+                          "every pill kept beside it, the run gone")
 
             client = mock.Mock()
             client.upload.return_value = "input.mp4"
@@ -983,11 +990,22 @@ class PanelTest(unittest.TestCase):
         self.assertIn("Write 120-180 words", film._instructions("x", 10, "image", 1, h3_prompt.MODEL, words=150), "H3")
         self.assertIn("60-120 words", film._instructions("x", 10, "image", 1), "blank keeps LTX-2's own")
 
-    def test_a_films_variety_and_chips_reach_the_writer(self):
-        flags, error = video_panel.build_options({"llm": "gemini", "variety": "wide", "chip_location": "keep"})
+    def test_a_films_variety_and_chips_reach_the_writer_only_for_variations(self):
+        varied = {"llm": "gemini", "variety": "wide", "chip_location": "keep"}
+        for relationship in ("progressive", "related"):
+            flags, error = video_panel.build_options({**varied, "clip_relationship": relationship})
+            self.assertIsNone(error)
+            self.assertFalse({"--variety", "--vary", "--keep"} & set(flags), f"{relationship} says how its clips differ itself")
+        flags, error = video_panel.build_options({**varied, "clip_relationship": "variations", "variations": "3",
+                                                  "clip_seconds": "6-6", "clip_fixed": "1", "start": "chain"})
         self.assertIsNone(error)
         start = flags.index("--variety")
         self.assertEqual(flags[start:start + 4], ["--variety", "wide", "--keep", "location"])
+        self.assertEqual([flags[flags.index(flag) + 1] for flag in ("--variations", "--duration", "--start")], ["3", "18", "image"])
+        self.assertEqual(flags.count("--duration"), 1)
+        self.assertIn("fixed clip length", video_panel.build_options({"clip_relationship": "variations", "variations": "3"})[1])
+        self.assertIn("Variations must be", video_panel.build_options({"clip_relationship": "variations", "variations": "0",
+                                                                       "clip_seconds": "6-6", "clip_fixed": "1"})[1])
         direct, error = video_panel.build_options({"prompt_mode": "direct", "variety": "wide"})
         self.assertIsNone(error)
         self.assertNotIn("--variety", direct, "every clip gets your prompt as it is")
@@ -1001,7 +1019,8 @@ class PanelTest(unittest.TestCase):
     def test_fixed_clip_only_continues_matching_plan(self):
         state = types.SimpleNamespace(id="old", shots=[{"seconds": 8}] * 4, final=None, inputs="same", brief="idea",
                                       seconds=32, workflow=None, llm="gemini", h3_mode="off",
-                                      h3_creativity="balanced", start="chain", connection_mode=None, fixed_clip=True)
+                                      h3_creativity="balanced", start="chain", connection_mode=None, fixed_clip=True,
+                                      clip_relationship="progressive")
         flags = ["--duration", "30", "--start", "chain", "--clip-seconds", "8-8", "--fixed-clips"]
         with mock.patch.object(video_panel, "busy_runs", return_value=set()), \
                 mock.patch.object(video_panel.media, "inputs_fingerprint", return_value="same"), \
@@ -1013,6 +1032,7 @@ class PanelTest(unittest.TestCase):
             self.assertIsNone(find(flags + ["--llm", "local"]), "a different prompt model needs a new plan")
             self.assertIsNone(find(["--duration", "32", "--start", "chain"]))
             self.assertIsNone(find(["--duration", "30", "--start", "chain", "--clip-seconds", "10-10", "--fixed-clips"]))
+            self.assertIsNone(find(flags + ["--clip-relationship", "variations"]), "variations are a plan of their own")
 
     def test_write_prompt_validation_lifecycle_and_exclusivity(self):
         from core import h3_refiner
@@ -1075,6 +1095,383 @@ class PanelTest(unittest.TestCase):
             self.assertEqual(result.status_code, 500)
             self.assertIn("model failed", result.get_json()["error"])
             self.assertFalse(webapp.run_queue.blocked())
+
+    def test_prompt_writer_streams_a_local_models_prompt_as_it_is_written(self):
+        from core import h3_refiner
+        self.addCleanup(webapp.close_warm_writer)
+        refiner = mock.MagicMock()
+        refiner.model_id = "gemma-4-12b"
+        refiner.process.poll.return_value = None
+
+        def write(text, side, on_text=None):
+            for piece in ("A storm ", "rolls in."):
+                on_text(piece)
+            return "A storm rolls in, checked."
+
+        refiner.write_prompt.side_effect = write
+        post = lambda: self.client.post("/api/write-prompt", data={"pipeline": "video", "prompt": "storm", "writer": "local",
+                                                                   "model": "gemma-4-12b", "stream": "1"})
+        with mock.patch.object(h3_refiner, "Refiner", return_value=refiner):
+            response = post()
+            self.assertIn("ndjson", response.headers["Content-Type"])
+            lines = [json.loads(line) for line in response.get_data(as_text=True).splitlines()]
+        # The pieces as they come, then the finished prompt (checked and formatted), which is what is kept.
+        self.assertEqual(lines, [{"text": "A storm "}, {"text": "rolls in."}, {"ok": True, "prompt": "A storm rolls in, checked."}])
+        self.assertFalse(webapp._writing_prompt, "its turn is over")
+        self.assertEqual(webapp.warm_model(), "gemma-4-12b")
+        # A failure is the last line, as the page reads it.
+        refiner.write_prompt.side_effect = RuntimeError("model failed")
+        lines = [json.loads(line) for line in post().get_data(as_text=True).splitlines()]
+        self.assertEqual(lines, [{"ok": False, "error": "model failed"}])
+        self.assertFalse(webapp.run_queue.blocked())
+
+    def test_chat_sent_during_a_run_goes_next_in_line(self):
+        from core import h3_refiner
+        from panel import chat
+        for name, file in (("CHATS_PATH", "chats.json"), ("OLD_CHAT_PATH", "chat.json")):
+            path = mock.patch.object(chat, name, os.path.join(self.temp, file))
+            path.start()
+            self.addCleanup(path.stop)
+        self.addCleanup(webapp.close_warm_writer)
+        refiner = mock.MagicMock()
+        refiner.model_id = "gemma-4-12b"
+        refiner.process.poll.return_value = None
+        refiner.chat.side_effect = lambda messages, tokens: iter([("text", "Hello"), ("finish", "stop")])
+        send = lambda text: self.client.post("/api/chat/send", json={"text": text, "model": "gemma-4-12b"}, buffered=False)
+        running = mock.PropertyMock(return_value=True)
+        with mock.patch.object(type(webapp.job), "running", running), mock.patch.object(chat, "WAIT_SECONDS", 0.01),                 mock.patch.object(h3_refiner, "Refiner", return_value=refiner) as factory:
+            # A generation going: taken, not refused. The queue starts nothing new, and the model waits for the GPU.
+            response = send("hi")
+            self.assertEqual(response.status_code, 200)
+            chunks = iter(response.response)
+            self.assertEqual(json.loads(next(chunks)), {"status": "queued", "waiting": "generating"})
+            self.assertTrue(webapp._chat_waiting)
+            self.assertTrue(webapp.run_queue.blocked(), "what waits in the queue goes after the message")
+            self.assertFalse(webapp._writing_prompt, "the GPU isn't its own yet")
+            factory.assert_not_called()
+            self.assertEqual(send("again").status_code, 409, "one message at a time")
+            # The generation done: the reply starts at once, ahead of the queue.
+            running.return_value = False
+            rest = [json.loads(chunk) for chunk in chunks]
+            self.assertEqual(rest[0], {"status": "loading"})
+            self.assertEqual(rest[-1], {"done": True, "cut_off": False})
+            self.assertFalse(webapp._chat_waiting or webapp._writing_prompt, "its turn is over: the queue may go")
+            self.assertEqual([m["content"] for m in self.client.get("/api/chat").get_json()["messages"]], ["hi", "Hello"])
+
+            # Stopped while still waiting: nothing loads, and the queue is free again.
+            running.return_value = True
+            webapp.close_warm_writer()
+            factory.reset_mock()
+            response = send("never mind")
+            next(iter(response.response))
+            response.close()
+            factory.assert_not_called()
+            self.assertFalse(webapp._chat_waiting or webapp._writing_prompt)
+            self.assertFalse(webapp.run_queue.blocked())
+
+    def test_chat_streams_a_reply_keeps_the_conversation_and_waits_for_a_run(self):
+        from core import h3_refiner
+        from panel import chat
+        for name, file in (("CHATS_PATH", "chats.json"), ("OLD_CHAT_PATH", "chat.json")):
+            path = mock.patch.object(chat, name, os.path.join(self.temp, file))
+            path.start()
+            self.addCleanup(path.stop)
+        self.addCleanup(webapp.close_warm_writer)
+        refiner = mock.MagicMock()
+        refiner.model_id = "gemma-4-12b"
+        refiner.process.poll.return_value = None
+        seen = []
+
+        def reply(messages, tokens):
+            seen.append(messages)
+            yield "text", "Hello"
+            yield "speed", 72.34
+            yield "text", " there"
+            yield "speed", 72.9  # Within half a second of the last: not sent again
+            yield "usage", {"prompt": 300, "completion": 5}
+            yield "finish", "stop"
+
+        refiner.chat.side_effect = reply
+        send = lambda text, **kwargs: self.client.post("/api/chat/send", json={"text": text, "model": "gemma-4-12b"}, **kwargs)
+        lines = lambda response: [json.loads(line) for line in response.get_data(as_text=True).splitlines()]
+        self.assertEqual(self.client.post("/api/chat/send", json={"text": " ", "model": "gemma-4-12b"}).status_code, 400)
+        self.assertEqual(self.client.post("/api/chat/send", json={"text": "hi", "model": "nope"}).status_code, 400)
+
+        with mock.patch.object(h3_refiner, "Refiner", return_value=refiner) as factory:
+            # The model's own speed comes with the reply, as soon as it writes.
+            self.assertEqual(lines(send("hi")), [{"status": "loading"}, {"status": "writing"}, {"text": "Hello"}, {"speed": 72.3},
+                                                 {"text": " there"}, {"done": True, "cut_off": False}])
+        factory.assert_called_once_with(self.comfy.url, require_compiler=False, model_id="gemma-4-12b", vision=False)
+        self.assertEqual(seen[0], [{"role": "system", "content": chat.INSTRUCTION}, {"role": "user", "content": "hi"}])
+        state = self.client.get("/api/chat").get_json()
+        self.assertEqual([(m["role"], m["content"]) for m in state["messages"]], [("user", "hi"), ("assistant", "Hello there")])
+        self.assertEqual(state["model"], "gemma-4-12b")
+        # The context as the model counted it (305 tokens, the instruction among them), with the room for its reply.
+        context = state["context"]
+        self.assertTrue(context["measured"])
+        self.assertEqual(context["instruction"] + context["conversation"], 305)
+        self.assertEqual(context["free"], context["window"] - 305 - chat.REPLY_TOKENS)
+        self.assertEqual(context["left_out"], 0)
+        self.assertEqual(state["sessions"], [{"id": state["id"], "title": "hi", "updated": mock.ANY, "messages": 2}])
+
+        # Kept loaded between messages: the next one starts no model, and reads the whole conversation.
+        self.assertEqual(webapp.warm_model(), "gemma-4-12b")
+        with mock.patch.object(h3_refiner, "Refiner") as factory:
+            self.assertEqual(lines(send("again"))[0], {"status": "writing"})
+            factory.assert_not_called()
+        self.assertEqual([m["content"] for m in seen[1][1:]], ["hi", "Hello there", "again"])
+        refiner.__exit__.assert_not_called()
+
+        # Another reply going: refused, and nothing is added. (A generation going only makes it wait: see next in line.)
+        with mock.patch.object(chat, "_replying", True):
+            refused = send("not now")
+        self.assertEqual(refused.status_code, 409)
+        self.assertIn("Replying", refused.get_json()["error"])
+        self.assertEqual(len(self.client.get("/api/chat").get_json()["messages"]), 4)
+
+        # Stopped by the page: what it wrote so far is kept, marked, and the model stays loaded.
+        webapp.close_warm_writer()
+        with mock.patch.object(h3_refiner, "Refiner", return_value=refiner):
+            response = send("tell me more", buffered=False)
+            chunks = iter(response.response)
+            while b'"text"' not in next(chunks):
+                pass
+            self.assertTrue(webapp.run_queue.blocked(), "the queue waits while a reply is being written")
+            response.close()
+        last = self.client.get("/api/chat").get_json()["messages"][-1]
+        self.assertEqual((last["content"], last["ended"]), ("Hello", "stopped"))
+        self.assertEqual(webapp.warm_model(), "gemma-4-12b")
+        self.assertFalse(webapp._writing_prompt, "its turn is over: the prompt writer and the queue may go")
+
+        # A failed reply closes the model rather than keeping it.
+        refiner.chat.side_effect = RuntimeError("model failed")
+        self.assertEqual(lines(send("break"))[-1], {"error": "model failed"})
+        refiner.__exit__.assert_called()
+        self.assertIsNone(webapp.warm_model())
+
+        # Clear: a new, empty chat with nothing of the last in its context; the last is kept, to open and carry on.
+        first = self.client.get("/api/chat").get_json()
+        fresh = self.client.post("/api/chat/new").get_json()
+        self.assertEqual(fresh["messages"], [])
+        self.assertNotEqual(fresh["id"], first["id"])
+        self.assertEqual((fresh["context"]["conversation"], fresh["context"]["measured"]), (0, False))
+        self.assertEqual([s["id"] for s in fresh["sessions"]], [first["id"]], "the empty new chat isn't listed")
+        self.assertEqual(self.client.post("/api/chat/new").get_json()["id"], fresh["id"], "an empty chat is reused, not piled up")
+        refiner.chat.side_effect = reply
+        with mock.patch.object(h3_refiner, "Refiner", return_value=refiner):
+            lines(send("a new topic"))
+        self.assertEqual(seen[-1][1:], [{"role": "user", "content": "a new topic"}], "nothing of the cleared chat is sent")
+        listed = self.client.get("/api/chat").get_json()["sessions"]
+        self.assertEqual([s["title"] for s in listed], ["a new topic", "hi"], "newest first")
+        opened = self.client.post(f"/api/chat/open/{first['id']}").get_json()
+        self.assertEqual(opened["messages"], first["messages"])
+        with mock.patch.object(h3_refiner, "Refiner", return_value=refiner):
+            lines(send("back again"))
+        self.assertEqual([m["content"] for m in seen[-1][1:4]], ["hi", "Hello there", "again"], "it carries on with its own context")
+        self.assertEqual(self.client.post("/api/chat/open/nope").status_code, 404)
+
+        # Deleted, it goes; the one open makes way for a new, empty one.
+        after = self.client.post(f"/api/chat/delete/{first['id']}").get_json()
+        self.assertEqual(after["messages"], [])
+        self.assertEqual([s["title"] for s in after["sessions"]], ["a new topic"])
+        with open(chat.CHATS_PATH, encoding="utf-8") as f:
+            self.assertNotIn(first["id"], f.read())
+
+        # Clear: only the open chat's messages and context go; the other chats stay.
+        topic = after["sessions"][0]["id"]
+        self.client.post(f"/api/chat/open/{topic}")
+        with mock.patch.object(h3_refiner, "Refiner", return_value=refiner):
+            lines(send("one more"))
+        self.client.post("/api/chat/new")
+        with mock.patch.object(h3_refiner, "Refiner", return_value=refiner):
+            lines(send("the other chat"))
+        cleared = self.client.post("/api/chat/clear").get_json()
+        self.assertEqual((cleared["messages"], cleared["context"]["conversation"]), ([], 0))
+        self.assertEqual([s["id"] for s in cleared["sessions"]], [topic], "the other chat stays, the cleared one is empty")
+        self.assertEqual(len(self.client.post(f"/api/chat/open/{topic}").get_json()["messages"]), 4)
+
+    def test_chat_messages_can_be_regenerated_edited_and_deleted(self):
+        from core import h3_refiner
+        from panel import chat
+        for name, file in (("CHATS_PATH", "chats.json"), ("OLD_CHAT_PATH", "chat.json")):
+            path = mock.patch.object(chat, name, os.path.join(self.temp, file))
+            path.start()
+            self.addCleanup(path.stop)
+        self.addCleanup(webapp.close_warm_writer)
+        refiner = mock.MagicMock()
+        refiner.model_id = "gemma-4-12b"
+        refiner.process.poll.return_value = None
+        seen, replies = [], iter(["one", "two", "three", "four", "five"])
+
+        def reply(messages, tokens):
+            seen.append([m["content"] for m in messages[1:]])
+            yield "text", next(replies)
+            yield "finish", "stop"
+
+        refiner.chat.side_effect = reply
+        post = lambda **body: self.client.post("/api/chat/send", json={"model": "gemma-4-12b", **body})
+        contents = lambda: [m["content"] for m in self.client.get("/api/chat").get_json()["messages"]]
+        with mock.patch.object(h3_refiner, "Refiner", return_value=refiner):
+            post(text="first").get_data()
+            post(text="second").get_data()
+            self.assertEqual(contents(), ["first", "one", "second", "two"])
+
+            # Regenerate a reply that has more after it: those go, and it is written again from what came before.
+            post(text="", **{"from": 1, "count": 4}).get_data()
+            self.assertEqual(seen[-1], ["first"])
+            self.assertEqual(contents(), ["first", "three"])
+
+            # Edit and resend: your message changed, the replies after it gone, a new reply to it.
+            post(text="first, changed", **{"from": 0, "count": 2}).get_data()
+            self.assertEqual(seen[-1], ["first, changed"])
+            self.assertEqual(contents(), ["first, changed", "four"])
+            self.assertEqual(self.client.get("/api/chat").get_json()["sessions"][0]["title"], "first, changed")
+
+            # The page's view out of date (the chat changed on another device): refused, and nothing cut.
+            self.assertEqual(post(text="", **{"from": 1, "count": 9}).status_code, 409)
+            self.assertEqual(post(text="", **{"from": 0, "count": 2}).status_code, 409, "your own message has no reply to write again")
+            self.assertEqual(post(text="x", **{"from": 1, "count": 2}).status_code, 409, "only your own messages are edited")
+            self.assertEqual(post(text="", **{"from": "1", "count": 2}).status_code, 400)
+            self.assertFalse(webapp._writing_prompt, "a refused one leaves the queue free")
+            self.assertEqual(contents(), ["first, changed", "four"])
+
+        # Delete: that one message goes, and with it, from what the model reads.
+        self.assertEqual(self.client.post("/api/chat/message/delete", json={"index": 1, "count": 5}).status_code, 409)
+        state = self.client.post("/api/chat/message/delete", json={"index": 1, "count": 2}).get_json()
+        self.assertEqual([m["content"] for m in state["messages"]], ["first, changed"])
+        with mock.patch.object(h3_refiner, "Refiner", return_value=refiner):
+            post(text="third").get_data()
+        self.assertEqual(seen[-1], ["first, changed", "third"])
+
+    def test_chat_keeps_the_single_chat_from_before_sessions_as_the_first_of_them(self):
+        from panel import chat
+        old, new = os.path.join(self.temp, "chat.json"), os.path.join(self.temp, "chats.json")
+        with open(old, "w", encoding="utf-8") as f:
+            json.dump({"model": "gemma-4-12b", "messages": [{"role": "user", "content": "from before", "at": 100},
+                                                            {"role": "assistant", "content": "kept", "at": 200}]}, f)
+        with mock.patch.object(chat, "OLD_CHAT_PATH", old), mock.patch.object(chat, "CHATS_PATH", new):
+            state = self.client.get("/api/chat").get_json()
+            self.assertEqual([m["content"] for m in state["messages"]], ["from before", "kept"])
+            self.assertEqual(state["sessions"], [{"id": state["id"], "title": "from before", "updated": 200, "messages": 2}])
+            # Taken into chats.json at once, the old file goes, and the chat keeps its id to open or delete it by.
+            self.assertFalse(os.path.exists(old))
+            self.assertEqual(self.client.get("/api/chat").get_json()["id"], state["id"])
+            # Deleted from Sessions, it is gone from the disk.
+            self.assertTrue(self.client.post(f"/api/chat/delete/{state['id']}").get_json()["ok"])
+            with open(new, encoding="utf-8") as f:
+                self.assertNotIn("from before", f.read())
+            # An old file left beside a chats.json that already took it in goes as soon as the chats are read.
+            with open(old, "w", encoding="utf-8") as f:
+                json.dump({"messages": [{"role": "user", "content": "left over"}]}, f)
+            self.assertNotIn("left over", json.dumps(self.client.get("/api/chat").get_json()))
+            self.assertFalse(os.path.exists(old))
+
+    def test_chat_sends_images_to_a_model_that_sees_them_and_forgets_them_with_their_message(self):
+        import base64
+        from core import h3_refiner
+        from panel import chat
+        for name, file in (("CHATS_PATH", "chats.json"), ("OLD_CHAT_PATH", "chat.json"), ("IMAGES_DIR", "chat_images")):
+            path = mock.patch.object(chat, name, os.path.join(self.temp, file))
+            path.start()
+            self.addCleanup(path.stop)
+        self.addCleanup(webapp.close_warm_writer)
+        picture = io.BytesIO()
+        Image.new("RGB", (3000, 1000), "red").save(picture, "PNG")
+        data_url = "data:image/png;base64," + base64.b64encode(picture.getvalue()).decode()
+        refiner = mock.MagicMock()
+        refiner.model_id = "gemma-4-12b"
+        refiner.process.poll.return_value = None
+        refiner.projector = None  # Loaded for words alone, first
+        seen = []
+
+        def reply(messages, tokens):
+            seen.append(messages)
+            yield "text", "A red picture."
+            yield "finish", "stop"
+
+        refiner.chat.side_effect = reply
+        post = lambda **body: self.client.post("/api/chat/send", json={"model": "gemma-4-12b", **body})
+        with mock.patch.object(h3_refiner, "Refiner", return_value=refiner) as factory:
+            post(text="hello").get_data()
+            self.assertIs(factory.call_args.kwargs["vision"], False, "words alone: no vision part")
+            # An image, with no words: the model, loaded without its vision part, is started again with it.
+            post(text="", images=[data_url]).get_data()
+            self.assertIs(factory.call_args.kwargs["vision"], True)
+            self.assertEqual(factory.call_count, 2)
+        content = seen[-1][-1]["content"]
+        self.assertEqual([part["type"] for part in content], ["image_url", "text"])
+        self.assertTrue(content[0]["image_url"]["url"].startswith("data:image/jpeg;base64,"))
+        state = self.client.get("/api/chat").get_json()
+        name = state["messages"][2]["images"][0]
+        # Kept as a JPEG at most 1536 along its longer side, and shown from the server.
+        with Image.open(os.path.join(chat.IMAGES_DIR, name)) as kept:
+            self.assertEqual((kept.format, kept.size), ("JPEG", (1536, 512)))
+        self.assertEqual(self.client.get(f"/api/chat/image/{name}").mimetype, "image/jpeg")
+        self.assertEqual(self.client.get("/api/chat/image/..%2Fchats.json").status_code, 404)
+        self.assertEqual(state["sessions"][0]["title"], "hello")
+        self.assertGreater(state["context"]["conversation"], chat.IMAGE_TOKENS, "the image counts in the context")
+
+        # A model that can't see, or not an image: refused, nothing added.
+        self.assertEqual(self.client.post("/api/chat/send", json={"model": "qwen3-14b", "text": "x", "images": [data_url]}).status_code, 400)
+        self.assertEqual(post(text="x", images=["data:image/png;base64,bm90IGFuIGltYWdl"]).status_code, 400)
+        self.assertEqual(post(text="x", images=[data_url] * 5).status_code, 400)
+        self.assertEqual(len(self.client.get("/api/chat").get_json()["messages"]), 4)
+        # The conversation goes on to a model that can't see: its words, the images left out.
+        self.assertEqual(chat.sent_to_model(state["messages"])[3]["content"], "")
+
+        # Its message deleted, the image goes from the disk too.
+        self.client.post("/api/chat/message/delete", json={"index": 2, "count": 4})
+        self.assertFalse(os.path.exists(os.path.join(chat.IMAGES_DIR, name)))
+
+    def test_chat_drops_chinese_the_model_slips_into_when_the_conversation_has_none(self):
+        from core import h3_refiner
+        from panel import chat
+        for name, file in (("CHATS_PATH", "chats.json"), ("OLD_CHAT_PATH", "chat.json")):
+            path = mock.patch.object(chat, name, os.path.join(self.temp, file))
+            path.start()
+            self.addCleanup(path.stop)
+        self.addCleanup(webapp.close_warm_writer)
+        refiner = mock.MagicMock()
+        refiner.model_id = "qwen3-14b"
+        refiner.process.poll.return_value = None
+        pieces = []
+
+        def reply(messages, tokens):
+            for piece in pieces:
+                yield "text", piece
+            yield "finish", "stop"
+
+        refiner.chat.side_effect = reply
+        send = lambda text: self.client.post("/api/chat/send", json={"text": text, "model": "qwen3-14b"})
+        lines = lambda response: [json.loads(line) for line in response.get_data(as_text=True).splitlines()]
+        self.assertIn("reply in the language the user writes in", chat.INSTRUCTION)
+        with mock.patch.object(h3_refiner, "Refiner", return_value=refiner):
+            # Started in Chinese, then English: it starts at the English, and keeps nothing of the Chinese.
+            pieces[:] = ["好的，", "我来回答。\n\n", "Sure. ", "The answer", " is 42。"]
+            texts = [event["text"] for event in lines(send("What is the answer?")) if "text" in event]
+            self.assertEqual("".join(texts), "Sure. The answer is 42")
+            self.assertEqual(self.client.get("/api/chat").get_json()["messages"][-1]["content"], "Sure. The answer is 42")
+            # Nothing but Chinese: said, rather than an empty reply.
+            pieces[:] = ["我不知道。"]
+            self.assertIn("only in Chinese", lines(send("And why?"))[-1]["error"])
+            # Asked in Chinese, it may answer in Chinese.
+            pieces[:] = ["你好！"]
+            texts = [event["text"] for event in lines(send("你好")) if "text" in event]
+            self.assertEqual(texts, ["你好！"])
+
+    def test_chat_sends_only_as_much_of_a_long_conversation_as_fits_the_model(self):
+        from panel import chat
+        messages = [{"role": "user" if i % 2 == 0 else "assistant", "content": f"{i}:" + "x" * 5000} for i in range(40)]
+        sent = chat.sent_to_model(messages)
+        self.assertEqual(sent[0], {"role": "system", "content": chat.INSTRUCTION})
+        self.assertEqual(sent[-1]["content"], messages[-1]["content"], "the latest message always goes")
+        self.assertLessEqual(sum(len(m["content"]) for m in sent[1:]), chat.HISTORY_CHARS)
+        self.assertLess(len(sent), len(messages) + 1)
+        # Its context says so: estimated (not yet counted by the model), and how many older messages are left out.
+        context = chat.context({"messages": messages, "usage": None})
+        self.assertFalse(context["measured"])
+        self.assertEqual(context["left_out"], len(messages) - (len(sent) - 1))
+        self.assertLessEqual(context["instruction"] + context["conversation"] + context["reply"], context["window"])
 
     def test_prompt_writer_estimates_learn_per_model_and_pipeline(self):
         from core import h3_refiner
@@ -1640,6 +2037,23 @@ class PanelTest(unittest.TestCase):
         self.assertTrue(queue["held"])
         self.assertEqual([(item.get("resume"), item.get("later")) for item in queue["items"]], [(paused, None)])
 
+    def test_trash_on_a_paused_run_in_the_queue_deletes_it_rather_than_moving_it_to_pending(self):
+        self.comfy.script = ["ok", "hang"]
+        self.assertTrue(self.generate().get_json()["ok"])
+        self.wait_until(lambda: self.comfy.hanging, "the second clip to start")
+        self.wait_until(lambda: webapp.job.progress.get("detail", "").startswith("Clip 2"), "the panel to see it")
+        paused = webapp.job.progress["run_id"]
+        self.assertTrue(self.client.post("/skip").get_json()["ok"])
+        self.wait_idle()
+        item = self.status()["queue"]["items"][0]
+        self.assertEqual(item["resume"], paused)
+
+        self.assertEqual(self.client.post(f"/queue/run/remove/{item['id']}").get_json(), {"ok": True})
+        status = self.status()
+        self.assertEqual(status["queue"]["items"], [])
+        self.assertNotIn(paused, [run["id"] for run in status["stopped_runs"]], "not under Pending, to be deleted again")
+        self.assertIsNone(webapp.PIPELINES["video"].load_run(paused), "what it had still to do is discarded")
+
     def test_cancel_before_anything_is_saved_waits_for_it_then_goes_on(self):
         self.comfy.script = ["hang"]
         self.assertTrue(self.generate().get_json()["ok"])
@@ -1816,7 +2230,7 @@ class PanelTest(unittest.TestCase):
         self.assertTrue(self.client.post(f"/queue/run/edit/{third['id']}/cancel", json={"token": edit["token"]}).get_json()["ok"])
         self.assertTrue(self.status()["queue"]["items"][-1]["later"])
 
-    def test_edit_queued_generation_keeps_inputs_and_replaces_at_front(self):
+    def test_edit_queued_generation_keeps_inputs_and_saves_in_its_place(self):
         self.assertTrue(self.generate(prompt="original", start_later="1").get_json()["ok"])
         original = self.status()["queue"]["items"][0]
         self.assertTrue(self.generate(prompt="other", start_later="1").get_json()["ok"])
@@ -1838,9 +2252,35 @@ class PanelTest(unittest.TestCase):
         self.assertTrue(saved.get_json()["ok"], saved.get_json())
         items = self.status()["queue"]["items"]
         self.assertEqual([item["id"] for item in items], [original["id"], original["id"] + 1])
-        self.assertFalse(items[0]["later"])
+        self.assertTrue(items[0]["later"], "it was in Pending, so Save keeps it there")
         self.assertEqual(items[0]["facts"]["prompt"], "changed")
         self.assertEqual(self.client.post(f"/queue/run/edit/{original['id']}/cancel", json={"token": edit["token"]}).status_code, 409)
+
+    def test_a_saved_edit_goes_where_it_was_or_where_asked(self):
+        for prompt in ("first", "middle", "last"):
+            self.assertTrue(self.generate(prompt=prompt, start_later="1").get_json()["ok"])
+        first, middle, last = (item["id"] for item in self.status()["queue"]["items"])
+        webapp.run_queue.hold()
+        for item_id in (first, middle, last):
+            self.assertTrue(self.client.post(f"/queue/run/start/{item_id}").get_json()["ok"])
+        self.assertTrue(self.generate(prompt="parked", start_later="1").get_json()["ok"])
+        parked = self.status()["queue"]["items"][-1]["id"]
+        order = lambda: [(item["id"], bool(item.get("later"))) for item in self.status()["queue"]["items"]]
+
+        def save(item_id, prompt, **where):
+            token = self.client.post(f"/queue/run/edit/{item_id}").get_json()["token"]
+            saved = self.generate(prompt=prompt, queue_edit_id=str(item_id), queue_edit_token=token, **where)
+            self.assertTrue(saved.get_json()["ok"], saved.get_json())
+
+        save(middle, "middle, changed")
+        self.assertEqual(order(), [(first, False), (middle, False), (last, False), (parked, True)], "Save: back in its place")
+        save(last, "last, to the top", queue_top="1")
+        self.assertEqual(order(), [(last, False), (first, False), (middle, False), (parked, True)], "Add to top: first in the queue")
+        save(first, "first, parked", start_later="1")
+        self.assertEqual(order(), [(last, False), (middle, False), (parked, True), (first, True)], "Add to pending: Pending's end")
+        save(parked, "parked, to the top", queue_top="1")
+        self.assertEqual(order()[0], (parked, False), "from Pending to the top of the queue")
+        self.assertEqual(self.status()["queue"]["items"][0]["facts"]["prompt"], "parked, to the top")
 
     def test_edit_legacy_video_reconstructs_original_form_and_inputs(self):
         self.assertTrue(self.generate(prompt="legacy", start_later="1", review="1").get_json()["ok"])
@@ -1882,10 +2322,36 @@ class PanelTest(unittest.TestCase):
         self.assertEqual(len(waiting), 2)
 
         reply = self.client.post(f"/queue/run/run-now/{waiting[1]['id']}")
-        self.assertEqual(reply.get_json(), {"ok": True})
+        self.assertEqual(reply.get_json(), {"ok": True, "waiting": False})
         self.wait_idle()
 
         status = self.status()["queue"]
+        self.assertTrue(status["held"], "the remaining generation stays paused")
+        self.assertEqual([item["id"] for item in status["items"]], [waiting[0]["id"]])
+        self.assertEqual(status["results"][-1]["outcome"], "done")
+
+    def test_run_this_now_closes_a_warm_local_model_first_then_starts(self):
+        # A chat's or the prompt writer's model kept loaded holds GPU memory a generation needs: Run this now closes it,
+        # and the job starts once it is gone, at one tap (before, the first tap only began closing it and was refused).
+        self.comfy.script = ["ok"] * 16
+        self.assertTrue(self.generate(prompt="leave waiting", start_later="1").get_json()["queued"])
+        webapp.run_queue.hold()
+        self.assertTrue(self.generate(prompt="run this one", start_later="1").get_json()["queued"])
+        waiting = self.status()["queue"]["items"]
+        refiner = mock.MagicMock()
+        refiner.model_id = "gemma-4-12b"
+        closed = threading.Event()
+        refiner.__exit__.side_effect = lambda *_: closed.set()
+        webapp.keep_warm(refiner)
+        self.addCleanup(webapp.close_warm_writer)
+
+        reply = self.client.post(f"/queue/run/run-now/{waiting[1]['id']}")
+        self.assertEqual(reply.get_json(), {"ok": True, "waiting": True})
+        self.assertTrue(closed.wait(5), "the warm model is closed")
+        self.wait_until(lambda: any(r.get("job_id") == waiting[1]["id"] for r in self.status()["queue"]["results"]), "the job to run")
+        self.wait_idle()
+        status = self.status()["queue"]
+        self.assertIsNone(webapp.warm_model())
         self.assertTrue(status["held"], "the remaining generation stays paused")
         self.assertEqual([item["id"] for item in status["items"]], [waiting[0]["id"]])
         self.assertEqual(status["results"][-1]["outcome"], "done")
@@ -3172,8 +3638,8 @@ class QueueUpscaleEditTest(unittest.TestCase):
             Image.new("RGB", (640, 368)).save(path)
             # 3x, as the upscale box sends it: 3 x its 368px shorter side.
             self.assertTrue(self.client.post(url, json={**{k: v for k, v in values.items() if k != "resolution"}, "times": "3"}).get_json()["ok"])
-        replacement = webapp.run_queue.items[0]
-        self.assertEqual([entry["id"] for entry in webapp.run_queue.items], [5, 9])
+        replacement = webapp.run_queue.items[1]
+        self.assertEqual([entry["id"] for entry in webapp.run_queue.items], [9, 5], "saved back in its place")
         self.assertEqual(replacement["resume"], state.id)
         self.assertIn("--image", replacement["argv"])
         self.assertEqual(replacement["argv"][-4:], ["--resolution", "1104", "--denoise", "0.1"])
@@ -3192,8 +3658,8 @@ class QueueUpscaleEditTest(unittest.TestCase):
             self.assertEqual(self.client.post(url, json={**values, "scale": "nan"}).status_code, 400)
             self.assertEqual(self.client.post(url, json={**values, "quality": "bad"}).status_code, 400)
             self.assertTrue(self.client.post(url, json=values).get_json()["ok"])
-        replacement = webapp.run_queue.items[0]
-        self.assertEqual([entry["id"] for entry in webapp.run_queue.items], [6, 9])
+        replacement = webapp.run_queue.items[1]
+        self.assertEqual([entry["id"] for entry in webapp.run_queue.items], [9, 6], "saved back in its place")
         self.assertEqual(replacement["argv"][-6:], ["--film", "film.mp4", "--scale", "3", "--quality", "STREAMING_ULTRA"])
         edit = self.client.post("/queue/run/edit/6").get_json()
         self.assertTrue(self.client.post("/queue/run/edit/6/cancel", json={"token": edit["token"]}).get_json()["ok"])

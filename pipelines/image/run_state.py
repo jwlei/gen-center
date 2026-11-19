@@ -43,6 +43,7 @@ class RunState:
     form: dict = None  # The panel's Generate form as it was sent, files aside: reopened, the set comes back as it was made
     provenance: dict = None
     local_model: str = None
+    looked: bool = False  # I2P: the LLM looked at a picture of yours (--look-at) to write more like it
 
     @classmethod
     def new(cls, brief, count, direct, width, height, llm=None, workflow=None, image_count=0):

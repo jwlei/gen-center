@@ -53,7 +53,7 @@ function renderQueue(el, q, doneIn, moving = false, idle = false) {
         + `</span><span class="when">${item.estimate ? fmtEta(item.estimate) : ''}</span><span class="acts-side acts-end">`
         + (item.resume && item.pipeline !== 'shorts' ? `<button type="button" class="icon-btn" data-shots="${esc(item.resume)}" aria-label="Prompts" title="View prompts">${ICONS.enhanced}</button>` : '')
         + `<button type="button" class="icon-btn" data-edit="${item.id}" aria-label="Go to setup" title="Edit this queued job">${ICONS.config}</button>`
-        + `<button type="button" class="icon-btn" data-remove="${item.id}" aria-label="Remove from the queue" title="Remove from the queue (tap twice)">${ICONS.trash}</button></span>`
+        + `<button type="button" class="icon-btn" data-remove="${item.id}" aria-label="Delete it" title="${item.continuation ? 'Delete it: what it has still to do goes, anything it made stays (tap twice)' : 'Delete it (tap twice)'}">${ICONS.trash}</button></span>`
         : `${item.estimate ? `<span class="when">${fmtEta(item.estimate)}</span>` : ''}<button type="button" data-remove="${item.id}" aria-label="Remove from the queue" title="Remove from the queue (tap twice)">✕</button>`}
       ${el.dataset.lane === 'run' ? '</div>' : ''}
     </div>`).join('');
@@ -244,6 +244,7 @@ function renderFinished(runs, uploads, madeNow = []) {
 const PANELS = { finished: ['Finished', 'finishedList'], log: ['Log', 'logPanes'], quota: ['Quota today', 'quotaCard'] };
 let panelShown = null;
 function openPanel(which) {
+  if (which === 'chat') { openChat(); return; }  // A box of its own, on a desktop too
   if (DESK.matches) { setRunTab(which); return; }
   closePanel();
   const [title, id] = PANELS[which], el = $(id);
@@ -274,13 +275,14 @@ const DESK = window.matchMedia('(min-width: 1280px)');
 let lastStatus = null;
 function placePanelControls() {
   if (DESK.matches) {
-    for (const id of ['logToggle', 'openTemperatures', 'finishedToggle', 'quotaToggle']) $('statusToggles').appendChild($(id));
+    for (const id of ['logToggle', 'openTemperatures', 'finishedToggle', 'chatToggle', 'quotaToggle']) $('statusToggles').appendChild($(id));
   } else {
     // The header: Finished, privacy, the log, the temperatures, then the gear.
     // In the box's second row, under its power buttons.
     $('topIconsRow').insertBefore($('finishedToggle'), $('privateToggle'));
     $('topIconsRow').insertBefore($('logToggle'), $('settingsBtn'));
     $('topIconsRow').insertBefore($('openTemperatures'), $('settingsBtn'));
+    $('topIconsRow').insertBefore($('chatToggle'), $('settingsBtn'));
     $('settingsHead').appendChild($('quotaToggle'));
   }
   const running = !!(lastStatus && lastStatus.running);
@@ -596,7 +598,7 @@ function renderStopped(runs, parked = [], results = [], canRunNow = false, check
           + `<button type="button" class="icon-btn start-item${item.continuation ? ' continue-item' : ''}" data-start="${item.id}" data-top="1" aria-label="Add to the top of the queue" title="Add to the top of the queue: ahead of everything waiting, and started now if nothing is running">${ICONS.top}</button>`
           + (canRunNow ? `<button type="button" class="icon-btn start-item${item.continuation ? ' continue-item' : ''}" data-run-now="${item.id}" aria-label="Run this now" title="Run this now: the rest of the queue stays on hold">${ICONS.play}</button>` : '')}</span>
         <span class="when">${item.estimate ? fmtEta(item.estimate) : ''}</span>
-        <span class="acts-side acts-end">${item.resume && item.pipeline !== 'shorts' ? `<button type="button" class="icon-btn${item.prompt_warnings && item.prompt_warnings.length ? ' prompt-warning' : ''}" data-shots="${esc(item.resume)}" aria-label="Prompts" title="View prompts">${ICONS.enhanced}</button>` : ''}<button type="button" class="icon-btn" data-edit="${item.id}" aria-label="Go to setup" title="Edit this pending job">${ICONS.config}</button><button type="button" class="icon-btn" data-remove="${item.id}" aria-label="Remove it" title="Remove it (tap twice)">${ICONS.trash}</button></span>
+        <span class="acts-side acts-end">${item.resume && item.pipeline !== 'shorts' ? `<button type="button" class="icon-btn${item.prompt_warnings && item.prompt_warnings.length ? ' prompt-warning' : ''}" data-shots="${esc(item.resume)}" aria-label="Prompts" title="View prompts">${ICONS.enhanced}</button>` : ''}<button type="button" class="icon-btn" data-edit="${item.id}" aria-label="Go to setup" title="Edit this pending job">${ICONS.config}</button><button type="button" class="icon-btn" data-remove="${item.id}" aria-label="Delete it" title="${item.continuation ? 'Delete it: what it has still to do goes, anything it made stays (tap twice)' : 'Delete it (tap twice)'}">${ICONS.trash}</button></span>
       </div>
     </div>`;
   const unsavedFailures = results.filter(result => result.outcome === 'failed' && !result.run_id && result.job_id != null);

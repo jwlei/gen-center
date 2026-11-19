@@ -38,6 +38,8 @@ class RunState:
     clips: dict = field(default_factory=dict)  # {shot index: file name in clips/}
     final: str = None
     film_name: str = None  # <title words>_<workflow>, chosen once: a film made again keeps its name
+    # Variations (planner.VARIATIONS): each clip's name in the output folder, chosen once, as a film's is. final is the first.
+    variations: list = None
     workflow: str = None  # The workflow file it renders with, if not the built-in one
     image_count: int = 1  # 0 for a film from text alone, several for a workflow that takes references
     inputs: str = None  # Fingerprint of the images and audio it was planned from, for Generate to recognise them
@@ -245,6 +247,9 @@ def films_of_runs():
         name = os.path.basename(state.final) if state.final else f"{state.film_name}.mp4" if state.film_name else None
         if name:
             films[name] = state
+        # Each variation is a video of the run's own.
+        for variation in state.variations or []:
+            films[f"{variation}.mp4"] = state
     return films
 
 
@@ -254,6 +259,7 @@ def claimed_films(run_id=None):
     for state in list_runs():
         if state.id != run_id:
             names.update(name for name in (state.film_name, state.final and os.path.splitext(os.path.basename(state.final))[0]) if name)
+            names.update(state.variations or [])
     return names
 
 

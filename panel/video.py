@@ -19,7 +19,7 @@ from pipelines.video import h3_infinite, h3_multishot, h3_prompt, media, output_
 from pipelines.video.comfy import workflow_model
 from pipelines.video.main import BUILT_IN
 from pipelines.video.run_eta import RunEta
-from core.saved_workflows import display_label, shorthand
+from core.saved_workflows import display_label, picker_label, shorthand
 from pipelines.video.run_state import STAGES, UPSCALED, RunState, claimed_films, films_of_runs, folder_size, list_runs, run_of_film
 from pipelines.video import upscale as film_upscale
 
@@ -78,7 +78,8 @@ def describe_run(state):
     elif state.next_stage() == "Clips":
         parts.append(f"{len(state.clips)} of {len(state.shots)} clips kept")
     else:
-        parts.append("Every clip is done, only stitching is left")
+        parts.append("Every variation is made, only saving them is left" if state.clip_relationship == planner.VARIATIONS
+                     else "Every clip is done, only stitching is left")
     parts.append(f"{folder_size(state.folder) / 2 ** 20:.0f} MB")
     return {"id": state.id, "pipeline": "video", "label": state.title or state.brief, "detail": " · ".join(parts), "when": saved_at(state.path),
             "clips": len(state.clips), "finished": bool(state.final), "outcome": read_outcome(state.folder),
@@ -95,13 +96,28 @@ def build_options(form):
     and prompt aren't needed for that: the estimate asks before they are filled in.
     """
     flags = []
-    try:
-        seconds = int(form.get("duration") or DEFAULT_FILM_SECONDS)
-    except ValueError:
-        return None, "Film length must be a whole number of seconds."
-    if not planner.MIN_FILM_SECONDS <= seconds <= planner.MAX_FILM_SECONDS:
-        return None, f"Film length must be {planner.MIN_FILM_SECONDS}-{planner.MAX_FILM_SECONDS} seconds."
-    flags += ["--duration", str(seconds)]
+    relationship = form.get("clip_relationship") or "progressive"
+    if relationship not in planner.CLIP_RELATIONSHIPS:
+        return None, "Unknown clip relationship."
+    # Variations: how many, each as long as the one clip length, in place of the film's length.
+    variations = relationship == planner.VARIATIONS
+    if variations:
+        try:
+            count = int(form.get("variations") or 1)
+        except ValueError:
+            return None, "Variations must be a whole number."
+        if not 1 <= count <= planner.MOST_VARIATIONS:
+            return None, f"Variations must be 1-{planner.MOST_VARIATIONS}."
+        if not form.get("clip_fixed"):
+            return None, "Variations need one fixed clip length."
+    else:
+        try:
+            seconds = int(form.get("duration") or DEFAULT_FILM_SECONDS)
+        except ValueError:
+            return None, "Film length must be a whole number of seconds."
+        if not planner.MIN_FILM_SECONDS <= seconds <= planner.MAX_FILM_SECONDS:
+            return None, f"Film length must be {planner.MIN_FILM_SECONDS}-{planner.MAX_FILM_SECONDS} seconds."
+        flags += ["--duration", str(seconds)]
 
     clip = (form.get("clip_seconds") or "").strip()
     if clip:
@@ -113,14 +129,15 @@ def build_options(form):
         if not clip or match.group(1) != match.group(2):
             return None, "A fixed clip length needs one matching clip length."
         flags.append("--fixed-clips")
+    if variations:
+        # The length the run is matched and timed by: every variation's seconds together.
+        flags += ["--duration", str(count * int(match.group(1))), "--variations", str(count)]
 
-    start = form.get("start") or "chain"
+    # Variations are separate clips, each starting on the image.
+    start = "image" if variations else form.get("start") or "chain"
     if start not in ("chain", "image", "director", "multishot", "infinite"):
         return None, "Unknown start mode."
     flags += ["--start", start]
-    relationship = form.get("clip_relationship") or "progressive"
-    if relationship not in planner.CLIP_RELATIONSHIPS:
-        return None, "Unknown clip relationship."
     flags += ["--clip-relationship", relationship]
     if start == "multishot":
         if not form.get("clip_fixed"):
@@ -157,10 +174,13 @@ def build_options(form):
             if model not in {item["id"] for item in settings.local_models()}:
                 return None, "Choose an available local model."
             flags += ["--local-model", model]
-        varied, error = variety.flags_from_form(form)
-        if error:
-            return None, error
-        flags += varied
+        # Variety only for variations: a story or related scenes say how their clips differ, and the writer never
+        # hears of it otherwise (the pipeline refuses it too).
+        if variations:
+            varied, error = variety.flags_from_form(form)
+            if error:
+                return None, error
+            flags += varied
         # How long each clip's prompt is: blank for the video model's own.
         worded, error = prompt_words.flags_from_form(form, "video")
         if error:
@@ -518,6 +538,7 @@ def run_to_continue(prompt, flags, env, takes, images, audio=None, references=()
                 and (not option(flags, "--local-model") or state.local_model == option(flags, "--local-model"))
                 and state.h3_mode == option(flags, "--h3-enhance", "off")
                 and state.h3_creativity == option(flags, "--h3-creativity", "balanced")
+                and state.clip_relationship == option(flags, "--clip-relationship", "progressive")
                 and (state.connection_mode or state.start) == (start if start in ("director", "multishot", "infinite") or takes["max_images"] == 1 else "image")
                 and (start != "multishot" or (state.h3_first_frame == ("--h3-first-frame" in flags)
                      and state.h3_multishot_steps == int(option(flags, "--h3-multishot-steps", 20))))):
@@ -624,6 +645,7 @@ def settings_of(state):
             "clip_range": state.clip_seconds, "h3_model": state.h3_model,
             "review": state.plan_only, "try_first": state.first_only,
             "clip_relationship": state.clip_relationship,
+            "variations": len(state.shots or []) if state.clip_relationship == planner.VARIATIONS else None,
             # The form as it was sent: anything above that it doesn't hold comes from the run itself.
             "form": run_form.flat(state.form)}
 
@@ -849,6 +871,8 @@ def latent_upscale_film(name, path):
     state = RunState.load(run_of_film(name)) if not UPSCALED.search(name) else None
     if not state or not state.shots or not state.final:
         return {"ok": False, "error": "Only a finished film whose run is still saved can be latent-upscaled."}, 409
+    if state.clip_relationship == planner.VARIATIONS:
+        return {"ok": False, "error": "Variations are separate videos: latent upscale works on a film."}, 400
     if (state.connection_mode or state.start) in ("director", "multishot", "infinite") or not offers_latent_upscale(state.workflow):
         return {"ok": False, "error": "Latent upscale needs a film made with an H3 reference-to-video workflow that offers it. "
                                       "Restart ComfyUI after installing the upscaler, then open the panel to list the workflows again."}, 400
@@ -919,11 +943,25 @@ def preserve_upscales(run_id=None, source_name=None):
                     output_metadata.write(path, metadata)
 
 
+def original_of(name):
+    """The film an upscaled copy was made from, by name: "x_upscaled.mp4" is "x.mp4"."""
+    while UPSCALED.search(name):
+        name = UPSCALED.sub(".mp4", name)
+    return name
+
+
+def both_upscales(latent):
+    """An upscaled copy's upscale: RTX VSR, after the latent upscale the film it came from was made with, if any."""
+    return f"{latent}, RTX VSR" if latent else "RTX VSR"
+
+
 def with_facts(caption, brief):
     """A film's caption, with what Output's pills are made from (core/pills.py): list_videos turns them into pills."""
-    caption["_facts"] = pills.facts(caption["model"], caption["upscaled"], caption["connection"], caption["h3_mode"],
-                                    caption["h3_creativity"], caption["loras"], caption["llm"], caption.pop("_direct", False),
-                                    caption.pop("_sampling", None), caption.pop("_cfg", None))
+    # The workflow as Generate's picker names it, where the film's run is known.
+    caption["_facts"] = pills.facts(caption.pop("_workflow", None) or caption["model"], caption["upscaled"], caption["connection"], caption["h3_mode"],
+                                    caption["h3_creativity"], caption["loras"], caption.pop("_llm", None) or caption["llm"],
+                                    caption.pop("_direct", False), caption.pop("_sampling", None), caption.pop("_cfg", None),
+                                    mode=caption.pop("_mode", None), prompt_writer=caption.pop("_writer", None))
     caption["_sibling"] = pills.sibling_key("video", brief)
     return caption
 
@@ -935,25 +973,41 @@ def captions():
 
     def caption(name):
         path = os.path.join(paths.OUTPUT_DIR, name)
-        if UPSCALED.search(name):
+        upscaled = bool(UPSCALED.search(name))
+        metadata = None
+        if upscaled:
             try:
                 metadata = output_metadata.read(path)
                 if metadata is None:
                     metadata = output_metadata.resolve(path, films)
                     if metadata is not None:
                         output_metadata.write(path, metadata)
-                if metadata is not None:
-                    return with_facts({**{key: metadata.get(key) for key in ("title", "model", "llm", "h3_mode", "h3_creativity", "connection")},
-                                       "loras": metadata.get("loras", []), "upscaled": "RTX VSR", "_direct": bool(metadata.get("direct")),
-                                       "run": metadata.get("origin_run") if metadata.get("origin_run") in titles else None},
-                                      metadata.get("brief"))
             except (OSError, ValueError) as error:
                 app.logger.warning("Could not preserve video metadata for %s: %s", name, error)
-        run = run_of_film(name, films)
-        made_by = films.get(name) or runs.get(run)
-        return with_facts({"run": run if run in titles else None, "title": titles.get(run),
+        run = (metadata or {}).get("origin_run") or run_of_film(name, films)
+        made_by = films.get(name) or runs.get(run) or films.get(original_of(name))
+        if upscaled and made_by is not None and metadata is not None and "mode" not in metadata:
+            # Kept before it held every pill: what it has now, beside it, should the run go.
+            try:
+                metadata = {**metadata, **output_metadata.from_run(made_by)}
+                output_metadata.write(path, metadata)
+            except (OSError, ValueError) as error:
+                app.logger.warning("Could not update video metadata for %s: %s", name, error)
+        if upscaled and made_by is None and metadata is not None:
+            # Its run is gone: what was kept of the film it came from.
+            return with_facts({**{key: metadata.get(key) for key in ("title", "model", "llm", "h3_mode", "h3_creativity", "connection")},
+                               "loras": metadata.get("loras", []), "upscaled": both_upscales(metadata.get("latent")),
+                               "_direct": bool(metadata.get("direct")), "_workflow": metadata.get("workflow_label"),
+                               "_llm": settings.llm_pill(metadata.get("llm"), metadata.get("local_model")),
+                               "_mode": metadata.get("mode"), "_writer": metadata.get("writer"),
+                               "_sampling": metadata.get("sampling"), "_cfg": metadata.get("cfg"),
+                               "run": metadata.get("origin_run") if metadata.get("origin_run") in titles else None},
+                              metadata.get("brief"))
+        # An upscaled copy is the film it came from, made bigger: all of its pills, and its upscale besides.
+        return with_facts({"run": run if run in titles else None, "title": titles.get(run) or (metadata or {}).get("title"),
                            "_direct": bool(made_by and made_by.direct),
                 "model": shorthand(made_by.workflow, BUILT_IN) if made_by else None,
+                "_workflow": picker_label(made_by.workflow, BUILT_IN) if made_by else None,
                 "llm": made_by.llm if made_by else None,
                 "h3_mode": made_by.h3_mode if made_by else None,
                 "h3_creativity": made_by.h3_creativity if made_by else None,
@@ -962,9 +1016,14 @@ def captions():
                 "loras": workflow_options.loras_used(made_by.workflow, made_by.options, "video") if made_by else [],
                 "_sampling": workflow_options.sampling_used(made_by.workflow, made_by.options, "video") if made_by else None,
                 "_cfg": workflow_options.cfg_used(made_by.workflow, made_by.options, "video") if made_by else None,
-                "upscaled": "RTX VSR" if UPSCALED.search(name) else latent_used(made_by),
+                "_mode": pills.video_mode(made_by) if made_by else None,
+                "_writer": pills.video_writer(made_by) if made_by else None,
+                # Which LLM, as the model pickers name it: the local one by its model, as an image set's is.
+                "_llm": settings.llm_pill(made_by.llm, getattr(made_by, "h3_model", None)) if made_by else None,
+                "upscaled": both_upscales(latent_used(made_by)) if upscaled else latent_used(made_by),
                 # The viewer's Latent upscale: greyed out where it can't be used (see latent_upscale_film).
                 "latent": bool(made_by and made_by.final and not UPSCALED.search(name)
+                               and made_by.clip_relationship != planner.VARIATIONS
                                and (made_by.connection_mode or made_by.start) not in ("director", "multishot", "infinite")
                                and offers(made_by.workflow))}, made_by.brief if made_by else None)
     offered = {}
@@ -982,6 +1041,7 @@ def context():
         "llms": [{"name": name, "label": label, "ready": planner.llm_configured(name)} for name, label in planner.LLMS],
         "default_llm": "local",
         "film_limits": [planner.MIN_FILM_SECONDS, planner.MAX_FILM_SECONDS, DEFAULT_FILM_SECONDS],
+        "most_variations": planner.MOST_VARIATIONS,
         "most_images": MOST_IMAGES,
         "most_media": MOST_MEDIA,
         "video_roles": [[role, roles.VIDEO_LABELS[role]] for role in roles.VIDEO_ROLES],

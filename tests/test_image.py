@@ -77,9 +77,9 @@ class SizeTest(unittest.TestCase):
                 eta.return_value.plan.return_value = {"total": 0}
                 listed = image_panel.describe_run(state)
             self.assertEqual([image["prompt_llm"] for image in listed["images"]],
-                             ["Gemma 4 U-H Q4_K_M", "Qwen3 14B", None])
+                             ["Gemma 4 U-H Q4_K_M", "Qwen3 14B", "Exact prompt"])
             self.assertEqual([value for kind, value in listed["_facts"] if kind == "llm"],
-                             ["Gemma 4 U-H Q4_K_M", "Qwen3 14B"])
+                             ["Gemma 4 U-H Q4_K_M", "Qwen3 14B", "Exact prompt"])
         self.assertEqual(image_panel.prompt_llm_pill({"llm": "local"}), "local")
         self.assertEqual(image_panel.prompt_llm_pill({"llm": "gemini", "local_model": "gemma-4-12b"}), "gemini")
         self.assertEqual(image_panel.prompt_llm_pill({"llm": "local", "local_model": "gemma-4-12b"}),
@@ -183,6 +183,24 @@ class PlannerTest(unittest.TestCase):
         with mock.patch.object(planner.llm, "_ask", side_effect=list(replies)) as call:
             return planner.write_prompts([], "a brief", count, "gemini"), call
 
+    def test_a_picture_for_the_llm_alone_is_shown_and_written_from_as_text(self):
+        with mock.patch.object(planner.llm, "_ask", return_value=self.reply(3)) as call:
+            planner.write_prompts([], "more like this", 3, "gemini", seen=[b"jpeg"])
+        instructions, images = call.call_args.args[1], call.call_args.args[4]
+        self.assertEqual(images, [b"jpeg"], "the LLM sees it")
+        self.assertIn("The attached picture is for you alone", instructions)
+        self.assertIn("Each prompt describes one finished image", instructions, "new images from text, not edits of it")
+        with mock.patch.object(planner.llm, "_ask", return_value=self.reply(3)) as call:
+            planner.write_prompts([b"edit"], "more like this", 3, "gemini", seen=[b"jpeg"])
+        self.assertEqual(call.call_args.args[4], [b"edit", b"jpeg"], "after the ones the model gets")
+        self.assertIn("The last attached picture is for you alone", call.call_args.args[1])
+        # No brief at all: the picture says what to make.
+        with mock.patch.object(planner.llm, "_ask", return_value=self.reply(3)) as call:
+            planner.write_prompts([], None, 3, "gemini", seen=[b"jpeg"])
+        self.assertIn("with no brief: the attached picture says what to make", call.call_args.args[1])
+        self.assertNotIn('brief, in the words', call.call_args.args[1])
+        self.assertNotIn("for you alone", planner._instructions("a brief", 3, 0), "only with one")
+
     def test_one_request_for_the_whole_set(self):
         (title, versions), call = self.write(self.reply(15), count=15)
         self.assertEqual(call.call_count, 1)
@@ -273,6 +291,14 @@ class PlannerTest(unittest.TestCase):
         self.assertNotIn("clearly different", make, "one image has nothing to differ from")
         self.assertIn("Picture 2", planner._instructions("x", 2, 2, models.QWEN_IMAGE_EDIT))
         self.assertIn("<image2>", planner._instructions("x", 2, 2, models.QWEN_IMAGE_21_EDIT), "Qwen-Image 2.1 names them its own way")
+
+    def test_a_picture_without_people_is_not_given_any(self):
+        # A deep-space brief once came back as 20 portraits: the checklist asked for "each person" with no "if".
+        make = planner._instructions("a deep-space nebula", 20, 0, variety="wide")
+        self.assertIn("Put in only the people, animals and characters the brief asks for or\n    clearly implies", make)
+        self.assertIn("Only if there are people: each one's age and ethnicity first", make)
+        self.assertNotIn("Everyone in an image", make)
+        self.assertNotIn("Each person:", make)
 
     def test_the_rules_kokon_tested(self):
         edit = planner._instructions("different outfits", 3, 1, models.QWEN_IMAGE_21_EDIT)
@@ -1472,8 +1498,10 @@ class PanelTest(unittest.TestCase):
         run.shots = run.shots[:1]
         self.assertEqual(image_panel.settings_of(run)["count"], 2)
         listed = image_panel.describe_run(run)
-        self.assertIn(("prompt", "Prompt enhancer"), listed["_facts"])
-        self.assertNotIn(("prompt", "Exact prompt"), listed["_facts"])
+        # Your prompt, which the workflow's enhancer wrote from: its pill follows.
+        self.assertIn(("writer", "Prompt enhancer"), listed["_facts"])
+        self.assertIn(("llm", "Exact prompt"), listed["_facts"])
+        self.assertIn(("mode", "T2I"), listed["_facts"])
         self.assertEqual(self.client.get(f"/image-runs/{run.id}/inputs/1").status_code, 404, "it was given no image")
         self.assertEqual(sorted(os.listdir(run.output_dir))[0][:len("a_lighthouse_text_001")], "a_lighthouse_text_001")
         self.assertIn("TextGenerate", [node["class_type"] for node in self.comfy.prompts[0]["prompt"].values()])
@@ -1505,6 +1533,73 @@ class PanelTest(unittest.TestCase):
         self.assertIn("no image to prompt", reply.get_json()["error"])
         # And the log says so too, for when the page has moved on.
         self.assertTrue(any(line["text"].startswith("🚫 Not added (image): This workflow has no image to prompt") for line in webapp.job.lines))
+
+    def test_image_to_prompt_describes_its_own_picture_or_else_image_1(self):
+        # Krea2's: image2image edits image 1, and image to prompt describes a picture of its own, the workflow's last.
+        takes = {"min_images": 0, "max_images": 0, "size": True, "options": [
+            {"id": "image_to_prompt", "kind": "switch", "role": "llm", "label": "Image to prompt", "default": "0",
+             "takes": {"min_images": 1, "max_images": 1}},
+            {"id": "mode", "kind": "choice", "label": "Mode", "default": "text2image", "choices": ["text2image", "image2image"],
+             "takes_by": {"text2image": {"min_images": 0, "max_images": 0}, "image2image": {"min_images": 1, "max_images": 1}}}]}
+
+        def queued(mode, edit, described):
+            form = {"prompt": "the same at night", "count": "1", "llm": "image_to_prompt", "prompt_mode": "llm",
+                    "aspect": "1:1", "megapixels": "1", "start_later": "1"}
+            if edit:
+                form["image"] = (io.BytesIO(png_bytes(color=(200, 0, 0))), "edit.png")
+            if described:
+                form["prompt_image"] = (io.BytesIO(png_bytes(color=(0, 0, 200))), "described.png")
+            with mock.patch.object(image_panel, "chosen_workflow", return_value=({}, takes, None)), \
+                 mock.patch.object(image_panel, "chosen_options", return_value=(["--option", f"mode={mode}"], None)):
+                reply = self.client.post("/generate/image", data=form, content_type="multipart/form-data")
+            if reply.status_code != 200:
+                return reply.get_json()["error"]
+            item = webapp.run_queue.items.pop()
+            # Edited in Pending, each picture goes back in its own box.
+            self.assertEqual(sorted(item["form_files"]), [*(["image"] if edit else []), *(["prompt_image"] if described else [])])
+            argv = item["argv"]
+            return [Image.open(path).getpixel((0, 0))[:3] for flag, path in zip(argv, argv[1:]) if flag == "--image"]
+
+        red, blue = (200, 0, 0), (0, 0, 200)
+        self.assertEqual(queued("image2image", edit=True, described=False), [red, red], "left empty, image 1 is described")
+        self.assertEqual(queued("image2image", edit=True, described=True), [red, blue], "its own picture goes last")
+        self.assertEqual(queued("text2image", edit=False, described=True), [blue], "from text, only the picture to describe")
+        self.assertIn("picture for Image to prompt", queued("text2image", edit=False, described=False))
+        self.assertIn("edits an image", queued("image2image", edit=False, described=True), "image2image still needs its image")
+
+    def test_the_llm_can_look_at_a_picture_the_workflow_never_gets(self):
+        form = {"prompt": "more like this", "count": "3", "llm": "gemini", "prompt_mode": "llm", "aspect": "1:1",
+                "megapixels": "1", "start_later": "1", "i2p": "on", "prompt_image": (io.BytesIO(png_bytes(color=(0, 0, 200))), "like.png")}
+        reply = self.client.post("/generate/image", data=form, content_type="multipart/form-data")
+        self.assertTrue(reply.get_json()["ok"], reply.get_json())
+        item = webapp.run_queue.items.pop()
+        argv = item["argv"]
+        self.assertNotIn("--image", argv, "made from text: the workflow never gets it")
+        looked = argv[argv.index("--look-at") + 1]
+        self.assertEqual(Image.open(looked).getpixel((0, 0))[:3], (0, 0, 200))
+        self.assertEqual(item["form_files"], {"prompt_image": looked}, "edited in Pending, it goes back on its line")
+        # An exact prompt has no LLM to show it to.
+        form = {**form, "prompt_mode": "direct", "prompt_image": (io.BytesIO(png_bytes()), "like.png")}
+        self.assertTrue(self.client.post("/generate/image", data=form, content_type="multipart/form-data").get_json()["ok"])
+        self.assertNotIn("--look-at", webapp.run_queue.items.pop()["argv"])
+        # With I2P off, the picture waits in its box, unused.
+        form = {**form, "prompt_mode": "llm", "i2p": None, "prompt_image": (io.BytesIO(png_bytes()), "like.png")}
+        self.assertTrue(self.client.post("/generate/image", data={k: v for k, v in form.items() if v is not None},
+                                         content_type="multipart/form-data").get_json()["ok"])
+        self.assertNotIn("--look-at", webapp.run_queue.items.pop()["argv"])
+        # A prompt is only needed without one: the picture says what to make.
+        self.assertEqual(self.generate(prompt="", start_later="1").status_code, 400)
+        self.assertEqual(self.generate(prompt="", start_later="1", i2p="on").status_code, 400, "I2P on, but no picture")
+        empty = {**form, "prompt": "", "i2p": "on", "prompt_image": (io.BytesIO(png_bytes()), "like.png")}
+        self.assertTrue(self.client.post("/generate/image", data=empty, content_type="multipart/form-data").get_json()["ok"])
+        self.assertIn("--look-at", webapp.run_queue.items.pop()["argv"])
+        # Run, with no prompt: Gemini is shown it, and the images are made from text alone.
+        self.llm.reply = versions_reply(3)
+        self.make(workflow="image_text.json", prompt="", i2p="on", prompt_image=(io.BytesIO(png_bytes()), "like.png"))
+        self.assertEqual(sum("image" in part for part in self.llm.requests[-1]["parts"]), 1)
+        self.assertIn("for you alone", " ".join(part.get("text", "") for part in self.llm.requests[-1]["parts"]))
+        self.assertEqual(len(self.only_run().done), 3)
+        self.assertEqual(self.comfy.uploads, [], "ComfyUI never gets it")
 
     def test_an_option_that_cant_run_is_refused(self):
         for fields in ({"opt_group_color_correction": ["0", "1"]}, {"opt_steps": "0"}, {"opt_group_upscaler.choice": "8K"}):

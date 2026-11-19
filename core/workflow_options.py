@@ -1306,7 +1306,10 @@ SPLICED_NODES = ("MinimaxH3LatentUpscaler3D", "LTXVSeparateAVLatent", "LTXVConca
                  "UNETLoader", "UpscaleModelLoader", "ImageUpscaleWithModel", "ImageScaleBy", "VAEEncode", "VAEDecode",
                  "LatentUpscaleBy", "SplitSigmasDenoise", "UltimateSDUpscale", "UltimateSDUpscaleCustomSample",
                  "UltimateSDUpscaleGuider", "ImageScale", "FreeMemoryImage", "SeedVR2LoadDiTModel", "SeedVR2LoadVAEModel",
-                 "SeedVR2VideoUpscaler", "LoraLoaderModelOnly")  # The style LoRA and those stacked after it, without a loader of its own
+                 "SeedVR2VideoUpscaler", "LoraLoaderModelOnly",  # The style LoRA and those stacked after it, without a loader of its own
+                 "SamplerCustomAdvanced", "SamplerCustom", "SamplerLCM", "BasicGuider", "RandomNoise", "EmptyImage",
+                 "ConditioningSetTimestepRange", "ConditioningCombine", "BasicScheduler", "SplitSigmas",
+                 "CFGGuider")  # H3 Image's harshness fix (_h3_image_steer)
 
 
 # In Generate, each image upscaled as it is made (pipelines/image/refine_upscale.py): Ultimate SD Upscale's tiles with
@@ -1386,6 +1389,172 @@ def _h3_fastvideo(api, info, chosen):
     if steps and "steps" not in chosen:
         api[steps[0]]["inputs"][steps[1]] = 4
     return options
+
+
+# MiniMax H3 Image without the harshness (the community's "EasyFix"): its sigmas split in two passes. Pass 1 samples the
+# first steps with the workflow's sampler (euler_ancestral, the recipe's, once it's switched on); pass 2 the rest with
+# LCM, which re-noises each step a little less than it was trained to (s_noise 0.95), so it doesn't over-sharpen.
+# Kijai's empty image steering besides: for the first step, the prompt is read again beside a black picture (no VAE, so
+# only the text encoder sees it), which calms the start. An edit's steering copy reads the image being edited too (also
+# without the VAE), the black picture after it. Steps, Scheduler and CFG still apply: at H3's own 6 simple steps the
+# sigmas are the recipe's (the model's simple schedule, which ComfyUI rounds a little differently); otherwise the
+# model's scheduler makes them, split after pass 1.
+H3_STEER = "h3_steer"
+H3_IMAGE_SIGMAS = (1.0, 0.9675236940383911, 0.8875485062599182, 0.75, 0.5327739119529724, 0.23200887441635132, 0.0)
+H3_STEER_NODES = ("SamplerCustomAdvanced", "SamplerCustom", "SamplerLCM", "KSamplerSelect", "ManualSigmas", "BasicGuider",
+                  "RandomNoise", "EmptyImage", "ConditioningSetTimestepRange", "ConditioningCombine", "BasicScheduler", "SplitSigmas")
+STEER_COPY, STEER_PASS_1, STEER_PASS_2 = "steer_empty_cond", "steer_pass_1", "steer_pass_2"
+STEER_DEFAULTS = {"split": 2, "sampler": "euler_ancestral", "s_noise": 0.95, "empty_end": 0.1, "empty_size": 512}
+
+
+def _sigmas_text(values):
+    return ", ".join(f"{value:g}" if value in (0, 1) else repr(value) for value in values)
+
+
+def _steer_target(api, info):
+    """(the H3 Image conditioning, its KSampler) where the harshness fix can go in, or None."""
+    conditions = [node_id for node_id, node in api.items() if node["class_type"] == sw.MINIMAX_H3_IMAGE_ENCODER]
+    samplers = [node_id for node_id, node in api.items() if node["class_type"] == "KSampler"]
+    if (len(conditions) != 1 or len(samplers) != 1 or not all(name in info for name in H3_STEER_NODES)
+            or api[samplers[0]]["inputs"].get("positive") != [conditions[0], 0]):
+        return None
+    return conditions[0], samplers[0]
+
+
+def _h3_steer_sampler(api, info, chosen):
+    """
+    Switched on, the workflow's sampler is the recipe's (euler_ancestral) until another is chosen: Sampler shows it, and
+    follows the switch as it's ticked. Before Sampler is offered and set.
+    """
+    target = _steer_target(api, info)
+    if not target or chosen.get(H3_STEER) != ON or STEER_DEFAULTS["sampler"] not in _combo(info, "KSamplerSelect", "sampler_name"):
+        return
+    source = _text_source(api, target[1], "sampler_name")
+    if source:
+        api[source[0]]["inputs"][source[1]] = STEER_DEFAULTS["sampler"]
+
+
+def _setting(api, node_id, name, kinds=(int,)):
+    """What a sampler's input comes to: its own value, or the primitive's that feeds it."""
+    source = _number_source(api, node_id, name, kinds=kinds) if kinds else _text_source(api, node_id, name)
+    return api[source[0]]["inputs"][source[1]] if source else api[node_id]["inputs"].get(name)
+
+
+def _h3_image_steer(api, info, chosen):
+    """
+    The harshness fix, for an H3 Image workflow that makes a picture or edits with one KSampler: offered off. On, the
+    KSampler is replaced by the two passes, with its sampler (pass 1), steps, scheduler, CFG and seed. Returns the options.
+    """
+    target = _steer_target(api, info)
+    if not target:
+        return []
+    # rows: its settings under it, each on a line with its name, shown while it's ticked. under_sampling: on the form,
+    # just below Sampling, as it changes how the sampling runs.
+    options = [{"id": H3_STEER, "kind": "switch", "label": "Reduce harshness", "default": OFF, "rows": True, "under_sampling": True},
+               {"id": f"{H3_STEER}.split", "kind": "number", "label": "Pass 1 steps", "parent": H3_STEER,
+                "default": str(STEER_DEFAULTS["split"]), "min": 1, "max": MOST_STEPS - 1, "step": 1},
+               {"id": f"{H3_STEER}.s_noise", "kind": "number", "label": "Pass 2 re-noise", "parent": H3_STEER,
+                "default": f"{STEER_DEFAULTS['s_noise']:g}", "min": 0.5, "max": 1.2, "step": 0.01},
+               {"id": f"{H3_STEER}.empty", "kind": "switch", "label": "Empty image steering", "parent": H3_STEER, "default": ON},
+               {"id": f"{H3_STEER}.empty_end", "kind": "number", "label": "Steering until", "parent": H3_STEER,
+                "default": f"{STEER_DEFAULTS['empty_end']:g}", "min": 0.01, "max": 0.5, "step": 0.01}]
+    if chosen.get(H3_STEER) != ON:
+        return options
+
+    def number(key, low, high, cast=float):
+        try:
+            value = cast(float(chosen.get(f"{H3_STEER}.{key}", STEER_DEFAULTS[key])))
+        except (TypeError, ValueError):
+            value = STEER_DEFAULTS[key]
+        return min(high, max(low, value))
+
+    condition, sampler = target
+    ks = api[sampler]["inputs"]
+    steps = max(2, int(_setting(api, sampler, "steps") or 6))
+    scheduler = _setting(api, sampler, "scheduler", kinds=None) or "simple"
+    sampler_name = _setting(api, sampler, "sampler_name", kinds=None) or STEER_DEFAULTS["sampler"]
+    cfg = float(_setting(api, sampler, "cfg", kinds=FLOATS) or 1.0)
+    seed = ks.get("seed", 0)
+    split = number("split", 1, steps - 1, int)
+    positive = [condition, 0]
+    if chosen.get(f"{H3_STEER}.empty", ON) == ON:
+        end = number("empty_end", 0.01, 0.5)
+        size = STEER_DEFAULTS["empty_size"]
+        api["steer_black"] = {"class_type": "EmptyImage", "inputs": {"width": size, "height": size, "batch_size": 1, "color": 0},
+                              "_meta": {"title": "Steering: black picture"}}
+        # The prompt as the picture's own reads it (its enhancer too), and an edit's images, beside the black picture,
+        # after them, with no VAE.
+        api[STEER_COPY] = {"class_type": sw.MINIMAX_H3_IMAGE_ENCODER, "_meta": {"title": "Steering: prompt + black picture", "mirrors": condition},
+                           "inputs": {name: value for name, value in api[condition]["inputs"].items() if name != "vae"}}
+        _place_black(api[STEER_COPY]["inputs"])
+        api["steer_range_empty"] = {"class_type": "ConditioningSetTimestepRange", "inputs": {"conditioning": [STEER_COPY, 0], "start": 0.0, "end": end},
+                                    "_meta": {"title": "Steering: first step"}}
+        api["steer_range_plain"] = {"class_type": "ConditioningSetTimestepRange", "inputs": {"conditioning": [condition, 0], "start": end, "end": 1.0},
+                                    "_meta": {"title": "Steering: the rest"}}
+        api["steer_combine"] = {"class_type": "ConditioningCombine", "_meta": {"title": "Steered conditioning"},
+                                "inputs": {"conditioning_1": ["steer_range_empty", 0], "conditioning_2": ["steer_range_plain", 0]}}
+        positive = ["steer_combine", 0]
+    if steps == len(H3_IMAGE_SIGMAS) - 1 and scheduler == "simple":
+        api["steer_sigmas_1"] = {"class_type": "ManualSigmas", "inputs": {"sigmas": _sigmas_text(H3_IMAGE_SIGMAS[:split + 1])},
+                                 "_meta": {"title": f"Pass 1: steps 1-{split}"}}
+        api["steer_sigmas_2"] = {"class_type": "ManualSigmas", "inputs": {"sigmas": _sigmas_text(H3_IMAGE_SIGMAS[split:])},
+                                 "_meta": {"title": f"Pass 2: steps {split + 1}-{steps}"}}
+        first, rest = ["steer_sigmas_1", 0], ["steer_sigmas_2", 0]
+    else:
+        api["steer_schedule"] = {"class_type": "BasicScheduler", "inputs": {"model": ks["model"], "scheduler": scheduler, "steps": steps, "denoise": 1.0},
+                                 "_meta": {"title": f"Sigmas: {steps} {scheduler} steps"}}
+        api["steer_split"] = {"class_type": "SplitSigmas", "inputs": {"sigmas": ["steer_schedule", 0], "step": split},
+                              "_meta": {"title": f"Sigmas: split after step {split}"}}
+        first, rest = ["steer_split", 0], ["steer_split", 1]
+    api["steer_noise"] = {"class_type": "RandomNoise", "inputs": {"noise_seed": seed}, "_meta": {"title": "Pass 1: noise"}}
+    # CFG 1, as H3 runs: the recipe's BasicGuider. Above it, a CFG guider with the negative.
+    if cfg == 1 or "CFGGuider" not in info:
+        api["steer_guider"] = {"class_type": "BasicGuider", "inputs": {"model": ks["model"], "conditioning": positive}, "_meta": {"title": "Pass 1: guider"}}
+    else:
+        api["steer_guider"] = {"class_type": "CFGGuider", "inputs": {"model": ks["model"], "positive": positive, "negative": ks["negative"], "cfg": cfg},
+                               "_meta": {"title": "Pass 1: guider"}}
+    api["steer_sampler_1"] = {"class_type": "KSamplerSelect", "inputs": {"sampler_name": sampler_name}, "_meta": {"title": "Pass 1: sampler"}}
+    api[STEER_PASS_1] = {"class_type": "SamplerCustomAdvanced", "_meta": {"title": "Pass 1"}, "inputs": {
+        "noise": ["steer_noise", 0], "guider": ["steer_guider", 0], "sampler": ["steer_sampler_1", 0], "sigmas": first,
+        "latent_image": ks["latent_image"]}}
+    s_noise = number("s_noise", 0.5, 1.2)
+    api["steer_sampler_2"] = {"class_type": "SamplerLCM", "inputs": {"s_noise": s_noise, "s_noise_end": s_noise, "noise_clip_std": 0.0},
+                              "_meta": {"title": "Pass 2: re-noise"}}
+    api[STEER_PASS_2] = {"class_type": "SamplerCustom", "_meta": {"title": "Pass 2"}, "inputs": {
+        "model": ks["model"], "add_noise": False, "noise_seed": seed, "cfg": cfg, "positive": positive, "negative": ks["negative"],
+        "sampler": ["steer_sampler_2", 0], "sigmas": rest, "latent_image": [STEER_PASS_1, 0]}}
+    for node in api.values():
+        for name, value in node["inputs"].items():
+            if value == [sampler, 0]:
+                node["inputs"][name] = [STEER_PASS_2, 0]
+    # Gone, so nothing reads its steps as the picture's.
+    del api[sampler]
+    return options
+
+
+BLACK = ["steer_black", 0]
+
+
+def _place_black(inputs):
+    """The black picture in the slot after the last image wired (images.image_1 with none, as Kijai's), alone there."""
+    for name in [name for name, value in inputs.items() if value == BLACK]:
+        del inputs[name]
+    numbers = [int(match.group(1)) for name, value in inputs.items() if isinstance(value, list)
+               for match in [re.fullmatch(r"images\.image_(\d+)", name)] if match]
+    inputs[f"images.image_{max(numbers, default=0) + 1}"] = BLACK
+
+
+def mirror_steering(workflow):
+    """
+    The steering copy of H3 Image's conditioning given what the picture's own was just set to: its size, its prompt,
+    and an edit's images (one left empty came out of it), the black picture after them.
+    """
+    copy_ = workflow.get(STEER_COPY)
+    source = workflow.get((copy_ or {}).get("_meta", {}).get("mirrors"))
+    if not copy_ or not source:
+        return
+    copy_["inputs"] = {name: value for name, value in source["inputs"].items() if name != "vae"}
+    _place_black(copy_["inputs"])
 
 
 def _node_defaults(info, class_type):
@@ -1506,6 +1675,9 @@ def convert(ui, info, chosen=None, pipeline="image"):
     _filter_lora_options(added, model, native)
     options += added
     _additional_loras(api, info, chosen, options)
+    # Before Sampler is offered: H3 Image's harshness fix has a sampler of its own, which Sampler then shows.
+    if pipeline == "image":
+        _h3_steer_sampler(api, info, chosen)
     steps = _steps(api) or _main_targets(api).get("steps")
     if steps:
         node_id, name = steps
@@ -1515,6 +1687,8 @@ def convert(ui, info, chosen=None, pipeline="image"):
             api[node_id]["inputs"][name] = int(float(chosen["steps"]))
     options += _tune(api, info, chosen)
     if pipeline == "image":
+        # Before the upscale, which refines with whatever samples last.
+        options += _h3_image_steer(api, info, chosen)
         options += _image_upscale(api, info, chosen)
         # SeedVR2 is in Upscale now: the workflow's own SeedVR2 switch (Krea 2 SFW/NSFW's group) stays as saved, off
         # the form. Kept among the options, so a set made with it can still be made again.
@@ -1605,6 +1779,20 @@ HINTS = {
     "face_enable_turbo_mode": "Runs the edit with its Lightning LoRA in 4 steps instead of 40: about ten times faster, for a "
                               "little less detail.",
     "negative": "What the picture shouldn't have. Only read where CFG is above 1; a distilled model at CFG 1 ignores it.",
+    H3_STEER: "Takes the harsh, over-sharpened look off MiniMax H3 Image (EasyFix). Its steps run in two passes: the first "
+              "steps with Sampler above (switched to euler_ancestral, the recipe's, when this is ticked: an ancestral one "
+              "adds fresh noise each step, which keeps the start loose), the rest with LCM, which adds back a little less "
+              "noise each step than the model was trained with. Steps, Scheduler and CFG still apply; the recipe is 6 "
+              "simple steps at CFG 1.",
+    f"{H3_STEER}.split": "How many of the steps the first pass takes. 2 (of 6) is the recipe's.",
+    f"{H3_STEER}.s_noise": "How much noise LCM adds back each step in the second pass, against what the model was trained "
+                           "with (1). The recipe's 0.95 is a little less, which softens it; lower is softer and flatter.",
+    f"{H3_STEER}.empty": "Kijai's empty image method: for the first step, the prompt is read beside a black picture (seen by "
+                         "the text encoder only), which calms the start. The rest uses your prompt alone. In an edit, that "
+                         "first step sees the image being edited through the text encoder only: if an edit drifts from it, "
+                         "turn this off.",
+    f"{H3_STEER}.empty_end": "How far into the sampling the black picture steers, from 0 to 1. The recipe's 0.1 is about the "
+                             "first step.",
 }
 DENOISE_HINT = ("How far I2I strays from image 1: about 0.3 keeps its layout and colours, the author's 0.6 keeps the "
                 "composition and redraws the rest, 1 makes a new picture. Inpaint uses it for the painted part.")
@@ -1921,6 +2109,55 @@ def _main_sampler(api):
     return max(samplers, key=lambda node_id: denoise(node_id) if denoise(node_id) is not None else 1.0)
 
 
+def _sigma_passes(api, main):
+    """
+    A picture made in passes over fixed sigmas, each going on from the last one's latent (MiniMax H3 Image's harshness
+    fix: euler_ancestral for 2 steps, then LCM for 4): [(sampler, steps)], first pass first. None if it isn't one.
+    """
+    def sampler_of(node_id):
+        fed = api[node_id]["inputs"].get("sampler")
+        source = api.get(fed[0], {}) if isinstance(fed, list) else {}
+        if isinstance(source.get("inputs", {}).get("sampler_name"), str):
+            return source["inputs"]["sampler_name"].split("/")[-1]
+        return re.sub(r"^Sampler", "", source.get("class_type", "")).lower() or None
+
+    def steps_of(node_id):
+        fed = api[node_id]["inputs"].get("sigmas")
+        source = api.get(fed[0], {}) if isinstance(fed, list) else {}
+        if source.get("class_type") == "SplitSigmas":
+            # A scheduler's sigmas split in two: the steps up to the split, or the rest.
+            schedule = source["inputs"].get("sigmas")
+            total = _constant(api, api.get(schedule[0], {}).get("inputs", {}).get("steps")) if isinstance(schedule, list) else None
+            split = _constant(api, source["inputs"].get("step"))
+            if not isinstance(total, int) or not isinstance(split, int):
+                return None
+            return split if fed[1] == 0 else total - split
+        if source.get("class_type") != "ManualSigmas" or not isinstance(source["inputs"].get("sigmas"), str):
+            return None
+        return len([part for part in source["inputs"]["sigmas"].split(",") if part.strip()]) - 1
+
+    used = _samplers(api)
+    current, seen = main, {main}
+    # Back to the first pass, whichever the main one is.
+    while True:
+        latent = api[current]["inputs"].get("latent_image")
+        before = latent[0] if isinstance(latent, list) and latent[0] in used else None
+        if not before or before in seen:
+            break
+        current = before
+        seen.add(current)
+    passes = []
+    while current:
+        steps, name = steps_of(current), sampler_of(current)
+        if not steps or not name:
+            return None
+        passes.append((name, steps))
+        if len(passes) > len(used):
+            return None
+        current = next((node_id for node_id in used if api[node_id]["inputs"].get("latent_image") == [current, 0]), None)
+    return passes if len(passes) > 1 else None
+
+
 def sampling_in(api):
     """
     The sampler and steps a workflow in API format samples with, as "euler, 6 steps". None if neither can be told.
@@ -1930,6 +2167,9 @@ def sampling_in(api):
     main = _main_sampler(api) if api else None
     if not main:
         return None
+    passes = _sigma_passes(api, main)
+    if passes:
+        return f"{' + '.join(dict.fromkeys(name for name, _ in passes))}, {sum(steps for _, steps in passes)} steps"
     inputs = api[main]["inputs"]
     fed = inputs.get("sampler")
     sampler = api.get(fed[0], {}).get("inputs", {}).get("sampler_name") if isinstance(fed, list) else inputs.get("sampler_name")

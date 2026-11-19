@@ -156,15 +156,18 @@ def _create_rules(model=None, words=WORDS):
     return f"""
     An AI image model ({models.label(model) if model else "an image model"}) will make one image per prompt. It sees
     only that prompt, and knows nothing about the others, so each has to say everything about how its image looks.
-    Everyone in an image is an adult, and looks it.
+    Anyone in an image is an adult, and looks it.
 
     Each prompt describes one finished image, as fully as if it were the only prompt you were writing: writing many
     is no reason to make any of them shorter. Name the medium early: a photograph, a painting, an illustration, a
-    render. If the brief names one, use that. Then cover, concretely:
-    - Each person: their age and ethnicity first, then body and proportions, face, skin texture, expression and
-      where they look, hair and its colour, jewellery and accessories, and clothing with its materials and fit.
-    - The pose: posture, what the hands do, and how people in the image touch and relate to each other.
-    - The framing and camera: close-up, medium or full body, the camera angle, and where the subject sits in the frame.
+    render. If the brief names one, use that. Put in only the people, animals and characters the brief asks for or
+    clearly implies: a landscape, a sky, an object or a place stays without them, however the images vary. Then
+    cover, concretely:
+    - The subject: what the image is of, with its shapes, colours, materials and scale.
+    - Only if there are people: each one's age and ethnicity first, then body and proportions, face, skin texture,
+      expression and where they look, hair and its colour, jewellery and accessories, and clothing with its
+      materials and fit; their pose, what their hands do, and how they touch and relate to each other.
+    - The framing and camera: how close or wide the shot is, the camera angle, and where the subject sits in the frame.
     - The setting: indoors or out, the background with its colours, objects and textures, and the depth of field.
     - The light: its direction, softness and contrast, and the time of day or the lamps it comes from.
     - The look: the style, the lens (wide, portrait compression, bokeh), sharpness and grain, the dominant colours and
@@ -178,6 +181,20 @@ def _create_rules(model=None, words=WORDS):
     - One dense paragraph of plain prose, {_word_range(words)}. No lists, no labels, no markdown."""
 
 
+def _look_rule(images):
+    """
+    A picture shown to the LLM alone, to write more like it: the image model never gets it, so each prompt has to say
+    in words everything about it that should carry over.
+    """
+    which = "The last attached picture" if images else "The attached picture"
+    return f"""
+
+    {which} is for you alone: the image model never sees it. The images are to be more like it. Look at it closely
+    and carry over what the brief doesn't change: its subject, the people with their looks, the setting, the medium,
+    the light and the colours, writing each into every prompt as fully as if the picture weren't there, and varying
+    the rest as above."""
+
+
 TRANSPARENT_RULE = """
 
     The images are made with a transparent background, to be cut out and placed on others: describe only the subject,
@@ -185,11 +202,11 @@ TRANSPARENT_RULE = """
 
 
 def _instructions(brief, count, images, model=None, compose=False, transparent=False, variety=variety_rules.DEFAULT,
-                  vary=(), keep=(), words=WORDS):
+                  vary=(), keep=(), words=WORDS, seen=0):
     """
     How to write the prompts, for editing what's attached, making a new picture from it, or making one from nothing.
     variety, vary and keep: how different the {count} are, and what changes or stays (core.variety). words: how long
-    each new or composed picture's prompt is.
+    each new or composed picture's prompt is. seen: pictures after those, shown to the LLM alone (_look_rule).
     """
     versions = "one image" if count == 1 else f"{count} different versions"
     apart = variety_rules.image_rule(count, variety, vary, keep)
@@ -201,11 +218,14 @@ def _instructions(brief, count, images, model=None, compose=False, transparent=F
         rules = _edit_rules(images, model)
     else:
         rules = _create_rules(model, words)
-    return f"""
-    You are writing the prompts for {versions} from this brief, in the words of the person making them: "{brief}"
+    # With a picture to make more like it, there may be no brief at all: the picture says what to make.
+    asked = (f"""from this brief, in the words of the person making them: "{brief}"
 
-    The brief is short on purpose. Invent the detail, in keeping with it and never contradicting it.{apart}
-    {rules}{TRANSPARENT_RULE if transparent else ""}
+    The brief is short on purpose. Invent the detail, in keeping with it and never contradicting it."""
+             if (brief or "").strip() or not seen else """with no brief: the attached picture says what to make.""")
+    return f"""
+    You are writing the prompts for {versions} {asked}{apart}
+    {rules}{_look_rule(images) if seen else ""}{TRANSPARENT_RULE if transparent else ""}
 
     Return a title for the set, 2-5 words, and exactly {count} {"version" if count == 1 else "versions"}. For each:
     - title: 2-5 words saying what sets this one apart.
@@ -240,15 +260,16 @@ def _already_written(written):
 
 
 def write_prompts(image_jpegs, brief, count, llm_name, model=None, compose=False, transparent=False, refiner=None,
-                  variety=variety_rules.DEFAULT, vary=(), keep=(), explicit=False, words=WORDS):
+                  variety=variety_rules.DEFAULT, vary=(), keep=(), explicit=False, words=WORDS, seen=()):
     """
     The set's title and {count} versions, from one request for up to round_size(words): the prompts have to know each other
     to differ, and it spends one of a free model's daily requests rather than {count}. More are written in even rounds
     (30 as 15 and 15), each told what the ones before it wrote and shown one of them; a reply cut off for want of
-    tokens anyway is asked again half as many at a time.
+    tokens anyway is asked again half as many at a time. seen: pictures the LLM is shown to write more like them, which
+    the image model never gets (_look_rule).
     """
     rounds = math.ceil(count / round_size(_words(words, len(image_jpegs), compose, model)))
-    written, title, size, seen = [], None, math.ceil(count / rounds), set()
+    written, title, size, known = [], None, math.ceil(count / rounds), set()
     while len(written) < count:
         want = min(size, count - len(written))
         if written:
@@ -259,15 +280,15 @@ def write_prompts(image_jpegs, brief, count, llm_name, model=None, compose=False
             print(f"   and shown this one to write like:\n{example}")
         try:
             round_title, versions = _write_round(image_jpegs, brief, want, llm_name, model, compose, transparent, refiner,
-                                                 variety, vary, keep, explicit, written, words)
+                                                 variety, vary, keep, explicit, written, words, seen)
         except CutOff:
             if want == 1:
                 raise RuntimeError("The LLM's reply was cut off even for a single prompt.")
             size = (want + 1) // 2
             print(f"   ⚠️ The reply ran out of tokens: writing the prompts {size} at a time instead.")
             continue
-        new = [version for version in versions if version["prompt"] not in seen]
-        seen.update(version["prompt"] for version in new)
+        new = [version for version in versions if version["prompt"] not in known]
+        known.update(version["prompt"] for version in new)
         written += new
         title = title or round_title
         # A round that came back short already asked again (and said so): going on with what there is.
@@ -281,9 +302,10 @@ def write_prompts(image_jpegs, brief, count, llm_name, model=None, compose=False
 
 
 def _write_round(image_jpegs, brief, count, llm_name, model, compose, transparent, refiner, variety, vary, keep, explicit,
-                 written, words=WORDS):
+                 written, words=WORDS, seen=()):
     """{count} versions from one request, asked again if the reply can't be used. Raises CutOff for a reply cut off."""
-    instructions = _instructions(brief, count, len(image_jpegs), model, compose, transparent, variety, vary, keep, words)
+    instructions = _instructions(brief, count, len(image_jpegs), model, compose, transparent, variety, vary, keep, words,
+                                 len(seen))
     if explicit:
         instructions += explicit_rules.paragraph()
     if written:
@@ -296,9 +318,9 @@ def _write_round(image_jpegs, brief, count, llm_name, model, compose, transparen
     for attempt in range(1, PROMPT_ATTEMPTS + 1):
         correction = f"\n\n    Your last reply came back with {problem}. Fix that." if problem else ""
         if llm_name == "local":
-            reply = llm._ask(llm_name, instructions + correction, Versions, schema, image_jpegs, refiner=refiner)
+            reply = llm._ask(llm_name, instructions + correction, Versions, schema, [*image_jpegs, *seen], refiner=refiner)
         else:
-            reply = llm._ask(llm_name, instructions + correction, Versions, schema, image_jpegs)
+            reply = llm._ask(llm_name, instructions + correction, Versions, schema, [*image_jpegs, *seen])
         try:
             versions = Versions.model_validate_json(fibo2_prompt.as_text(reply) if caption_objects else reply)
         except ValidationError as e:
@@ -321,7 +343,7 @@ def _write_round(image_jpegs, brief, count, llm_name, model, compose, transparen
 
 
 def token_estimate(count, images=0, model=None, compose=False, transparent=False, variety=variety_rules.DEFAULT,
-                   vary=(), keep=(), explicit=False, words=WORDS, brief=""):
+                   vary=(), keep=(), explicit=False, words=WORDS, brief="", seen=0):
     """
     What writing {count} prompts should take in tokens, before it starts: each prompt's, all written together, how
     many requests, and the largest request's context (the instructions, images, what the rounds before it wrote,
@@ -330,10 +352,10 @@ def token_estimate(count, images=0, model=None, compose=False, transparent=False
     rounds = math.ceil(count / round_size(_words(words, images, compose, model)))
     size = math.ceil(count / rounds)
     each = prompt_tokens(_words(words, images, compose, model))
-    instructions = _instructions(brief, size, images, model, compose, transparent, variety, vary, keep, words)
+    instructions = _instructions(brief, size, images, model, compose, transparent, variety, vary, keep, words, seen)
     if explicit:
         instructions += explicit_rules.paragraph()
-    asked = len(instructions) // CHARS_PER_TOKEN + images * IMAGE_TOKENS
+    asked = len(instructions) // CHARS_PER_TOKEN + (images + seen) * IMAGE_TOKENS
     # The last round is the largest: it is also told every title before it (about 6 tokens each) and shown one prompt.
     before = count - min(size, count) if rounds > 1 else 0
     handover = before * 6 + each if before else 0

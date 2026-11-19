@@ -244,7 +244,7 @@ function openSideMenu(link) {
   if (link.dataset.page === 'status') {
     // Status, tapped again: what opens over it.
     const finished = $('finishedCount').textContent;
-    menu.innerHTML = [['finished', `Finished${finished ? ` (${finished})` : ''}`], ['log', 'Log'], ['quota', 'Quota']].map(([which, name]) =>
+    menu.innerHTML = [['finished', `Finished${finished ? ` (${finished})` : ''}`], ['log', 'Log'], ['quota', 'Quota'], ['chat', 'Chat']].map(([which, name]) =>
       `<button type="button" role="menuitem" data-panel="${which}">${dot('var(--shared)')}${name}</button>`).join('');
   } else if (link.dataset.page === 'output') {
     const here = pipeline === 'shorts' ? 'shorts' : outputKind;

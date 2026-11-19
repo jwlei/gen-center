@@ -105,9 +105,8 @@ $('imageWords').addEventListener('input', () => syncWords('image', +$('imageCoun
 function syncImageForm() {
   syncGuideLink('image');
   syncImageLlm();
-  // For image to prompt, the image it describes goes right under that choice; otherwise back in Generation.
-  const slot = imageRole() === 'image_to_prompt' ? $('imageToPromptSlot') : $('imageSourcesHome');
-  if ($('imageSources').parentNode !== slot) slot.appendChild($('imageSources'));
+  // Image to prompt's picture has its own line under that choice; the images to edit stay in Generation.
+  syncPromptImage();
   syncImageSources();
   syncImageMode();
   syncImageSources();
@@ -198,6 +197,6 @@ function imageOptionsOnly() {
   const body = new FormData($('formImage'));
   body.append('image_count', chosenSources());
   body.delete('prompt');
-  for (const box of sourceBoxes()) body.delete(box.querySelector('input').name);
+  for (const box of imageSideBoxes()) body.delete(box.querySelector('input').name);
   return body;
 }

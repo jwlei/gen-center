@@ -71,12 +71,18 @@ While enhancing, animated status text replaces the heading and the reset icon st
 For local writers, live output tok/s appears immediately before the remaining-time counter once generation is sampled.
 Enhancing a video brief does not replace planning: in LLM mode the planner still turns that brief into per-clip prompts.
 
-### One story or related scenes
+### One story, related scenes or variations
 
 **One story** asks the planner for a beginning, development and ending, with each clip advancing the action.
 **Related scenes** asks for distinct, self-contained moments sharing the subject and visual identity, without a
 required chronological story. With continuous connections, Related scenes still has to continue physically from
 the previous clip: it cannot jump to a different location without getting there on screen.
+
+**Variations** isn't a film: it makes the same clip several times over, each saved as a video of its own
+(`<title>_<workflow>_v1.mp4`, `_v2`...), not stitched. Film length becomes a **Variations** count, the clip length is
+one fixed length, and each variation starts on your image (or its prompt alone, with none). Only Variations shows
+**Variety** and its chips, for how different they are and what changes or stays; One story and Related scenes say how
+their clips differ themselves, so Variety is never sent to the writer for them (the pipeline refuses it too).
 
 Write the subject, desired actions, look, constraints and any essential ending or dialogue. You can omit
 "plan N clips", clip lengths, general continuity instructions and "do not repeat the same scene": Generation and

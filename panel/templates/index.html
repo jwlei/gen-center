@@ -80,6 +80,9 @@
   .connection-notice[hidden] { display: flex; opacity: 0; transform: translateY(-100%); visibility: hidden; pointer-events: none; transition: opacity .25s ease, transform .25s ease, visibility 0s .25s; }
   .connection-notice > span { min-width: 0; overflow-wrap: anywhere; }
   .connection-notice button { width: auto; flex: none; padding: 4px 8px; margin: 0; font-size: inherit; }
+  /* Retry pressed: it pulses in the notice's yellow while it asks, so it is plain it is trying. */
+  .connection-notice button.retrying, .connection-notice button.retrying:disabled { opacity: 1; color: var(--warn); border-color: var(--warn);
+    animation: busy-pulse .9s ease-in-out infinite; }
   .status { display: flex; align-items: center; gap: 9px; font-size: .9rem; margin-bottom: 12px; }
   .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--muted); flex: none; }
   .dot.on { background: var(--ok); animation: pulse 1.4s infinite; }
@@ -808,12 +811,31 @@
   .prompt-label-row > .prompt-actions { margin-left: auto; }
   .prompt-label-row > .explicit-box { flex: none; margin: 0; }
   .prompt-label-row > .explicit-box[hidden], .prompt-label-row > .explicit-box.hidden { display: none; }
-  .explicit-box .check { position: relative; display: inline-flex; align-items: center; margin: 0; padding: 2px 0; border: 0; background: none;
+  /* I2P, a little left of Explicit, as it looks: pushed right with it, or after Clear and Write when they show. */
+  .prompt-label-row > .i2p-box { flex: none; margin-left: auto; }
+  .prompt-label-row > .prompt-actions:not([hidden]) + .i2p-box { margin-left: 0; }
+  .prompt-label-row > .i2p-box.hidden { display: none; }
+  .prompt-label-row > .i2p-box + .explicit-box { margin-left: 4px; }
+  #imageLookSlot { margin: 0 0 8px; }
+  .explicit-box .check, .i2p-box .check, .prompt-source .check { position: relative; display: inline-flex; align-items: center; margin: 0; padding: 2px 0; border: 0; background: none;
     color: var(--muted); font-size: .7rem; font-weight: 600; text-transform: none; letter-spacing: 0; cursor: pointer; transition: color .2s ease; }
+  /* Brief / Detailed, opened from a preview: left of I2P (right to left: Explicit, I2P, it), in a box of its own as
+     I2P is, its words a <label> as I2P's are (the form's labels sit 2px low: 7px over, 3px under), so it sits on the
+     line as I2P does; its words by the rule above. The one in use in the side's colour. */
+  .prompt-label-row > .prompt-source { flex: none; margin-left: auto; }
+  .prompt-label-row > .prompt-source[hidden] { display: none; }
+  .prompt-source .check { gap: 0; white-space: nowrap; }
+  .prompt-label-row > .prompt-actions:not([hidden]) + .prompt-source { margin-left: 0; }
+  .prompt-label-row > .prompt-actions:not([hidden]) ~ .i2p-box { margin-left: 0; }
+  .prompt-label-row > .prompt-source:not([hidden]) + .i2p-box { margin-left: 6px; }
+  .prompt-label-row > .prompt-source:not([hidden]) + .i2p-box.hidden + .explicit-box { margin-left: 6px; }
+  .prompt-source [data-source] { transition: color .2s ease; }
+  .prompt-source [data-source].on { color: var(--side); }
+  .prompt-source .check:focus-visible { outline: 2px solid var(--side); outline-offset: 2px; border-radius: 4px; }
   /* Just the words: the box is still there for the form, out of sight; a tap on the words ticks it. */
-  .explicit-box .check input[type=checkbox] { position: absolute; width: 1px; height: 1px; margin: 0; opacity: 0; pointer-events: none; }
-  .explicit-box .check:has(input:checked) { color: var(--side); }
-  .explicit-box .check:has(input:focus-visible) { outline: 2px solid var(--side); outline-offset: 2px; border-radius: 4px; }
+  .explicit-box .check input[type=checkbox], .i2p-box .check input[type=checkbox] { position: absolute; width: 1px; height: 1px; margin: 0; opacity: 0; pointer-events: none; }
+  .explicit-box .check:has(input:checked), .i2p-box .check:has(input:checked) { color: var(--side); }
+  .explicit-box .check:has(input:focus-visible), .i2p-box .check:has(input:focus-visible) { outline: 2px solid var(--side); outline-offset: 2px; border-radius: 4px; }
   .switch.segmented { position: relative; display: grid; grid-auto-flow: column; grid-auto-columns: 1fr; gap: 0; width: 100%; margin: 4px 0 10px; --kind: var(--side, var(--shared)); }
   .switch.segmented button { position: relative; z-index: 1; padding: 6px 12px; transition: color .3s ease; }
   .switch.segmented button.active { background: transparent; border-color: transparent; color: var(--kind); }
@@ -1258,6 +1280,110 @@
   .select-menu-group { align-self: end; padding: 0 4px; color: var(--muted); font-size: .66rem; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .prompt-copy[hidden] { display: none; }
   .prompt-editor-foot .panel-close { align-self: auto; }
+  /* The chat: the prompt editor's box filling the screen (what the keyboard leaves of it), the conversation scrolling
+     above where you type. */
+  dialog.chat-dialog { inset: 0; margin: 0; width: 100vw; height: 100dvh; max-width: none; border: 0; border-radius: 0; padding: 0; gap: 0; background: var(--bg); }
+  /* The top and the bottom in the colour of the page's boxes; the conversation between them on the page's own. */
+  .chat-head { flex: none; padding: 10px 12px; background: var(--panel); border-bottom: 1px solid var(--line); }
+  /* Its title (or what it is doing), how fast it writes and how much context it takes: centred on one line, the last
+     two in the same small grey. */
+  .chat-head.prompt-editor-head { align-items: center; }
+  .chat-head .hint, .chat-head .chat-context { font-size: .72rem; line-height: 1.2; opacity: 1; color: var(--muted); }
+  .chat-head .chat-context.tight { color: var(--warn); }
+  .chat-bottom { flex: none; display: flex; flex-direction: column; gap: 8px; padding: 8px 10px 10px; background: var(--panel); border-top: 1px solid var(--line); }
+  /* The conversation: no box around it, it simply fills the screen. */
+  .chat-box { overflow: clip; padding: 0 10px; }
+  .chat-log { flex: 1; min-height: 0; overflow-y: auto; padding: 6px 2px; display: flex; flex-direction: column; gap: 8px; }
+  /* What scrolls past the top or the bottom of the conversation fades out there, as Generate's sections do. */
+  .chat-log { -webkit-mask-image: linear-gradient(to bottom, transparent 0, #000 var(--fade-top, 0px), #000 calc(100% - var(--fade-bottom, 0px)), transparent 100%);
+    mask-image: linear-gradient(to bottom, transparent 0, #000 var(--fade-top, 0px), #000 calc(100% - var(--fade-bottom, 0px)), transparent 100%); }
+  .chat-log.scroll-above { --fade-top: 24px; }
+  .chat-log.scroll-below { --fade-bottom: 28px; }
+  .chat-log:empty::before { content: "Ask anything: the local model below replies."; margin: auto; color: var(--muted); font-size: .85rem; text-align: center; }
+  .chat-msg { max-width: 88%; padding: 8px 11px; border-radius: 12px; overflow-wrap: anywhere; font-size: .95rem; line-height: 1.45; cursor: pointer; }
+  .chat-msg.user { align-self: flex-end; white-space: pre-wrap; background: var(--panel); border: 1px solid var(--accent); border-bottom-right-radius: 4px; }
+  .chat-msg.assistant { align-self: flex-start; background: var(--panel); border: 1px solid var(--line); border-bottom-left-radius: 4px; }
+  .chat-msg.assistant.writing:empty::before { content: "…"; color: var(--muted); }
+  .chat-ended { display: block; margin-top: 4px; color: var(--muted); font-size: .75rem; }
+  /* What the model writes in Markdown, drawn. */
+  .chat-msg > :first-child { margin-top: 0; }
+  .chat-msg > :last-child, .chat-msg > .chat-ended:last-child { margin-bottom: 0; }
+  .chat-msg p { margin: 0 0 .55em; }
+  .chat-msg :is(h1, h2, h3, h4, h5, h6) { margin: .7em 0 .35em; line-height: 1.25; }
+  .chat-msg h1 { font-size: 1.2rem; } .chat-msg h2 { font-size: 1.1rem; } .chat-msg :is(h3, h4, h5, h6) { font-size: 1rem; }
+  .chat-msg :is(ul, ol) { margin: .2em 0 .55em; padding-left: 1.3em; }
+  .chat-msg li > :is(ul, ol) { margin: .15em 0; }
+  .chat-msg code { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: .86em; padding: 1px 4px; border-radius: 4px; background: var(--panel-2); }
+  .chat-msg pre { margin: .3em 0 .6em; padding: 8px 10px; border-radius: 8px; background: var(--panel-2); overflow-x: auto; white-space: pre; }
+  .chat-msg pre code { padding: 0; background: none; font-size: .84rem; }
+  .chat-msg blockquote { margin: .3em 0 .6em; padding-left: 10px; border-left: 3px solid var(--line); color: var(--muted); }
+  .chat-msg hr { border: 0; border-top: 1px solid var(--line); margin: .7em 0; }
+  .chat-msg a { color: var(--accent); }
+  .chat-table { overflow-x: auto; margin: .3em 0 .6em; }
+  .chat-msg table { border-collapse: collapse; font-size: .88rem; }
+  .chat-msg :is(th, td) { border: 1px solid var(--line); padding: 4px 8px; text-align: left; vertical-align: top; }
+  .chat-msg th { background: var(--panel-2); }
+  .chat-compose { flex: none; display: flex; gap: 8px; align-items: center; }
+  .chat-editing { display: flex; align-items: center; gap: 8px; color: var(--accent); font-size: .75rem; }
+  .chat-editing[hidden] { display: none; }
+  .chat-editing span { flex: 1; min-width: 0; }
+  .chat-editing button { flex: none; width: auto; margin: 0; padding: 2px 10px; background: none; border: 1px solid var(--line); border-radius: 999px; color: var(--muted); font-size: .72rem; }
+  .chat-msg-menu button.danger-item { color: var(--warn); }
+  .chat-compose textarea { flex: 1; min-width: 0; margin: 0; resize: none; max-height: 30dvh; padding: 8px 10px; font-size: 1rem; line-height: 1.4; box-sizing: border-box; }
+  /* Send as quiet as Close: a thin outline, muted, only brighter when there is something to send. */
+  .chat-send { flex: none; width: 36px; height: 36px; min-width: 0; margin: 0; padding: 0; display: inline-flex; align-items: center;
+    justify-content: center; background: transparent; border: 1px solid var(--line); border-radius: 999px; color: var(--muted); }
+  .chat-send svg { width: 18px; height: 18px; }
+  .chat-compose-side { flex: none; display: flex; flex-direction: column; gap: 6px; }
+  /* The images going with the next message; and those a message brought, above its text. */
+  .chat-attached { display: flex; flex-wrap: wrap; gap: 6px; }
+  .chat-attached[hidden] { display: none; }
+  .chat-thumb { position: relative; width: 56px; height: 56px; }
+  .chat-thumb img { width: 100%; height: 100%; object-fit: cover; border-radius: 8px; border: 1px solid var(--line); }
+  .chat-thumb button { position: absolute; top: -6px; right: -6px; width: 20px; height: 20px; min-width: 0; margin: 0; padding: 0; border-radius: 999px;
+    border: 1px solid var(--line); background: var(--panel); color: var(--muted); font-size: .7rem; line-height: 1; }
+  .chat-imgs { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 6px; }
+  .chat-imgs:last-child { margin-bottom: 0; }
+  .chat-imgs img { display: block; max-width: min(200px, 100%); max-height: 200px; border-radius: 8px; }
+  .chat-send:not(:disabled) { color: var(--text); }
+  .chat-send:disabled { opacity: .5; }
+  /* Something written (or an image) to send: outlined in the theme colour. */
+  .chat-send.ready { border-color: var(--accent); }
+  .chat-foot { flex: none; display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; }
+  #chatNew { justify-self: end; width: 26px; height: 26px; background: transparent; border: 0; padding: 3px; }
+  #chatNew svg { width: 18px; height: 18px; }
+  #chatClear { justify-self: start; width: 26px; height: 26px; background: transparent; border: 0; padding: 3px; }
+  #chatClear svg { width: 18px; height: 18px; }
+  .chat-model-wrap { position: relative; min-width: 0; }
+  .chat-model { display: block; width: auto; max-width: 70vw; margin: 0; padding: 3px 6px; background: none; border: 0; color: var(--muted);
+    font-size: .75rem; font-weight: 400; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .chat-model::after { content: " \25B4"; }
+  .chat-model:disabled { opacity: .5; }
+  /* The models grow straight up out of it, centred on it. */
+  .chat-model-menu { position: fixed; left: 8px; right: 8px; bottom: auto; width: auto; max-height: 50dvh; margin: 0; z-index: 5; transform-origin: bottom center; }
+  .chat-model-menu button.selected { color: var(--accent); border-color: var(--accent); }
+  .chat-msg-menu { position: fixed; bottom: auto; width: auto; min-width: 150px; z-index: 5; transform-origin: top left; }
+  .chat-pickers { display: flex; align-items: center; justify-content: center; gap: 2px; min-width: 0; }
+  .chat-pickers .chat-model { max-width: 45vw; }
+  /* The saved chats, newest first: each its title and when, and its bin. */
+  .chat-sessions-menu { grid-auto-rows: auto; max-height: 50dvh; }
+  .chat-sessions-menu:empty::before { content: "No saved chats yet."; color: var(--muted); font-size: .75rem; padding: 4px; }
+  .chat-session { display: flex; align-items: stretch; gap: 4px; min-width: 0; }
+  .chat-sessions-menu .chat-session-open { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; height: auto; white-space: normal; }
+  .chat-session.current .chat-session-open { color: var(--accent); border-color: var(--accent); }
+  .chat-session-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .chat-session-meta { color: var(--muted); font-size: .66rem; }
+  .chat-sessions-menu .chat-session-delete { flex: none; width: 32px; padding: 4px; text-align: center; color: var(--muted); }
+  /* How much of the model's context the chat takes: quiet, at the top right; tapped, its parts. */
+  .chat-context-wrap { position: relative; flex: none; align-self: center; }
+  .chat-context { width: auto; margin: 0; padding: 0 0 0 4px; background: none; border: 0; color: var(--muted); font-size: .72rem; font-weight: 400; font-variant-numeric: tabular-nums; }
+  .chat-context.tight { color: var(--warn); }
+  .chat-context-info { position: fixed; left: 8px; right: 8px; bottom: auto; z-index: 5; transform-origin: top center; width: auto;
+    display: grid; grid-template-columns: 1fr auto; gap: 3px 14px; font-size: .78rem; }
+  .chat-context-info span:nth-child(even) { text-align: right; font-variant-numeric: tabular-nums; }
+  .chat-context-info .chat-context-bar { grid-column: 1 / -1; display: flex; height: 6px; border-radius: 3px; overflow: hidden; background: var(--panel-2); margin-bottom: 4px; }
+  .chat-context-bar i { display: block; height: 100%; }
+  .chat-context-info .chat-context-note { grid-column: 1 / -1; text-align: left; color: var(--muted); font-size: .72rem; }
   /* While a writer runs: a bar along the inside top of the box, and the write button pulsing. */
   @keyframes prompt-writing-icon { 50% { opacity: .35; transform: scale(.82) rotate(-14deg); } }
   .prompt-write.working, #promptEditorEnhance.working { color: var(--accent); opacity: 1; }
@@ -1674,6 +1800,9 @@
   .option-reveal { display: grid; grid-template-rows: 0fr; opacity: 0; transition: grid-template-rows .3s cubic-bezier(.2, .8, .2, 1), opacity .25s ease; }
   .option-reveal.open { grid-template-rows: 1fr; opacity: 1; }
   .option-reveal-in { min-height: 0; min-width: 0; overflow: clip; }
+  /* A switch's settings in rows (Reduce harshness): under it, in from its tickbox, each name above the next. */
+  .pipeline-form .option-rows .option-reveal-in { padding-left: 24px; }
+  .pipeline-form .option-rows .option-row > input[type=checkbox] { width: 16px; height: 16px; margin: 0; }
   @media (prefers-reduced-motion: reduce) { .option-reveal { transition: none; } }
   .options-lora { min-width: 0; margin: 4px 0 10px; }
   .options-lora > .options-subtitle { margin-bottom: 0; }
@@ -1839,6 +1968,20 @@
   .dashboard .card { scroll-margin-top: 8px; }
   /* Brought to the top when the preview closes (revealViewedBatch): a little room above it. */
   .output-batch { scroll-margin-top: 8px; }
+  /* A little room inside each batch on the sides and between them, so the highlight below never hugs the text. */
+  #imageSets > .output-batch { padding: 6px 8px; }
+  #imageSets > .output-batch + .output-batch { margin-top: 6px; }
+  /* The batch the preview was on, lit when it closes and fading out over 4 seconds (glowViewedBatch). */
+  /* Its tint is one animated amount (--glow), so the pills' "+N", which covers the pills under it with a solid
+     background, fades in step with the batch around it. */
+  @property --glow { syntax: '<percentage>'; inherits: true; initial-value: 0%; }
+  .output-batch.viewed-glow { border-radius: 8px; animation: viewed-glow 4s ease-out forwards;
+    background: color-mix(in srgb, var(--accent) var(--glow), transparent); }
+  .output-batch.viewed-glow .pills.more:not(.open)::after { background: color-mix(in srgb, var(--accent) var(--glow), var(--panel)); }
+  @keyframes viewed-glow {
+    from { --glow: 10%; box-shadow: 0 0 0 1px var(--accent), 0 0 12px color-mix(in srgb, var(--accent) 35%, transparent); }
+    to { --glow: 0%; box-shadow: 0 0 0 1px transparent, 0 0 12px transparent; }
+  }
   .options-col { min-width: 0; }
   .form-actions { margin-top: 16px; }
   .form-actions[hidden] { display: none; }
@@ -2355,6 +2498,7 @@
     <button type="button" class="status-toggle panel-icon" id="logToggle" aria-haspopup="dialog" aria-label="Log" title="Log"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 4h14v16H5zM8 8h8M8 12h8M8 16h5"/></svg><span class="icon-label">Log</span></button>
     <button type="button" class="status-toggle panel-icon" id="openTemperatures" aria-haspopup="dialog" aria-label="Temperatures" title="GPU and CPU temperatures over time: lowest, average and highest"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 14.8V5a2 2 0 0 0-4 0v9.8a4 4 0 1 0 4 0z"/><path d="M12 10v7"/></svg><span class="icon-label">Temps</span></button>
     <button type="button" class="status-toggle panel-icon empty" id="finishedToggle" aria-haspopup="dialog" aria-label="Finished" title="Finished" disabled><span id="finishedCount" aria-hidden="true"></span><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m5 12 5 5 9-10"/></svg><span class="icon-label" id="finishedLabel">Finished</span></button>
+    <button type="button" class="status-toggle panel-icon" id="chatToggle" aria-haspopup="dialog" aria-label="Chat" title="Chat with a local model (not while a generation runs)"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 5h16v11H10l-5 4v-4H4z"/><path d="M8 9h8M8 12h5"/></svg><span class="icon-label">Chat</span></button>
     <button type="button" class="status-toggle panel-icon" id="quotaToggle" aria-haspopup="dialog" aria-label="Quota" title="Quota"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 20h16M6 17v-5M12 17V7M18 17V4"/></svg><span class="icon-label">Quota</span></button>
   </div>
   <details class="log-box" id="logBox">
@@ -2616,6 +2760,15 @@
       <button type="button" id="durationUp" aria-label="Increase film length by 5 seconds">+</button>
     </div>
     </div>
+    <!-- Variations, in place of Film length: how many times the clip is made, each saved as a video of its own. -->
+    <div class="stepper-line" id="variationsBox" hidden style="margin-top:12px">
+      <label for="videoVariations">Variations</label>
+      <div class="count-stepper">
+        <button type="button" id="videoVariationsDown" aria-label="Fewer variations">−</button>
+        <input id="videoVariations" name="variations" type="number" min="1" max="{{ most_variations }}" value="4" inputmode="numeric" disabled>
+        <button type="button" id="videoVariationsUp" aria-label="More variations">+</button>
+      </div>
+    </div>
     <div class="range-head" style="margin-top:12px"><label>Clip length</label><span class="clip-length-actions"><output id="videoClipText"></output><button type="button" class="clip-fixed" id="videoClipFixedButton" aria-label="Fixed clip length" aria-pressed="false" title="Fixed clip length"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="10" width="16" height="11" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3M12 14v3"/></svg></button></span></div>
     <div class="range" id="videoClipRange">
       <div class="fill"></div>
@@ -2628,10 +2781,11 @@
 
     <div id="connectionBox">
       {{ field_heading('clipRelationship', 'How clips relate', 'clipRelationshipHelp') }}
-      <div class="field-help" id="clipRelationshipHelp" hidden><div class="hint">For LLM-planned clips. Exact prompt repeats your wording; OpenH3-IR may still refine each clip. Continuous takes still continue physically.</div></div>
+      <div class="field-help" id="clipRelationshipHelp" hidden><div class="hint">For LLM-planned clips. Exact prompt repeats your wording; OpenH3-IR may still refine each clip. Continuous takes still continue physically. Variations aren't a film: each is the clip made again, saved as its own video, and only they use Variety.</div></div>
       <select id="clipRelationship" name="clip_relationship">
         <option value="progressive">One story: each clip moves it forward</option>
         <option value="related">Related scenes: distinct moments in the same world</option>
+        <option value="variations">Variations: the same clip made again, each saved as its own video</option>
       </select>
       <div class="field-heading"><label for="start">How clips connect</label><button type="button" class="hint-toggle" id="connectGuideLink" data-guide="clip_connection" aria-haspopup="dialog" aria-controls="modelGuide" aria-label="About how clips connect" title="About how clips connect"><span class="res-info-mark" aria-hidden="true">i</span></button></div>
       <select id="start" name="start">
@@ -2643,6 +2797,9 @@
       </select>
       <select id="startUnavailable" aria-label="How clips connect" disabled hidden>
         <option>Separate moments: clips are generated independently, with a fade between</option>
+      </select>
+      <select id="startVariations" aria-label="How clips connect" disabled hidden>
+        <option>Separately: each starts on your image, and plays on its own</option>
       </select>
       <div id="multishotOptions" hidden>
         <label class="check"><input type="checkbox" name="h3_first_frame" id="h3FirstFrame"><span>Use image 1 as the first frame as well as a subject reference</span></label>
@@ -2885,11 +3042,12 @@
       </div>
       <div id="imageToPromptSlot"></div>
     </div>
-    <div class="prompt-label-row"><span class="field-heading"><label for="imagePrompt" id="imagePromptLabel">Prompt</label>{{ hint_button('imagePromptHelp', 'prompt') }}</span><span class="prompt-actions" hidden><button type="button" id="clearImagePrompt" aria-label="Clear image prompt">Clear</button><button type="button" class="prompt-write" id="writeImagePrompt" aria-label="Write image prompt" title="Write prompt" disabled></button></span>{{ explicit_box('image') }}</div>
+    <div class="prompt-label-row"><span class="field-heading"><label for="imagePrompt" id="imagePromptLabel">Prompt</label>{{ hint_button('imagePromptHelp', 'prompt') }}</span><span class="prompt-actions" hidden><button type="button" id="clearImagePrompt" aria-label="Clear image prompt">Clear</button><button type="button" class="prompt-write" id="writeImagePrompt" aria-label="Write image prompt" title="Write prompt" disabled></button></span><span class="prompt-source" id="imagePromptSource" hidden><label class="check" role="button" tabindex="0" title="The set's brief or this picture's own detailed prompt in the box"><span data-source="brief">Brief</span>&nbsp;/&nbsp;<span data-source="detailed">Detailed</span></label></span><span class="i2p-box" id="imageI2pBox"><label class="check" title="Show the LLM a picture to write more like it: the workflow never gets it"><input type="checkbox" id="imageI2p" name="i2p"><span>I2P</span></label></span>{{ explicit_box('image') }}</div>
     <div class="field-help" id="imagePromptHelp" hidden>
       <div class="hint" id="imagePromptHint"></div>
       <div class="hint" id="imageHowDirect" hidden>Your prompt goes in as it is, so each image differs only by its seed.</div>
     </div>
+    <div id="imageLookSlot" hidden></div>
     <div class="prompt-writing" id="imagePromptWriting"><textarea id="imagePrompt" name="prompt" data-prompt inputmode="none"></textarea><div class="prompt-progress-track"><div class="prompt-progress" id="imagePromptProgress" hidden></div></div><div class="prompt-eta" id="imagePromptEta" role="status" hidden></div></div>
     <div class="err" id="imagePromptWriteError" role="alert" hidden></div>
     <button type="button" class="generated-prompts" data-generated-prompts hidden></button>
@@ -3223,6 +3381,47 @@
     <button type="button" class="panel-close" id="promptEditorCancel">Cancel</button>
   </div>
 </dialog>
+<!-- Chat with a local model: the prompt editor's box, filling the screen (panel/chat.py). -->
+<dialog id="chatDialog" class="panel-dialog prompt-editor chat-dialog" aria-labelledby="chatTitle">
+  <div class="prompt-editor-head chat-head"><div class="prompt-editor-heading"><div class="panel-dialog-title" id="chatTitle">Chat</div><span class="prompt-editor-thinking" id="chatThinking" aria-live="polite" hidden><span class="prompt-thinking-line" id="chatThinkingPrevious" aria-hidden="true"></span><span class="prompt-thinking-line" id="chatThinkingCurrent"></span></span></div><span class="hint" id="chatNote" aria-live="polite"></span><div class="chat-context-wrap"><button type="button" class="chat-context" id="chatContext" aria-expanded="false" aria-controls="chatContextInfo" title="How much of the model's context this chat takes: tap for the parts"></button><div class="paint-pop chat-context-info" id="chatContextInfo" role="status" hidden></div></div></div>
+  <div class="prompt-editor-box chat-box">
+    <div class="chat-log" id="chatLog" role="log" tabindex="0"></div>
+    <div class="prompt-progress-track"><div class="prompt-progress" id="chatProgress" hidden></div></div>
+  </div>
+  <!-- The bottom, in the colour of the page's boxes: Clear, Sessions and the model; then where you type; then Close. -->
+  <div class="chat-bottom">
+    <!-- Clear on the left; the saved chats and the model replying in the middle, each list growing up out of it; a new chat on the right. -->
+    <div class="chat-foot">
+      <button type="button" class="prompt-copy prompt-clear icon-btn" id="chatClear" aria-label="Clear chat" title="Clear this chat: its messages and context go; the other chats stay under Sessions (tap twice)"></button>
+      <div class="chat-pickers">
+        <div class="chat-model-wrap">
+          <div class="paint-pop prompt-writer-menu chat-model-menu chat-sessions-menu" id="chatSessionsMenu" role="menu" aria-label="Saved chats" hidden></div>
+          <button type="button" class="chat-model chat-sessions" id="chatSessions" aria-haspopup="menu" aria-expanded="false" title="Saved chats: open one to carry on">Sessions</button>
+        </div>
+        <div class="chat-model-wrap">
+          <div class="paint-pop prompt-writer-menu chat-model-menu" id="chatModelMenu" role="menu" aria-label="Model" hidden></div>
+          <button type="button" class="chat-model" id="chatModel" aria-haspopup="menu" aria-expanded="false" title="The local model that replies: tap to change"></button>
+        </div>
+      </div>
+      <button type="button" class="prompt-copy icon-btn" id="chatNew" aria-label="New chat" title="New chat: this one stays under Sessions"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 5h16v11H10l-5 4v-4H4z"/><path d="M12 7.5v5M9.5 10h5"/></svg></button>
+    </div>
+    <!-- Editing one of your messages: sending replaces it, and what came after it. -->
+    <div class="chat-editing" id="chatEditing" hidden><span>Editing your message: sending replaces it and the replies after it.</span><button type="button" id="chatEditCancel">Cancel</button></div>
+    <!-- The images going with the next message, each with an x to take it off. -->
+    <div class="chat-attached" id="chatAttached" hidden></div>
+    <div class="chat-compose">
+      <textarea id="chatInput" rows="2" maxlength="16000" placeholder="Message" aria-label="Message"></textarea>
+      <div class="chat-compose-side">
+        <button type="button" class="chat-send" id="chatAttach" aria-label="Add an image" title="Add an image for the model to look at (models marked -v see images)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg></button>
+        <button type="button" class="chat-send" id="chatSend" aria-label="Send" title="Send"></button>
+      </div>
+      <input type="file" id="chatFile" accept="image/*" multiple hidden>
+    </div>
+    <button type="button" class="panel-close" id="chatClose">Close</button>
+  </div>
+  <!-- A message tapped: what can be done with it, where it was tapped. -->
+  <div class="paint-pop prompt-writer-menu chat-msg-menu" id="chatMsgMenu" role="menu" hidden></div>
+</dialog>
 <dialog id="paintPrompts" class="panel-dialog" aria-labelledby="paintPromptsTitle">
   <div class="panel-dialog-title" id="paintPromptsTitle">Colour prompts</div>
   <div class="paint-error" id="paintPromptsError" role="alert" hidden></div>
@@ -3238,7 +3437,7 @@
     <div class="viewer-meta"><button type="button" id="viewerMeta" aria-expanded="false" aria-controls="viewerMetaDetails"></button><div class="viewer-meta-details" id="viewerMetaDetails" hidden></div></div>
     <div class="viewer-tools" id="viewerTools">
       <div class="viewer-tools-left">
-      <button type="button" class="icon-btn" id="viewerVariations" aria-label="More like this" title="More like this one: its prompt and settings in Generate, on new seeds"></button>
+      <button type="button" class="icon-btn" id="viewerVariations" aria-label="Make it again" title="Make it again: the exact prompt and settings it was made with, in Generate (its seed too, if that was fixed)"></button>
       <button type="button" class="icon-btn" id="viewerPrompts" aria-label="Detailed prompt" title="Detailed prompt, with your own a tap away"></button>
       <button type="button" class="icon-btn" id="viewerClips" aria-label="Clips and prompt history" title="All clips in this video, with their prompt history" hidden></button>
       <button type="button" class="icon-btn" id="viewerUpscale" aria-label="Upscale" title="Make this one bigger, as a new image in its set"></button>
@@ -3412,6 +3611,7 @@
 <script defer src="{{ url_for('static', filename='generation-actions.js') }}"></script>
 <script defer src="{{ url_for('static', filename='navigation.js') }}"></script>
 <script defer src="{{ url_for('static', filename='prompt-editor.js') }}"></script>
+<script defer src="{{ url_for('static', filename='chat.js') }}"></script>
 <script defer src="{{ url_for('static', filename='accordions.js') }}"></script>
 <script defer src="{{ url_for('static', filename='startup.js') }}"></script>
 {% endblock %}

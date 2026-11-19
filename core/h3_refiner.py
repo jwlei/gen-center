@@ -357,7 +357,35 @@ class Refiner:
             speed = f"{rate:.1f} tok/s | " if isinstance(rate, (int, float)) else ""
             print(f"Local LLM complete: {speed}{count} total tok", flush=True)
 
-    def write_prompt(self, text, pipeline):
+    def _streamed(self, payload, on_text):
+        """
+        The completion streamed, each piece of its answer handed to on_text as it comes (not its reasoning), and put
+        back together as the whole reply would have been, for the same checks.
+        """
+        content, reasoning, finish, last = [], [], None, {}
+        with requests.post(f"{self.url}/chat/completions", json={**payload, "stream": True},
+                           stream=True, timeout=(10, 900)) as response:
+            response.raise_for_status()
+            for line in response.iter_lines(decode_unicode=True):
+                if not line or not line.startswith("data:"):
+                    continue
+                data = line[5:].strip()
+                if data == "[DONE]":
+                    break
+                last = json.loads(data)
+                choice = (last.get("choices") or [{}])[0]
+                delta = choice.get("delta") or {}
+                if delta.get("reasoning_content"):
+                    reasoning.append(delta["reasoning_content"])
+                if delta.get("content"):
+                    content.append(delta["content"])
+                    on_text(delta["content"])
+                finish = choice.get("finish_reason") or finish
+        return {"usage": last.get("usage") or {}, "timings": last.get("timings"),
+                "choices": [{"finish_reason": finish, "message": {"content": "".join(content), "reasoning_content": "".join(reasoning)}}]}
+
+    def write_prompt(self, text, pipeline, on_text=None):
+        """The prompt written from text. on_text: given, it is handed each piece of the prompt as it is written."""
         instruction = prompt_writer_instructions.INSTRUCTIONS[pipeline]
         try:
             if hasattr(self, "_token_stop"):
@@ -365,14 +393,18 @@ class Refiner:
                                   input_sha256=hashlib.sha256((instruction + text).encode()).hexdigest(),
                                   max_tokens=4096 if panel_settings.model_family(self.model_id) == "qwen3-14b" else 2048,
                                   enable_thinking=panel_settings.model_family(self.model_id) == "qwen3-14b", temperature=0.7)
-            response = requests.post(f"{self.url}/chat/completions", json={
+            payload = {
                 "model": "h3-refiner", "messages": [{"role": "system", "content": instruction},
                                                       {"role": "user", "content": text}],
                 "max_tokens": 4096 if panel_settings.model_family(self.model_id) == "qwen3-14b" else 2048, "temperature": 0.7,
                 "chat_template_kwargs": {"enable_thinking": panel_settings.model_family(self.model_id) == "qwen3-14b"},
-            }, timeout=900)
-            response.raise_for_status()
-            body = response.json()
+            }
+            if on_text is None:
+                response = requests.post(f"{self.url}/chat/completions", json=payload, timeout=900)
+                response.raise_for_status()
+                body = response.json()
+            else:
+                body = self._streamed(payload, on_text)
             self._completion_tokens(body)
             choice = body["choices"][0]
             result = choice["message"]["content"]
@@ -389,6 +421,53 @@ class Refiner:
             return video_prompt_format(result) if pipeline == "video" else result.strip()
         except (requests.RequestException, ValueError, KeyError, IndexError, TypeError) as e:
             raise RuntimeError(f"Could not write the prompt: {e}") from e
+
+    def chat(self, messages, max_tokens):
+        """
+        A chat reply, as it is written: ("text", piece) for each piece, with ("speed", tokens a second) as the server
+        times its writing (not its loading, nor its reading the prompt); then ("usage", {"prompt": n, "completion": n})
+        when the server counted the tokens it read and wrote, then ("finish", why it ended: "stop", or "length" when it
+        ran out of tokens). messages: the conversation as the model takes it, system first.
+        """
+        try:
+            if hasattr(self, "_token_stop"):
+                self._token_event("request", kind="chat", messages=len(messages), max_tokens=max_tokens, temperature=0.8)
+            with requests.post(f"{self.url}/chat/completions", json={
+                "model": "h3-refiner", "messages": messages, "max_tokens": max_tokens, "temperature": 0.8, "stream": True,
+                "stream_options": {"include_usage": True},
+                # Its own timing with every piece: the speed shown as soon as it writes, not polled every 5 s.
+                "timings_per_token": True,
+                # Its answer, not its reasoning first: a chat reply starts at once.
+                "chat_template_kwargs": {"enable_thinking": False},
+            }, stream=True, timeout=(10, 900)) as response:
+                response.raise_for_status()
+                finish, usage, timings = None, None, None
+                for line in response.iter_lines(decode_unicode=True):
+                    if not line or not line.startswith("data:"):
+                        continue
+                    data = line[5:].strip()
+                    if data == "[DONE]":
+                        break
+                    chunk = json.loads(data)
+                    usage, timings = chunk.get("usage") or usage, chunk.get("timings") or timings
+                    choice = (chunk.get("choices") or [{}])[0]
+                    piece = (choice.get("delta") or {}).get("content")
+                    if piece:
+                        yield "text", piece
+                    speed = (chunk.get("timings") or {}).get("predicted_per_second")
+                    if piece and isinstance(speed, (int, float)) and speed > 0:
+                        yield "speed", speed
+                    finish = choice.get("finish_reason") or finish
+                self.tokens = None
+                # The whole of what it read (llama.cpp's timings count apart what it had cached) and what it wrote.
+                if usage and usage.get("prompt_tokens") is not None:
+                    yield "usage", {"prompt": usage["prompt_tokens"], "completion": usage.get("completion_tokens") or 0}
+                elif timings and timings.get("prompt_n") is not None:
+                    yield "usage", {"prompt": timings["prompt_n"] + (timings.get("cache_n") or 0),
+                                    "completion": timings.get("predicted_n") or 0}
+                yield "finish", finish or "stop"
+        except (requests.RequestException, ValueError, KeyError, IndexError, TypeError, AttributeError) as e:
+            raise RuntimeError(f"Could not get a reply: {e}") from e
 
     def plan(self, prompt, schema, images=()):
         if panel_settings.model_family(self.model_id) == "qwen3-14b" and images:

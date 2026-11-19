@@ -1,7 +1,9 @@
 // --- The same again: a set's settings back in Generate, its images too, to change before pressing it ---
+// Alone (a set's sliders): the settings the set was made with, its seed fixed only if it was.
 // With position: more like that one image: its own prompt, word for word, four times on new seeds.
-// With from: the generation that one image came from (More like this in the viewer): its brief, prompt writer, Variety
-// and chips as it was queued, its seed a tap away.
+// With from: exactly what made that one image (the sliders in the viewer), to make it again: its own settings, its
+// prompt word for word as the model got it, one image, and its seed only if that was fixed (a random one stays a tap
+// away, under Same seed).
 async function sameAgain(id, position = null, exact = null, from = null) {
   const epoch = workspaceEpoch;
   let data;
@@ -11,16 +13,26 @@ async function sameAgain(id, position = null, exact = null, from = null) {
   const shot = position && data.shots[position - 1], picked = shot || (from && data.shots[from - 1]);
   // One image's own setup where it kept one; else the set's.
   const s = { ...((picked && picked.settings) || data.settings) };
+  // The set's brief, for Brief beside I2P.
+  const brief = s.prompt || '';
   if (shot) Object.assign(s, { prompt: shot.prompt, direct: true, count: VARIATIONS });
+  if (!shot && picked && !exact) exact = recreated(picked);
   // Created again from a set's prompts: that one image, its prompt word for word, on its own seed.
   if (exact) Object.assign(s, { prompt: exact.prompt, direct: true, count: exact.count || 1 });
   reopening('image');
+  setPromptSources(null);
   if (pipeline !== 'image') setPipeline('image');
   await loadImageWorkflows();
   if (epoch !== workspaceEpoch) return false;
   $('imageWorkflow').value = [...$('imageWorkflow').options].some(o => o.value === s.workflow && !o.disabled) ? s.workflow : '';
   syncImageForm();
   applySavedForm($('formImage'), s.form);
+  // One picture from a test (the preview's sliders): what made it alone, its own LoRA strength, file or workflow, so
+  // none of the test's ticks, which would run the test again over it. A test batch's own sliders keep them.
+  const ticks = from && !shot ? [...$('imageComparisons').querySelectorAll('input[type=checkbox]')] : [];
+  // Its seed too, fixed by the test so its images compare, not by you: random again unless the form had one of yours.
+  const testSeed = ticks.some(box => box.checked) && !(s.form && s.form.seed);
+  for (const box of ticks) box.checked = false;
   syncImageForm();
   $('imagePromptMode').value = s.direct ? 'direct' : 'llm';
   $('imagePrompt').value = s.prompt || '';
@@ -30,16 +42,19 @@ async function sameAgain(id, position = null, exact = null, from = null) {
   $('imageSize').value = s.size;
   // Its images, as files in the boxes again, so they go up with the rest.
   sourceBoxes().forEach((box, i) => clearSource(box, i === 0));
+  clearSource(promptImageBox(), false);
+  // Image to prompt's picture was the last, and goes back on its own line.
+  const described = s.llm === 'image_to_prompt' ? s.inputs : 0;
   for (let number = 1; number <= s.inputs; number++) {
     try {
       const blob = await (await fetch(`/image-runs/${encodeURIComponent(id)}/inputs/${number}`)).blob();
       if (epoch !== workspaceEpoch) return false;
       syncImageSources();
-      const box = sourceBoxes()[number - 1], files = new DataTransfer();
+      const box = number === described ? promptImageBox() : sourceBoxes()[number - 1], files = new DataTransfer();
       if (!box) break;
       files.items.add(new File([blob], `image_${number}.png`, { type: 'image/png' }));
       box.querySelector('input').files = files.files;
-      showSource(box, number === 1);
+      showSource(box, box === sourceBoxes()[0]);
     } catch (e) { if (epoch !== workspaceEpoch) return false; break; }
   }
   syncImageForm();
@@ -50,10 +65,14 @@ async function sameAgain(id, position = null, exact = null, from = null) {
   syncImageForm();
   applyOptions($('imageOptionsBox'), imageTakes().options || [], s.options);
   syncImageForm();
-  if (exact) $('imageSeed').value = exact.seed || '';
+  // A fixed seed comes back fixed; a random one stays random (an empty box). A set from before the form was kept: random.
+  $('imageSeed').value = exact ? (testSeed ? '' : exact.seed ?? '') : (s.form && s.form.seed) || '';
   // From one picture: its seed, a tap away, to make it again with other settings.
   offerSameSeed('imageSeed', picked ? picked.used_seed ?? picked.seed : null);
   saveImageForm();
+  // From a preview, where the set's brief isn't the picture's own prompt: either a tap away, Detailed first.
+  if (from && !shot && exact && brief.trim() && brief.trim() !== (s.prompt || '').trim())
+    setPromptSources({ current: 'detailed', brief: { prompt: brief }, detailed: { prompt: s.prompt } });
   reopened('image');
   showFormError(($('imageOptionsBox').unavailable || []).join(' '));
   $('imageGeneration').open = $('imagePromptSection').open = true;
@@ -61,6 +80,47 @@ async function sameAgain(id, position = null, exact = null, from = null) {
   if (WIDE.matches) $('optionsCard').scrollIntoView({ behavior: 'smooth' }); else showPage('generate');
   queuePlan();
   return true;
+}
+// Brief / Detailed, beside I2P when a picture is opened from the preview: the set's brief or the picture's own prompt
+// in the box. Only the text: LLM or Exact prompt, Amount and the rest stay as they are. A prompt changed by hand isn't
+// lost to a tap without asking.
+let promptSources = null;
+function setPromptSources(sources) {
+  promptSources = sources;
+  $('imagePromptSource').hidden = !sources;
+  if (sources) paintPromptSource();
+}
+function paintPromptSource() {
+  for (const part of $('imagePromptSource').querySelectorAll('[data-source]')) part.classList.toggle('on', part.dataset.source === promptSources.current);
+  $('imagePromptSource').querySelector('.check').setAttribute('aria-label', `Prompt from: ${promptSources.current === 'brief' ? 'the brief' : 'the detailed prompt'}. Tap for the other.`);
+}
+function usePromptSource(name) {
+  if (!promptSources || name === promptSources.current) return;
+  const was = promptSources[promptSources.current], to = promptSources[name];
+  if ($('imagePrompt').value.trim() !== was.prompt.trim()
+      && !confirm(`Replace the prompt you changed with the ${name === 'brief' ? 'brief' : 'detailed prompt'}?`)) return;
+  promptSources.current = name;
+  $('imagePrompt').value = to.prompt;
+  syncPromptWriter('image');
+  saveImageForm();
+  queuePlan();
+  paintPromptSource();
+}
+$('imagePromptSource').addEventListener('click', () => {
+  if (promptSources) usePromptSource(promptSources.current === 'brief' ? 'detailed' : 'brief');
+});
+// Words like I2P's, so not a <button>: Enter and Space work it as one.
+$('imagePromptSource').addEventListener('keydown', e => {
+  if (e.key !== 'Enter' && e.key !== ' ') return;
+  e.preventDefault();
+  $('imagePromptSource').click();
+});
+// One image made again: what the model was given, word for word, as your own prompt. Where the workflow's own prompt
+// enhancer or image to prompt wrote it as the image was made, that is what it wrote: run again, they would write
+// another (as your own prompt, neither runs). Its seed only if it was fixed: one picked at random is random again.
+function recreated(picture) {
+  const prompt = picture.enhanced_prompt || picture.prompt;
+  return prompt ? { prompt, seed: picture.seed ?? '', count: 1 } : null;
 }
 // A file a run was given, back as a file for a form's box.
 async function runFile(url, name) {
@@ -218,7 +278,7 @@ $('viewerVariations').addEventListener('click', () => {
   const { id, position, film, run } = viewing;
   if (film && !run) return;
   closeViewer();
-  // The generation it came from, as it was queued: Variety and its chips too.
+  // A picture: exactly what made it, to make it again. A film: the settings it was made with.
   if (film) sameAgainFilm(run); else sameAgain(id, null, null, position);
 });
 // A cut title shows whole on a click, and is cut again on the next click, or for the next picture or film (setViewerTitle).

@@ -768,6 +768,9 @@ function upscaleProblem(method, width, height) {
     return `Too big: ${Math.max(width, height)}px on its longer side, past ${TILED_MOST_SIDE}px.`;
   return '';
 }
+// The order pills are always in: core/pills.py KINDS.
+const PILL_ORDER = ['workflow', 'mode', 'test', 'llm', 'writer', 'openh3', 'lora', 'model', 'encoder', 'vae', 'upscale', 'clips', 'sampling', 'cfg'];
+function pillPlace(kind) { const at = PILL_ORDER.indexOf(kind); return at < 0 ? PILL_ORDER.length : at; }
 // A picture in the viewer: its own upscale, not the set's, and in a LoRA comparison its own LoRA, not all those the
 // set tests; its other pills are the set's.
 function pictureMetadata(set, picture) {
@@ -780,6 +783,8 @@ function pictureMetadata(set, picture) {
       diff: set.pills.some(p => p.kind === 'llm' && p.text === picture.prompt_llm && p.diff) }] : []),
     ...(ownLora && picture.lora ? [{ text: `LoRA: ${picture.lora}`, kind: 'lora', diff: true }] : []),
     ...(picture.upscaled ? [{ text: `Upscaled: ${picture.upscaled}`, kind: 'upscale', diff: false }] : [])];
+  // Each where it always is, as the set's are (core/pills.py KINDS).
+  if (pills) pills.sort((a, b) => pillPlace(a.kind) - pillPlace(b.kind));
   viewerMetadata({ ...set, upscaled: picture.upscaled || null, pills }, 'image');
 }
 function viewerMetadata(item, side = 'video') {
@@ -801,8 +806,12 @@ function viewerMetadata(item, side = 'video') {
     details.dataset.pills = html;
     details.innerHTML = html;
     requestAnimationFrame(() => markPillOverflow(details));
+    // The setup menu open (swiped on to this one with it up): it shows this one's pills now.
+    if ($('pillsMenu').open && !$('pillsMenu').classList.contains('closing')) openPillsMenu(details.firstElementChild);
     return;
   }
+  // Nothing to show for this one: the menu goes.
+  if ($('pillsMenu').open) closePillsMenu();
   details.dataset.pills = '';
   details.textContent = lines.join('\n');
   if (!has) details.hidden = true;
@@ -923,8 +932,8 @@ function openViewer(id, position) {
   viewing = { id, position };
   document.body.dataset.viewing = 'image';
   showViewerMedia(false);
-  $('viewerVariations').title = 'More like this: the generation it came from, back in Generate with its Variety and chips';
-  $('viewerVariations').setAttribute('aria-label', 'More like this');
+  $('viewerVariations').title = 'Make it again: the exact prompt and settings it was made with, in Generate (its seed too, if that was fixed)';
+  $('viewerVariations').setAttribute('aria-label', 'Make it again');
   resetZoom();
   const url = `/image-runs/${encodeURIComponent(id)}/files/${position}?v=${picture.version}`;
   // The small picture the set already shows comes at once; the full one replaces it as soon as it has arrived.
@@ -1094,10 +1103,25 @@ $('imageViewer').addEventListener('touchend', e => {
     if (dy > 60 && dy > Math.abs(dx) * 1.5) closeViewer();
     return;
   }
+  swipeViewer(dx, dy);
+});
+function swipeViewer(dx, dy) {
   if (viewing && !viewing.film && zoom.scale > 1) return;
   // Sideways, and far enough to mean it: a tap or a scroll isn't a swipe. Up and down: the next or the previous set.
   if (Math.abs(dx) > 50 && Math.abs(dx) > Math.abs(dy) * 1.5) stepViewer(dx < 0 ? 1 : -1);
   else if (Math.abs(dy) > 60 && Math.abs(dy) > Math.abs(dx) * 1.5) stepSet(dy < 0 ? 1 : -1);
+}
+// The setup menu open over the preview (a dialog of its own, so the preview doesn't feel the finger): a swipe on it or
+// around it still goes to the next entry, and the menu stays, showing that one's pills (viewerMetadata).
+let pillsSwipeFrom = null;
+$('pillsMenu').addEventListener('touchstart', e => {
+  pillsSwipeFrom = e.touches.length === 1 ? { x: e.touches[0].clientX, y: e.touches[0].clientY } : null;
+}, { passive: true });
+$('pillsMenu').addEventListener('touchend', e => {
+  if (!pillsSwipeFrom || !e.changedTouches.length || !viewing) return;
+  const from = pillsSwipeFrom;
+  pillsSwipeFrom = null;
+  swipeViewer(e.changedTouches[0].clientX - from.x, e.changedTouches[0].clientY - from.y);
 });
 let outputArranging = false, outputSelected = null, outputOrderSaving = false;
 const outputKey = item => item.set ? `image:${item.set.id}` : `film:${item.film.name}`;
@@ -1239,6 +1263,22 @@ function revealViewedBatch(was, collection) {
   if (!batch || !batch.getClientRects().length) return;
   const tall = batch.getBoundingClientRect && batch.getBoundingClientRect().height > window.innerHeight * 0.8;
   batch.scrollIntoView({ behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth', block: tall ? 'start' : 'center' });
+  viewedGlow = { key, at: Date.now() };
+  glowViewedBatch();
+}
+// And it lights up, fading out over 4 seconds, so the eye finds it. Output drawn again meanwhile (a poll), the new cell
+// picks the fade up where it was, not from the start.
+const VIEWED_GLOW_MS = 4000;
+let viewedGlow = null;
+function glowViewedBatch() {
+  if (!viewedGlow) return;
+  const left = VIEWED_GLOW_MS - (Date.now() - viewedGlow.at);
+  if (left <= 0) { viewedGlow = null; return; }
+  const batch = [...$('imageSets').querySelectorAll('.output-batch[data-output-key]')].find(cell => cell.dataset.outputKey === viewedGlow.key);
+  if (!batch || batch.classList.contains('viewed-glow')) return;
+  batch.style.animationDelay = `-${VIEWED_GLOW_MS - left}ms`;
+  batch.classList.add('viewed-glow');
+  batch.addEventListener('animationend', () => { batch.classList.remove('viewed-glow'); batch.style.animationDelay = ''; }, { once: true });
 }
 $('imageViewer').addEventListener('close', () => {
   clearViewerTransition();

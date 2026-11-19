@@ -528,6 +528,61 @@ class H3RefinerTest(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "reasoning"):
                 refiner.write_prompt("a harbour", "image")
 
+    def test_write_prompt_can_stream_its_answer_and_still_checks_it(self):
+        refiner = object.__new__(h3_refiner.Refiner)
+        refiner.url = "http://127.0.0.1:42/v1"
+        refiner.model_id = "gemma-4-12b"
+        response = mock.MagicMock()
+        response.__enter__.return_value = response
+        chunk = lambda delta, finish=None: "data: " + json.dumps({"choices": [{"delta": delta, "finish_reason": finish}]})
+        response.iter_lines.return_value = [chunk({"reasoning_content": "hmm"}), chunk({"content": "A vivid "}),
+                                            chunk({"content": "scene. "}), chunk({}, "stop"), "data: [DONE]"]
+        pieces = []
+        with mock.patch.object(h3_refiner.requests, "post", return_value=response) as post:
+            self.assertEqual(refiner.write_prompt("a harbour", "image", on_text=pieces.append), "A vivid scene.")
+            self.assertEqual(pieces, ["A vivid ", "scene. "], "its answer as it comes, not its reasoning")
+            self.assertTrue(post.call_args.kwargs["json"]["stream"])
+            response.iter_lines.return_value = [chunk({"content": "A vivid"}), chunk({}, "length"), "data: [DONE]"]
+            with self.assertRaisesRegex(RuntimeError, "cut off"):
+                refiner.write_prompt("a harbour", "image", on_text=pieces.append)
+
+    def test_chat_streams_the_reply_and_says_how_it_ended(self):
+        refiner = object.__new__(h3_refiner.Refiner)
+        refiner.url = "http://127.0.0.1:42/v1"
+        refiner.model_id = "gemma-4-12b"
+        response = mock.MagicMock()
+        response.__enter__.return_value = response
+        chunk = lambda content=None, finish=None: "data: " + json.dumps(
+            {"choices": [{"delta": {"content": content} if content else {}, "finish_reason": finish}]})
+        response.iter_lines.return_value = ["", chunk("Hel"), ": keep-alive", chunk("lo"), chunk(finish="length"), "data: [DONE]"]
+        messages = [{"role": "system", "content": "s"}, {"role": "user", "content": "hi"}]
+        with mock.patch.object(h3_refiner.requests, "post", return_value=response) as post:
+            self.assertEqual(list(refiner.chat(messages, 100)), [("text", "Hel"), ("text", "lo"), ("finish", "length")])
+            payload = post.call_args.kwargs["json"]
+            self.assertEqual((payload["messages"], payload["max_tokens"], payload["stream"]), (messages, 100, True))
+            self.assertFalse(payload["chat_template_kwargs"]["enable_thinking"])
+            self.assertTrue(post.call_args.kwargs["stream"])
+            self.assertEqual(post.call_args.kwargs["json"]["stream_options"], {"include_usage": True})
+            self.assertTrue(post.call_args.kwargs["json"]["timings_per_token"])
+            # The server's own timing of its writing, with each piece: passed on as it comes.
+            response.iter_lines.return_value = ["data: " + json.dumps({"choices": [{"delta": {"content": "a"}}], "timings": {"predicted_per_second": 71.5}}),
+                                                "data: " + json.dumps({"choices": [{"delta": {"content": "b"}}], "timings": {"predicted_per_second": 72.0}}),
+                                                "data: [DONE]"]
+            self.assertEqual([event for event in refiner.chat(messages, 100) if event[0] in ("text", "speed")],
+                             [("text", "a"), ("speed", 71.5), ("text", "b"), ("speed", 72.0)])
+            response.iter_lines.return_value = [chunk("ok"), "data: [DONE]"]
+            self.assertEqual(list(refiner.chat(messages, 100))[-1], ("finish", "stop"))
+            # What it read and wrote, as the server counted: its usage, or else its timings (cached tokens included).
+            response.iter_lines.return_value = [chunk("ok"), "data: " + json.dumps(
+                {"choices": [], "usage": {"prompt_tokens": 40, "completion_tokens": 2}}), "data: [DONE]"]
+            self.assertEqual(list(refiner.chat(messages, 100))[-2:], [("usage", {"prompt": 40, "completion": 2}), ("finish", "stop")])
+            response.iter_lines.return_value = ["data: " + json.dumps({"choices": [{"delta": {"content": "ok"}, "finish_reason": "stop"}],
+                                                                      "timings": {"prompt_n": 5, "cache_n": 30, "predicted_n": 2}}), "data: [DONE]"]
+            self.assertIn(("usage", {"prompt": 35, "completion": 2}), list(refiner.chat(messages, 100)))
+            response.raise_for_status.side_effect = h3_refiner.requests.HTTPError("500")
+            with self.assertRaisesRegex(RuntimeError, "Could not get a reply"):
+                list(refiner.chat(messages, 100))
+
     def test_settings_and_video_form(self):
         self.assertEqual(h3_refiner.settings(None, None), ("off", "balanced"))
         for creativity in h3_refiner.CREATIVITY:

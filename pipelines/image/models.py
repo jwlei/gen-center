@@ -25,6 +25,8 @@ QWEN_IMAGE_21, QWEN_IMAGE_21_EDIT = "qwen_image_21", "qwen_image_21_edit"
 MINIMAX_H3_IMAGE, MINIMAX_H3_IMAGE_EDIT = "minimax_h3_image", "minimax_h3_image_edit"
 LABELS = {FIBO2: "Fibo 2.0", KREA2: "Krea-2", MOSS_IMAGE: "MOSS Image", QWEN_IMAGE_EDIT: "Qwen-Image-Edit", QWEN_IMAGE_21: "Qwen-Image 2.1",
           QWEN_IMAGE_21_EDIT: "Qwen-Image 2.1 (edit)", MINIMAX_H3_IMAGE: "MiniMax H3 Image", MINIMAX_H3_IMAGE_EDIT: "MiniMax H3 Image (edit)"}
+# One model, as the Model picker lists it: its edit workflows are the same model as its text ones.
+FAMILIES = {MINIMAX_H3_IMAGE_EDIT: MINIMAX_H3_IMAGE, QWEN_IMAGE_21_EDIT: QWEN_IMAGE_21}
 # The most megapixels each makes (before any upscale; a preset size above it is made at its shape within it). A model
 # left out takes what the form offers. Qwen-Image-Edit's is 2560x2560, MOSS Image's 4.2 (about 2K x 2K), MiniMax H3 Image's 20.
 MOST_MEGAPIXELS = {FIBO2: 1.1, KREA2: 4.2, MOSS_IMAGE: 4.2, QWEN_IMAGE_EDIT: 2560 * 2560 / PIXELS_PER_MEGAPIXEL, QWEN_IMAGE_21: 3.2,

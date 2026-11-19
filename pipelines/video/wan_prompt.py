@@ -33,16 +33,20 @@ def _what_to_write(images):
 
 def instructions(brief, seconds, count, images, continuity, shortest, longest, second_image="", relationship="", clip_relationship="progressive",
                  words=None):
-    clips = "one clip" if count == 1 else f"{count} consecutive clips"
+    # Variations (planner.VARIATIONS): one clip made several times over, each a video of its own, not a film.
+    variations = clip_relationship == "variations" and count > 1
+    clips = "one clip" if count == 1 else f"{count} separate variations of one clip" if variations else f"{count} consecutive clips"
     # The form's words per prompt, as a range (core.prompt_words), else Wan's own.
     length = "{}-{}".format(*prompt_words.word_range(words)) if words else "80-120"
-    shots = "one shot" if count == 1 else f"{count} shots in order"
-    together = f"Use {seconds}." if count == 1 else f"All of them together add up to {seconds}."
+    shots = "one shot" if count == 1 else f"{count} shots" if variations else f"{count} shots in order"
+    together = f"Use {seconds}." if count == 1 else f"Each one is {longest}." if variations else f"All of them together add up to {seconds}."
     shape = ("Show one clear moment that feels complete." if count == 1 else
+             "Make each variation a complete moment on its own." if variations else
              "Make each clip a distinct, self-contained moment in the same world." if clip_relationship == "related" else
              f"Give the film a beginning, a development and a real ending, rather than {count} versions of the same moment.")
+    length_of = f"{longest}-second clip" if variations else f"{seconds}-second film"
     return f"""
-    You are directing a {seconds}-second film made of {clips} from Wan, an AI video model. {_what_it_opens_on(images)}
+    You are directing a {length_of} made of {clips} from Wan, an AI video model. {_what_it_opens_on(images)}
 
     The brief, in the words of the person making it: "{brief}"
 

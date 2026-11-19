@@ -875,6 +875,38 @@ def shorthand(workflow, default):
     return re.sub(r"[^\w-]+", "_", stem).strip("_") or default
 
 
+# What a workflow's .map.json keeps, by the file and its time: read once per change.
+_maps = {}
+
+
+def map_field(workflow, key):
+    """One field of what a saved workflow's .map.json keeps (as "_saved_as" or "_model"), or None."""
+    if not workflow:
+        return None
+    map_path = os.path.splitext(str(workflow))[0] + ".map.json"
+    try:
+        found = (map_path, os.stat(map_path).st_mtime_ns)
+        if found not in _maps:
+            with open(map_path, encoding="utf-8") as f:
+                kept = json.load(f)
+            _maps[found] = kept if isinstance(kept, dict) else {}
+        return _maps[found].get(key)
+    except (OSError, ValueError):
+        return None
+
+
+def picker_label(workflow, default):
+    """
+    A workflow as Generate's Workflow picker names it (display_label of the name it was saved under in ComfyUI, kept
+    in its .map.json), for its pill: the same words in both, however old the run. Its file's name where that isn't
+    kept. default for the built-in one.
+    """
+    if not workflow:
+        return default
+    name = map_field(workflow, "_saved_as")
+    return display_label(name if isinstance(name, str) and name else os.path.basename(str(workflow))) or default
+
+
 def title_words(title, default):
     """A title as words for a file name."""
     return re.sub(r"[^\w-]+", "_", title or "").strip("_")[:60] or default

@@ -142,7 +142,7 @@ const ICONS = {
   clips: ICON_SVG('<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 4v16M17 4v16M3 9h4M3 15h4M17 9h4M17 15h4"/><path d="m10 9 4 3-4 3z"/>'),
 };
 $('writeVideoPrompt').innerHTML = $('writeImagePrompt').innerHTML = ICONS.enhanced;
-for (const [id, icon] of Object.entries({ viewerDownload: 'download', viewerDelete: 'trash', promptDetailYours: 'brief', promptEditorCopy: 'copy', promptEditorClear: 'eraser', promptEditorEnhance: 'enhanced', promptEditorReset: 'again', viewerVariations: 'config', viewerUpscale: 'upscale',
+for (const [id, icon] of Object.entries({ viewerDownload: 'download', viewerDelete: 'trash', promptDetailYours: 'brief', promptEditorCopy: 'copy', promptEditorClear: 'eraser', chatClear: 'eraser', promptEditorEnhance: 'enhanced', promptEditorReset: 'again', viewerVariations: 'config', viewerUpscale: 'upscale',
   viewerEdit: 'prompts', viewerPrompts: 'enhanced', viewerClips: 'clips' })) $(id).innerHTML = ICONS[icon];
 function outputSize(bytes) {
   if (bytes == null) return '';
@@ -250,6 +250,7 @@ function renderImageSets() {
     : pipeline === 'shorts' ? '' : `<div class="empty">${nsfwView ? 'Nothing here.' : none[outputKind]}</div>`;
   requestAnimationFrame(() => markPillOverflow($('imageSets')));
   showOutputArranging();
+  if (typeof glowViewedBatch === 'function') glowViewedBatch();
 }
 // A narrower or wider page fits more or fewer pills on a line.
 window.addEventListener('resize', () => { for (const id of ['videos', 'imageSets', 'viewerMetaDetails']) markPillOverflow($(id)); });

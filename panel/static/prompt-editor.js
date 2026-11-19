@@ -325,8 +325,9 @@ function setPromptEditorBusy(busy) {
   bar.hidden = !busy;
   if (!busy) bar.style.width = '0%';
 }
-function setPromptThinkingPhrase(phrase) {
-  const previous = $('promptEditorThinkingPrevious'), current = $('promptEditorThinkingCurrent');
+// The phrase slides out and the next one's letters come in; the chat's thinking line is drawn the same way.
+function setPromptThinkingPhrase(phrase, previousId = 'promptEditorThinkingPrevious', currentId = 'promptEditorThinkingCurrent') {
+  const previous = $(previousId), current = $(currentId);
   previous.textContent = current.textContent;
   previous.className = 'prompt-thinking-line';
   if (previous.textContent) {
@@ -360,6 +361,28 @@ function syncPromptThinking(busy) {
   advance();
   promptThinkingTimer = setInterval(advance, 2200);
 }
+// The writer's answer. Streamed (a JSON object a line), each {"text"} goes to onText as it comes, and the last line
+// is the answer; otherwise the answer is the whole reply.
+async function readPromptReply(response, onText) {
+  const type = response.headers && response.headers.get ? response.headers.get('Content-Type') || '' : '';
+  if (!type.includes('ndjson') || !response.body) return response.json();
+  const reader = response.body.getReader(), decoder = new TextDecoder();
+  let buffer = '', answer = null;
+  for (;;) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    let end;
+    while ((end = buffer.indexOf('\n')) >= 0) {
+      const line = buffer.slice(0, end).trim();
+      buffer = buffer.slice(end + 1);
+      if (!line) continue;
+      const event = JSON.parse(line);
+      if ('text' in event && !('ok' in event)) onText(event.text); else answer = event;
+    }
+  }
+  return answer || { ok: false, error: 'The writer stopped without an answer.' };
+}
 async function enhanceInEditor(writer) {
   const side = promptSide(promptField), text = $('promptEditorText'), idea = text.value;
   if (!side || !writer) return;
@@ -367,6 +390,7 @@ async function enhanceInEditor(writer) {
   const originalBeforeRun = promptEditorOriginal;
   if (promptEditorOriginal === null) promptEditorOriginal = idea;
   const writing = promptWriting = {};
+  let streamed = false;  // The box holds what is being written, not the idea, until it is done
   setPromptEditorBusy(true);
   $('promptEditorCount').textContent = 'Estimating…';
   let timer;
@@ -392,8 +416,19 @@ async function enhanceInEditor(writer) {
     form.set('prompt', idea);
     form.set('writer', writer.id);
     if (writer.model) form.set('model', writer.model);
+    // A local model's prompt comes in as it is written, into the box; its finished, checked prompt replaces it at the end.
+    if (writer.id === 'local') form.set('stream', '1');
     const response = await fetch('/api/write-prompt', { method: 'POST', body: form });
-    const result = await response.json();
+    let result;
+    try {
+      result = await readPromptReply(response, piece => {
+        if (promptWriting !== writing) return;
+        if (!streamed) { text.value = ''; streamed = true; }
+        const follow = text.scrollHeight - text.scrollTop - text.clientHeight < 40;
+        text.value += piece;
+        if (follow) text.scrollTop = text.scrollHeight;
+      });
+    } catch (e) { throw new Error('Could not reach the panel.'); }
     if (!response.ok || !result.ok) throw new Error(result.error || 'Could not write the prompt.');
     if (promptWriting !== writing) return;  // Closed or written again meanwhile
     text.value = result.prompt;
@@ -402,6 +437,7 @@ async function enhanceInEditor(writer) {
     countPrompt();
   } catch (e) {
     if (promptWriting === writing) {
+      if (streamed) text.value = idea;  // Not half a prompt: the idea it was written from, to try again
       $('promptEditorCount').textContent = e.message || 'Could not write the prompt.';
       if (!promptEditorEnhanced && originalBeforeRun === null) {
         promptEditorOriginal = null;

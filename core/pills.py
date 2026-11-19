@@ -1,7 +1,7 @@
 """
-Pills: what a film or an image set was made with, in short (workflow, upscale, how clips connect, OpenH3-IR, LoRA,
-sampler and steps, CFG,
-who wrote the prompts: an LLM or your exact prompt, and which LLM), and which of those tell it apart from its siblings: what else was made from the same prompt.
+Pills: what a film or an image set was made with, in short (workflow, its mode, who wrote the prompts and what helped,
+LoRA, the files it ran, upscale, how clips connect, OpenH3-IR, sampler and steps, CFG), and which of those tell it apart
+from its siblings: what else was made from the same prompt.
 
 Live, Output marks the pills that differ from its siblings as they are now. Fixed, a new film's or set's file name
 takes the differing ones when it is made (fixed_tag), in place of a bare _2, _3.
@@ -14,12 +14,56 @@ from core import file_tests, llm_tests, lora_tests, model_files, test_names, wor
 # How a film's clips connect, in short: the long names are Generate's "How clips connect".
 CONNECTIONS = {"chain": "Continuous take", "image": "Separate moments", "director": "H3 Motion Director",
                "multishot": "H3 Multishot", "infinite": "H3 Infinite continuation"}
-# The order pills are shown in, after the differing ones.
-# The files it ran (Model, Encoder, VAE) right after its workflow: they tell sets of one workflow apart.
-KINDS = ("workflow", "test", "model", "encoder", "vae", "prompt", "upscale", "clips", "openh3", "lora", "sampling", "cfg", "llm")
-# The pills that are always first, whether or not they differ: the workflow, who writes the prompts, and which LLM.
-# A comparison's name ("VAE test") second, right after its workflow.
-LEADING = ("workflow", "test", "prompt", "llm")
+# The order pills are always shown in, differing or not, so each is where you look for it: what tells two apart most
+# often first. The workflow, its mode (T2I, I2I...), a comparison's name ("VAE test"), who wrote the prompts (which LLM,
+# or your exact prompt) and what helped (Prompt enhancer, I2P), the LoRAs; then the files it ran and the rest.
+KINDS = ("workflow", "mode", "test", "llm", "writer", "openh3", "lora", "model", "encoder", "vae", "upscale", "clips",
+         "sampling", "cfg")
+# What helped write the prompts, as its pill says it.
+WRITERS = {"Image to prompt": "I2P"}
+# An image workflow's mode switch (FoxFurEssence's text2image | image2image | inpaint), as its pill says it: as the
+# Mode picker does (panel/static/image-inputs.js MODE_LABELS), painted areas Inpaint too and references R2I.
+IMAGE_MODES = {"text2image": "T2I", "image2image": "I2I", "inpaint": "Inpaint"}
+REGION_MODES = {"areas": "Inpaint", "expand": "Expand"}
+
+
+def image_mode(state):
+    """
+    How an image set was made, as the Mode picker says it: from text (T2I), from an image (I2I, Inpaint, or Edit for a
+    model that edits by instruction), a new picture from references (R2I), or Inpaint of painted parts, or Expand.
+    From what the set keeps, so every set has it, however old.
+    """
+    kind = (getattr(state, "region", None) or {}).get("kind")
+    if kind:
+        return REGION_MODES.get(kind, str(kind).title())
+    if getattr(state, "compose", False):
+        return "R2I"
+    options = getattr(state, "options", None) or {}
+    for key, value in options.items():
+        if key.startswith("one_of_") and "." not in key and str(value).lower() in IMAGE_MODES:
+            return IMAGE_MODES[str(value).lower()]
+    # The picture image to prompt describes isn't one it edits.
+    edited = (getattr(state, "image_count", 0) or 0) - (1 if options.get("image_to_prompt") == workflow_options.ON else 0)
+    return "Edit" if edited > 0 else "T2I"
+
+
+def video_mode(state):
+    """How a film was made: from text (T2V), from an image (I2V), or from several or reference videos (R2V)."""
+    images = getattr(state, "image_count", 1) or 0
+    if getattr(state, "ref_videos", None) or images > 1:
+        return "R2V"
+    return "I2V" if images else "T2V"
+
+
+def video_writer(state):
+    """What helped write a film's prompts: the workflow's own prompt enhancer, where it wrote any clip's; else None."""
+    return "Prompt enhancer" if any(shot.get("workflow_enhanced_prompt") for shot in getattr(state, "shots", None) or []) else None
+
+
+def image_writer(state):
+    """What helped write an image set's prompts: the workflow's own enhancer or image to prompt, or I2P; else None."""
+    writer = workflow_options.prompt_writer_used(state.workflow, state.options, state.form)
+    return writer[1] if writer else "I2P" if getattr(state, "looked", False) else None
 
 
 def latent_description(options):
@@ -80,15 +124,15 @@ def run_facts(state, pipeline, workflow_name):
         return facts(workflow_name, latent_description(state.options), state.connection_mode or state.start,
                      state.h3_mode, state.h3_creativity, workflow_options.loras_used(state.workflow, state.options, "video"),
                      state.llm, state.direct, workflow_options.sampling_used(state.workflow, state.options, "video"),
-                     workflow_options.cfg_used(state.workflow, state.options, "video"))
-    writer = workflow_options.prompt_writer_used(state.workflow, state.options, state.form)
-    # A workflow comparison's workflow pill says what it compares ("All T2I workflows").
+                     workflow_options.cfg_used(state.workflow, state.options, "video"), mode=video_mode(state),
+                     prompt_writer=video_writer(state))
+    # A workflow comparison's workflow pill says what it compares ("All T2I workflows"); an LLM comparison's LLM pill, "All LLMs".
     return facts(workflow_tests.pill(state.shots) or workflow_name, image_upscale_description(state.options),
                  files=image_files(state), test=test_names.of_shots(state.shots),
-                 loras=image_loras(state), llm=state.llm, direct=state.direct,
+                 loras=image_loras(state), llm=llm_tests.pill(state.shots) or state.llm, direct=state.direct,
                  sampling=workflow_options.sampling_used(state.workflow, state.options, "image"),
                  cfg=workflow_options.cfg_used(state.workflow, state.options, "image"),
-                 prompt_writer=llm_tests.pill(state.shots) or (writer[1] if writer else None))
+                 prompt_writer=image_writer(state), mode=image_mode(state))
 
 
 def run_stamp(run_id):
@@ -98,13 +142,22 @@ def run_stamp(run_id):
 
 
 def facts(workflow=None, upscaled=None, clips=None, h3_mode=None, h3_creativity=None, loras=(), llm=None, direct=False, sampling=None, cfg=None,
-          prompt_writer=None, files=(), test=None):
-    """What it was made with, as (kind, text), in the order they are shown."""
+          prompt_writer=None, files=(), test=None, mode=None):
+    """
+    What it was made with, as (kind, text). llm: which LLM wrote the prompts (none: your exact prompt). prompt_writer:
+    what helped, its pill following the LLM's: the workflow's Prompt enhancer, or I2P.
+    """
     found = []
     if workflow:
         found.append(("workflow", workflow))
+    if mode:
+        found.append(("mode", mode))
     if test:
         found.append(("test", test))
+    # Who wrote the prompts: which LLM, or your own word for word (as the workflow's enhancer starts from); then what helped.
+    found.append(("llm", "Exact prompt" if direct or not llm else llm))
+    if prompt_writer:
+        found.append(("writer", WRITERS.get(prompt_writer, prompt_writer)))
     found += list(files or ())
     if upscaled:
         found.append(("upscale", f"Upscaled: {upscaled}"))
@@ -119,10 +172,6 @@ def facts(workflow=None, upscaled=None, clips=None, h3_mode=None, h3_creativity=
         found.append(("sampling", sampling))
     if cfg:
         found.append(("cfg", f"CFG: {cfg}"))
-    # Who wrote the prompts: your own, word for word, or an LLM from your idea; which LLM is its own pill, later.
-    found.append(("prompt", prompt_writer or ("Exact prompt" if direct else "LLM")))
-    if llm and not direct:
-        found.append(("llm", llm))
     return found
 
 
@@ -139,17 +188,15 @@ def _differing(own, others):
     return {kind for kind in KINDS if any(of(other, kind) != of(own, kind) for other in others)}
 
 
-def pills(own, others, lead=LEADING):
+def pills(own, others):
     """
-    Its pills: the workflow always first, then Exact prompt or LLM and, for an LLM, which one; then those that tell it
-    apart from its siblings, marked, then the rest: [{"text", "kind", "diff"}]. What it lacks and a sibling has isn't
-    a pill of its own: the sibling's is marked. lead: the kinds that come first, in order.
+    Its pills, always in the order of KINDS, those that tell it apart from its siblings marked: [{"text", "kind",
+    "diff"}]. What it lacks and a sibling has isn't a pill of its own: the sibling's is marked.
     """
     differing = _differing(own, others) if others else set()
     shown = [{"text": text, "kind": kind, "diff": kind in differing} for kind, text in own]
     order = {kind: number for number, kind in enumerate(KINDS)}
-    first = {kind: number for number, kind in enumerate(lead)}
-    return sorted(shown, key=lambda pill: (first.get(pill["kind"], len(lead)), not pill["diff"], order.get(pill["kind"], len(KINDS))))
+    return sorted(shown, key=lambda pill: order.get(pill["kind"], len(KINDS)))
 
 
 def with_pills(items):
@@ -187,6 +234,6 @@ def fixed_tag(own, others, stamp):
     """
     if not others:
         return ""
-    differing = [pill["text"] for pill in pills(own, others, ("workflow",)) if pill["diff"] and pill["kind"] != "workflow"]
+    differing = [pill["text"] for pill in pills(own, others) if pill["diff"] and pill["kind"] != "workflow"]
     tag = "_".join(_slug(text) for text in differing[:2]) or stamp
     return tag[:48].strip("_-")

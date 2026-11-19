@@ -23,9 +23,13 @@ const statusCatalogue = (() => {
 })();
 
 const panelConnection = (() => {
-  // A status call that fails once (a panel restart, a slow reply) isn't worth a notice: it shows only after 5 s down.
-  const DISCONNECTED_AFTER_MS = 5000;
+  // A status call that fails for a while (a panel restart, a slow reply, the phone's network waking) isn't worth a
+  // notice: it shows only after 30 s down. A page error waits 30 s too: a section that fails to draw shows only if it
+  // is still failing then (drawn again with every answer, a gap of RENDER_GAP_MS without a failure means it recovered),
+  // and the notice goes once it has gone that long without one; an error that happened once shows then regardless.
+  const DISCONNECTED_AFTER_MS = 30000, RENDER_GAP_MS = 10000;
   let lastSuccess = null, disconnectTimer = null, lastError = null, wokeAt = 0, shown = null;
+  let renderTimer = null, renderLast = 0, renderError = null, renderOnce = false;
   function show(message, kind = 'render') {
     const notice = document.getElementById('connectionNotice');
     notice.hidden = false;
@@ -34,7 +38,7 @@ const panelConnection = (() => {
     shown = kind;
   }
   function disconnected() {
-    // Hidden, or back less than 5 s ago (a timer frozen with the page goes off as soon as it's back): not yet.
+    // Hidden, or back less than 30 s ago (a timer frozen with the page goes off as soon as it's back): not yet.
     const since = Date.now() - wokeAt;
     if (document.hidden) return;
     if (since < DISCONNECTED_AFTER_MS) { disconnectTimer = setTimeout(disconnected, DISCONNECTED_AFTER_MS - since); return; }
@@ -42,7 +46,7 @@ const panelConnection = (() => {
     show(`Panel disconnected. Retrying automatically.${last} ${(lastError && lastError.message) || 'Could not reach the panel.'}`, 'disconnected');
   }
   // The page back in sight (the browser opened again, the phone unlocked): its connection is waking too. Whatever
-  // failed while it was away, the notice waits 5 s more from now, and one already up goes until then.
+  // failed while it was away, the notice waits 30 s more from now, and one already up goes until then.
   function wake() {
     wokeAt = Date.now();
     if (shown === 'disconnected') {
@@ -56,7 +60,7 @@ const panelConnection = (() => {
   }
   document.addEventListener('visibilitychange', () => { if (!document.hidden) wake(); });
   window.addEventListener('pageshow', event => { if (event.persisted) wake(); });
-  // Loading, the same: "Connecting to the panel..." only if the first answer takes over 5 s.
+  // Loading, the same: "Connecting to the panel..." only if the first answer takes over 30 s.
   const connecting = setTimeout(() => { if (!lastSuccess) show('Connecting to the panel...'); }, DISCONNECTED_AFTER_MS);
   return {
     success() {
@@ -72,6 +76,8 @@ const panelConnection = (() => {
       clearTimeout(disconnectTimer);
       disconnectTimer = null;
       lastError = null;
+      // A section still failing to draw keeps its notice: each answer is drawn after this, and would show it again.
+      if (shown === 'render' && Date.now() - renderLast < RENDER_GAP_MS) return;
       document.getElementById('connectionNotice').hidden = true;
       shown = null;
     },
@@ -81,9 +87,22 @@ const panelConnection = (() => {
       disconnectTimer = setTimeout(disconnected, DISCONNECTED_AFTER_MS);
     },
     wake,
-    renderFailure(error) {
-      show(`A page section could not update. Retry now or reload the page. ${error.message || ''}`);
+    // once: an error that happened once (uncaught), not a section drawn again with every answer.
+    renderFailure(error, once = false) {
+      renderLast = Date.now();
+      renderError = error;
+      renderOnce = renderOnce || once;
+      if (shown === 'render') { show(`A page section could not update. Retry now or reload the page. ${error.message || ''}`); return; }
+      if (renderTimer) return;
+      renderTimer = setTimeout(() => {
+        renderTimer = null;
+        const still = renderOnce || Date.now() - renderLast < RENDER_GAP_MS;
+        renderOnce = false;
+        if (still) show(`A page section could not update. Retry now or reload the page. ${(renderError && renderError.message) || ''}`);
+      }, DISCONNECTED_AFTER_MS);
     },
+    // Whether the notice is still up, for Retry to say how it went.
+    showing() { return !document.getElementById('connectionNotice').hidden; },
   };
 })();
 window.addEventListener('error', event => {
@@ -92,11 +111,11 @@ window.addEventListener('error', event => {
     console.warn(event.message);
     return;
   }
-  panelConnection.renderFailure(event.error || new Error(event.message));
+  panelConnection.renderFailure(event.error || new Error(event.message), true);
   reportUncaught(event.error || new Error(event.message));
 });
 window.addEventListener('unhandledrejection', event => {
-  panelConnection.renderFailure(event.reason || new Error('Unexpected page error.'));
+  panelConnection.renderFailure(event.reason || new Error('Unexpected page error.'), true);
   reportUncaught(event.reason || new Error('Unexpected page error.'));
 });
 // An error no part of the page caught (a tap's handler, say) goes to the panel's page error log too, once each, as

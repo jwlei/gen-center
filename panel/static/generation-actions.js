@@ -75,13 +75,21 @@ function syncContinued() {
     else if (field.dataset.continued) { delete field.dataset.continued; field.readOnly = false; }
   }
 }
-// A queued job being changed in place saves back to the queue; a continued run reopened as a new run is added like any other.
-function queueSaves() { return !!queueEdit && !queueEdit.fresh; }
+// A queued job being edited is saved back into the queue: Save where it was (in the queue or Pending), or to the top
+// of the queue, or to Pending's end (panel/server.py put_back_edited).
+function queueSaves() { return !!queueEdit; }
+const GO_EXTRA_LABELS = { goTop: ['Add to top of queue', 'Save to top of queue'], goLater: ['Add to pending', 'Save to pending'] };
 function queueEditLabel() {
   syncContinued();
   $('cancelQueueEdit').hidden = $('editRow').hidden = !queueEdit;
-  $('goLater').hidden = $('goTop').hidden = $('goStickLater').hidden = $('goStickTop').hidden = queueSaves();
-  if (!submitting) $('go').textContent = $('goStick').textContent = queueSaves() ? 'Save' : goLabel(wasRunning);
+  if (!submitting) {
+    $('go').textContent = $('goStick').textContent = queueSaves() ? 'Save' : goLabel(wasRunning);
+    for (const [id, labels] of Object.entries(GO_EXTRA_LABELS)) {
+      const label = labels[queueSaves() ? 1 : 0], stick = id === 'goTop' ? 'goStickTop' : 'goStickLater';
+      $(id).textContent = label;
+      $(stick).setAttribute('aria-label', label);
+    }
+  }
 }
 async function editQueued(id, button) {
   const epoch = workspaceEpoch;
@@ -169,6 +177,7 @@ async function editQueued(id, button) {
       syncVideoForm();
     } else if (pipeline === 'image') {
       sourceBoxes().forEach((box, i) => clearSource(box, i === 0));
+      clearSource(promptImageBox(), false);
       sourcesShown = Math.max(1, Object.keys(files).filter(name => /^image(_\d+)?$/.test(name)).length);
       if (values.size && !values.aspect) $('imageAspect').value = 'custom';
       syncImageForm();
@@ -273,8 +282,6 @@ async function startJob(url, later = false, top = false) {
   }
   submitting = false;
   $('go').disabled = $('goStick').disabled = $('goLater').disabled = $('goTop').disabled = $('goStickLater').disabled = $('goStickTop').disabled = false;
-  $('goLater').textContent = 'Add to pending';
-  $('goTop').textContent = 'Add to top of queue';
   if (body.ok && queueEdit) queueEdit = null;
   queueEditLabel();
   $('queuePending').hidden = true;
@@ -421,7 +428,7 @@ function clearPrompt(side) {
 for (const [id, side] of [['clearShortsPrompt', 'shorts'], ['clearVideoPrompt', 'video'], ['clearImagePrompt', 'image']]) {
   $(id).addEventListener('click', e => { e.preventDefault(); e.stopPropagation(); clearPrompt(side); });
 }
-for (const [id, down, up, steps] of [['runs', 'runsDown', 'runsUp', 1], ['imageCount', 'imageCountDown', 'imageCountUp', 1], ['duration', 'durationDown', 'durationUp', 5], ['imageWorkflowDenoise', 'imageWorkflowDenoiseDown', 'imageWorkflowDenoiseUp', 1]]) {
+for (const [id, down, up, steps] of [['runs', 'runsDown', 'runsUp', 1], ['imageCount', 'imageCountDown', 'imageCountUp', 1], ['duration', 'durationDown', 'durationUp', 5], ['videoVariations', 'videoVariationsDown', 'videoVariationsUp', 1], ['imageWorkflowDenoise', 'imageWorkflowDenoiseDown', 'imageWorkflowDenoiseUp', 1]]) {
   for (const [button, direction] of [[down, -1], [up, 1]]) {
     $(button).addEventListener('click', () => {
       const field = $(id);

@@ -60,7 +60,12 @@ CONTINUITY = {
 SEPARATE_CLIPS = """Every clip is made on its own, with a fade between clips. So each shot is its own
     moment: a different action, a different camera move, a different development of the idea, in an
     order that still builds."""
-CLIP_RELATIONSHIPS = ("progressive", "related")
+# One story, related scenes, or variations: one clip made several times over, each saved as a video of its own. Only
+# variations differ the way Variety (core.variety) says; the other two say how their clips differ themselves.
+CLIP_RELATIONSHIPS = ("progressive", "related", "variations")
+VARIATIONS = "variations"
+MOST_VARIATIONS = 20
+
 PROMPT_SIMILARITY = 0.92
 
 
@@ -301,13 +306,15 @@ def _guide(brief, seconds, start, images, video_model, image_2_role, second_imag
         return h3_prompt.instructions(brief, seconds, count, images, shortest, longest,
                                       second_image, roles.image_roles(image_2_role, images), references, start, first_frame,
                                       clip_relationship, words)
-    clips = "one clip" if count == 1 else f"{count} consecutive clips"
-    shots = "one shot" if count == 1 else f"{count} shots in order"
+    variations = clip_relationship == VARIATIONS
+    clips = "one clip" if count == 1 else f"{count} separate variations of one clip" if variations else f"{count} consecutive clips"
+    shots = "one shot" if count == 1 else f"{count} shots" if variations else f"{count} shots in order"
     shape = ("Show one clear moment that feels complete." if count == 1 else
+             "Make each variation a complete moment on its own." if variations else
              "Make each clip a distinct, self-contained moment in the same world." if clip_relationship == "related" else
              f"Give the film a beginning, a development and a real ending, rather than {count} versions of the same moment.")
-    together = f"Use {seconds}." if count == 1 else f"All of them together add up to {seconds}."
-    continuity = "" if count == 1 else (
+    together = f"Use {seconds}." if count == 1 else f"Each one is {longest}." if variations else f"All of them together add up to {seconds}."
+    continuity = "" if count == 1 else variety_rules.variations_rule(count, longest) if variations else (
         """Every clip is independent, with a fade between clips. Keep the same subject and visual identity, but give
         each scene its own complete moment; the scenes need not build in chronological order.""" if
         clip_relationship == "related" and start == "image" else
@@ -316,11 +323,12 @@ def _guide(brief, seconds, start, images, video_model, image_2_role, second_imag
     if video_model == wan_prompt.MODEL:
         return wan_prompt.instructions(brief, seconds, count, images, continuity, shortest, longest, second_image,
                                        relation, clip_relationship, words)
+    length_of = f"{longest}-second clip" if variations and count > 1 else f"{seconds}-second film"
     in_keeping = "the brief and\n    the image, and never contradicting them" if images else "the brief, and never contradicting it"
     sees = "one prompt and one start frame" if images == 1 else "one prompt and its images" if images else "one prompt"
     length = "{}-{}".format(*prompt_words.word_range(words)) if words else "60-120"
     return f"""
-    You are directing a {seconds}-second film made of {clips} from an AI video
+    You are directing a {length_of} made of {clips} from an AI video
     model (LTX-2). {_what_it_opens_on(images)}
 
     The brief, in the words of the person making it: "{brief}"
@@ -396,8 +404,9 @@ def plan_film(image_jpeg, brief, seconds, start, llm="gemini", video_model=None,
     shortest, longest, _ = clip_seconds(video_model, chosen)
     instructions = _instructions(brief, seconds, start, images, video_model, image_2_role, bool(image_2_in_words), references,
                                  chosen, first_frame, clip_relationship, words)
-    # How different the clips are, and what changes or stays (core.variety): only when the form chose it.
-    if variety and shot_count(seconds, video_model, chosen) > 1:
+    # How different the clips are, and what changes or stays (core.variety): only for variations, which have nothing
+    # else to say so. A story or related scenes say it themselves, and a second say would only contradict them.
+    if variety and clip_relationship == VARIATIONS and shot_count(seconds, video_model, chosen) > 1:
         instructions += variety_rules.film_rule(variety, vary, keep)
     if explicit:
         instructions += explicit_rules.paragraph()

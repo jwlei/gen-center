@@ -58,9 +58,29 @@ function resumePolling() {
   pollAbort = null;
   polling = false;
   pollAgain = false;
-  poll();
+  return poll();
 }
-$('connectionRetry').addEventListener('click', resumePolling);
+// Retry: says it is trying (at least long enough to be seen), then, if the panel still doesn't answer, says so before
+// it can be tried again. Through, the notice simply goes.
+const RETRY_SHOWN_MS = 700, RETRY_RESULT_MS = 2000;
+$('connectionRetry').addEventListener('click', async () => {
+  const button = $('connectionRetry');
+  if (button.disabled) return;
+  button.disabled = true;
+  button.classList.add('retrying');
+  button.textContent = 'Retrying…';
+  const started = performance.now();
+  try { await resumePolling(); } catch (_) {}
+  const left = RETRY_SHOWN_MS - (performance.now() - started);
+  if (left > 0) await new Promise(resolve => setTimeout(resolve, left));
+  button.classList.remove('retrying');
+  if (panelConnection.showing()) {
+    button.textContent = 'Still no answer';
+    await new Promise(resolve => setTimeout(resolve, RETRY_RESULT_MS));
+  }
+  button.textContent = 'Retry now';
+  button.disabled = false;
+});
 // The panel sends the log from the last line the page has (log_delta), not all of it: the whole log every 2 seconds
 // was too much for a phone away from home. Lines the panel has dropped off the top (before log_first) go here too.
 function withNewLogLines(data) {

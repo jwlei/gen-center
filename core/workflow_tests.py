@@ -7,7 +7,7 @@ import json
 import os
 
 from core import lora_tests, workflow_options
-from core.saved_workflows import shorthand
+from core.saved_workflows import picker_label
 
 ENV = "GEN_CENTER_WORKFLOW_TEST"
 # What the form's "workflow_test" asks for, and the set's workflow pill for it.
@@ -46,8 +46,8 @@ def variations(kind, entries, images=0, form=None, private=False):
     for entry in entries:
         if entry.get("pipeline") != "image" or "problem" in entry or not made_for(kind, entry["takes"], images):
             continue
-        # Named as Output names a workflow (Krea2_T2I_turbo_int8), as each image's title and its pill in the viewer.
-        workflow = {"kind": kind, "workflow": entry["path"], "label": shorthand(entry["path"], "image")}
+        # Named as Generate's picker names it, as each image's title and its pill in the viewer.
+        workflow = {"kind": kind, "workflow": entry["path"], "label": picker_label(entry["path"], "image")}
         try:
             loras = lora_tests.variations(asked, entry["takes"].get("options") or [], private)
         except ValueError:
@@ -100,6 +100,8 @@ def pill(shots):
 
 
 def shot_workflow(shot):
-    """The workflow one comparison image ran through, as its pill says it, or None."""
+    """The workflow one comparison image ran through, as its pill says it (as Generate's picker names it), or None."""
     test = shot.get("workflow_test")
-    return test.get("label") if isinstance(test, dict) else None
+    if not isinstance(test, dict):
+        return None
+    return picker_label(test["workflow"], test.get("label")) if test.get("workflow") else test.get("label")
