@@ -74,8 +74,10 @@ function renderCollections() {
   if (shown.length < 2) { collectionsArranging = false; collectionSelected = null; }
   if (!shown.some(c => c.id === collectionSelected)) collectionSelected = null;
   // Arranging is for two or more, so its icon has a thin line of its own then.
-  box.innerHTML = (shown.length > 1 ? `<div class="collections-head"><span>Collections</span><button type="button" class="collections-arrange" data-arrange-collections="1" aria-pressed="false" title="Arrange: tap one, then drag it where it goes" aria-label="Arrange">${ICONS.arrange}</button></div>` : '')
-    + `<div class="collection-tiles">${shown.map(collectionHtml).join('')}</div>`;
+  flipList(box, '.collection-tile', el => el.dataset.collection, () => {
+    box.innerHTML = (shown.length > 1 ? `<div class="collections-head"><span>Collections</span><button type="button" class="collections-arrange" data-arrange-collections="1" aria-pressed="false" title="Arrange: tap one, then drag it where it goes" aria-label="Arrange">${ICONS.arrange}</button></div>` : '')
+      + `<div class="collection-tiles">${shown.map(collectionHtml).join('')}</div>`;
+  });
   // Shown or hidden as you left them (shown to begin with); the icon only when there are some.
   $('collectionsToggle').hidden = !shown.length;
   showCollectionArranging();
@@ -211,12 +213,18 @@ $('collectionEditSave').addEventListener('click', async () => {
 $('collectionEditDelete').addEventListener('click', async e => {
   const button = e.currentTarget, edit = collectionEditing;
   if (!edit || !secondTap(button)) return;
-  button.disabled = true;
-  const body = await collectionRequest(`/api/collections/${encodeURIComponent(edit.id)}/delete`, {});
-  button.disabled = false;
-  if (!body) return;
+  // Gone at once, with what is in it: the box closes, the tile fades out and the rest close up. Refused, they come back.
+  const collection = collections.find(c => c.id === edit.id), items = collection ? collection.items : [];
+  const images = items.filter(item => item.kind === 'image'), films = items.filter(item => item.kind === 'film').map(item => item.name);
   $('collectionEdit').close();
-  poll();
+  await localChanges.make({
+    fade: $('collections').querySelector(`.collection-tile[data-collection="${cssEscape(edit.id)}"]`),
+    apply: data => films.reduce((rest, name) => withoutFilm(rest, 'video', name),
+      { ...withoutImageFiles(data, images), collections: (data.collections || []).filter(c => c.id !== edit.id) }),
+    landed: data => !(data.collections || []).some(c => c.id === edit.id),
+    request: () => postJson(`/api/collections/${encodeURIComponent(edit.id)}/delete`, {}),
+    failed: 'Could not delete the collection',
+  });
 });
 $('collectionEditCancel').addEventListener('click', () => $('collectionEdit').close());
 $('collectionEdit').addEventListener('click', e => { if (e.target === $('collectionEdit')) $('collectionEdit').close(); });
@@ -224,10 +232,10 @@ async function collectionRequest(url, payload) {
   try {
     const response = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
     const body = await response.json();
-    if (!response.ok || !body.ok) { alert(body.error || 'That could not be done.'); return null; }
+    if (!response.ok || !body.ok) { actionFailed(body.error || 'That could not be done.'); return null; }
     return body;
   } catch (error) {
-    alert('Could not reach the panel. Try again.');
+    actionFailed('Could not reach the panel. Try again.');
     return null;
   }
 }
@@ -263,34 +271,35 @@ function closeMoveMenu(then) {
   box.classList.add('closing');
   setTimeout(() => { box.close(); box.classList.remove('closing'); if (then) then(); }, 150);
 }
+// Moved at once: the menu goes, the preview goes on to the next, and Output and the collections show it where it went.
+// Refused, it comes back where it was and the banner at the top says why; the preview stays where you are.
+let moveCount = 0;
 async function moveViewed(target, button = null) {
   const item = viewedItem();
-  if (!item || $('moveSheet').classList.contains('moving')) return;
-  // The one tapped lights up, the others dim, while it moves; a check on it once it has, then the menu goes.
-  $('moveSheet').classList.add('moving');
+  if (!item) return;
   if (button) button.classList.add('picked');
   // Where the preview goes once it has moved: the next there, or the one before, or closed if it was the last.
   const next = viewerCollection ? collectionNeighbour(1) || collectionNeighbour(-1) : viewerNeighbour(1) || viewerNeighbour(-1);
+  const original = viewing;
   $('moveError').hidden = true;
-  let body;
-  try {
-    const response = await fetch('/api/collections/move', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...item, ...target }) });
-    body = await response.json();
-    if (!response.ok || !body.ok) throw new Error(body.error || 'It could not be moved.');
-  } catch (error) {
-    $('moveError').textContent = error.message === 'Failed to fetch' ? 'Could not reach the panel. Try again.' : error.message;
-    $('moveError').hidden = false;
-    $('moveSheet').classList.remove('moving');
-    if (button) button.classList.remove('picked');
-    return;
-  }
-  // Moved: its border flashes once, then the menu goes.
-  if (button) button.classList.add('moved');
-  await new Promise(resolve => setTimeout(resolve, 380));
-  $('moveSheet').classList.remove('moving');
-  closeMoveMenu();
-  await poll();
-  if (next) next(); else closeViewer();
+  // A new one has a stand-in id until the panel has made it, then its own.
+  const into = target.to ? { id: target.to, name: (collections.find(c => c.id === target.to) || {}).name }
+    : { id: `new-${++moveCount}`, name: target.new };
+  const there = isEntry(item);
+  const done = localChanges.make({
+    apply: data => withMovedToCollection(data, item, into),
+    landed: data => (data.collections || []).some(c => (target.to ? c.id === target.to : c.name === target.new) && c.items.some(there)),
+    request: async () => {
+      const body = await postJson('/api/collections/move', { ...item, ...target });
+      if (body.ok && body.collection && body.collection.id) into.id = body.collection.id;
+      return body;
+    },
+    failed: 'Could not move it',
+  });
+  closeMoveMenu(() => { if (button) button.classList.remove('picked'); });
+  // It shrinks away, and the next fades in, as a delete does.
+  if (viewing === original) { if (next) transitionViewer(viewerMedia(), 'removed', next, viewerMedia); else closeViewer(); }
+  await done;
 }
 $('moveList').addEventListener('click', e => {
   if (e.target.closest && e.target.closest('[data-move-new]')) {
@@ -522,6 +531,84 @@ $('thumbGridBody').addEventListener('wheel', e => {
   e.preventDefault();
   setThumbSize(thumbSize * Math.exp(-e.deltaY * 0.01), e.clientY - $('thumbGridBody').getBoundingClientRect().top);
 }, { passive: false });
+// Pulled on past its top or bottom: the album or collection before or after this one in Output, as it lists them
+// (the collections above, then the sets). A finger dragged on past the edge, or a wheel or trackpad turned on against
+// it, until the hint over that edge is full; let go short of that, and nothing changes.
+const GRID_PULL = 90, GRID_WHEEL_PULL = 260;
+function gridAlbums() {
+  if (pipeline === 'shorts') return [];
+  return [...shownCollections().map(c => ({ collection: c.id, name: c.name })),
+    ...outputItems().filter(item => item.set).map(item => ({ set: item.set.id, name: item.set.label }))];
+}
+function gridNeighbour(by) {
+  const what = thumbGridWhat;
+  if (!what || what.films) return null;
+  const albums = gridAlbums();
+  const at = albums.findIndex(a => what.collection ? a.collection === what.collection : a.set === what.set);
+  return at < 0 ? null : albums[at + by] || null;
+}
+function showGridPull(by, amount) {
+  const hint = $('thumbGridPull'), next = by && gridNeighbour(by);
+  if (!next) { hint.hidden = true; return; }
+  hint.hidden = false;
+  hint.classList.toggle('at-top', by < 0);
+  hint.classList.toggle('ready', amount >= 1);
+  hint.textContent = `${by < 0 ? '↑' : '↓'} ${amount >= 1 ? 'Let go for' : by < 0 ? 'Previous:' : 'Next:'} ${next.name}`;
+  hint.style.opacity = String(Math.min(1, 0.25 + amount * 0.75));
+}
+function stepGrid(by) {
+  const next = gridNeighbour(by);
+  $('thumbGridPull').hidden = true;
+  if (!next) return false;
+  openThumbGrid(next.collection ? { collection: next.collection } : { set: next.set });
+  // On down, it starts at its top; back up, at its bottom, as if the two were one long grid.
+  const body = $('thumbGridBody');
+  body.scrollTop = by > 0 ? 0 : body.scrollHeight;
+  body.classList.remove('grid-in-down', 'grid-in-up');
+  void body.offsetWidth;
+  body.classList.add(by > 0 ? 'grid-in-down' : 'grid-in-up');
+  return true;
+}
+const gridAtTop = body => body.scrollTop <= 0;
+const gridAtBottom = body => body.scrollTop + body.clientHeight >= body.scrollHeight - 1;
+let gridPull = null;
+$('thumbGridBody').addEventListener('touchstart', e => {
+  const body = $('thumbGridBody');
+  gridPull = e.touches.length === 1 && !thumbGridArranging
+    ? { y: e.touches[0].clientY, top: gridAtTop(body), bottom: gridAtBottom(body), by: 0, amount: 0 } : null;
+}, { passive: true });
+$('thumbGridBody').addEventListener('touchmove', e => {
+  if (!gridPull || e.touches.length !== 1 || gridPinch) { gridPull = null; showGridPull(0); return; }
+  const dy = e.touches[0].clientY - gridPull.y;
+  // Only past the edge it started at: a scroll that reaches the top on the way isn't a pull.
+  gridPull.by = dy > 0 && gridPull.top ? -1 : dy < 0 && gridPull.bottom ? 1 : 0;
+  gridPull.amount = gridPull.by ? Math.abs(dy) / GRID_PULL : 0;
+  showGridPull(gridPull.by, gridPull.amount);
+}, { passive: true });
+$('thumbGridBody').addEventListener('touchend', () => {
+  const pull = gridPull;
+  gridPull = null;
+  if (pull && pull.by && pull.amount >= 1) stepGrid(pull.by); else showGridPull(0);
+}, { passive: true });
+$('thumbGridBody').addEventListener('touchcancel', () => { gridPull = null; showGridPull(0); }, { passive: true });
+// A wheel: a fresh turn (a pause before it) that starts at the edge, so the scroll that reached it, and its trackpad
+// glide after, never carries on into the next.
+let gridWheel = null, gridWheelAt = 0;
+$('thumbGridBody').addEventListener('wheel', e => {
+  if (e.ctrlKey || thumbGridArranging) return;
+  const body = $('thumbGridBody'), now = performance.now(), fresh = now - gridWheelAt > 250;
+  gridWheelAt = now;
+  const by = e.deltaY < 0 && gridAtTop(body) ? -1 : e.deltaY > 0 && gridAtBottom(body) ? 1 : 0;
+  if (fresh) gridWheel = by ? { by, total: 0 } : null;
+  if (!gridWheel || by !== gridWheel.by) { gridWheel = null; showGridPull(0); return; }
+  gridWheel.total += Math.abs(e.deltaMode === 1 ? e.deltaY * 16 : e.deltaY);
+  const amount = gridWheel.total / GRID_WHEEL_PULL;
+  if (amount >= 1) { gridWheel = null; stepGrid(by); return; }
+  showGridPull(by, amount);
+  clearTimeout(gridWheel.fade);
+  gridWheel.fade = setTimeout(() => { if (performance.now() - gridWheelAt >= 400) showGridPull(0); }, 450);
+}, { passive: true });
+$('thumbGrid').addEventListener('close', () => { gridPull = gridWheel = null; $('thumbGridPull').hidden = true; });
 function gridTapped(e) {
   const tap = gridTap;
   gridTap = null;
@@ -843,18 +930,22 @@ let viewerTransition = null;
 function clearViewerTransition() {
   if (!viewerTransition) return;
   const { media, ghost, ready, failed, event, timer } = viewerTransition;
-  media.removeEventListener(event, ready);
-  media.removeEventListener('error', failed);
+  if (media) {
+    media.removeEventListener(event, ready);
+    media.removeEventListener('error', failed);
+  }
   clearTimeout(timer);
   ghost.remove();
   viewerTransition = null;
 }
 // media: what shows now, left as a picture of itself that slides away. target: what shows next, whose loading lets it
 // go: the same element, or the other one when a swipe goes between a film and a set (it never loads in the old one,
-// so waiting on that left the screen black).
+// so waiting on that left the screen black); or a function that says which, once it is open. direction 'removed'
+// (deleted, or moved to a collection): it shrinks away as the next fades in, as a deleted batch does in Output.
 function transitionViewer(media, direction, open, target = media) {
   clearViewerTransition();
-  if (window.matchMedia('(prefers-reduced-motion: reduce)').matches ||
+  const reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  if (reduced ||
       (media === $('viewerVideo') ? !(media.readyState >= 2 && media.videoWidth && media.videoHeight) : !media.complete || !media.naturalWidth)) {
     open();
     return;
@@ -875,19 +966,29 @@ function transitionViewer(media, direction, open, target = media) {
   Object.assign(ghost.style, { left: `${box.left}px`, top: `${box.top}px`, width: `${box.width}px`, height: `${box.height}px`, transform: 'none' });
   ghost.setAttribute('aria-hidden', 'true');
   $('imageViewer').appendChild(ghost);
-  const event = target === $('viewerVideo') ? 'loadeddata' : 'load';
   const failed = () => clearViewerTransition();
+  const transition = viewerTransition = { media: null, ghost, ready: null, failed, event: null, timer: setTimeout(clearViewerTransition, 10000) };
+  open();
+  if (viewerTransition !== transition) return;  // Opening it ended this (the viewer closed)
+  // Listened for once it is open: its picture loads after this, never before.
+  const goal = typeof target === 'function' ? target() : target;
+  const event = goal === $('viewerVideo') ? 'loadeddata' : 'load';
   const ready = () => {
-    clearTimeout(viewerTransition.timer);
+    clearTimeout(transition.timer);
     ghost.addEventListener('animationend', clearViewerTransition, { once: true });
     ghost.classList.add(direction);
-    viewerTransition.timer = setTimeout(clearViewerTransition, 500);
+    if (direction === 'removed' && goal.animate) {
+      goal.animate([{ opacity: 0, transform: 'scale(.94)' }, { opacity: 1, transform: 'none' }],
+        { duration: 300, delay: 90, easing: 'cubic-bezier(.2,.8,.2,1)', fill: 'backwards' });
+    }
+    transition.timer = setTimeout(clearViewerTransition, 500);
   };
-  target.addEventListener(event, ready, { once: true });
-  target.addEventListener('error', failed, { once: true });
-  viewerTransition = { media: target, ghost, ready, failed, event, timer: setTimeout(clearViewerTransition, 10000) };
-  open();
+  Object.assign(transition, { media: goal, ready, event });
+  goal.addEventListener(event, ready, { once: true });
+  goal.addEventListener('error', failed, { once: true });
 }
+// What shows in the viewer now: its film, or its picture.
+const viewerMedia = () => $(viewing && viewing.film ? 'viewerVideo' : 'viewerImage');
 // A film in the viewer, playing; a swipe goes to the one beside it in Output.
 function openFilm(name, filmFolder = folder) {
   const films = viewerCollection ? collectionAlbums(viewerCollection).films : visibleFilms(), at = films.findIndex(v => v.name === name);
@@ -929,27 +1030,27 @@ function downloadFile(url) {
 function openViewer(id, position) {
   const set = findSet(id), picture = set && set.images.find(p => p.position === position);
   if (!picture) return;
-  viewing = { id, position };
+  viewing = { id, position, file: picture.file };
   document.body.dataset.viewing = 'image';
   showViewerMedia(false);
   $('viewerVariations').title = 'Make it again: the exact prompt and settings it was made with, in Generate (its seed too, if that was fixed)';
   $('viewerVariations').setAttribute('aria-label', 'Make it again');
   resetZoom();
-  const url = `/image-runs/${encodeURIComponent(id)}/files/${position}?v=${picture.version}`;
-  // The small picture the set already shows comes at once; the full one replaces it as soon as it has arrived.
-  // The full file can be many megabytes, which is why a preview used to take so much longer than the album.
-  const img = $('viewerImage');
-  img.dataset.full = url;
-  img.src = `/image-runs/${encodeURIComponent(id)}/thumbnails/${position}?v=${picture.version}`;
-  const full = new Image();
-  full.onload = () => { if (img.dataset.full === url) img.src = url; };
-  full.src = url;
-  $('viewerImage').alt = picture.title;
-  const at = set.images.indexOf(picture);
-  setViewerTitle(picture.title);
   // In a collection: where it is in the collection's images, not in the set it was made in.
   const album = viewerCollection ? collectionAlbums(viewerCollection).images : set.images.filter(p => !p.collection);
   const place = album.findIndex(p => (p.set || set.id) === id && p.position === position);
+  const base = `/image-runs/${encodeURIComponent(id)}`, version = `?v=${picture.version}`;
+  const url = `${base}/files/${position}${version}`;
+  // The small picture the set already shows comes at once; the screen-sized one replaces it once it has arrived and
+  // been decoded; the full file only once zoomed in past that (wantFullImage). The full file can be tens of MB, and
+  // decoding a 17-megapixel one in one go made a phone lag.
+  const img = $('viewerImage');
+  img.dataset.full = url;
+  img.dataset.size = picture.resolution || '';
+  img.src = `${base}/thumbnails/${position}${version}`;
+  showDecoded(img, `${base}/previews/${position}${version}`, () => prefetchPreviews(album, place, id));
+  $('viewerImage').alt = picture.title;
+  setViewerTitle(picture.title);
   $('viewerCount').textContent = album.length > 1 && place >= 0 ? `${place + 1} of ${album.length}` : '';
   // This picture's own upscale, not another of the set's.
   pictureMetadata(set, picture);
@@ -964,14 +1065,59 @@ function openViewer(id, position) {
   // Its set, for Prompts, More like this and its settings: asked for now, so each opens at once.
   prefetch(runUrl(id));
 }
+// What the viewer shows next (url), swapped in only once it is decoded: decoding a big picture while it is drawn
+// held the page still. then: once it shows.
+function showDecoded(img, url, then = null) {
+  img.dataset.want = url;
+  const next = new Image();
+  next.decoding = 'async';
+  const show = () => {
+    if (img.dataset.want !== url) return;  // Moved on to another in the meantime
+    img.src = url;
+    if (then) then();
+  };
+  next.onload = () => { if (!next.decode) show(); };
+  next.src = url;
+  // A browser that can't decode it ahead still shows it.
+  if (next.decode) next.decode().then(show, show);
+}
+// The pictures either side of this one in its album, at screen size, fetched once it shows: a swipe then opens at once.
+function prefetchPreviews(album, place, id) {
+  if (place < 0 || album.length < 2) return;
+  for (const by of [1, -1]) {
+    const p = album[(place + by + album.length) % album.length];
+    if (p && p.version) new Image().src = `/image-runs/${encodeURIComponent(p.set || id)}/previews/${p.position}?v=${p.version}`;
+  }
+}
+// The picture's own size, not that of the copy shown: as Output's catalogue has it, or the full file's once it shows.
+function viewedImageSize() {
+  const img = $('viewerImage'), saved = /^(\d+)\s*[x×]\s*(\d+)$/i.exec(img.dataset.size || '');
+  if (saved) return [+saved[1], +saved[2]];
+  return img.dataset.full && String(img.src).endsWith(img.dataset.full) && img.naturalWidth ? [img.naturalWidth, img.naturalHeight] : null;
+}
+// The longer side the screen-sized copy has at most (pipelines/image/media.py PREVIEW_EDGE).
+const PREVIEW_EDGE = 2560;
+// Zoomed in past what the screen-sized copy has for the screen's pixels, the full file takes its place, decoded first.
+function wantFullImage() {
+  const img = $('viewerImage'), full = img.dataset.full;
+  if (!viewing || viewing.film || !full || img.dataset.want === full) return;
+  const size = viewedImageSize();
+  if (size && Math.max(...size) <= PREVIEW_EDGE) return;  // The copy is the whole picture already
+  const boxW = img.offsetWidth, boxH = img.offsetHeight, ratio = size ? size[0] / size[1] : boxW / (boxH || 1);
+  const shownW = Math.min(boxW, boxH * ratio), copyW = size ? size[0] * PREVIEW_EDGE / Math.max(...size) : 0;
+  const needed = shownW * zoom.scale * (window.devicePixelRatio || 1);
+  if (size ? needed > copyW * 1.05 : zoom.scale > 1.5) showDecoded(img, full);
+}
 // The viewer's size, one way whichever told it (the saved "880x1920", or the picture once loaded): "880 × 1920".
 function sizeText(size) { return String(size || '').replace(/^(\d+)\s*[x×]\s*(\d+)$/i, '$1 × $2'); }
 $('viewerImage').addEventListener('load', () => {
   const img = $('viewerImage');
-  if (img.dataset.full && !String(img.src).endsWith(img.dataset.full)) return;  // The small picture, while the full one comes
-  $('viewerRes').textContent = viewing && !viewing.film && img.naturalWidth ? sizeText(`${img.naturalWidth}x${img.naturalHeight}`) : '';
+  if (String(img.src).includes('/thumbnails/')) return;  // The small picture, while the screen-sized one comes
+  // The picture's own size, not the screen-sized copy's.
+  const size = viewing && !viewing.film ? viewedImageSize() : null;
+  $('viewerRes').textContent = size ? sizeText(`${size[0]}x${size[1]}`) : '';
   // Past 1440p on its shorter side, SeedVR2 can't take it: greyed, but the other ways still can.
-  $('viewerUpscale').classList.toggle('dim', !!viewing && !viewing.film && Math.min(img.naturalWidth, img.naturalHeight) > UPSCALE_MOST_SIDE);
+  $('viewerUpscale').classList.toggle('dim', !!size && Math.min(...size) > UPSCALE_MOST_SIDE);
 });
 // The image before or after this one in its set: a swipe, or the arrow keys. Round in a loop: from the last on to
 // the first, and from the first back to the last.
@@ -1022,12 +1168,34 @@ function applyZoom(ease = false) {
   if (zoom.scale > 1) clampZoom(image);
   image.classList.toggle('easing', ease);
   image.style.transform = zoom.scale > 1 ? `translate(${zoom.x}px, ${zoom.y}px) scale(${zoom.scale})` : '';
+  // Not while fingers are on it: swapping in a 17-megapixel picture mid-pinch stalled it (gestureEnded does it then).
+  if (zoom.scale > 1 && !pinch && !drag) wantFullImage();
 }
+// While a finger moves it: the picture once per frame, however many touches come in that frame.
+let zoomFrame = null;
+function applyZoomSoon() {
+  if (zoomFrame !== null) return;
+  zoomFrame = requestAnimationFrame(() => { zoomFrame = null; applyZoom(); });
+}
+// A finger on it: the picture gets a layer of its own, so moving and scaling it is the GPU's work alone, and the
+// page's own updates wait (viewerGesturing, polling.js). Lifted: the layer goes, so it is drawn again sharp at its
+// new size, the full file comes if it now needs it, and what waited is drawn.
+function gestureStarted() {
+  $('viewerImage').classList.add('gesturing');
+}
+function gestureEnded() {
+  if (pinch || drag) return;
+  if (zoomFrame !== null) { cancelAnimationFrame(zoomFrame); zoomFrame = null; }
+  $('viewerImage').classList.remove('gesturing');
+  applyZoom();
+  releaseHeldStatus();
+}
+const viewerGesturing = () => !!(pinch || drag);
 function resetZoom() {
   zoom.scale = 1;
   zoom.x = zoom.y = 0;
   pinch = drag = null;
-  applyZoom();
+  gestureEnded();
 }
 // To scale to s around the screen point m, from where it was (s0, t0) with the image's centre at c.
 function zoomAround(s, m, s0, t0, c) {
@@ -1048,8 +1216,10 @@ $('viewerImage').addEventListener('touchstart', e => {
     pinch = { dist: apart(e.touches[0], e.touches[1]), mid: between(e.touches[0], e.touches[1]), scale: zoom.scale,
               at: { x: zoom.x, y: zoom.y }, centre: imageCentre() };
     drag = null;
+    gestureStarted();
   } else if (e.touches.length === 1 && zoom.scale > 1) {
     drag = { x: e.touches[0].clientX - zoom.x, y: e.touches[0].clientY - zoom.y };
+    gestureStarted();
   }
 }, { passive: false });
 $('viewerImage').addEventListener('touchmove', e => {
@@ -1061,17 +1231,20 @@ $('viewerImage').addEventListener('touchmove', e => {
     zoom.x = m.x - pinch.centre.x - (s / pinch.scale) * (pinch.mid.x - pinch.centre.x - pinch.at.x);
     zoom.y = m.y - pinch.centre.y - (s / pinch.scale) * (pinch.mid.y - pinch.centre.y - pinch.at.y);
     if (s === 1) zoom.x = zoom.y = 0;
-    applyZoom();
+    applyZoomSoon();
   } else if (drag && e.touches.length === 1) {
     e.preventDefault();
     zoom.x = e.touches[0].clientX - drag.x;
     zoom.y = e.touches[0].clientY - drag.y;
-    applyZoom();
+    applyZoomSoon();
   }
 }, { passive: false });
+// The browser took the touch away (a call, the system's own gesture): let go, as a lift would.
+$('viewerImage').addEventListener('touchcancel', () => { pinch = drag = null; gestureEnded(); });
 $('viewerImage').addEventListener('touchend', e => {
   if (e.touches.length < 2) pinch = null;
   if (!e.touches.length) drag = null;
+  gestureEnded();
   if (e.touches.length || e.changedTouches.length !== 1) return;
   // Two taps close together: in to 2.5x where you tapped, or back out.
   const touch = e.changedTouches[0], now = Date.now();
@@ -1289,6 +1462,7 @@ $('imageViewer').addEventListener('close', () => {
   $('viewerMetaDetails').hidden = true;
   $('viewerMeta').setAttribute('aria-expanded', 'false');
   $('viewerImage').removeAttribute('src');
+  $('viewerImage').dataset.want = '';  // A copy still decoding doesn't show in the closed viewer
   $('viewerVideo').pause();
   $('viewerVideo').removeAttribute('src');
   disarm($('viewerDelete'));
@@ -1322,58 +1496,27 @@ $('viewerDelete').addEventListener('click', async () => {
     const other = at < 0 ? null : items[at + 1] || items[at - 1];
     if (other) after = other.film ? { film: other.film.name } : { set: other.set.id, file: other.set.images[0]?.file };
   }
-  let body;
-  $('viewerDelete').disabled = true;
-  $('viewerDelete').classList.add('deleting');
-  $('viewerDelete').setAttribute('aria-busy', 'true');
-  try {
-    body = await (await fetch(url, { method: 'POST' })).json();
-  } catch (e) {
-    body = { error: 'Could not reach the panel. Try again.' };
+  // The next in its own set comes first, found by its file: the set isn't renumbered until the panel has the delete.
+  if (!viewerCollection && !film && next) after = { set: id, file: next.file };
+  const file = !film && (original.file || ((findSet(id) || { images: [] }).images.find(p => p.position === position) || {}).file);
+  // Gone at once: the viewer goes on to the next, and Output closes up behind it. Refused, it comes back in Output and
+  // the banner says why; the viewer stays where you are.
+  const done = localChanges.make({
+    apply: data => film ? withoutFilm(data, original.folder, name) : withoutImageFiles(data, [{ set: id, file }]),
+    landed: data => film ? !hasFilm(data, original.folder, name) : !hasImage(data, id, file),
+    // An image by its file too: the next delete can come before this set is renumbered here.
+    request: () => postJson(url, film || !file ? null : { file }),
+    failed: film ? 'Could not delete the video' : 'Could not delete the image',
+  });
+  if (viewing === original) {
+    const nextSet = after && after.set && findSet(after.set), picture = nextSet && nextSet.images.find(p => p.file === after.file);
+    const filmFolder = viewerCollection ? 'video' : original.folder || 'video';
+    const next = after && after.film && (lastVideos[filmFolder] || []).some(v => v.name === after.film) ? () => openFilm(after.film, filmFolder)
+      : picture ? () => openViewer(nextSet.id, picture.position) : null;
+    // It shrinks away, and the next fades in under it (an image or a film, whichever it is).
+    if (next) transitionViewer(viewerMedia(), 'removed', next, viewerMedia); else closeViewer();
   }
-  try {
-    if (!body.ok) { alert(body.error || 'Could not delete it.'); return; }
-    if (viewerCollection) {
-      await poll();
-      if (viewing !== original) return;  // Moved on in the meantime
-      if (after && after.film && (lastVideos.video || []).some(v => v.name === after.film)) { openFilm(after.film, 'video'); return; }
-      const set = after && after.set && findSet(after.set), picture = set && set.images.find(p => p.file === after.file);
-      if (picture) openViewer(set.id, picture.position); else closeViewer();
-      return;
-    }
-    if (!film && Array.isArray(body.images)) {
-      const updated = imageSets.find(s => s.id === id), fullSet = allImageSets.find(s => s.id === id);
-      const membership = new Map((fullSet ? fullSet.images : pictures).map(p => [p.file, p.collection]));
-      const images = body.images.map(p => ({ ...p, collection: membership.get(p.file) }));
-      if (fullSet) fullSet.images = images;
-      if (updated) updated.images = images.filter(p => !p.collection);
-      if (viewing && !viewing.film && viewing.id === id) {
-        const current = viewing === original || viewing.position === position ? next && next.position : viewing.position;
-        const nextPosition = current && current - (current > position ? 1 : 0);
-        if (updated && updated.images.some(p => p.position === nextPosition)) openViewer(id, nextPosition);
-        else if (after && after.film) openFilm(after.film, 'video');
-        else if (after && after.set) {
-          const nextSet = findSet(after.set), picture = nextSet && nextSet.images.find(p => p.file === after.file);
-          if (picture) openViewer(nextSet.id, picture.position); else closeViewer();
-        } else closeViewer();
-      }
-      renderImageSets();
-    } else {
-      lastVideos[original.folder] = (lastVideos[original.folder] || []).filter(v => v.name !== name);
-      if (viewing === original) {
-        if (after && after.film) openFilm(after.film, original.folder);
-        else if (after && after.set) {
-          const nextSet = findSet(after.set), picture = nextSet && nextSet.images.find(p => p.file === after.file);
-          if (picture) openViewer(nextSet.id, picture.position); else closeViewer();
-        } else closeViewer();
-      }
-    }
-    poll();
-  } finally {
-    $('viewerDelete').disabled = false;
-    $('viewerDelete').classList.remove('deleting');
-    $('viewerDelete').setAttribute('aria-busy', 'false');
-  }
+  await done;
 });
 $('imageSets').addEventListener('click', async e => {
   if (outputArranging) {
@@ -1408,9 +1551,62 @@ $('imageSets').addEventListener('click', async e => {
   else if (d.shots) openShots(d.shots);
   else if (d.deleteSet) {
     if (e.target.classList.contains('deleting') || !secondTap(e.target)) return;
-    await confirmedDelete(e.target, `/image-runs/${encodeURIComponent(d.deleteSet)}/delete`);
+    const button = e.target, id = d.deleteSet, url = `/image-runs/${encodeURIComponent(id)}/delete`;
+    const set = findSet(id);
+    // Still in the queue: the panel asks first, so it is asked before anything goes. Take its jobs out and delete it,
+    // or leave it be.
+    let ask = set && set.queued ? (await confirmedDelete(button, url) || {}).queued : null;
+    if (!set || !set.queued) {
+      const body = await deleteImageSet(button, id, url);
+      ask = body && body.queued;
+    }
+    if (!ask) return;
+    // Back where it was: the question grows out of its trash as drawn now.
+    const anchor = $('imageSets').querySelector(`[data-delete-set="${cssEscape(id)}"]`) || button;
+    if (await askQueuedDelete(anchor, ask)) await deleteImageSet(anchor, id, url, { dequeue: true });
   }
 });
+// A set deleted: it fades out and is gone from Output at once, the rest closing up; refused, it comes back.
+async function deleteImageSet(button, id, url, send = null) {
+  return localChanges.make({
+    fade: button.closest && button.closest('[data-output-key]'),
+    apply: data => withoutImageSet(data, id),
+    landed: data => !(data.image_sets || []).some(set => set.id === id),
+    request: () => postJson(url, send),
+    failed: 'Could not delete the set',
+  });
+}
+const cssEscape = text => (window.CSS && CSS.escape ? CSS.escape(text) : String(text).replace(/["\\]/g, '\\$&'));
+// The menu that grows up out of a set's trash when the queue still has jobs for it. Resolves true to take them out and
+// delete the set, false to keep it (Keep, a tap outside, or Escape).
+function askQueuedDelete(button, jobs) {
+  const box = $('queuedDelete');
+  $('queuedDeleteText').textContent = jobs.length === 1 ? `It's in the queue: ${jobs[0]}`
+    : `It's in the queue ${jobs.length} times: ${jobs.join(' · ')}`;
+  box.classList.remove('closing');
+  box.showModal();
+  const anchor = button.getBoundingClientRect(), width = Math.min(300, window.innerWidth - 32);
+  Object.assign(box.style, { inset: 'auto', margin: '0', width: `${width}px`,
+    left: `${Math.max(16, Math.min(anchor.right - width, window.innerWidth - 16 - width))}px` });
+  box.style.top = `${Math.max(16, anchor.top - 6 - box.getBoundingClientRect().height)}px`;
+  return new Promise(resolve => {
+    const finish = answer => {
+      box.removeEventListener('click', onClick);
+      box.removeEventListener('cancel', onCancel);
+      box.classList.add('closing');
+      setTimeout(() => { box.close(); box.classList.remove('closing'); resolve(answer); }, 150);
+    };
+    const onCancel = ev => { ev.preventDefault(); finish(false); };
+    const onClick = ev => {
+      const pick = ev.target.closest && ev.target.closest('[data-queued-delete]');
+      if (pick) { finish(pick.dataset.queuedDelete === 'delete'); return; }
+      const r = box.getBoundingClientRect();
+      if (ev.target === box && (ev.clientX < r.left || ev.clientX > r.right || ev.clientY < r.top || ev.clientY > r.bottom)) finish(false);
+    };
+    box.addEventListener('click', onClick);
+    box.addEventListener('cancel', onCancel);
+  });
+}
 
 
 // preload="none": a browser allows about 6 connections per site, and films loading

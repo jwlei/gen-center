@@ -9,6 +9,7 @@ made at 0.5 / 1 / 1.5 / 2):
   ultra_real_v1_NSFW      0.7-0.8 (a mirror of the release); kept 96 / 88 / 42 / 8%
   ultra_real_v2_pro_SFW   UltraReal KR2_V2: 0.6-0.8; kept 96 / 65 / 8 / 4%
   Moss_ultra_real_v2_SFW  no advice found; one comparison, only 0.5 kept
+  fingering_V0.1_NSFW     creator: 0.6-0.85, no trigger word, made to stack with character LoRAs; not compared yet
 
 Keyed by the file's name without its folder or .safetensors, lower case.
 """
@@ -24,6 +25,8 @@ RANGES = {
     "krea2_ultra_real_v1_nsfw": {"ours": "0.5–1", "author": "0.7–0.8"},
     "krea2_ultra_real_v2_pro_sfw": {"ours": "0.4–0.8", "author": "0.6–0.8"},
     "moss_ultra_real_v2_sfw": {"ours": "0.5–0.8", "author": None},
+    # Until a comparison says otherwise, the creator's own.
+    "krea2_fingering_v0.1_nsfw": {"ours": "0.6–0.85", "author": "0.6–0.85"},
 }
 
 

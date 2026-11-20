@@ -6,7 +6,9 @@ import gzip
 import io
 import json
 import os
+import re
 import types
+import zlib
 from datetime import datetime, timedelta
 import shutil
 import stat
@@ -77,6 +79,19 @@ class RestartReasonTest(unittest.TestCase):
         self.assertIsNone(webapp.restart_reason(refused, 1))
         plain, _ = webapp.explain_failure(refused, 1)
         self.assertTrue(plain.startswith("A LoRA this run saved"), plain)
+
+    def test_a_hung_comfyui_restarts_it_before_the_first_image(self):
+        # The local prompt writer has ComfyUI free its memory first: a hung ComfyUI answers that with a 504.
+        hung = self.job("Waiting for ComfyUI to finish clearing its models and caches...",
+                        "❌ Could not verify ComfyUI memory cleanup: 504 Server Error: Gateway Timeout for url: "
+                        "http://127.0.0.1:8188/gen-center/free")
+        self.assertEqual(webapp.restart_reason(hung, 1), "ComfyUI stopped answering")
+        plain, _ = webapp.explain_failure(hung, 1)
+        self.assertTrue(plain.startswith("ComfyUI stopped answering"), plain)
+        queued = self.job("❌ Timed out after 3600s waiting for ComfyUI to start this prompt.")
+        self.assertEqual(webapp.restart_reason(queued, 1), "ComfyUI stopped answering")
+        self.assertIsNone(webapp.restart_reason(self.job("❌ Timed out after 7200s rendering this ComfyUI clip."), 1),
+                          "a render that is only slow is not retried")
 
     def test_aimdo_still_restarts_even_beside_a_refused_setting(self):
         job = self.job("aimdo memory compile error", "LoRA is one of a, b.")
@@ -958,6 +973,42 @@ class PanelTest(unittest.TestCase):
         self.assertEqual(json.loads(gzip.decompress(zipped.data))["lines"], lines)
         self.assertNotIn("Content-Encoding", plain.headers)
         self.assertEqual(plain.get_json()["lines"], lines)
+
+    def test_the_status_stream_is_one_gzip_stream_flushed_at_each_update(self):
+        with mock.patch.object(webapp, "STREAM_EVERY", 30), mock.patch.object(webapp, "STREAM_GATHER", 0):
+            response = self.client.get("/api/status/stream?catalogue_revision=", headers={"Accept-Encoding": "gzip"}, buffered=False)
+            self.assertEqual((response.headers.get("Content-Encoding"), response.mimetype), ("gzip", "text/event-stream"))
+            chunks, unpack = response.iter_encoded(), zlib.decompressobj(31)
+            # Each part can be read as soon as it comes, without waiting for the end of the stream.
+            self.assertEqual(unpack.decompress(next(chunks)), b"retry: 2000\n\n")
+            first = unpack.decompress(next(chunks)).decode("utf-8")
+            self.assertTrue(first.startswith("data: ") and first.endswith("\n\n"))
+            self.assertIn("image_sets", json.loads(first.removeprefix("data: ")), "the catalogue, compressed")
+            threading.Timer(0.2, webapp.job.log, args=("next",)).start()
+            later = next(chunks)
+            self.assertIn(b'"next"', unpack.decompress(later))
+            self.assertLess(len(later), 1000, "an update much like the one before comes to little")
+            response.close()
+
+    def test_the_page_and_its_scripts_are_compressed_and_scripts_kept_by_their_version(self):
+        page = self.client.get("/", headers={"Accept-Encoding": "gzip"})
+        self.assertEqual(page.headers.get("Content-Encoding"), "gzip")
+        html = gzip.decompress(page.data).decode("utf-8")
+        script = re.search(r'src="(/static/polling\.js\?v=\d+)"', html)
+        self.assertTrue(script, "each script with its file's time")
+        zipped = self.client.get(script.group(1), headers={"Accept-Encoding": "gzip"})
+        self.assertEqual((zipped.status_code, zipped.headers.get("Content-Encoding")), (200, "gzip"))
+        self.assertEqual(zipped.headers["Cache-Control"], webapp.CACHE_FOR_GOOD)
+        self.assertNotIn("Accept-Ranges", zipped.headers)
+        with open(os.path.join(ROOT, "panel", "static", "polling.js"), "rb") as f:
+            self.assertEqual(gzip.decompress(zipped.data), f.read())
+        zipped.close()
+        plain = self.client.get(script.group(1))
+        self.assertNotIn("Content-Encoding", plain.headers)
+        plain.close()
+        unversioned = self.client.get("/static/polling.js")
+        self.assertNotEqual(unversioned.headers.get("Cache-Control"), webapp.CACHE_FOR_GOOD, "without a version, asked about again")
+        unversioned.close()
 
     def test_fixed_clip_form_and_legacy_queue(self):
         fixed, error = video_panel.build_options({"duration": "30", "clip_seconds": "8-8", "clip_fixed": "on"})

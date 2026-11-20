@@ -301,9 +301,10 @@ $('viewerUpscale').addEventListener('click', () => {
   latent.title = latent.disabled ? 'Not available for this film: it needs an H3 reference-to-video run that is still saved, not Motion Director, Multishot or Infinite'
     : 'H3 latent upscaler: the film is made again on the same seeds, then upscaled and refined';
   if (!film) {
-    const img = $('viewerImage'), problem = method => upscaleProblem(method, img.naturalWidth, img.naturalHeight);
+    // The picture's own size: the viewer shows a screen-sized copy of a big one.
+    const size = viewedImageSize(), problem = method => upscaleProblem(method, size[0], size[1]);
     for (const b of box.querySelectorAll('[data-for="image"]')) {
-      const why = img.naturalWidth ? problem(b.dataset.method) : '';
+      const why = size ? problem(b.dataset.method) : '';
       b.disabled = !!why;
       if (!b.dataset.title) b.dataset.title = b.title;
       b.title = why || b.dataset.title;
@@ -344,8 +345,7 @@ function showUpscaleMethod(method) {
 }
 // From the viewer (edit null), or for a queued upscale being edited (edit: its settings, as the queue gives them).
 function openUpscaleSettings(method, edit = null) {
-  const img = $('viewerImage');
-  upscaleSource = edit ? edit.size || null : img.naturalWidth ? [img.naturalWidth, img.naturalHeight] : null;
+  upscaleSource = edit ? edit.size || null : viewedImageSize();
   $('upscaleMethodRow').hidden = !edit || edit.kind !== 'image_upscale';
   $('upscaleGo').textContent = edit ? 'Save' : 'Add to queue';
   $('upscaleGo').title = edit ? 'Saves it in the queue as it now is' : 'Adds it to the queue';

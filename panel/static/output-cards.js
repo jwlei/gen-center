@@ -209,7 +209,7 @@ function imageSetHtml(set) {
     </div>`;
   return `
   <div class="image-set">
-    <div class="image-set-heading"><h3>${esc(set.label)}</h3>${nsfwButton('image', set.id, !!set.nsfw)}</div>
+    <div class="image-set-heading"><h3${set.queued || set.generating ? ' class="wip" title="Still in the queue: more of it is being made, or waits to be"' : ''}>${esc(set.label)}</h3>${nsfwButton('image', set.id, !!set.nsfw)}</div>
     <div class="meta">${[madeOn(madeAt(set.id, set.mtime)), !set.pills && set.model && esc(set.model), set.resolutions?.length && esc(set.resolutions.join(', ')), outputSize(set.size_bytes), outputCount(set)].filter(Boolean).join(' · ')}</div>${set.pills ? '' : `${lorasLine(set.loras)}${h3Line(set)}${upscaledLine(set)}`}
     ${row}
   </div>`;
@@ -236,7 +236,7 @@ function renderImageSets() {
   if (gridDrag && gridDrag.grid === $('imageSets')) return;
   const sets = showsImages() ? filtered(imageSets) : [];
   const films = showsFilms() ? visibleFilms() : [];
-  const key = pipeline + outputKind + nsfwView + JSON.stringify(SETTINGS.output_order || []) + JSON.stringify(sets.map(set => [set.id, set.label, set.total, set.images, set.model, set.loras, set.resolutions, set.size_bytes, set.generating, set.llm, set.h3_mode, set.h3_creativity, set.nsfw, set.mtime, set.pills]))
+  const key = pipeline + outputKind + nsfwView + JSON.stringify(SETTINGS.output_order || []) + JSON.stringify(sets.map(set => [set.id, set.label, set.total, set.images, set.model, set.loras, set.resolutions, set.size_bytes, set.generating, set.queued, set.llm, set.h3_mode, set.h3_creativity, set.nsfw, set.mtime, set.pills]))
     + JSON.stringify(films.map(v => [v.name, v.mtime, v.topic, v.title, v.model, v.resolution, v.duration, v.size_mb, v.loras, v.h3_mode, v.h3_creativity, v.run]));
   // Only when it changed, so a poll doesn't reload the pictures.
   if ($('imageSets').dataset.key === key) return;
@@ -246,8 +246,11 @@ function renderImageSets() {
   if (items.length < 2) { outputArranging = false; outputSelected = null; }
   if (!items.some(item => outputKey(item) === outputSelected)) outputSelected = null;
   const none = { both: 'Nothing yet. Press Generate to make something.', image: 'No images yet. Press Generate to make some.', video: 'No videos yet. Press Generate to make one.' };
-  $('imageSets').innerHTML = items.length ? items.map((item, index) => `<div class="output-batch" data-output-key="${esc(outputKey(item))}" data-grid-index="${index}" tabindex="0" aria-label="${esc(item.set ? item.set.label : item.film.title || item.film.name)}">${item.set ? imageSetHtml(item.set) : filmHtml(item.film, 'video')}</div>`).join('')
-    : pipeline === 'shorts' ? '' : `<div class="empty">${nsfwView ? 'Nothing here.' : none[outputKind]}</div>`;
+  // One deleted: what came after it moves up into its place, rather than the list jumping.
+  flipList($('imageSets'), '[data-output-key]', el => el.dataset.outputKey, () => {
+    $('imageSets').innerHTML = items.length ? items.map((item, index) => `<div class="output-batch" data-output-key="${esc(outputKey(item))}" data-grid-index="${index}" tabindex="0" aria-label="${esc(item.set ? item.set.label : item.film.title || item.film.name)}">${item.set ? imageSetHtml(item.set) : filmHtml(item.film, 'video')}</div>`).join('')
+      : pipeline === 'shorts' ? '' : `<div class="empty">${nsfwView ? 'Nothing here.' : none[outputKind]}</div>`;
+  });
   requestAnimationFrame(() => markPillOverflow($('imageSets')));
   showOutputArranging();
   if (typeof glowViewedBatch === 'function') glowViewedBatch();

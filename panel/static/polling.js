@@ -112,6 +112,8 @@ async function pollOnce(generation) {
   } finally {
     clearTimeout(timer);
     if (pollAbort === abort) pollAbort = null;
+    // The stream waited for this answer: now it can say which catalogue the page has, or connects anyway after a failure.
+    if (streamAfterPoll && generation === pollGeneration) { streamAfterPoll = false; openStatusStream(true); }
   }
   applyStatus(data, askedAt, editAtRequest, upscaleAtRequest);
 }
@@ -124,9 +126,13 @@ function statusUrl(path) {
 // Before, the page asked every 2 s, so a change took up to 2 s to show. poll() stays for an answer straight after a
 // button, and for when the stream goes quiet.
 const STREAM_QUIET_MS = 8000;
-let statusStream = null, streamQuiet = null, streamHeardAt = 0;
-function openStatusStream() {
+let statusStream = null, streamQuiet = null, streamHeardAt = 0, streamAfterPoll = false;
+// afterPoll: that first poll's answer is in (pollOnce), so it connects now.
+function openStatusStream(afterPoll = false) {
   if (typeof EventSource !== 'function') return false;
+  // Loading, with the first poll already asking for the catalogue: the stream would bring all of it (about 600 KB) a
+  // second time beside the poll's. It connects as soon as that answer is in, from the catalogue it brought.
+  if (!afterPoll && !lastStatus && !statusCatalogue.revision() && polling) { streamAfterPoll = true; return true; }
   if (statusStream) statusStream.close();
   const source = statusStream = new EventSource(statusUrl('/api/status/stream'));
   streamHeardAt = performance.now();
@@ -163,7 +169,27 @@ function watchStreamQuiet() {
   clearTimeout(streamQuiet);
   streamQuiet = setTimeout(() => { poll(); openStatusStream(); }, STREAM_QUIET_MS);
 }
+// A page out of sight (another tab, the browser minimised) needs no updates: the stream closes, and the panel stops
+// working out a status for it every 2 s. Shown again, it catches up and connects again (startup.js).
+function closeStatusStream() {
+  clearTimeout(streamQuiet);
+  streamAfterPoll = false;
+  if (statusStream) statusStream.close();
+  statusStream = null;
+}
+// A status that came while a finger was pinching or dragging the viewer's picture: drawn once it is lifted. Drawing
+// it meanwhile (Output's lists behind the viewer, every 2 s) took the frames the pinch needed, and it stuttered.
+let heldStatus = null;
+function releaseHeldStatus() {
+  const held = heldStatus;
+  heldStatus = null;
+  if (held) applyStatus(...held);
+}
 function applyStatus(data, askedAt, editAtRequest, upscaleAtRequest) {
+  if (viewerGesturing()) { heldStatus = [data, askedAt, editAtRequest, upscaleAtRequest]; return; }
+  // With what was just deleted or moved here, until the panel's status shows it too (optimistic.js). `local`: the
+  // status the page had, drawn again for such a change, with no new log.
+  data = localChanges.view(data, askedAt);
   // A new server has new code: pick it up, unless that would lose what is being typed.
   if (serverStarted && serverStarted !== data.server_started) {
     if (!formInProgress()) {
@@ -256,8 +282,10 @@ function applyStatus(data, askedAt, editAtRequest, upscaleAtRequest) {
   $('statusStarted').textContent = data.started_at ? data.started_at.slice(0, 5) : '—';
   $('statusDuration').textContent = running ? fmt(data.elapsed) : '';
 
-  data.lines = withNewLogLines(data);
-  if (data.lines.length) safely(() => renderLog(data.lines));
+  if (!data.local) {
+    data.lines = withNewLogLines(data);
+    if (data.lines.length) safely(() => renderLog(data.lines));
+  }
 
   const c = data.comfyui;
   if (c.online !== workflowsFor) { workflowsFor = c.online; loadWorkflows(); loadVideoWorkflows(); loadImageWorkflows(); }
@@ -275,8 +303,11 @@ function applyStatus(data, askedAt, editAtRequest, upscaleAtRequest) {
 
   lastVideos = data.videos;
   // Every set, to open any image (one in a collection too); and as Output shows them, without what moved to a collection.
-  allImageSets = data.image_sets || [];
-  imageSets = allImageSets.map(set => ({ ...set, images: set.images.filter(p => !p.collection) })).filter(set => set.images.length || set.generating);
+  // Worked out again only when they changed (statusCatalogue keeps the same sets while they haven't).
+  if (data.image_sets !== allImageSets || !data.image_sets) {
+    allImageSets = data.image_sets || [];
+    imageSets = allImageSets.map(set => ({ ...set, images: set.images.filter(p => !p.collection) })).filter(set => set.images.length || set.generating);
+  }
   collections = data.collections || [];
   if (!outputOrderSaving && !gridDrag) SETTINGS.output_order = data.output_order || [];
   if (viewing && viewing.film) {
@@ -284,7 +315,13 @@ function applyStatus(data, askedAt, editAtRequest, upscaleAtRequest) {
     if (film) { $('viewerRes').textContent = sizeText(film.resolution); viewerMetadata(film); }
   } else if (viewing) {
     const set = findSet(viewing.id);
-    const picture = set && set.images.find(p => p.position === viewing.position);
+    let picture = set && set.images.find(p => p.position === viewing.position);
+    // The set renumbered (one before it deleted): the picture shown is the same file, at its new place. By place alone,
+    // the next delete or step would be another's.
+    if (set && viewing.file && (!picture || picture.file !== viewing.file)) {
+      const moved = set.images.find(p => p.file === viewing.file);
+      if (moved) { viewing.position = moved.position; picture = moved; }
+    }
     if (picture) pictureMetadata(set, picture);
   }
   safely(() => renderVideos());

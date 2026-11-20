@@ -1,6 +1,7 @@
 import math
 import os
 import re
+import threading
 
 from PIL import Image, ImageOps
 
@@ -23,6 +24,8 @@ DESKTOP_SIZES = (("1080p Full HD", 1920, 1080), ("1440p QHD", 2560, 1440), ("144
 PHONE_SIZES = (("OnePlus 15", 1272, 2772), ("Android Full HD+", 1080, 2400), ("Android QHD+", 1440, 3200),
                ("iPhone 16", 1179, 2556), ("iPhone 16 Pro Max", 1320, 2868))
 THUMBNAIL_EDGE = 480
+# The viewer's picture: a phone's screen, sharp, without the full file (see preview).
+PREVIEW_EDGE = 2560
 
 
 def on_grid(value):
@@ -179,17 +182,47 @@ def image_problem(path):
     return None
 
 
+def _made(path, output):
+    return os.path.exists(output) and os.path.getmtime(output) >= os.path.getmtime(path)
+
+
+def _part(output):
+    """
+    Where a copy is written until complete: two requests can ask for it at once, and the panel answers each on a
+    thread of its own, so the process alone doesn't tell them apart.
+    """
+    return f"{output}.{os.getpid()}.{threading.get_ident()}.part"
+
+
 def thumbnail(path, output):
     """A small JPEG of the image, made once, so a gallery of big PNGs doesn't crawl over a phone connection."""
-    if os.path.exists(output) and os.path.getmtime(output) >= os.path.getmtime(path):
+    if _made(path, output):
         return output
     os.makedirs(os.path.dirname(output), exist_ok=True)
     with Image.open(path) as image:
         small = image.convert("RGB")
         small.thumbnail((THUMBNAIL_EDGE, THUMBNAIL_EDGE))
-        # Under another name until complete: two requests can ask for it at once.
-        part = f"{output}.{os.getpid()}.part"
+        part = _part(output)
         small.save(part, format="JPEG", quality=85)
+    os.replace(part, output)
+    return output
+
+
+def preview(path, output):
+    """
+    The image at screen size for the viewer, made once: a phone opening a 3008x5584 PNG fetched tens of MB and then
+    decoded 67 MB of pixels in one go, and lagged. WebP, which keeps transparency; at most PREVIEW_EDGE on its longer
+    side, about 4 times less to decode, and the full file comes only when zoomed in past it.
+    """
+    if _made(path, output):
+        return output
+    os.makedirs(os.path.dirname(output), exist_ok=True)
+    with Image.open(path) as image:
+        clear = image.mode in ("RGBA", "LA", "PA") or (image.mode == "P" and "transparency" in image.info)
+        shown = image.convert("RGBA" if clear else "RGB")
+        shown.thumbnail((PREVIEW_EDGE, PREVIEW_EDGE), Image.Resampling.LANCZOS)
+        part = _part(output)
+        shown.save(part, format="WEBP", quality=88, method=4)
     os.replace(part, output)
     return output
 

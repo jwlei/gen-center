@@ -9,6 +9,11 @@
   <span id="connectionMessage">Connecting to the panel...</span>
   <button type="button" class="ghost" id="connectionRetry">Retry now</button>
 </div>
+{# An action shown at once that the panel then refused (a delete, a move in the queue): it went back, and this says why. #}
+<div id="actionNotice" role="alert" class="connection-notice action-notice" hidden style="position: fixed; top: 3px; left: 0; right: 0; z-index: 1000;">
+  <span id="actionMessage"></span>
+  <button type="button" class="ghost" id="actionDismiss" aria-label="Dismiss">✕</button>
+</div>
 {# A dropdown's list is drawn by the system and shows only text: a shape mark stands in for the drawn box. #}
 {% macro shape_mark(w, h) %}{{ '□' if w == h else ('▭' if w > h else '▯') }}{% endmacro %}
 {% macro trash_icon() %}<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7h16"/><path d="M10 11v6M14 11v6"/><path d="M6 7l1 13h10l1-13"/><path d="M9 7V4h6v3"/></svg>{% endmacro %}
@@ -80,6 +85,7 @@
   .connection-notice[hidden] { display: flex; opacity: 0; transform: translateY(-100%); visibility: hidden; pointer-events: none; transition: opacity .25s ease, transform .25s ease, visibility 0s .25s; }
   .connection-notice > span { min-width: 0; overflow-wrap: anywhere; }
   .connection-notice button { width: auto; flex: none; padding: 4px 8px; margin: 0; font-size: inherit; }
+  .action-notice { z-index: 1000; color: var(--err); }
   /* Retry pressed: it pulses in the notice's yellow while it asks, so it is plain it is trying. */
   .connection-notice button.retrying, .connection-notice button.retrying:disabled { opacity: 1; color: var(--warn); border-color: var(--warn);
     animation: busy-pulse .9s ease-in-out infinite; }
@@ -509,9 +515,15 @@
   .upscale-dialog .upscale-row button { flex: 1 1 0; min-width: 0; }
   .upscale-dialog select[hidden], .upscale-row[hidden], .upscale-methods button[hidden] { display: none; }
   /* The method list grows up out of the Upscale button, as the footer's side menu does. */
-  dialog#viewerUpscaleBar, dialog#moveSheet, dialog#pillsMenu, dialog#editMenu { padding: 5px; gap: 4px; transform-origin: bottom center; animation: menu-in .2s ease; box-shadow: 0 8px 24px rgba(0, 0, 0, .45); }
-  dialog#viewerUpscaleBar::backdrop, dialog#moveSheet::backdrop, dialog#pillsMenu::backdrop, dialog#editMenu::backdrop { background: transparent; }
-  dialog#viewerUpscaleBar.closing, dialog#moveSheet.closing, dialog#pillsMenu.closing, dialog#editMenu.closing { animation: menu-out .15s ease forwards; pointer-events: none; }
+  dialog#viewerUpscaleBar, dialog#moveSheet, dialog#pillsMenu, dialog#editMenu, dialog#queuedDelete { padding: 5px; gap: 4px; transform-origin: bottom center; animation: menu-in .2s ease; box-shadow: 0 8px 24px rgba(0, 0, 0, .45); }
+  dialog#viewerUpscaleBar::backdrop, dialog#moveSheet::backdrop, dialog#pillsMenu::backdrop, dialog#editMenu::backdrop, dialog#queuedDelete::backdrop { background: transparent; }
+  dialog#viewerUpscaleBar.closing, dialog#moveSheet.closing, dialog#pillsMenu.closing, dialog#editMenu.closing, dialog#queuedDelete.closing { animation: menu-out .15s ease forwards; pointer-events: none; }
+  /* A set's trash when the queue still has it: grows up out of the trash, Delete in red above Keep. */
+  dialog#queuedDelete { transform-origin: bottom right; }
+  dialog#queuedDelete .upscale-head, dialog#queuedDelete .upscale-note { padding: 4px 6px 0; }
+  dialog#queuedDelete .upscale-note { overflow-wrap: anywhere; max-height: 30vh; overflow-y: auto; }
+  dialog#queuedDelete .upscale-methods button { text-align: center; }
+  dialog#queuedDelete .queued-delete-go { color: var(--err); border-color: color-mix(in srgb, var(--err) 55%, transparent); }
   dialog#moveSheet { --accent: var(--shared); border-color: var(--line); }
   /* Its options' text in the middle, + New's icon with it. */
   dialog#moveSheet .upscale-methods button { text-align: center; }
@@ -840,6 +852,9 @@
   .switch.segmented button { position: relative; z-index: 1; padding: 6px 12px; transition: color .3s ease; }
   .switch.segmented button.active { background: transparent; border-color: transparent; color: var(--kind); }
   .switch.segmented.off { opacity: .5; pointer-events: none; }
+  /* Variety's level tapped again: armed to clear the chips, in yellow, until the second tap or a few seconds pass. */
+  .switch.segmented button.clearing { color: var(--warn); }
+  .switch.segmented.clearing .seg-thumb { border-color: var(--warn); }
   .seg-thumb { position: absolute; top: 2px; bottom: 2px; left: 2px; width: calc((100% - 4px) / var(--n)); border-radius: 999px; background: var(--panel-2);
     border: 1px solid color-mix(in srgb, var(--kind) 45%, transparent); pointer-events: none; transform: translateX(calc(var(--i) * 100%));
     transition: transform .32s cubic-bezier(.2, .8, .2, 1), border-color .32s ease; }
@@ -1405,7 +1420,9 @@
   /* Room is kept for the title and both button rows: a portrait picture or film shrinks to fit rather than pushing them out. */
   #viewerImage, #viewerVideo { max-height: calc(100dvh - 190px); }
   #viewerImage { display: block; max-width: calc(100vw - 24px); object-fit: contain; border-radius: 8px; background: #000;
-    touch-action: none; user-select: none; -webkit-user-drag: none; transform-origin: center; will-change: transform; }
+    touch-action: none; user-select: none; -webkit-user-drag: none; transform-origin: center; }
+  /* A layer of its own only while a finger moves it: kept for good, it was never drawn again sharper once zoomed. */
+  #viewerImage.gesturing { will-change: transform; }
   #viewerImage.easing { transition: transform .2s ease; }
   /* The old frame fades away directionally, revealing the new one without moving either. */
   .viewer-out { position: fixed; z-index: 2; pointer-events: none; object-fit: contain; background: #000; border-radius: 8px; }
@@ -1416,6 +1433,9 @@
   .viewer-out.to-right { mask-image: linear-gradient(to left, transparent 33%, black 67%); }
   .viewer-out.to-up { mask-image: linear-gradient(to bottom, transparent 33%, black 67%); }
   .viewer-out.to-down { mask-image: linear-gradient(to top, transparent 33%, black 67%); }
+  /* Deleted or moved to a collection: it shrinks away, and the next fades in under it. */
+  .viewer-out.removed { animation: viewer-removed .26s ease-in forwards; }
+  @keyframes viewer-removed { to { opacity: 0; transform: scale(.9) translateY(12px); } }
   @keyframes viewer-fade-x { from { mask-position: 100% 0; } to { mask-position: 0 0; } }
   @keyframes viewer-fade-y { from { mask-position: 0 100%; } to { mask-position: 0 0; } }
   /* The whole preview is one rounded card: the picture, and under it its title and buttons. */
@@ -1460,7 +1480,19 @@
   .thumb-grid button { position: relative; display: block; width: 100%; aspect-ratio: 1; margin: 0; padding: 0; overflow: clip;
     border: 0; border-radius: 8px; background: #000; cursor: pointer; touch-action: pan-y; content-visibility: auto; contain-intrinsic-size: auto var(--thumb-size, 78px); }
   /* pan-y: a swipe scrolls it, and two fingers pinch the grid (the pictures' size), never zoom the page. */
-  .thumb-grid-dialog .panel-dialog-body { overflow-y: auto; -webkit-overflow-scrolling: touch; touch-action: pan-y; }
+  .thumb-grid-dialog .panel-dialog-body { overflow-y: auto; -webkit-overflow-scrolling: touch; touch-action: pan-y; overscroll-behavior: contain; }
+  /* Pulled on past the top or bottom: which album comes next, over that edge, filling in until letting go moves to it. */
+  .thumb-grid-pull { position: absolute; left: 50%; bottom: 58px; transform: translateX(-50%); max-width: calc(100% - 32px); padding: 6px 12px;
+      border-radius: 999px; background: var(--panel-2); border: 1px solid var(--line); color: var(--muted); font-size: .75rem; font-weight: 600;
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis; pointer-events: none; z-index: 2; box-shadow: 0 4px 14px rgba(0, 0, 0, .4); }
+  .thumb-grid-pull.at-top { top: 52px; bottom: auto; }
+  .thumb-grid-pull.ready { color: var(--accent); border-color: var(--accent); }
+  .thumb-grid-pull[hidden] { display: none; }
+  .thumb-grid-dialog .panel-dialog-body.grid-in-down { animation: grid-in-down .22s ease; }
+  .thumb-grid-dialog .panel-dialog-body.grid-in-up { animation: grid-in-up .22s ease; }
+  @keyframes grid-in-down { from { transform: translateY(24px); opacity: .3; } }
+  @keyframes grid-in-up { from { transform: translateY(-24px); opacity: .3; } }
+  @media (prefers-reduced-motion: reduce) { .thumb-grid-dialog .panel-dialog-body.grid-in-down, .thumb-grid-dialog .panel-dialog-body.grid-in-up { animation: none; } }
   /* The whole picture, letterboxed on black: a portrait or a wide one isn't cut to the square. */
   .thumb-grid button img { width: 100%; height: 100%; object-fit: contain; display: block; }
   /* Inside the picture, so the grid's edge never clips it. */
@@ -1716,6 +1748,8 @@
   .image-set h3 { margin: 0; font-size: .85rem; font-weight: 600; line-height: 1.3; overflow-wrap: anywhere; }
   .image-set-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; }
   .image-set-heading h3 { flex: 1; min-width: 0; }
+  /* A set the queue still has (being made, or waiting to be): its title in a soft tint of the theme, as work in progress. */
+  .image-set-heading h3.wip { color: color-mix(in srgb, var(--accent) 55%, currentColor); }
   /* Its tag button hangs over the line below rather than pushing it down: the details sit just under the title. */
   .image-set-heading .nsfw-button { flex: none; width: 34px; height: 24px; padding: 0; margin: 0 0 -8px; display: inline-flex; align-items: center; justify-content: center; background: var(--panel-2); color: var(--muted); }
   /* A run that made nothing: a small word at the end of its title's line, and why under a fold. */
@@ -3463,6 +3497,14 @@
     <button type="button" data-edit-to="video" style="--side:var(--c-video)" title="A video from it on Video, with the video preset chosen in Settings">Make a video</button>
   </div>
 </dialog>
+<dialog id="queuedDelete" class="panel-dialog upscale-dialog queued-delete" aria-labelledby="queuedDeleteHead">
+  <div class="upscale-head" id="queuedDeleteHead"><span>Still in the queue</span></div>
+  <div class="upscale-note" id="queuedDeleteText"></div>
+  <div class="upscale-methods">
+    <button type="button" data-queued-delete="delete" class="queued-delete-go">Take it out of the queue and delete</button>
+    <button type="button" data-queued-delete="keep">Keep it in the queue</button>
+  </div>
+</dialog>
 <dialog id="pillsMenu" class="panel-dialog upscale-dialog pills-menu" aria-label="Setup">
   <div class="upscale-head pills-menu-head"><span>Setup</span></div>
   <div class="pills open" id="pillsMenuBody"></div>
@@ -3476,6 +3518,7 @@
 <dialog id="thumbGrid" class="panel-dialog thumb-grid-dialog" aria-labelledby="thumbGridTitle">
   <div class="panel-dialog-title" id="thumbGridTitle"></div>
   <div class="panel-dialog-body" id="thumbGridBody"></div>
+  <div class="thumb-grid-pull" id="thumbGridPull" aria-live="polite" hidden></div>
   <div class="thumb-grid-foot">
     <button type="button" class="thumb-grid-arrange" id="thumbGridArrange" aria-pressed="false" title="Arrange: tap one, then drag it where it goes" aria-label="Arrange"></button>
     <button type="button" class="panel-close" id="thumbGridClose">Close</button>
@@ -3586,6 +3629,7 @@
 <script defer src="{{ url_for('static', filename='config.js') }}"></script>
 <script defer src="{{ url_for('static', filename='status.js') }}"></script>
 <script defer src="{{ url_for('static', filename='shared.js') }}"></script>
+<script defer src="{{ url_for('static', filename='optimistic.js') }}"></script>
 <script defer src="{{ url_for('static', filename='presets.js') }}"></script>
 <script defer src="{{ url_for('static', filename='model-guide.js') }}"></script>
 <script defer src="{{ url_for('static', filename='shorts.js') }}"></script>

@@ -155,6 +155,39 @@ function chipSelect(select) {
   paint();
 }
 for (const select of document.querySelectorAll('select[data-chip]')) chipSelect(select);
+// Variety's level tapped again where it already is: it turns yellow, armed, as Delete does; a second tap within a few
+// seconds clears the chips under it, back to up to the writer. Only with a chip to clear. Caught before the switch's
+// own tap, which would already have moved a tap elsewhere onto the level it chose.
+function levelClearsChips(select) {
+  const box = select.nextElementSibling;
+  const chips = () => [...select.closest('.variety-box').querySelectorAll('select[data-chip]')];
+  const disarmLevel = () => {
+    clearTimeout(box._disarm);
+    for (const button of box.querySelectorAll('button.clearing')) {
+      button.classList.remove('clearing');
+      button.removeAttribute('title');
+    }
+    box.classList.remove('clearing');
+  };
+  box.addEventListener('click', e => {
+    const button = e.target.closest && e.target.closest('button');
+    if (!button || select.disabled) return;
+    const set = chips().filter(chip => chip.value);
+    if (button.dataset.value !== select.value || !set.length) { disarmLevel(); return; }
+    if (!button.classList.contains('clearing')) {
+      button.classList.add('clearing');
+      box.classList.add('clearing');
+      button.title = 'Tap again to clear the chips';
+      box._disarm = setTimeout(disarmLevel, ARMED_MS);
+      return;
+    }
+    disarmLevel();
+    for (const chip of set) chip.value = '';
+    // Once for them all: the form is saved and estimated again as after any chip.
+    set[set.length - 1].dispatchEvent(new Event('change', { bubbles: true }));
+  }, true);
+}
+for (const select of document.querySelectorAll('select[name="variety"][data-segmented]')) levelClearsChips(select);
 // --- Every dropdown's list as the prompt editor's Enhance menu draws it: one menu, under the select it opens from ---
 // The select stays where it is, showing its value, so the layout is as it was; only its list is ours. A segmented
 // switch, a Variety chip, a multiple choice or one marked data-native keeps its own.
@@ -270,9 +303,11 @@ function renderVideos() {
     const was = (slides()[currentSlide()] || {}).dataset;
     $('videos').classList.add('as-list');
     // Shorts only: the made films are listed with the image sets, in the order they were made (renderImageSets).
-    $('videos').innerHTML = pipeline !== 'shorts' ? ''
-      : videos.length ? videos.map(v => filmHtml(v, folder)).join('')
-      : `<div class="empty">${folder === 'uploaded' ? 'Nothing uploaded yet.' : 'No videos waiting. Press Generate to make one.'}</div>`;
+    flipList($('videos'), '.film[data-name]', el => el.dataset.name, () => {
+      $('videos').innerHTML = pipeline !== 'shorts' ? ''
+        : videos.length ? videos.map(v => filmHtml(v, folder)).join('')
+        : `<div class="empty">${folder === 'uploaded' ? 'Nothing uploaded yet.' : 'No videos waiting. Press Generate to make one.'}</div>`;
+    });
     $('videos').dataset.key = key;
     requestAnimationFrame(() => markPillOverflow($('videos')));
     const back = was && slides().findIndex(s => s.dataset.name === was.name);
@@ -306,7 +341,7 @@ async function queueRequest(button, request, doneText = 'Queued', pendingText = 
   try {
     const data = await request();
     if (!data.ok) {
-      alert(data.error || 'Could not add it. Try again.');
+      actionFailed(data.error || 'Could not add it. Try again.');
       return null;
     }
     button.classList.remove('queue-request');
@@ -317,7 +352,7 @@ async function queueRequest(button, request, doneText = 'Queued', pendingText = 
     await new Promise(resolve => setTimeout(resolve, 800));
     return data;
   } catch (error) {
-    alert('Could not reach the panel. Try again.');
+    actionFailed('Could not reach the panel. Try again.');
     return null;
   } finally {
     button.disabled = false;
@@ -348,7 +383,8 @@ function disarm(button) {
 // A delete confirmed (the second tap): the button pulses, held, until the server has answered and the page is redrawn
 // without what it deleted. Only the server's own refusal or warning is said; an answer that doesn't come lets the
 // button go, to be tapped again, rather than ending as an error over the page.
-async function confirmedDelete(button, url) {
+// A set still in the queue comes back with `queued` (its jobs) and no alert: the caller asks what to do with them.
+async function confirmedDelete(button, url, send = null) {
   if (button.classList.contains('deleting')) return null;
   button.disabled = true;
   button.classList.add('deleting');
@@ -356,13 +392,14 @@ async function confirmedDelete(button, url) {
   try {
     let body = null;
     try {
-      const response = await fetch(url, { method: 'POST' });
+      const response = await fetch(url, send ? { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(send) }
+        : { method: 'POST' });
       body = await response.json().catch(() => ({ ok: response.ok }));
     } catch (e) {
       console.warn('Delete got no answer:', e);
     }
-    if (body && body.warning) alert(body.warning);
-    if (body && !body.ok && body.error) alert(body.error);
+    if (body && body.warning) actionFailed(body.warning);
+    if (body && !body.ok && body.error && !body.queued) actionFailed(body.error);
     try { await poll(); } catch (e) { console.warn(e); }
     return body;
   } finally {
@@ -405,7 +442,15 @@ const onFilmClick = async e => {
     await sameAgainFilm(d.againFilm);
   } else if (d.del) {
     if (e.target.classList.contains('deleting') || !secondTap(e.target)) return;
-    await confirmedDelete(e.target, `/delete/${filmFolder}/` + encodeURIComponent(d.del));
+    // Gone at once: it fades out and the rest close up; refused, it comes back and the banner says why.
+    const name = d.del;
+    await localChanges.make({
+      fade: e.target.closest && (e.target.closest('[data-output-key]') || e.target.closest('.film')),
+      apply: data => withoutFilm(data, filmFolder, name),
+      landed: data => !hasFilm(data, filmFolder, name),
+      request: () => postJson(`/delete/${filmFolder}/` + encodeURIComponent(name)),
+      failed: 'Could not delete the video',
+    });
   } else if (d.shots) {
     openShots(d.shots);
   } else if (d.up) {

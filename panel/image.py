@@ -15,7 +15,7 @@ from core.upscale_eta import UpscaleEta
 from core.saved_workflows import display_label, map_field, picker_label, shorthand
 from panel import settings
 from panel.server import (read_outcome, IMAGE_TIMINGS, PIPELINES, _runs_cache, active_runs, app, busy_runs, form_options, job, password_required, run_queue, saved_at, queue_form_snapshot,
-                          saved_workflows, private_mode)
+                          saved_workflows, private_mode, CACHE_FOR_GOOD)
 from panel.video import clean_inputs, queue_label, seed_fixed, shot_seeds, workflow_name
 from pipelines.image import media, models, regions
 from pipelines.image import planner as image_planner
@@ -217,7 +217,7 @@ def image_files(state):
             except FileNotFoundError:
                 app.logger.warning("Image disappeared while listing saved runs: %s", path)
                 continue
-            version = f"{stat.st_mtime_ns}-{shot['number']}"
+            version = version_of(stat, shot)
             try:
                 with Image.open(path) as image:
                     resolution = f"{image.width}x{image.height}"
@@ -870,7 +870,8 @@ def image_run_detail(run_id):
                        "settings": settings_of(state, state.shot_setup(shot)) if shot.get("setup") else None,
                        # It can't be deleted now: an upscale of it waits, say.
                        "locked": lock,
-                       "version": int(os.path.getmtime(state.image_path(shot))) if shot.get("file") else 0}
+                       # As Output's (image_files): a picture's address under it is cached for good.
+                       "version": version_of(os.stat(state.image_path(shot)), shot) if shot.get("file") else 0}
                       for shot, lock in zip(state.shots, locked)]}
 
 
@@ -913,15 +914,62 @@ def shot_of(run_id, position):
 @app.route("/image-runs/<run_id>/files/<int:position>")
 @password_required
 def image_file(run_id, position):
-    state, shot = shot_of(run_id, position)
-    return send_file(state.image_path(shot), conditional=True, as_attachment="download" in request.args)
+    state, shot, exact = requested_shot(run_id, position)
+    return versioned(send_file(state.image_path(shot), conditional=True, as_attachment="download" in request.args), exact)
 
 
 @app.route("/image-runs/<run_id>/thumbnails/<int:position>")
 @password_required
 def image_thumbnail(run_id, position):
+    state, shot, exact = requested_shot(run_id, position)
+    return versioned(send_file(media.thumbnail(state.image_path(shot), state.thumbnail_path(shot)), mimetype="image/jpeg", max_age=3600), exact)
+
+
+@app.route("/image-runs/<run_id>/previews/<int:position>")
+@password_required
+def image_preview(run_id, position):
+    """The viewer's picture: the image at screen size (media.preview); the full file only once zoomed in past it."""
+    state, shot, exact = requested_shot(run_id, position)
+    return versioned(send_file(media.preview(state.image_path(shot), state.preview_path(shot)), mimetype="image/webp", max_age=3600), exact)
+
+
+def version_of(stat, shot):
+    """An image's version: its file's time to the nanosecond, and its number. An upscale keeps its source's number."""
+    return f"{stat.st_mtime_ns}-{shot['number']}"
+
+
+def requested_shot(run_id, position):
+    """
+    (state, shot, exact): the image asked for, and whether it is the very one its version (?v=) names. The page drops
+    a deleted image at once, before the panel has renumbered the set: asked for by its old place then, the image after
+    it would come, and be kept under the wrong address for good. So the version, which names one image, wins.
+    """
+    version = request.args.get("v", "")
+    state = RunState.load(run_id) if version else None
+    if state:
+        shots = state.shots or []
+        at = [shots[position - 1]] if 1 <= position <= len(shots) else []
+        number = version.rpartition("-")[2]
+        for shot in at + [s for s in shots if str(s.get("number")) == number]:
+            if not shot.get("file"):
+                continue
+            try:
+                if version_of(os.stat(state.image_path(shot)), shot) == version:
+                    return state, shot, True
+            except OSError:
+                continue
     state, shot = shot_of(run_id, position)
-    return send_file(media.thumbnail(state.image_path(shot), state.thumbnail_path(shot)), mimetype="image/jpeg", max_age=3600)
+    return state, shot, False
+
+
+def versioned(response, exact):
+    """
+    The very image its version names is never different under that address (a remade or renumbered one has another):
+    the browser keeps it, and doesn't ask again.
+    """
+    if exact and response.status_code in (200, 304):
+        response.headers["Cache-Control"] = CACHE_FOR_GOOD
+    return response
 
 
 @app.route("/image-runs/<run_id>/shots", methods=["POST"])
@@ -964,10 +1012,19 @@ def redo_image(run_id, position):
 @app.route("/image-runs/<run_id>/delete/<int:position>", methods=["POST"])
 @password_required
 def delete_image(run_id, position):
-    """Takes one image and its prompt out of the set, so a Continue doesn't make it again. The last one takes the set with it."""
+    """
+    Takes one image and its prompt out of the set, so a Continue doesn't make it again. The last one takes the set with
+    it. Sent with its file ({"file": ...}), that image wherever it is now: the page drops one at once and goes on to the
+    next, so a second delete can come before the page has the set renumbered, and by place alone would take another.
+    """
     state = RunState.load(run_id)
     if not state or not state.shots:
         return {"ok": False, "error": "That run is no longer saved."}, 404
+    wanted = (request.get_json(silent=True) or {}).get("file") if request.is_json else None
+    if isinstance(wanted, str) and wanted:
+        position = next((i for i, s in enumerate(state.shots, 1) if s.get("file") == wanted), 0)
+        if not position:
+            return {"ok": False, "error": "That image is already gone."}, 404
     if not 1 <= position <= len(state.shots):
         return {"ok": False, "error": "That image isn't in this set."}, 400
     shot = state.shots[position - 1]
@@ -981,6 +1038,12 @@ def delete_image(run_id, position):
     else:
         if shot.get("file"):
             os.remove(state.image_path(shot))
+            # Its small copies go with it, rather than staying in the run's folder for nothing.
+            for copy in (state.thumbnail_path(shot), state.preview_path(shot)):
+                try:
+                    os.remove(copy)
+                except FileNotFoundError:
+                    pass
         del state.shots[position - 1]
         state.save()
         images = image_files(state)
@@ -1154,7 +1217,22 @@ def order_image_set(run_id):
 @app.route("/image-runs/<run_id>/delete", methods=["POST"])
 @password_required
 def delete_image_set(run_id):
-    """Deletes a whole set from Output: its prompts, and the images it made."""
+    """
+    Deletes a whole set from Output: its prompts, and the images it made. A set the queue still has jobs for (to make
+    more of it, or upscale it) is refused with those jobs listed, so the page can ask; asked again with dequeue, the
+    jobs come out of the queue and the set goes. One being made right now has to be stopped first.
+    """
+    dequeue = bool((request.get_json(silent=True) or {}).get("dequeue"))
+    with run_queue.lock:
+        current = run_queue.current
+        if (job.running and (job.progress or {}).get("run_id") == run_id) or (current and current.get("resume") == run_id):
+            return {"ok": False, "error": "That set is being made right now. Stop it first, then delete it."}, 409
+        queued = [item for item in run_queue.items if item.get("resume") == run_id]
+        if queued and not dequeue:
+            return {"ok": False, "queued": [item.get("label") or "A job" for item in queued],
+                    "error": "That set is still in the queue."}, 409
+        for item in queued:
+            run_queue.remove(item["id"])
     state, refused = load_idle_run(run_id)
     if refused:
         return refused

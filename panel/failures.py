@@ -21,6 +21,10 @@ SETTINGS_REFUSED = re.compile(r"Can't use the LoRA|\bis one of\b|Value not in li
 REACHED_COMFYUI = re.compile(r"(?:Image|Clip|Shot|Scene) \d+(?:/| of )\d+|ComfyUI · |\bComfyUI (?:failed|rejected|"
                              r"stopped|crashed|is too busy|didn't|did not|isn't|is not)|reach ComfyUI|\bCUDA\b|"
                              r"out of memory|\btorch\b", re.I)
+# ComfyUI up but no longer answering (hung): what the runs say when it doesn't. A fresh ComfyUI fixes it, though the run
+# may not have got as far as an image yet: the local prompt writer has ComfyUI free its memory before it starts.
+COMFYUI_UNRESPONSIVE = re.compile(r"Could not (?:verify ComfyUI memory cleanup|release ComfyUI models)|"
+                                  r"ComfyUI was still busy after|Timed out after \S+ waiting for ComfyUI to start", re.I)
 EXIT_ONE_ERROR = re.compile(r"\b(?:exit(?:ed)? (?:with )?(?:(?:exit )?code |status )?1|returned non-zero exit status 1)\b", re.I)
 
 
@@ -51,6 +55,8 @@ def restart_reason(job, code):
     reason = live_crash_reason(job)
     if reason:
         return reason
+    if any(COMFYUI_UNRESPONSIVE.search(line["text"]) for line in job.lines if line["n"] > getattr(job, "first_line", 0)):
+        return "ComfyUI stopped answering"
     # Exit 1 before anything reached ComfyUI (a missing API key, an LLM's refusal or quota, a bad plan): a fresh ComfyUI
     # changes nothing, so it goes to Failed at once instead of restarting ComfyUI and trying again.
     if code == 1 and any(line.get("k") == "comfy" or (line.get("k") != "dim" and REACHED_COMFYUI.search(line["text"]))
@@ -75,6 +81,8 @@ FAILURES = (
      "A model file this workflow needs isn't in ComfyUI's models folder. Download it there, then continue."),
     (r"ComfyUI isn't running|Connection refused|Max retries exceeded|Failed to establish a new connection|ConnectionError",
      "ComfyUI wasn't running, or stopped answering. Start it (Generate starts it when COMFYUI_LAUNCHER is set), then continue."),
+    (COMFYUI_UNRESPONSIVE.pattern,
+     "ComfyUI stopped answering (it hung). Restart ComfyUI, then continue."),
     (r"ComfyUI rejected the workflow|prompt_outputs_failed_validation|Prompt outputs failed validation",
      "ComfyUI refused the workflow as sent: something it expects is missing or out of range. The lines below say what."),
     (r"\b429\b|RESOURCE_EXHAUSTED|exceeded your current quota|rate limit",

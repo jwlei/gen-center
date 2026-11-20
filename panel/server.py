@@ -13,7 +13,6 @@ Set APP_PASSWORD to expose it beyond localhost. Without it the server refuses
 any host but 127.0.0.1: an open instance lets anyone spend your API quota and GPU.
 """
 import argparse
-import copy
 import gzip
 import hashlib
 import atexit
@@ -21,6 +20,7 @@ import json
 import logging
 import math
 import os
+import pickle
 import re
 import shutil
 import secrets
@@ -31,6 +31,7 @@ import subprocess
 import sys
 import threading
 import time
+import zlib
 from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor
 from urllib.parse import urlparse
@@ -4100,13 +4101,18 @@ def status_payload(catalogue_revision=None, log_after=None):
     compact = catalogue_revision is not None
     if compact:
         catalogue, film_runs, scanned_revision = _catalogue_cache.get(_scan_output_catalogue, active=payload["running"])
-        payload.update(copy.deepcopy(catalogue))
+        # A copy of its own, as the NSFW tags and collections are marked on it. Through pickle: about 4 times faster than
+        # copy.deepcopy, which every status (each stream's, every 2 s) paid for the whole catalogue.
+        payload.update(pickle.loads(pickle.dumps(catalogue, pickle.HIGHEST_PROTOCOL)))
+        in_queue = busy_runs()
         for run in payload["image_sets"]:
             run["generating"] = bool(payload["running"] and payload.get("pipeline") == "image" and run["id"] == run_id)
+            run["queued"] = run["id"] in in_queue  # Still being made, or waiting to be: Output shows it as unfinished
     else:
         payload["videos"] = {folder: list_videos(folder) for folder in FOLDERS}
+        in_queue = busy_runs()
         payload["image_sets"] = [{**run, "generating": bool(payload["running"] and payload.get("pipeline") == "image"
-                                                            and run["id"] == run_id)}
+                                                            and run["id"] == run_id), "queued": run["id"] in in_queue}
                                  for run in saved_runs() if run["pipeline"] == "image" and run["images"]]
         film_runs = films_of_runs()
     with _nsfw_lock:
@@ -4157,6 +4163,7 @@ STREAM_GATHER = 0.25
 def status_stream():
     revision = request.args.get("catalogue_revision", "")
     log_after = request.args.get("log_after", type=int)
+    zipped = accepts_gzip()
 
     def events():
         nonlocal revision, log_after
@@ -4172,9 +4179,22 @@ def status_stream():
             wait_for_status_change(seen, STREAM_EVERY)
             time.sleep(STREAM_GATHER)
 
-    response = Response(stream_with_context(events()), mimetype="text/event-stream")
+    def gzipped():
+        """
+        One gzip stream for the whole connection, flushed after each update so it arrives at once. A changed Output
+        catalogue (about 600 KB) went to a phone uncompressed; and as each update is nearly the one before, which the
+        stream still remembers, an ordinary one comes to a few hundred bytes.
+        """
+        packer = zlib.compressobj(5, zlib.DEFLATED, 31)  # 31: with a gzip header, as Content-Encoding says
+        for text in events():
+            yield packer.compress(text.encode("utf-8")) + packer.flush(zlib.Z_SYNC_FLUSH)
+
+    response = Response(stream_with_context(gzipped() if zipped else events()), mimetype="text/event-stream")
     response.headers["Cache-Control"] = "no-store"
     response.headers["X-Accel-Buffering"] = "no"
+    if zipped:
+        response.headers["Content-Encoding"] = "gzip"
+        response.headers["Vary"] = "Accept-Encoding"
     return response
 
 
@@ -4194,23 +4214,52 @@ def _only_new_log_lines(payload, log_after):
 
 # Gzipped only when worth it: a status without the Output catalogue is a few KB.
 GZIP_FROM_BYTES = 2048
+# Text worth compressing. Pictures and videos are compressed already.
+GZIP_TYPES = {"application/json", "application/javascript", "text/javascript", "text/html", "text/css", "text/plain",
+              "image/svg+xml", "application/manifest+json"}
+# A file asked for with its version (?v=) is never different under that address: kept by the browser for a year,
+# not asked about again on each load.
+CACHE_FOR_GOOD = "public, max-age=31536000, immutable"
+
+
+def accepts_gzip():
+    return "gzip" in request.headers.get("Accept-Encoding", "").lower()
+
+
+@app.url_defaults
+def versioned_static(endpoint, values):
+    """The page's scripts with their file's time (?v=), so they can be cached for good, and a changed one loads anew."""
+    if endpoint != "static" or "v" in values or not values.get("filename"):
+        return
+    try:
+        values["v"] = int(os.stat(os.path.join(app.static_folder, values["filename"])).st_mtime)
+    except OSError:
+        pass
 
 
 @app.after_request
 def gzip_json(response):
     """
-    Large JSON goes compressed (the status with the Output catalogue: about 600 KB, 10 times smaller gzipped), so a
-    phone on mobile data or Tailscale gets it within the poll's time limit.
+    Large JSON, the page and its scripts go compressed: the status with the Output catalogue is about 600 KB, 10 times
+    smaller gzipped, and the page with its scripts about 1 MB, 4 times smaller. So a phone on mobile data or Tailscale
+    gets them within the poll's time limit, and opens the panel sooner.
     """
-    if (response.mimetype != "application/json" or response.direct_passthrough or response.status_code < 200
-            or response.status_code >= 300 or "Content-Encoding" in response.headers
-            or "gzip" not in request.headers.get("Accept-Encoding", "").lower()):
+    if request.endpoint == "static" and request.args.get("v") and response.status_code in (200, 304):
+        response.headers["Cache-Control"] = CACHE_FOR_GOOD
+    if (response.mimetype not in GZIP_TYPES or response.status_code != 200 or "Content-Encoding" in response.headers
+            or "Content-Range" in response.headers or not accepts_gzip()):
         return response
+    if response.direct_passthrough or response.is_streamed:
+        # A file sent as it is read: only the page's own scripts and styles, which are small, are read whole to zip.
+        if request.endpoint != "static":
+            return response
+        response.direct_passthrough = False
     data = response.get_data()
     if len(data) < GZIP_FROM_BYTES:
         return response
     response.set_data(gzip.compress(data, compresslevel=5))
     response.headers["Content-Encoding"] = "gzip"
+    response.headers.pop("Accept-Ranges", None)  # A range of the zipped bytes isn't one of the file's
     response.headers.add("Vary", "Accept-Encoding")
     return response
 

@@ -959,7 +959,7 @@ run(`renderNow({ running: true })`);
 }
 // Move: a menu growing over the preview's buttons, as Upscale's: + New on top, then the collections.
 {
-  assert(/<dialog id="moveSheet" class="panel-dialog upscale-dialog move-menu"/.test(html) && /dialog#viewerUpscaleBar, dialog#moveSheet, dialog#pillsMenu, dialog#editMenu \{[^}]*animation: menu-in/.test(html), 'it grows as the upscale menu does');
+  assert(/<dialog id="moveSheet" class="panel-dialog upscale-dialog move-menu"/.test(html) && /dialog#viewerUpscaleBar, dialog#moveSheet, dialog#pillsMenu, dialog#editMenu, dialog#queuedDelete \{[^}]*animation: menu-in/.test(html), 'it grows as the upscale menu does');
   for (const id of ['moveSheet', 'moveList', 'moveNewRow', 'moveNewName', 'moveError']) context.document.getElementById(id);
   run(`allImageSets = [{ id: 'image_1', images: [{ position: 1, file: 'a.png' }] }]; collections = [{ id: 'c_1', name: 'Mine', items: [] }];
        viewing = { id: 'image_1', position: 1 }; viewerCollection = null; oldPlace = placeOverViewerButtons; placeOverViewerButtons = () => {}`);
@@ -979,6 +979,18 @@ run(`renderNow({ running: true })`);
   run('privateMode = false; openMoveSheet()');
   assert(els.moveList.innerHTML.includes('c_1') && els.moveList.innerHTML.includes('c_2'), 'out of it, under the NSFW filter: all of them');
   run("nsfwView = false");
+  // Moved, as shown at once: out of its set's list and the collection it was in, in at the end of the other.
+  context.moveData = { image_sets: [{ id: 'image_1', nsfw: true, images: [{ position: 1, file: 'a.png', collection: 'c_2' }, { position: 2, file: 'b.png' }] }],
+    videos: { video: [{ name: 'f.mp4' }], output: [] },
+    collections: [{ id: 'c_1', name: 'Mine', nsfw: false, items: [{ kind: 'film', name: 'x.mp4' }] }, { id: 'c_2', name: 'Hot', nsfw: true, items: [{ kind: 'image', set: 'image_1', file: 'a.png' }] }] };
+  const moved = JSON.parse(run(`JSON.stringify(withMovedToCollection(moveData, { kind: 'image', run: 'image_1', file: 'a.png' }, { id: 'c_1', name: 'Mine' }))`));
+  assert.strictEqual(moved.image_sets[0].images[0].collection, 'c_1', 'marked as in the one it went to');
+  assert.deepStrictEqual(moved.collections.map(c => c.items.length), [2, 0], 'out of the one it was in, in at the end of the other');
+  assert(moved.collections[0].nsfw && run('moveData.collections[1].items.length') === 1, 'NSFW with it; and the status it came from is left as it was');
+  const fresh = JSON.parse(run(`JSON.stringify(withMovedToCollection(moveData, { kind: 'film', name: 'f.mp4' }, { id: 'new-1', name: 'Films' }))`));
+  assert.deepStrictEqual(fresh.collections.at(-1), { id: 'new-1', name: 'Films', nsfw: false, items: [{ kind: 'film', name: 'f.mp4' }], folded: false, cover: null },
+    'a new one shows under its name straight away');
+  assert.strictEqual(fresh.videos.video[0].collection, 'new-1', 'and the film is out of Videos');
   // A batch: one main row with how many and a chevron; its items under it, set in, a tap away. Going, from what it
   // has made; done, from its set's pictures.
   run(`imageSets = [{ id: 'image_5', images: [{ position: 1, version: 1, title: 'A' }, { position: 2, version: 1, title: 'B' }, { position: 3, version: 1, title: 'C' }] }];
@@ -1026,8 +1038,19 @@ run(`renderNow({ running: true })`);
   run('setThumbSize(78); gridTap = { x: 10, y: 10, at: 100, moving: false }; gridScrolledAt = 0; gridPinchedAt = performance.now()');
   assert.strictEqual(run("gridTapped({ clientX: 10, clientY: 10, pointerType: 'touch' })"), false, 'the end of a pinch is no tap');
   run('gridPinchedAt = -Infinity');
+  // Pulled past its top or bottom, the grid goes to the album or collection before or after it in Output; films have none.
+  run(`oldGridAlbums = gridAlbums; gridAlbums = () => [{ collection: 'c_1', name: 'Mine' }, { set: 's_1', name: 'A' }, { set: 's_2', name: 'B' }];
+       oldGridWhat = thumbGridWhat; thumbGridWhat = { set: 's_1' }`);
+  assert.strictEqual(run('gridNeighbour(-1).collection'), 'c_1', 'up from the first set is the collection above it');
+  assert.strictEqual(run('gridNeighbour(1).set'), 's_2', 'down is the next set');
+  run("thumbGridWhat = { set: 's_2' }");
+  assert.strictEqual(run('gridNeighbour(1)'), null, 'nothing after the last');
+  run("thumbGridWhat = { films: 'video' }");
+  assert.strictEqual(run('gridNeighbour(1)'), null, 'the films grid stays as it is');
+  run('gridAlbums = oldGridAlbums; thumbGridWhat = oldGridWhat');
+  assert(/\.thumb-grid-dialog \.panel-dialog-body \{[^}]*overscroll-behavior: contain;/.test(html), "a pull past the edge doesn't move the page under it");
   assert(/\.thumb-grid \{ display: grid; grid-template-columns: repeat\(auto-fill, minmax\(var\(--thumb-size, 78px\), 1fr\)\);/.test(html)
-    && /\.thumb-grid-dialog \.panel-dialog-body \{[^}]*touch-action: pan-y; \}/.test(html)
+    && /\.thumb-grid-dialog \.panel-dialog-body \{[^}]*touch-action: pan-y;[^}]*\}/.test(html)
     && script.includes("$('thumbGridBody').addEventListener('touchmove', e => {") && script.includes('}, { passive: false });'),
     'the grid sizes its pictures by the pinch, and two fingers pinch it rather than zoom the page');
   assert(/\.thumb-grid button\.current \{ outline: 2px solid var\(--accent\); outline-offset: -2px; \}/.test(html)
@@ -1089,7 +1112,9 @@ assert(/\.thumb-grid button \{[^}]*overflow: clip;/.test(html) && !/\.thumb-grid
 assert(/button, \[role="button"\], \.icon-btn, summary, \.count-stepper, \.count-stepper \.mp-field, \.pills, \.pill \{\s*-webkit-user-select: none; user-select: none; -webkit-touch-callout: none; \}/.test(html),
   'pressing a button or stepper quickly never selects its text');
 assert(/\.prompt-progress::after \{[^}]*animation: bar-sheen 3\.6s/.test(html), "the prompt's bar has the light passing along it, as the others");
-assert(script.includes("const other = at < 0 ? null : album[at + 1] || album[at - 1];") && script.includes("if (picture) openViewer(set.id, picture.position); else closeViewer();"),
+assert(script.includes("const other = at < 0 ? null : album[at + 1] || album[at - 1];") && script.includes("picture = nextSet && nextSet.images.find(p => p.file === after.file);")
+  && script.includes(": picture ? () => openViewer(nextSet.id, picture.position) : null;")
+  && script.includes("if (next) transitionViewer(viewerMedia(), 'removed', next, viewerMedia); else closeViewer();"),
   'deleting in a collection: on to the next in its album, found by its file');
 assert(script.includes("if (was !== side) carryImages(was, side);") && script.includes("if (boxes().some(box => box.querySelector('input').files.length)) return;"),
   "switching side, the images chosen go into the other's empty boxes");
@@ -2512,8 +2537,12 @@ assert(/\.meta\.loras \{ white-space: nowrap; overflow: hidden; text-overflow: e
 }
 // Discarding a stopped run takes two taps, with no pop-up; deleting a whole set from Output has its own address.
 assert(!script.includes('Discard this run? Its') && /else if \(d\.discard\) \{\s*\/\/[^\n]*\n\s*if \(!secondTap\(button\)\) return;/.test(script));
-assert(script.includes("confirmedDelete(e.target, `/image-runs/${encodeURIComponent(d.deleteSet)}/delete`)"));
-assert(script.includes("confirmedDelete(e.target, `/delete/${filmFolder}/` + encodeURIComponent(d.del))"), 'a film too');
+assert(script.includes("url = `/image-runs/${encodeURIComponent(id)}/delete`") && script.includes('const body = await deleteImageSet(button, id, url);'));
+// A set still in the queue: no alert, a menu up out of its trash asks to take it out and delete, or keep it.
+assert(/!body\.queued\) actionFailed\(body\.error\)/.test(script) && script.includes("if (!(body && body.queued)) actionFailed("), 'the queued refusal is not an error');
+assert(script.includes('if (await askQueuedDelete(anchor, ask)) await deleteImageSet(anchor, id, url, { dequeue: true });'));
+assert(/data-queued-delete="delete"/.test(html) && /data-queued-delete="keep"/.test(html), 'delete, or keep it queued');
+assert(script.includes("request: () => postJson(`/delete/${filmFolder}/` + encodeURIComponent(name)),"), 'a film too');
 
 // An exact size with nothing in its box falls back on 1:1 at one megapixel.
 els.imageAspect.value = 'custom';
@@ -2892,6 +2921,68 @@ assert(/<select id="videoPromptMode" name="prompt_mode" data-segmented>/.test(ht
   context.fake.disabled = false;
   box.click({ target: { closest: () => buttons[0] } });
   assert(context.fake.value === 'llm' && context.fake.changed === 'change' && painted.props['--i'] === 0, 'a tap sets the value and tells the form');
+}
+// Variety's level tapped again: yellow (armed); again, the chips go back to up to the writer, the form told once.
+{
+  const classes = (set = new Set()) => ({ add: n => set.add(n), remove: n => set.delete(n), contains: n => set.has(n), has: n => set.has(n) });
+  const level = value => ({ dataset: { value }, classList: classes(), removeAttribute() {}, title: '' });
+  const levels = [level('slight'), level('mixed'), level('wide')];
+  let told = 0;
+  const chip = value => ({ value, dispatchEvent: () => { told++; } });
+  const chips = [chip('vary'), chip(''), chip('keep')];
+  const box = { classList: classes(), querySelectorAll: selector => levels.filter(b => selector !== 'button.clearing' || b.classList.contains('clearing')),
+    addEventListener(name, fn, capture) { box.tap = fn; box.capture = capture; } };
+  context.fakeVariety = { value: 'mixed', disabled: false, nextElementSibling: box, closest: () => ({ querySelectorAll: () => chips }) };
+  run('levelClearsChips(fakeVariety)');
+  const tap = button => box.tap({ target: { closest: () => button } });
+  assert(box.capture === true, 'caught before the switch moves the level');
+  tap(levels[1]);
+  assert(levels[1].classList.contains('clearing') && box.classList.contains('clearing') && chips[0].value === 'vary', 'once: armed, nothing cleared');
+  tap(levels[1]);
+  assert(chips.every(c => c.value === '') && told === 1 && !levels[1].classList.contains('clearing'), 'twice: every chip cleared, the form told once');
+  chips[0].value = 'keep';
+  tap(levels[1]); tap(levels[2]);
+  assert(!levels[1].classList.contains('clearing') && chips[0].value === 'keep', 'another level in between disarms it');
+  chips[0].value = '';
+  tap(levels[1]);
+  assert(!levels[1].classList.contains('clearing'), 'with no chip set, nothing to arm');
+  assert(/\.switch\.segmented button\.clearing \{ color: var\(--warn\); \}/.test(html), 'in yellow');
+}
+// Generate on a phone: pulled on past the end of a section, the next one; past its top, the one before, at its end.
+{
+  const sectionBody = (scrollTop, scrollHeight = 300) => ({ scrollTop, clientHeight: 100, scrollHeight, style: {} });
+  const bodies = [sectionBody(200), sectionBody(0), sectionBody(0)];
+  const sections = bodies.map(body => ({ querySelector: () => body }));
+  const form = { id: 'formImage', _tab: sections[0], querySelector: () => null };
+  const bodyClasses = context.document.body.classList;
+  context.document.body.classList = { ...bodyClasses, contains: name => name === 'section-tabs-on' };
+  run(`oldShownForm = shownForm; oldTabSections = tabSections; oldSyncSectionBar = syncSectionBar;
+       shownForm = () => pullForm; tabSections = () => fakeSectionList; syncSectionBar = () => {};
+       oldPage = document.body.dataset.page; document.body.dataset.page = 'generate'`);
+  Object.assign(context, { pullForm: form, fakeSectionList: sections });
+  const card = context.document.getElementById('optionsCard');
+  const fire = (name, y) => card.listenersAll[name].at(-1)({ touches: y === undefined ? [] : [{ clientY: y }] });
+  const pull = (body, from, to) => {
+    card.listenersAll.touchstart.at(-1)({ touches: [{ clientY: from }], target: { closest: s => (s.startsWith('#optionsCard') ? body : null) } });
+    fire('touchmove', to);
+    fire('touchend');
+  };
+  pull(bodies[0], 500, 470);
+  assert(form._tab === sections[0], 'a short pull stays');
+  pull(bodies[0], 500, 380);
+  assert(form._tab === sections[1] && bodies[1].scrollTop === 0, 'up past the end: the next section, at its start');
+  bodies[1].scrollTop = 50;
+  pull(bodies[1], 300, 450);
+  assert(form._tab === sections[1], 'not at its top: an ordinary scroll');
+  bodies[1].scrollTop = 0;
+  pull(bodies[1], 300, 450);
+  assert(form._tab === sections[0] && bodies[0].scrollTop === 300, 'down past the top: the one before, at its end');
+  form._tab = sections[2];
+  bodies[2].scrollTop = 0;
+  pull(bodies[2], 500, 300);
+  assert(form._tab === sections[2], 'past the last, nothing more');
+  run(`shownForm = oldShownForm; tabSections = oldTabSections; syncSectionBar = oldSyncSectionBar; document.body.dataset.page = oldPage`);
+  context.document.body.classList = bodyClasses;
 }
 assert(html.includes('<option value="llm">LLM</option>') && html.includes('<option value="direct">Exact prompt</option>'));
 assert(!html.includes('>Prompt source<') && !html.includes('>Model<') && (html.match(/aria-label="Prompt model"/g) || []).length === 2,
@@ -3592,8 +3683,10 @@ assert(els.comfyFacts.innerHTML.includes('Generating the image · 3/8') && els.c
     assert(run('queueEdit === null') && els.cancelQueueEdit.hidden && !els.goLater.hidden, 'removing the edited job releases the form');
     run(`queueEdit = { id: 9, token: 'token', pipeline: 'video', ready: true }; queueEditLabel()`);
     context.fetch = async () => ({ json: async () => ({ ok: false }) });
+    els.actionMessage.textContent = '';
     await run("removeQueued('run', '9')");
-    assert(run('queueEdit !== null') && message, 'failed removal retains the edit and reports an error');
+    assert(run('queueEdit !== null') && !message && els.actionMessage.textContent.startsWith('Could not remove that job')
+      && !els.actionNotice.hidden, 'failed removal retains the edit and says so in the banner, not a pop-up');
     run(`const staleEdit = queueEdit; queueEdit = { id: 10, token: 'new', pipeline: 'image', ready: true };
          reconcileQueueEdits({ items: [] }, staleEdit, null)`);
     assert(run('queueEdit.id === 10'), 'a stale status cannot close a newer edit');
@@ -3775,60 +3868,137 @@ assert(els.comfyFacts.innerHTML.includes('Generating the image · 3/8') && els.c
     const savedClasses = els.viewerDelete.classList;
     els.viewerDelete.classList = classes();
     run('poll = () => {}');
-    const image = (position, title) => ({ position, title, version: title });
-    const prepare = () => {
-      context.deleteSet = { id: 'image_delete', label: 'Batch', total: 3, size: '1x1', when: '', images: [
-        image(1, 'First'), image(2, 'Second'), image(3, 'Third')] };
-      run("imageSets = [deleteSet]; nsfwView = false; pipeline = 'image'");
-      run("allImageSets = [{ ...deleteSet, images: [...deleteSet.images] }]");
+    const image = (position, title) => ({ position, title, version: title, file: `${title}.png` });
+    // The panel's status with this set (and these films): what the page draws, and draws again for a change.
+    const emptyQueue = { items: [], results: [], held: false, current: null };
+    // ComfyUI as the page last had it, so the workflow lists aren't fetched again.
+    context.deleteBase = { ...idle, server_started: 1, lines: [], log_delta: true, queue: emptyQueue, stopped_runs: [], comfyui: { online: run('workflowsFor') },
+      quota: { groups: [], resets_in: 100 }, gpu: null, upload: { lines: [], running: false, elapsed: 0, queue: emptyQueue } };
+    const status = (images, videos = []) => {
+      context.deleteImages = images;
+      context.deleteVideos = videos;
+      run(`applyStatus({ ...deleteBase, videos: { output: [], uploaded: [], video: deleteVideos },
+        image_sets: deleteImages.length ? [{ id: 'image_delete', label: 'Batch', total: 3, size: '1x1', when: '', images: deleteImages }] : [] },
+        performance.now(), null, null)`);
     };
-    const remove = async (position, remaining) => {
-      context.fetch = async url => {
-        assert.strictEqual(url, `/image-runs/image_delete/delete/${position}`);
-        return { json: async () => ({ ok: true, images: remaining }) };
-      };
-      await els.viewerDelete.listeners.click();
-      await els.viewerDelete.listeners.click();
+    // The second tap's delete, still waiting for its answer: wrapped, as awaiting it would wait for that too.
+    const tap = async () => { await els.viewerDelete.listeners.click(); return { done: els.viewerDelete.listeners.click() }; };
+    let sent = [], answer = null;
+    // The deletes wait for their answer; what the page asks the panel otherwise (workflows, the plan) is answered at once.
+    context.fetch = (url, options) => {
+      if (String(url).startsWith('/api/')) return Promise.resolve({ ok: true, json: async () => ({ online: false, workflows: [] }) });
+      sent.push({ url, body: options && options.body });
+      return new Promise(resolve => { answer = resolve; });
     };
-    prepare();
+    run("nsfwView = false; pipeline = 'image'");
+    status([image(1, 'First'), image(2, 'Second'), image(3, 'Third')]);
     run("openViewer('image_delete', 2)");
-    await remove(2, [image(1, 'First'), image(2, 'Third')]);
-    assert(els.imageViewer.open && els.viewerTitle.textContent === 'Third' && els.viewerCount.textContent === '2 of 2', 'deletion opens the renumbered next image');
-    assert(els.viewerDownload.href.includes('/files/2?v=Third'), 'download points to the surviving image');
-    await remove(2, [image(1, 'First')]);
-    assert(els.imageViewer.open && els.viewerTitle.textContent === 'First', 'deleting the last visible image opens the previous one');
-    await remove(1, []);
-    assert(!els.imageViewer.open, 'deleting the only remaining image closes the preview');
-    prepare();
+    // Gone at once: the viewer is on the next before the panel has answered, and the set has two.
+    let deleting = await tap();
+    assert(els.imageViewer.open && els.viewerTitle.textContent === 'Third' && els.viewerCount.textContent === '2 of 2', 'deletion opens the next image at once');
+    assert.deepStrictEqual(JSON.parse(run('JSON.stringify(imageSets[0].images.map(p => p.file))')), ['First.png', 'Third.png'], 'and Output has it gone');
+    assert.strictEqual(sent[0].url, '/image-runs/image_delete/delete/2');
+    assert.deepStrictEqual(JSON.parse(sent[0].body), { file: 'Second.png' }, 'by its file, so a second delete before the renumbering takes the right one');
+    // A status on its way from before can't bring it back while the panel hasn't answered.
+    status([image(1, 'First'), image(2, 'Second'), image(3, 'Third')]);
+    assert.strictEqual(run('imageSets[0].images.length'), 2, 'an older status does not undo it');
+    answer({ json: async () => ({ ok: true }) });
+    await deleting.done;
+    // The panel's renumbered set: the viewer is on the same file, at its new place.
+    status([image(1, 'First'), { ...image(2, 'Third') }]);
+    assert(run("viewing.position === 2 && viewing.file === 'Third.png'"), 'renumbered, the viewer follows its file');
+    assert(els.viewerDownload.href.includes('/files/') && els.viewerTitle.textContent === 'Third', 'the download points to the surviving image');
+    // Refused: it comes back in Output, the viewer stays where it went, and the banner says why.
+    sent = [];
+    deleting = await tap();
+    assert(els.viewerTitle.textContent === 'First', 'deleting the last one goes to the one before');
+    answer({ json: async () => ({ ok: false, error: 'Run is busy' }) });
+    await deleting.done;
+    assert(els.imageViewer.open && els.viewerTitle.textContent === 'First', 'a failed deletion does not move the viewer back');
+    assert.strictEqual(run('imageSets[0].images.length'), 2, 'it is back in Output');
+    assert(!els.actionNotice.hidden && els.actionMessage.textContent.includes('Run is busy'), 'a failed deletion says why in the banner');
+    // The only one left: the viewer closes.
+    status([image(1, 'First')]);
     run("openViewer('image_delete', 1)");
-    let finishDelete;
-    context.fetch = () => new Promise(resolve => { finishDelete = resolve; });
-    await els.viewerDelete.listeners.click();
-    const pendingDelete = els.viewerDelete.listeners.click();
-    assert(els.viewerDelete.disabled && els.viewerDelete.classList.contains('deleting'), 'deletion pulses yellow and cannot be submitted twice while in flight');
-    run('stepViewer(1)');
-    finishDelete({ json: async () => ({ ok: true, images: [image(1, 'Second'), image(2, 'Third')] }) });
-    await pendingDelete;
-    assert(!els.viewerDelete.disabled && !els.viewerDelete.classList.contains('deleting'), 'the pending indicator clears after the response');
-    assert(els.imageViewer.open && els.viewerTitle.textContent === 'Second' && els.viewerCount.textContent === '1 of 2', 'navigation during deletion keeps the selected image after renumbering');
-    let error = '';
-    const savedAlert = context.alert;
-    context.alert = text => { error = text; };
-    context.fetch = async () => ({ json: async () => ({ ok: false, error: 'Run is busy' }) });
-    await els.viewerDelete.listeners.click();
-    await els.viewerDelete.listeners.click();
-    assert(els.imageViewer.open && els.viewerTitle.textContent === 'Second' && els.viewerCount.textContent === '1 of 2' && error === 'Run is busy', 'a failed deletion leaves the preview intact and reports the error');
-    run(`imageSets = []; allImageSets = []; pipeline = 'video'; outputKind = 'both'; folder = 'video';
-      lastVideos.video = [{ name: 'first.mp4', title: 'First film', mtime: 2 }, { name: 'next.mp4', title: 'Next film', mtime: 1 }];
-      openFilm('first.mp4', 'video')`);
-    context.fetch = async url => {
-      assert.strictEqual(url, '/delete/video/first.mp4');
-      return { json: async () => ({ ok: true }) };
-    };
-    await els.viewerDelete.listeners.click();
-    await els.viewerDelete.listeners.click();
+    deleting = await tap();
+    assert(!els.imageViewer.open, 'deleting the only remaining image closes the preview');
+    answer({ json: async () => ({ ok: true }) });
+    await deleting.done;
+    run(`pipeline = 'video'; outputKind = 'both'; folder = 'video'`);
+    status([], [{ name: 'first.mp4', title: 'First film', mtime: 2 }, { name: 'next.mp4', title: 'Next film', mtime: 1 }]);
+    run("openFilm('first.mp4', 'video')");
+    sent = [];
+    deleting = await tap();
+    assert.strictEqual(sent[0].url, '/delete/video/first.mp4');
     assert(els.imageViewer.open && els.viewerTitle.textContent === 'Next film', 'deleting a film opens the next output instead of closing');
-    context.alert = savedAlert;
+    answer({ json: async () => ({ ok: true }) });
+    await deleting.done;
+    status([], []);
+    // Deleted or moved: the picture shown shrinks away once the next has loaded, and the next fades in. Which one loads
+    // is known only once it is open (a film after an image, say).
+    {
+      const listeners = {}, ghostClasses = new Set(), animated = [];
+      const ghost = { style: {}, classList: { add: name => ghostClasses.add(name) }, removeAttribute() {}, setAttribute() {},
+        addEventListener() {}, remove() {} };
+      context.shownMedia = { complete: true, naturalWidth: 10, cloneNode: () => ghost, getBoundingClientRect: () => ({ left: 0, top: 0, width: 10, height: 10 }) };
+      context.nextMedia = { addEventListener: (name, fn) => { listeners[name] = fn; }, removeEventListener() {}, animate: (frames, options) => animated.push(options) };
+      let opened = false, askedWhich = false;
+      context.openNext = () => { opened = true; };
+      context.whichNext = () => { askedWhich = opened; return context.nextMedia; };
+      run("transitionViewer(shownMedia, 'removed', openNext, whichNext)");
+      assert(opened && askedWhich && listeners.load, 'opened first, then which one loads is asked');
+      assert(!ghostClasses.has('removed') && !animated.length, 'nothing moves before the next has loaded');
+      listeners.load();
+      assert(ghostClasses.has('removed') && animated.length === 1 && animated[0].delay > 0, 'it shrinks away, and the next fades in just after');
+      run('clearViewerTransition()');
+      assert(/\.viewer-out\.removed \{ animation: viewer-removed/.test(html) && /@keyframes viewer-removed \{ to \{ opacity: 0; transform: scale\(\.9\)/.test(html));
+    }
+    // A big picture opens small, then at screen size once decoded; its full file only when zoomed in past that.
+    {
+      const savedImage = context.Image, loaded = [], asked = [];
+      context.Image = class {
+        set src(url) { this.url = url; asked.push(url); }
+        get src() { return this.url || ''; }
+        decode() { loaded.push(this.url); return Promise.resolve(); }
+      };
+      const settle = () => new Promise(resolve => setImmediate(resolve));
+      status([image(1, 'Tall'), image(2, 'Next')].map(p => ({ ...p, resolution: '3008x5584' })));
+      run("pipeline = 'image'; openViewer('image_delete', 1)");
+      assert(els.viewerImage.src.includes('/thumbnails/1?v=Tall'), 'the small picture at once');
+      await settle();
+      assert(els.viewerImage.src.includes('/previews/1?v=Tall') && loaded[0].includes('/previews/1?v=Tall'), 'then the screen-sized one, decoded first');
+      assert(asked.some(src => src.includes('/previews/2?v=Next')) && !asked.some(src => src.includes('/files/')),
+        'and the next one at screen size, for a swipe; no full file yet');
+      assert.deepStrictEqual(JSON.parse(run('JSON.stringify(viewedImageSize())')), [3008, 5584], 'its own size, not the copy\'s');
+      Object.assign(els.viewerImage, { offsetWidth: 400, offsetHeight: 742 });
+      context.window.devicePixelRatio = 1;
+      run('zoom.scale = 3; applyZoom()');
+      await settle();
+      assert(!els.viewerImage.src.includes('/files/'), 'zoomed 3x on a 1x screen, the copy (1379 wide) still has the pixels');
+      context.window.devicePixelRatio = 3;
+      run('zoom.scale = 1.3; applyZoom()');
+      await settle();
+      assert(els.viewerImage.src.includes('/files/1?v=Tall'), 'past what the copy has for the screen: the full file');
+      run('resetZoom()');
+      // Pinching: the page's own updates wait until the fingers lift, and the full file isn't swapped in meanwhile.
+      const finger = (x, y) => ({ clientX: x, clientY: y });
+      run("openViewer('image_delete', 1)");
+      await settle();
+      els.viewerImage.listeners.touchstart({ touches: [finger(100, 100), finger(200, 200)], preventDefault() {} });
+      assert(run('viewerGesturing()'), 'two fingers down: a gesture');
+      status([image(1, 'Tall'), image(2, 'Next'), image(3, 'Made meanwhile')].map(p => ({ ...p, resolution: '3008x5584' })));
+      assert(run('heldStatus !== null') && run('imageSets[0].images.length') === 2, 'a status that comes meanwhile waits');
+      run('zoom.scale = 4; applyZoom()');
+      await settle();
+      assert(!els.viewerImage.src.includes('/files/'), 'no full file while the fingers are on it');
+      els.viewerImage.listeners.touchend({ touches: [], changedTouches: [finger(100, 100), finger(200, 200)], preventDefault() {} });
+      await settle();
+      assert(run('heldStatus === null && !viewerGesturing()') && run('imageSets[0].images.length') === 3, 'lifted: what waited is drawn');
+      assert(els.viewerImage.src.includes('/files/1?v=Tall'), 'and the full file comes, zoomed past the copy');
+      run('resetZoom()');
+      delete context.window.devicePixelRatio;
+      context.Image = savedImage;
+    }
     context.fetch = savedFetch;
     context.savedPoll = savedPoll;
     run('poll = savedPoll; closeViewer(); imageSets = []; allImageSets = []; lastVideos.video = []');
@@ -4156,6 +4326,78 @@ assert(els.comfyFacts.innerHTML.includes('Generating the image · 3/8') && els.c
     run('statusStream.close(); statusStream = null; clearTimeout(streamQuiet)');
     context.setTimeout = savedTimeout;
     delete context.EventSource;
+  }
+  // Loading: the stream waits for the first poll's catalogue, rather than bringing all of it a second time; and a page
+  // out of sight closes it.
+  {
+    const sources = [], savedFetch = context.fetch;
+    context.EventSource = class { constructor(url) { this.url = url; sources.push(this); } close() { this.closed = true; } };
+    context.keptStatus = run('lastStatus');
+    run('lastStatus = null; polling = true; streamAfterPoll = false');
+    assert.strictEqual(run('openStatusStream()'), true);
+    assert.strictEqual(sources.length, 0, 'not while the first poll is out');
+    run('polling = false');
+    context.fetch = answer({ ...quiet, server_started: 1, returncode: 0 });
+    await run('poll()');
+    assert.strictEqual(sources.length, 1, 'connected as soon as that answer is in');
+    assert.strictEqual(run('openStatusStream()') && sources.length, 2, 'once a status is in, it connects at once');
+    context.document.hidden = true;
+    for (const listener of documentListeners.visibilitychange) listener();
+    context.document.hidden = false;
+    assert(sources[1].closed && run('statusStream === null'), 'out of sight, the stream closes');
+    run('clearTimeout(streamQuiet); if (!lastStatus) lastStatus = keptStatus');
+    context.fetch = savedFetch;
+    delete context.EventSource;
+  }
+  // The Output sets as the page uses them stay the same while the catalogue and the set being made do.
+  {
+    run(`statusCatalogue.hydrate({ catalogue_revision: 'memo', videos: { video: [] }, image_sets: [{ id: 'a', images: [] }], collections: [], output_order: [] })`);
+    assert(run(`statusCatalogue.hydrate({ catalogue_revision: 'memo', running: false }).image_sets === statusCatalogue.hydrate({ catalogue_revision: 'memo', running: false }).image_sets`),
+      'unchanged, not made anew every update');
+    assert(run(`statusCatalogue.hydrate({ catalogue_revision: 'memo', running: true, pipeline: 'image', progress: { run_id: 'a' } }).image_sets[0].generating`),
+      'the set being made says so');
+  }
+  // Moves and deletes in the queue show at once, stay through a status from before, and go back with a banner when refused.
+  {
+    const savedFetch = context.fetch, savedPoll = run('poll');
+    run('poll = () => {}');
+    const job = (id, later = false) => ({ id, label: `job ${id}`, detail: 'd', pipeline: 'image', later });
+    const panelStatus = items => {
+      context.queueItems = items;
+      run(`applyStatus({ ...lastStatus, local: false, lines: [], log_delta: true, queue: { ...lastStatus.queue, items: queueItems, current: null } }, performance.now(), null, null)`);
+    };
+    const ids = () => JSON.parse(run('JSON.stringify(lastStatus.queue.items.map(item => [item.id, !!item.later]))'));
+    let reply;
+    context.fetch = () => new Promise(resolve => { reply = resolve; });
+    panelStatus([job(1), job(2), job(3, true)]);
+    // Removed: gone at once, and a status from before it was taken can't bring it back.
+    let removing = run("removeQueued('run', '2')");
+    assert.deepStrictEqual(ids(), [[1, false], [3, true]], 'removed from the queue at once');
+    panelStatus([job(1), job(2), job(3, true)]);
+    assert.deepStrictEqual(ids(), [[1, false], [3, true]], 'an older status does not bring it back');
+    reply({ json: async () => ({ ok: true }) });
+    await removing;
+    panelStatus([job(1), job(3, true)]);
+    assert.strictEqual(run('localChanges.size'), 0, 'the panel has it: nothing kept any more');
+    // Pending to the front of the queue, and refused: back where it was, and the banner says why.
+    let moving = run(`moveQueued(3, { later: false, top: true }, '/queue/run/start/3?top=1', 'Could not add it to the queue')`);
+    assert.deepStrictEqual(ids(), [[3, false], [1, false]], 'up into the queue at once, at its front');
+    reply({ json: async () => ({ ok: false, error: 'The queue is closed.' }) });
+    await moving;
+    assert.deepStrictEqual(ids(), [[1, false], [3, true]], 'refused: back in Pending');
+    assert(!els.actionNotice.hidden && els.actionMessage.textContent === 'Could not add it to the queue. The queue is closed.', 'the banner says why');
+    // Into Pending, and a new order: both as asked, until the panel says the same.
+    moving = run(`moveQueued(1, { later: true }, '/queue/run/pause/1', 'x')`);
+    assert.deepStrictEqual(ids(), [[1, true], [3, true]], 'into Pending at once');
+    reply({ json: async () => ({ ok: true }) });
+    await moving;
+    panelStatus([job(1, true), job(3, true), job(4), job(5)]);
+    assert.deepStrictEqual(run(`JSON.stringify(withQueueOrder(lastStatus, 'run', [5, 4]).queue.items.map(item => item.id))`), '[1,3,5,4]',
+      'a new order moves the waiting ones; the pending ones stay where they are');
+    assert(run(`queueOrderIs(withQueueOrder(lastStatus, 'run', [5, 4]), 'run', [5, 4]) && !queueOrderIs(lastStatus, 'run', [5, 4])`));
+    context.savedPollForQueue = savedPoll;
+    run('poll = savedPollForQueue');
+    context.fetch = savedFetch;
   }
   {
     const savedFetch = context.fetch;

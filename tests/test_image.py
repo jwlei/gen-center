@@ -1319,11 +1319,86 @@ class PanelTest(unittest.TestCase):
         self.assertEqual(self.status()["stopped_runs"], [])
         self.assertEqual(self.client.get(f"/image-runs/{run.id}/files/2").status_code, 200, "the next one moved up")
 
+    def test_an_image_asked_for_by_its_version_is_that_one_even_after_a_renumbering(self):
+        """
+        The page drops a deleted image at once and goes on to the next by its old place: its address, with its version,
+        must still bring that image (kept for good), and a delete by its file must take that one.
+        """
+        self.make()
+        run = self.only_run()
+        before = image_panel.image_files(run)
+        second, third = before[1], before[2]
+        with open(run.image_path(run.shots[2]), "rb") as f:
+            third_bytes = f.read()
+        exact = self.client.get(f"/image-runs/{run.id}/files/3?v={third['version']}")
+        self.assertEqual(exact.headers["Cache-Control"], webapp.CACHE_FOR_GOOD, "its very version: kept for good")
+        exact.close()
+        # Deleted by its file: the place sent is the old one, but the file says which.
+        reply = self.client.post(f"/image-runs/{run.id}/delete/9", json={"file": second["file"]}).get_json()
+        self.assertTrue(reply["ok"])
+        self.assertEqual([p["file"] for p in reply["images"]], [before[0]["file"], third["file"]])
+        gone = self.client.post(f"/image-runs/{run.id}/delete/2", json={"file": second["file"]})
+        self.assertEqual((gone.status_code, gone.get_json()["ok"]), (404, False), "a second delete of it takes nothing else")
+        # The old place (3) is past the end now, and 2 is the third image: by its version, either brings the third.
+        for place in (2, 3):
+            moved = self.client.get(f"/image-runs/{run.id}/files/{place}?v={third['version']}")
+            self.assertEqual((moved.status_code, moved.data), (200, third_bytes), f"place {place}: the image its version names")
+            self.assertEqual(moved.headers["Cache-Control"], webapp.CACHE_FOR_GOOD)
+            moved.close()
+            thumb = self.client.get(f"/image-runs/{run.id}/thumbnails/{place}?v={third['version']}")
+            self.assertEqual((thumb.status_code, thumb.headers["Cache-Control"]), (200, webapp.CACHE_FOR_GOOD))
+            thumb.close()
+        # A version that names no image any more: what is at that place, and not kept for good.
+        stale = self.client.get(f"/image-runs/{run.id}/files/2?v={second['version']}")
+        self.assertEqual(stale.status_code, 200)
+        self.assertNotEqual(stale.headers.get("Cache-Control"), webapp.CACHE_FOR_GOOD)
+        stale.close()
+
+    def test_the_viewer_gets_a_screen_sized_copy_that_keeps_transparency(self):
+        """A big image opens in the viewer as a WebP at most PREVIEW_EDGE long, not as its full file; deleted, it goes too."""
+        self.make()
+        run = self.only_run()
+        path = run.image_path(run.shots[0])
+        Image.new("RGBA", (3200, 1600), (200, 40, 40, 128)).save(path)  # Bigger than the screen, and see-through
+        version = image_panel.image_files(run)[0]["version"]
+        reply = self.client.get(f"/image-runs/{run.id}/previews/1?v={version}")
+        self.assertEqual((reply.status_code, reply.mimetype), (200, "image/webp"))
+        self.assertEqual(reply.headers["Cache-Control"], webapp.CACHE_FOR_GOOD)
+        with Image.open(io.BytesIO(reply.data)) as shown:
+            self.assertEqual((shown.format, shown.size), ("WEBP", (media.PREVIEW_EDGE, media.PREVIEW_EDGE // 2)))
+            self.assertEqual(shown.mode, "RGBA", "transparency kept")
+        reply.close()
+        self.assertTrue(os.path.exists(run.preview_path(run.shots[0])), "made once, kept beside the thumbnails")
+        thumb = self.client.get(f"/image-runs/{run.id}/thumbnails/1?v={version}")
+        thumb.close()
+        self.assertTrue(self.client.post(f"/image-runs/{run.id}/delete/1").get_json()["ok"])
+        self.assertFalse(os.path.exists(run.preview_path(run.shots[0])) or os.path.exists(run.thumbnail_path(run.shots[0])),
+                         "its copies go with it")
+
     def test_deleting_the_last_image_takes_the_set(self):
         self.make(count="1")
         run = self.only_run()
         self.assertEqual(self.client.post(f"/image-runs/{run.id}/delete/1").get_json(), {"ok": True, "images": []})
         self.assertEqual(list_runs(), [])
+        self.assertFalse(os.path.exists(run.output_dir))
+
+    def test_deleting_a_queued_set_asks_then_takes_its_jobs_out(self):
+        self.make()
+        run = self.only_run()
+        # Waiting in a held queue, as it would be behind other jobs: a job queued now would start at once.
+        with webapp.run_queue.lock:
+            webapp.run_queue.held = True
+            webapp.run_queue.items.append({"id": self.queue_id(), "label": "1 image: more of it", "pipeline": "image",
+                                           "resume": run.id, "argv": ["python", "-m", "pipelines.image.main"]})
+        webapp._runs_cache["at"] = 0.0
+        self.assertTrue(self.status()["image_sets"][0]["queued"], "Output shows it as still in the queue")
+        asked = self.client.post(f"/image-runs/{run.id}/delete")
+        self.assertEqual(asked.status_code, 409)
+        self.assertEqual(len(asked.get_json()["queued"]), 1, "the page is told which jobs, to ask")
+        self.assertTrue(os.path.exists(run.output_dir), "kept until asked again")
+        self.assertEqual(len(webapp.run_queue.items), 1, "and still queued")
+        self.assertTrue(self.client.post(f"/image-runs/{run.id}/delete", json={"dequeue": True}).get_json()["ok"])
+        self.assertEqual(webapp.run_queue.items, [], "taken out of the queue")
         self.assertFalse(os.path.exists(run.output_dir))
 
     def test_deleting_a_set_takes_its_images(self):

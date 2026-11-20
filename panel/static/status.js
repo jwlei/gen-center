@@ -1,23 +1,28 @@
 // Classic scripts share the page's lexical scope; no draft data leaves this page.
 const statusCatalogue = (() => {
   const keys = ['videos', 'image_sets', 'collections', 'output_order'];
-  let revision = '', catalogue = null;
+  // The sets as the page uses them, kept while neither the catalogue nor the set being made changes: each update (every
+  // 2 s) once made all of them anew, and Output's lists worked out again from those, for nothing.
+  let revision = '', catalogue = null, sets = null, setsFor = '';
   return {
     url() { return '/api/status?catalogue_revision=' + encodeURIComponent(revision); },
+    revision() { return revision; },
     hydrate(data) {
       if (typeof data.catalogue_revision !== 'string') return data; // Older servers.
       if (data.videos && Array.isArray(data.image_sets)) {
         catalogue = Object.fromEntries(keys.map(key => [key, data[key]]));
         revision = data.catalogue_revision;
+        sets = null;
       } else if (!catalogue || data.catalogue_revision !== revision) {
         revision = '';
         throw new Error('Output catalogue is out of sync. Retrying a full update.');
       }
-      const merged = { ...catalogue, ...data };
-      merged.image_sets = merged.image_sets.map(set => ({ ...set, generating: !!(
-        data.running && data.pipeline === 'image' && data.progress && data.progress.run_id === set.id
-      ) }));
-      return merged;
+      const making = data.running && data.pipeline === 'image' && data.progress ? data.progress.run_id : null;
+      if (!sets || setsFor !== String(making)) {
+        sets = catalogue.image_sets.map(set => ({ ...set, generating: making !== null && making === set.id }));
+        setsFor = String(making);
+      }
+      return { ...catalogue, ...data, image_sets: sets };
     },
   };
 })();

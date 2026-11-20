@@ -113,6 +113,9 @@ class RunState:
     def thumbnail_path(self, shot):
         return os.path.join(self.folder, "thumbnails", f"{os.path.splitext(shot['file'])[0]}.jpg")
 
+    def preview_path(self, shot):
+        return os.path.join(self.folder, "previews", f"{os.path.splitext(shot['file'])[0]}.webp")
+
     # What made an image, kept with it ("setup") when it is made: a set continued another way later, or the image moved
     # to a collection, it still knows its own. Its prompt, seed and title are its own already.
     SETUP_FIELDS = ("brief", "direct", "llm", "local_model", "workflow", "options", "width", "height", "compose", "transparent", "detail",

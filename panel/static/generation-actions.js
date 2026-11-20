@@ -20,14 +20,19 @@ function reconcileQueueEdits(queue, editAtRequest, upscaleAtRequest) {
     if (edit && !queue.items.some(item => String(item.id) === String(edit.id) && item.editing)) endQueueEdit(edit);
   }
 }
-async function removeQueued(lane, id) {
-  try {
-    const body = await (await fetch(`/queue/${lane}/remove/${id}`, { method: 'POST' })).json();
-    if (!body.ok) { alert(body.error || 'That queued job could not be removed.'); return; }
-    if (lane === 'run') {
-      for (const edit of [queueEdit, queueUpscaleEdit]) if (edit && String(edit.id) === String(id)) endQueueEdit(edit);
-    }
-  } catch (error) { alert('Could not reach the panel. Try again.'); }
+// Gone from the queue (or Pending) at once: its row fades out and the rest close up. Refused, it comes back, and the
+// banner says why. row: the one to fade; the upload queue's rows slide out by themselves (renderQueue).
+async function removeQueued(lane, id, row = null) {
+  const body = await localChanges.make({
+    fade: lane === 'run' ? row : null,
+    apply: data => withoutJob(data, lane, id),
+    landed: data => !inLane(data, lane, id),
+    request: () => postJson(`/queue/${lane}/remove/${id}`),
+    failed: 'Could not remove that job',
+  });
+  if (body && body.ok && lane === 'run') {
+    for (const edit of [queueEdit, queueUpscaleEdit]) if (edit && String(edit.id) === String(id)) endQueueEdit(edit);
+  }
 }
 async function cancelQueueUpscale() {
   if (!queueUpscaleEdit || $('upscaleGo').disabled) return;

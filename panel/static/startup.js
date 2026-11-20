@@ -44,10 +44,16 @@ markJump();
 wirePresets();
 loadPresets();
 poll();
-// Updates pushed by the panel; asking every 2 s only in a browser that can't take them.
+// Updates pushed by the panel, once that first answer is in (polling.js); asking every 2 s only in a browser that
+// can't take them.
 if (!openStatusStream()) setInterval(poll, 2000);
-// A phone pauses a page it isn't showing (its stream too), so catch up as soon as it is shown again.
-document.addEventListener('visibilitychange', () => { if (!document.hidden) { holdOutput(); openStatusStream(); } });
+// A phone pauses a page it isn't showing (its stream too), so catch up as soon as it is shown again; out of sight,
+// the stream closes.
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) { if (typeof EventSource === 'function') closeStatusStream(); return; }
+  holdOutput();
+  openStatusStream();
+});
 window.addEventListener('pageshow', holdOutput);
 window.addEventListener('focus', resumePolling);
 window.addEventListener('online', () => { resumePolling(); openStatusStream(); });

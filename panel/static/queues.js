@@ -399,7 +399,7 @@ $('finishedClear').addEventListener('click', async () => {
     $('finishedList').innerHTML = '';
     cleared = true;
   } catch (error) {
-    alert('Could not clear Finished. Check the connection and try again.');
+    actionFailed('Could not clear Finished. Check the connection and try again.');
   }
   $('finishedList').dataset.html = '';  // Drawn again from what the server has: nothing, or all of it back
   finishedSwiping = false;
@@ -438,7 +438,7 @@ function forgetResult(row) {
   if (d.jobId == null) return;
   fetch(`/queue/${encodeURIComponent(d.lane)}/finished/${encodeURIComponent(d.jobId)}/forget`, { method: 'POST' })
     .then(response => { if (!response.ok) throw new Error(); accepted = true; closeIfEmpty(); })
-    .catch(() => { forgottenResults.delete(d.key); alert('Could not remove it from Finished. Check the connection and try again.'); poll(); });
+    .catch(() => { forgottenResults.delete(d.key); actionFailed('Could not remove it from Finished. Check the connection and try again.'); poll(); });
 }
 $('finishedList').addEventListener('click', async e => {
   if (finishedSwiped) { e.preventDefault(); e.stopPropagation(); return; }
@@ -661,7 +661,6 @@ for (const id of ['warningRuns', 'stoppedRuns', 'failedRuns']) {
     }
     const button = e.target.closest && e.target.closest('button');
     const d = button ? button.dataset : {};
-    let url;
     if (d.shots) {
       openShots(d.shots);
       return;
@@ -674,16 +673,36 @@ for (const id of ['warningRuns', 'stoppedRuns', 'failedRuns']) {
       const run = d.continue || d.continueTop || d.continueLater;
       // Pending's "Add to the queue" (start-item, not Retry in Finished): with nothing running it waits for Resume.
       const query = d.continueTop ? '?top=1' : d.continueLater ? '?later=1' : button.classList.contains('start-item') ? '?pending=1' : '';
-      const data = await queueRequest(button, async () => (await fetch(`/runs/${encodeURIComponent(run)}/continue${query}`, { method: 'POST' })).json(), d.continueLater ? 'Pending' : undefined, d.continueLater ? 'Moving…' : undefined);
-      if (data) poll();
+      // It leaves here at once; its job shows in the queue (or Pending) with the panel's next status.
+      await localChanges.make({
+        apply: data => withoutStoppedRun(data, run),
+        request: () => postJson(`/runs/${encodeURIComponent(run)}/continue${query}`),
+        failed: d.continueLater ? 'Could not move it to Pending' : 'Could not add it to the queue',
+      });
       return;
     } else if (d.discardUnreadable) {
       if (!secondTap(button)) return;
-      url = `/runs/${encodeURIComponent(d.discardUnreadable)}/discard-unreadable`;
+      const run = d.discardUnreadable;
+      await localChanges.make({
+        fade: button.closest('.stopped-run'),
+        apply: data => ({ ...data, checkpoint_errors: (data.checkpoint_errors || []).filter(error => error.run_id !== run) }),
+        landed: data => !(data.checkpoint_errors || []).some(error => error.run_id === run),
+        request: () => answered(`/runs/${encodeURIComponent(run)}/discard-unreadable`),
+        failed: 'Could not delete that run',
+      });
+      return;
     } else if (d.discard) {
       // Two taps, as a delete: what it already made stays in Output.
       if (!secondTap(button)) return;
-      url = `/runs/${d.discard}/discard`;
+      const run = d.discard;
+      await localChanges.make({
+        fade: button.closest('.stopped-run'),
+        apply: data => withoutStoppedRun(data, run),
+        landed: data => !(data.stopped_runs || []).some(item => item.id === run),
+        request: () => answered(`/runs/${run}/discard`),
+        failed: 'Could not discard that run',
+      });
+      return;
     } else if (d.requeueJob) {
       // Back to Pending with its settings; the sliders then open it for editing there, as any pending job.
       if (d.requeueEdit && (queueEdit || queueUpscaleEdit)) {
@@ -701,7 +720,15 @@ for (const id of ['warningRuns', 'stoppedRuns', 'failedRuns']) {
       return;
     } else if (d.dismissJob) {
       if (!secondTap(button)) return;
-      url = `/queue/run/failed/${encodeURIComponent(d.dismissJob)}/dismiss`;
+      const job = d.dismissJob, mine = result => String(result.job_id) === job && result.outcome === 'failed' && !result.run_id;
+      await localChanges.make({
+        fade: button.closest('.stopped-run'),
+        apply: data => ({ ...data, queue: { ...data.queue, results: data.queue.results.filter(result => !mine(result)) } }),
+        landed: data => !data.queue.results.some(mine),
+        request: () => answered(`/queue/run/failed/${encodeURIComponent(job)}/dismiss`),
+        failed: 'Could not delete that failure',
+      });
+      return;
     } else if (d.edit) {
       await editQueued(d.edit, button);
       return;
@@ -712,18 +739,32 @@ for (const id of ['warningRuns', 'stoppedRuns', 'failedRuns']) {
     } else if (d.start || d.remove) {
       if (d.remove && !secondTap(button)) return;
       if (d.start) {
-        const data = await queueRequest(button, async () => (await fetch(`/queue/run/start/${d.start}${d.top ? '?top=1' : ''}`, { method: 'POST' })).json());
-        if (data) poll();
+        // Up into the queue at once, at its end or its front; refused, it comes back here.
+        await moveQueued(d.start, { later: false, top: !!d.top }, `/queue/run/start/${d.start}${d.top ? '?top=1' : ''}`, 'Could not add it to the queue');
       } else {
-        await removeQueued('run', d.remove);
-        poll();
+        await removeQueued('run', d.remove, button.closest('.stopped-run'));
       }
       return;
-    } else {
-      return;
     }
-    await stopJob(url);
   });
+}
+// A job between the queue and Pending, shown there at once (renderRunSections glides it across).
+function moveQueued(id, where, url, failed) {
+  return localChanges.make({
+    apply: data => withJobMoved(data, id, where),
+    landed: data => {
+      const job = data.queue.items.find(item => String(item.id) === String(id));
+      return !job || !!job.later === where.later;
+    },
+    request: () => postJson(url),
+    failed,
+  });
+}
+const withoutStoppedRun = (data, run) => ({ ...data, stopped_runs: (data.stopped_runs || []).filter(item => item.id !== run) });
+// An answer that says what went wrong only with `error` (a run discarded, a failure dismissed): ok unless it does.
+async function answered(url) {
+  const body = await postJson(url);
+  return { ...body, ok: body.ok !== false && !body.error };
 }
 // Reordering the queue: select a job, then drag it or move it with the arrow keys. The page moves it at once,
 // then sends the new order; the next poll draws what the server has.
@@ -743,21 +784,29 @@ function glide(el, move) {
     row.animate([{ transform: `translateY(${shift}px)` }, { transform: 'none' }], { duration: 220, easing: 'cubic-bezier(.2,.8,.2,1)' });
   }
 }
+// The order as the page shows it now stays so, through statuses on their way, until the panel's says the same.
+// Refused, the queue goes back to the panel's order, and the banner says why.
 async function sendOrder(el) {
   el._ordering = true;
+  const lane = el.dataset.lane, ids = queueOrder(el);
   const abort = new AbortController();
   const timer = setTimeout(() => abort.abort(), POLL_TIMEOUT);
   try {
-    const response = await fetch(`/queue/${el.dataset.lane}/order`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ids: queueOrder(el) }), signal: abort.signal });
-    const data = await response.json();
-    if (!response.ok || !data.ok) throw new Error(data.error || 'Could not reorder the queue.');
-  } catch (error) {
-    alert(`Could not reorder the queue: ${error.message}`);
+    await localChanges.make({
+      apply: data => withQueueOrder(data, lane, ids),
+      landed: data => queueOrderIs(data, lane, ids),
+      request: async () => {
+        const response = await fetch(`/queue/${lane}/order`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ids }), signal: abort.signal });
+        const data = await response.json();
+        return response.ok === false ? { ...data, ok: false } : data;
+      },
+      failed: 'Could not reorder the queue',
+    });
   } finally {
     clearTimeout(timer);
     el._ordering = false;
     el.dataset.html = '';
-    poll();
+    localChanges.redraw();
   }
 }
 async function sortQueueByEta(el) {
@@ -946,21 +995,30 @@ for (const id of ['runQueue', 'uploadQueue']) {
       }, state.held || state.stopAfter ? 'Resumed' : 'On hold', 'Updating…');
       if (!data) return;
     }
-    else if (d.run || d.pause) {
-      const action = d.run ? 'run-now' : 'pause';
-      const data = await queueRequest(button, async () => (await fetch(`/queue/${lane}/${action}/${d.run || d.pause}`, { method: 'POST' })).json(), d.pause ? 'Pending' : 'Started', d.pause ? 'Pausing…' : 'Starting…');
+    else if (d.pause) {
+      // Into Pending at once: it moves down there (renderRunSections glides it); refused, it comes back.
+      await moveQueued(d.pause, { later: true }, `/queue/${lane}/pause/${d.pause}`, 'Could not move it to Pending');
+      return;
+    }
+    else if (d.run) {
+      const data = await queueRequest(button, async () => (await fetch(`/queue/${lane}/run-now/${d.run}`, { method: 'POST' })).json(), 'Started', 'Starting…');
       if (!data) return;
     }
     else if (d.top) {
-      // First in line: the queue's order with this one moved to the front.
+      // First in line at once: the queue's order with this one moved to the front.
       const ids = [Number(d.top), ...queueOrder($(id)).filter(n => n !== Number(d.top))];
-      const data = await queueRequest(button, async () => (await fetch(`/queue/${lane}/order`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ids }) })).json(), 'Next', 'Moving…');
-      if (!data) return;
+      await localChanges.make({
+        apply: data => withQueueOrder(data, lane, ids),
+        landed: data => queueOrderIs(data, lane, ids),
+        request: () => postJson(`/queue/${lane}/order`, { ids }),
+        failed: 'Could not move it to the top',
+      });
+      return;
     }
     else if (d.remove) {
       if (!secondTap(button)) return;
-      await removeQueued(lane, d.remove);
+      await removeQueued(lane, d.remove, button.closest('.queue-item'));
+      return;
     }
     else if (d.resume) {
       // Shown at once; the next status confirms it.

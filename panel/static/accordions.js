@@ -256,22 +256,72 @@ function syncSectionBar() {
   buttons.forEach((button, index) => button.setAttribute('aria-selected', String(sections[index] === current)));
   placeUnderline($('sectionGlider'), buttons[sections.indexOf(current)], $('sectionBar'));
 }
-$('sectionTabs').addEventListener('click', e => {
-  const button = e.target.closest && e.target.closest('[data-tab]');
+// The section at index in the bar, shown: tapped, it slides in from the side of its button; pulled to from the end of
+// the one before or after (pullSections), from below or above. Whether it changed.
+function showSectionTab(index, way = 'side') {
   const form = shownForm();
-  if (!button || !form) return;
-  const sections = tabSections(form), next = sections[+button.dataset.tab], before = sections.indexOf(chosenTab(form, sections));
-  if (!next || before === +button.dataset.tab) return;
+  if (!form) return false;
+  const sections = tabSections(form), next = sections[index], before = sections.indexOf(chosenTab(form, sections));
+  if (!next || before === index) return false;
   form._tab = next;
   if (next.id) try { localStorage.setItem(SECTION_TAB_KEY + form.id, next.id); } catch (error) {}
   syncSectionBar();
-  // In from the side of its button: from the right when it's further along, the left when it's back.
+  // Further along: from the right (or below); back: from the left (or above).
   if (!window.matchMedia('(prefers-reduced-motion: reduce)').matches && next.animate) {
-    const from = +button.dataset.tab > before ? '24%' : '-24%';
-    next.animate([{ transform: `translateX(${from})`, opacity: 0 }, { transform: 'none', opacity: 1 }],
+    const from = `${way === 'side' ? 'translateX' : 'translateY'}(${index > before ? '24%' : '-24%'})`;
+    next.animate([{ transform: from, opacity: 0 }, { transform: 'none', opacity: 1 }],
                  { duration: 260, easing: 'cubic-bezier(.3, .7, .3, 1)' });
   }
+  return true;
+}
+$('sectionTabs').addEventListener('click', e => {
+  const button = e.target.closest && e.target.closest('[data-tab]');
+  if (button) showSectionTab(+button.dataset.tab);
 });
+// Pulled on past the end of a section, a finger goes on to the next one; past its top, back to the one before, at its
+// end. Only a pull that starts there, at the end already: a scroll that runs into it stops there, as ever. The section
+// gives a little as it's pulled, so the pull is felt before it's let go.
+const SECTION_PULL = 80;
+let sectionPull = null;
+function pullSections(e) {
+  sectionPull = null;
+  if (!document.body.classList.contains('section-tabs-on') || document.body.dataset.page !== 'generate' || e.touches.length !== 1) return;
+  const target = e.target, body = target.closest && target.closest('#optionsCard details.section[open] > .section-body');
+  if (!body || target.closest('textarea, select, [contenteditable], .shots-list, dialog')) return;
+  const top = body.scrollTop <= 1, bottom = body.scrollTop + body.clientHeight >= body.scrollHeight - 1;
+  if (top || bottom) sectionPull = { body, y: e.touches[0].clientY, top, bottom, by: 0 };
+}
+function pulling(e) {
+  const pull = sectionPull;
+  if (!pull) return;
+  if (e.touches.length !== 1) { letGoSections(); return; }
+  const dy = e.touches[0].clientY - pull.y;
+  // Up past the end (dy < 0) or down past the top (dy > 0), and still there; the other way is an ordinary scroll.
+  pull.by = (dy < 0 && pull.bottom) || (dy > 0 && pull.top) ? dy : 0;
+  pull.body.style.transition = '';
+  pull.body.style.transform = pull.by ? `translateY(${Math.max(-40, Math.min(40, pull.by * 0.35))}px)` : '';
+}
+function letGoSections() {
+  const pull = sectionPull;
+  sectionPull = null;
+  if (!pull) return;
+  // Eased back into place, not snapped.
+  pull.body.style.transition = 'transform .2s ease';
+  pull.body.style.transform = '';
+  setTimeout(() => { pull.body.style.transition = ''; }, 220);
+  if (Math.abs(pull.by) < SECTION_PULL) return;
+  const form = shownForm();
+  if (!form) return;
+  const sections = tabSections(form), at = sections.indexOf(chosenTab(form, sections)), index = at + (pull.by < 0 ? 1 : -1);
+  if (!showSectionTab(index, 'pull')) return;
+  // Onward at its start; back at its end, where it was left off coming the other way.
+  const body = sections[index].querySelector(':scope > .section-body');
+  if (body) body.scrollTop = pull.by < 0 ? 0 : body.scrollHeight;
+}
+$('optionsCard').addEventListener('touchstart', pullSections, { passive: true });
+$('optionsCard').addEventListener('touchmove', pulling, { passive: true });
+$('optionsCard').addEventListener('touchend', letGoSections, { passive: true });
+$('optionsCard').addEventListener('touchcancel', () => { if (sectionPull) sectionPull.body.style.transform = ''; sectionPull = null; }, { passive: true });
 SECTION_TABS.addEventListener('change', () => { $('sectionGlider').dataset.place = ''; syncSectionBar(); });
 window.addEventListener('resize', () => { $('sectionGlider').dataset.place = ''; syncSectionBar(); });
 if (window.MutationObserver) {
