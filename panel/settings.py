@@ -16,6 +16,11 @@ MODEL_FOLDERS = {"gemma-4-12b": "gemma-4-12b-heretic", "qwen3-14b": "qwen3-14b-a
 _logger = logging.getLogger(__name__)
 
 
+def llm_models_dir():
+    """Where the local LLMs' GGUF folders are: LLM_MODELS_DIR in .env, or the project's models folder."""
+    return os.getenv("LLM_MODELS_DIR") or os.path.join(PROJECT_ROOT, "models")
+
+
 def local_model_benchmarks():
     try:
         with open(os.path.join(LOGS_DIR, "local_model_benchmarks.json"), encoding="utf-8") as source:
@@ -74,7 +79,7 @@ _TAGS = (("qat", "QAT"), ("uncensored", "U"), ("heretic", "H"), ("abliterated", 
 def _model_file_stem(folder):
     """The name of a model folder's model file, without .gguf: what it is, where the folder's own name doesn't say."""
     try:
-        with os.scandir(os.path.join(PROJECT_ROOT, "models", folder)) as entries:
+        with os.scandir(os.path.join(llm_models_dir(), folder)) as entries:
             names = sorted(entry.name for entry in entries if entry.is_file() and entry.name.lower().endswith(".gguf")
                            and "mmproj" not in entry.name.lower())
     except OSError:
@@ -118,7 +123,7 @@ def short_name(model_id, file_stem=None):
 def local_models():
     models = [{"id": "gemma-4-12b", "label": "Gemma 4 12B (vision)"},
               {"id": "qwen3-14b", "label": "Qwen3 14B (text only)"}]
-    root = os.path.join(PROJECT_ROOT, "models")
+    root = llm_models_dir()
     if os.path.isdir(root):
         with os.scandir(root) as entries:
             folders = sorted((entry for entry in entries if entry.is_dir(follow_symlinks=False)),
@@ -151,7 +156,7 @@ def local_model_rates(models):
     for model in models:
         model_id = model["id"]
         folder = model_id.split(":", 1)[1] if ":" in model_id else MODEL_FOLDERS[model_id]
-        directory = os.path.join(PROJECT_ROOT, "models", folder)
+        directory = os.path.join(llm_models_dir(), folder)
         override = os.getenv("H3IR_MODEL_FILE")
         try:
             if override:

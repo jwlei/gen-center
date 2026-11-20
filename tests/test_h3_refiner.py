@@ -97,6 +97,24 @@ class H3RefinerTest(unittest.TestCase):
             self.assertTrue(vision["gemma-4-12b"])
             self.assertFalse(vision["qwen3-14b"])
 
+    def test_models_are_found_in_llm_models_dir_when_set(self):
+        from panel import settings
+        with tempfile.TemporaryDirectory() as root, tempfile.TemporaryDirectory() as elsewhere, \
+             mock.patch.object(settings, "PROJECT_ROOT", root), \
+             mock.patch.object(h3_refiner, "PROJECT_ROOT", root), \
+             mock.patch.object(settings, "LOGS_DIR", root), \
+             mock.patch.dict(os.environ, {"LLM_MODELS_DIR": elsewhere}, clear=True):
+            folder = os.path.join(elsewhere, "qwen3-14b-custom")
+            os.makedirs(folder)
+            model = os.path.join(folder, "Qwen3-14B-Q4_K_M.gguf")
+            open(model, "wb").close()
+            server = os.path.join(root, "llama-server.exe")
+            open(server, "wb").close()
+            os.environ["H3IR_LLAMA_SERVER"] = server
+            self.assertEqual(settings.llm_models_dir(), elsewhere)
+            self.assertIn("qwen3-14b:qwen3-14b-custom", [m["id"] for m in settings.local_models()])
+            self.assertEqual(h3_refiner._paths("qwen3-14b:qwen3-14b-custom", require_compiler=False)[3], model)
+
     def test_benchmark_resets_rates_and_applies_only_to_matching_files(self):
         from panel import settings
         with tempfile.TemporaryDirectory() as root, \

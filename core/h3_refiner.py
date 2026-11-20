@@ -111,7 +111,8 @@ def _paths(model_id, require_compiler=True):
     base = os.path.dirname(os.path.dirname(launcher))
     server = os.getenv("H3IR_LLAMA_SERVER") or os.path.join(base, "1_Misc", "llama.cpp", "b12177-vulkan", "llama-server.exe")
     folder = panel_settings.model_folder(model_id)
-    models = os.path.join(PROJECT_ROOT, "models", folder)
+    # As panel/settings.py llm_models_dir(), from this module's PROJECT_ROOT.
+    models = os.path.join(os.getenv("LLM_MODELS_DIR") or os.path.join(PROJECT_ROOT, "models"), folder)
     model = _gguf_path(models)
     projector = _gguf_path(models, projector=True) if panel_settings.model_family(model_id) == "gemma-4-12b" else None
     needed = [("llama.cpp server", server), ("local model", model)]

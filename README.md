@@ -142,7 +142,8 @@ panel/        the web app: server.py, one module per side, and the frontend in s
 workflows/    the built-in workflows
 docs/         each pipeline in detail
 logs/         usage, errors, topics and timings
-models/       models the panel runs itself on the CPU: python scripts/get_models.py
+models/       models the panel runs itself on the CPU: python scripts/get_models.py; local LLMs
+              too, unless LLM_MODELS_DIR in .env puts them elsewhere
 runs/         saved progress, by pipeline
 output/       shorts/ready, shorts/uploaded, shorts/bad, video and image
 ```

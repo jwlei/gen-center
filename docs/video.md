@@ -156,8 +156,9 @@ Motion Director is supported when the panel has adapted its inputs; manually wir
 
 Choose the OpenH3-IR model in Settings: **Gemma 4 12B** is the default and supports images and reference videos;
 **Qwen3 14B** is text-only and rejects visual references. This selection applies to subsequent compilations.
-The GGUF models live in the project's ignored `models/gemma-4-12b-heretic` and `models/qwen3-14b-abliterated`
-directories. Additional folders directly under `models` are discovered when their names contain `gemma-4-12b`
+The GGUF models live in `gemma-4-12b-heretic` and `qwen3-14b-abliterated` folders in the LLM models folder:
+`LLM_MODELS_DIR` in `.env`, or the project's ignored `models` folder when that isn't set. Other folders directly
+in it are discovered when their names contain `gemma-4-12b`
 or `qwen3-14b` and contain a model GGUF. They appear separately in Settings and the prompt writer.
 Keep one model GGUF in each directory; Gemma also requires one projector GGUF whose filename
 contains `mmproj`. Original download filenames and the older `model.gguf` and `mmproj.gguf` names both work.
