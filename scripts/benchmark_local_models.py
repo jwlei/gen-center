@@ -17,12 +17,12 @@ from gguf import GGUFReader
 load_dotenv(os.path.join(ROOT, ".env"))
 
 from core import h3_refiner
-from core.paths import LOGS_DIR
+from core.paths import LOGS_DIR, comfyui_url
 from panel import settings
 
 
 PANEL = "http://127.0.0.1:8800"
-COMFY = (os.getenv("COMFYUI_URL") or "http://127.0.0.1:8188").rstrip("/")
+COMFY = comfyui_url()
 PROMPT = ("Describe a quiet coastal village at sunrise, including the buildings, weather, "
           "people, sounds and small details. Write several detailed paragraphs.")
 

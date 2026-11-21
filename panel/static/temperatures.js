@@ -152,15 +152,29 @@ function hideTemperatureTip() {
   for (const { key } of TEMP_SENSORS) { const dot = $(`tempDot-${key}`); if (dot) dot.setAttribute('visibility', 'hidden'); }
 }
 
+// System information's storage: how full the disk is, and what the outputs take.
+async function loadDisk() {
+  try {
+    const { disk } = await (await fetch('/api/settings')).json();
+    $('diskBox').innerHTML = !disk ? '<div class="hint">The disk could not be read.</div>' : `
+      <div class="bar"><div style="width:${Math.round((1 - disk.free / disk.total) * 100)}%"></div></div>
+      <div class="disk-line"><span><b>${formatBytes(disk.free)}</b> free of ${formatBytes(disk.total)} (${esc(disk.drive)})</span><span>Outputs take ${formatBytes(disk.outputs)}</span></div>`;
+  } catch (e) { $('diskBox').innerHTML = '<div class="hint">The disk could not be read.</div>'; }
+}
 $('openTemperatures').addEventListener('click', () => {
   $('tempNote').hidden = true;
   tempDialog.showModal();
   loadTemperatures();
+  loadDisk();
   clearInterval(tempTimer);
   tempTimer = setInterval(loadTemperatures, 30000);  // A new minute's bucket shows while it stays open
 });
 tempDialog.addEventListener('close', () => { clearInterval(tempTimer); tempTimer = null; hideTemperatureTip(); });
 $('tempClose').addEventListener('click', () => tempDialog.close());
+// The table, in a box of its own over it: filled with the chart (renderTemperatures), so it is current when opened.
+$('tempTableOpen').addEventListener('click', () => $('tempTableDialog').showModal());
+$('tempTableClose').addEventListener('click', () => $('tempTableDialog').close());
+$('tempTableDialog').addEventListener('click', e => { if (e.target === $('tempTableDialog')) $('tempTableDialog').close(); });
 tempDialog.addEventListener('click', event => {
   if (event.target === tempDialog) { tempDialog.close(); return; }
   const range = event.target.closest ? event.target.closest('[data-hours]') : null;

@@ -6,7 +6,13 @@ const assert = require('assert');
 const vm = require('vm');
 const path = require('path');
 
-const html = fs.readFileSync(process.argv[2], 'utf8');
+const page = fs.readFileSync(process.argv[2], 'utf8');
+// The page's styles are files of their own (panel/static/css, linked in order): read with the page, so a check on a style
+// finds it wherever it lives. Line endings as one, as the scripts' below.
+const styles = [...page.matchAll(/<link rel="stylesheet" href="\/static\/(css\/[^"?]+)(?:\?[^"]*)?">/g)]
+  .map(m => fs.readFileSync(path.join(__dirname, '..', 'panel', 'static', m[1]), 'utf8').replace(/\r\n/g, '\n'));
+assert(styles.length, 'the page links its stylesheets');
+const html = page + '\n<style>\n' + styles.join('\n') + '\n</style>\n';
 const modules = [...html.matchAll(/<script(?: defer)? src="\/static\/([^"?]+)(?:\?[^"]*)?"><\/script>/g)]
   // Line endings as one: git may check the scripts out with CRLF (core.autocrlf), and the checks read them by line.
   .map(m => ({ name: m[1], source: fs.readFileSync(path.join(__dirname, '..', 'panel', 'static', m[1]), 'utf8').replace(/\r\n/g, '\n') }));
@@ -15,6 +21,8 @@ const config = html.match(/<script id="panelConfig" type="application\/json">([\
 assert(config && modules.length && script.includes('async function poll'), 'the page loads its configuration and topic scripts');
 assert(!/<script>/.test(html), 'no executable JavaScript is embedded in the HTML');
 
+// A value as the running page holds it (JSON-able): a check on what a constant is, not on how its line is written.
+const valueOf = expression => JSON.parse(run(`JSON.stringify(${expression})`));
 const status0 = () => html.slice(html.indexOf('id="runCard"'), html.indexOf('id="optionsCard"'));
 // Every id the script reaches for has to be on the page.
 const ids = new Set([...(html + script).matchAll(/\bid="([^"]+)"/g)].map(m => m[1]));
@@ -521,7 +529,8 @@ assert(/body\.on-shorts \{ --side: var\(--c-shorts\); \}/.test(html));
 assert(/:root \{ --c-shorts: #ff0033; --c-video: #4c8dff; --c-image: #2fbf71; --shared: var\(--accent\); \}/.test(html), "each colour once; the shared one is the theme's own");
 {
   assert.strictEqual((html.match(/#ff0033|#4c8dff|#2fbf71|#a07cff/g) || []).length, 5, "nowhere else in the page: the violet only as Standard's own colour and its swatch");
-  assert(!/#ff0033|#4c8dff|#2fbf71|#a07cff/.test(script) && script.includes("const SIDE_COLOURS = { shorts: 'var(--c-shorts)', video: 'var(--c-video)', image: 'var(--c-image)' };"), 'nor in its script');
+  assert(!/#ff0033|#4c8dff|#2fbf71|#a07cff/.test(script), 'nor in its script');
+  assert.deepStrictEqual(valueOf('SIDE_COLOURS'), { shorts: 'var(--c-shorts)', video: 'var(--c-video)', image: 'var(--c-image)' }, "each side's colour by its variable");
 }
 assert(/#restartComfy\.pulse \{ border-color: var\(--warn\); color: var\(--warn\);/.test(html) && !/e6b800|230, 184, 0/.test(html), "Restart ComfyUI's pulse: the same yellow as Restart panel's");
 assert(script.includes("document.body.dataset.viewing = filmFolder === 'video' ? 'video' : 'shorts';") && script.includes("document.body.dataset.viewing = 'image';")
@@ -1101,7 +1110,10 @@ assert(script.includes("if (pick) moveViewed({ to: pick.dataset.moveTo }, pick);
   run('markBusy(busyButton, -1)');
   assert(!classes.has('is-busy') && attrs['aria-busy'] === 'false', 'and back once answered');
   assert(script.includes("if (button && (button.closest('.count-stepper') || button.closest('[data-no-busy]'))) { lastPressed = null; return; }"), "a stepper's + and - never wait on the last press");
-  assert(/\.is-busy \{ animation: busy-pulse/.test(html) && script.includes(String.raw`const QUIET_REQUESTS = /\/api\/(status|estimate|temperatures|page-error)\b/;`), 'polls, estimates and graphs never pulse anything');
+  assert(/\.is-busy \{ animation: busy-pulse/.test(html), 'a pressed button pulses');
+  for (const url of ['/api/status', '/api/status/stream', '/api/estimate?x=1', '/api/temperatures', '/api/page-error'])
+    assert.strictEqual(run(`QUIET_REQUESTS.test(${JSON.stringify(url)})`), true, `${url}: polls, estimates and graphs never pulse anything`);
+  assert.strictEqual(run(`QUIET_REQUESTS.test('/api/presets')`), false, 'what a tap asks for does');
   assert(run('QUIET_REQUESTS').test('/api/estimate/image') && run('QUIET_REQUESTS').test('/api/status?x=1') && !run('QUIET_REQUESTS').test('/image-runs/a'));
   const wrapped = script.slice(script.indexOf('window.fetch = (url, options = {}) => {'), script.indexOf('const SETTINGS = PANEL_CONFIG.settings;'));
   assert(!wrapped.includes("!== 'GET'"), "opening something (a prompt, a set's settings) pulses too, not only what changes something");
@@ -1635,7 +1647,8 @@ assert(/dialog\.panel-dialog::backdrop \{[^}]*backdrop-filter: blur\(6px\)/.test
 assert(/\.status-queue:has\(> :not\(\[hidden\]\)\) \{[^}]*background: var\(--bg\)/.test(html), 'the runs in a darker box');
 // Status's parts grow in and close out (a copy closes, the part hidden at once); a new stage eases in; idle, the nudge
 // comes in slowly after a second.
-assert(script.includes("const SMOOTH_PARTS = ['currentWork', 'currentWorkSize', 'runProgress',") && script.includes("watcher.observe(el, { attributes: true, attributeFilter: ['hidden', 'class'] });")
+assert.deepStrictEqual(valueOf('SMOOTH_PARTS').slice(0, 3), ['currentWork', 'currentWorkSize', 'runProgress'], 'the parts that fade in and out');
+assert(script.includes("watcher.observe(el, { attributes: true, attributeFilter: ['hidden', 'class'] });")
   && script.includes("for (const id of ['stageDetail', 'comfyNow']) replay($(id), 'stage-in');"), 'smooth in and out, and from stage to stage');
 {
   context.document.getElementById('smoothHost');
@@ -2199,7 +2212,8 @@ assert(els.sideMenu.innerHTML.includes('data-side="video"') && els.sideMenu.inne
   'the other two sides, not the one you are on');
 assert(/\.side-menu \{[^}]*animation: side-menu-in/.test(html) && /@keyframes side-menu-in \{ from \{ opacity: 0; transform: translateY\(-8px\) scale\(\.94\)/.test(html),
   'grows and fades in, downwards from the header');
-assert(/if \(page === document\.body\.dataset\.page && SIDE_PAGES\.includes\(page\)\)/.test(script) && /const SIDE_PAGES = \['status', 'generate', 'output'\]/.test(script), 'Status, Generate and Output; not Quota');
+assert(/if \(page === document\.body\.dataset\.page && SIDE_PAGES\.includes\(page\)\)/.test(script), 'the page tapped again');
+assert.deepStrictEqual(valueOf('SIDE_PAGES'), ['status', 'generate', 'output'], 'Status, Generate and Output; not Quota');
 // Status, tapped again while on it, as the others: a menu of Finished, the log and Quota, each opening its box.
 context.statusLink = { ...genLink, dataset: { page: 'status' } };
 run('openSideMenu(statusLink)');
@@ -2591,8 +2605,8 @@ run('resetZoom(); viewing = null');
   run(`prefetched.set('/image-runs/a', { at: performance.now(), promise: 'kept' })`);
   run(`takePrefetched('/image-runs/a/delete/1', { method: 'POST' })`);
   assert.strictEqual(run('prefetched.size'), 0, 'a change drops them all');
-  assert(script.includes("const PREFETCH_BUTTONS = '[data-shots], [data-again-set], [data-again-film], [data-config]';")
-    && script.includes("document.addEventListener('pointerdown', e => {\n  const button = e.target.closest && e.target.closest(PREFETCH_BUTTONS);"), 'from the moment a finger is on the button');
+  assert.strictEqual(valueOf('PREFETCH_BUTTONS'), '[data-shots], [data-again-set], [data-again-film], [data-config]', 'the buttons that open a run');
+  assert(script.includes("document.addEventListener('pointerdown', e => {\n  const button = e.target.closest && e.target.closest(PREFETCH_BUTTONS);"), 'from the moment a finger is on the button');
   assert(script.includes('  prefetch(runUrl(id));\n}') && script.includes('  if (film.run) prefetch(runUrl(film.run));'), 'and as the viewer shows an image or film');
   for (const [fn, side] of [['loadImageWorkflows', 'image'], ['loadVideoWorkflows', 'video'], ['loadWorkflows', 'shorts']]) {
     assert(script.includes(`if (!data) try { data = await workflowList('${side}', ${fn}); }`), `${fn}: the list kept, drawn again if it changed`);
@@ -2609,8 +2623,9 @@ run('resetZoom(); viewing = null');
   run('stepPage(-1)'); order.push(context.document.body.dataset.page);
   run('showPage = oldShowPage');
   assert.deepStrictEqual(order, ['status', 'output', 'generate', 'status'], 'on from Output is Status, back from Status is Output');
-  assert(script.includes("Math.abs(dx) < 70 || Math.abs(dx) < Math.abs(dy) * 2") && script.includes(`const NO_PAGE_SWIPE = 'input[type="range"], textarea, canvas, video, dialog,`)
-    && !/NO_PAGE_SWIPE = [^;]*#stick/.test(script), 'only a clear sideways swipe, anywhere (the footer too), not on what takes a finger sideways itself');
+  const noSwipe = valueOf('NO_PAGE_SWIPE');
+  assert(script.includes("Math.abs(dx) < 70 || Math.abs(dx) < Math.abs(dy) * 2") && noSwipe.startsWith('input[type="range"], textarea, canvas, video, dialog,')
+    && !noSwipe.includes('#stick'), 'only a clear sideways swipe, anywhere (the footer too), not on what takes a finger sideways itself');
   assert(script.includes('if (from.scrollers.some(([node, left]) => Math.abs(node.scrollLeft - left) > 1)) return;'), 'a row that scrolled took it; one at its end gives it to the page');
   assert(/body \{ overflow-x: clip; \}\s*body\.page-swipe \{ touch-action: pan-y pinch-zoom; \}/.test(html), 'with swiping on, the page leaves sideways swipes to the panel');
   assert(script.includes("if (WIDE.matches || SETTINGS.page_swipe === false ||") && html.includes('<input type="checkbox" id="pageSwipe">'), 'swiping can be turned off in Settings');
@@ -2776,6 +2791,40 @@ assert(['shortsOptionsBox', 'videoOptionsBox'].every(box => html.includes(`data-
 }
 assert(run("samePreset({ a: '1', b: true }, { b: true, a: '1' })") === true && run("samePreset({ a: '1' }, { a: '2' })") === false);
 assert(run("samePreset({ a: '1' }, { a: '1', transparent: false })") === true, 'a field added since a preset was saved does not unmatch it');
+// Workflow defaults: each workflow a preset of its own, from its options as saved in ComfyUI, its family's default on top
+// but for how it samples and the files it runs; one saved for it wins over both.
+{
+  const keptLists = run('JSON.stringify(workflowLists)'), keptPresets = run('JSON.stringify(presets)');
+  const options = [{ id: 'steps', kind: 'number', default: '8' }, { id: 'model_file', kind: 'choice', model: true, default: 'turbo.safetensors' },
+                   { id: 'grain', kind: 'switch', default: '1' }, { id: 'boost', kind: 'strength', default: '0', usual: '0.8' },
+                   { id: 'lora', kind: 'switch', speed: true, default: '1' }, { id: 'lora_strength', kind: 'number', parent: 'lora', default: '1' },
+                   { id: 'prompt_enhancer', kind: 'switch', role: 'prompt_enhancer', default: '0' }];
+  assert.deepStrictEqual(JSON.parse(run(`JSON.stringify(optionDefaultValues(${JSON.stringify(options)}))`)),
+    { opt_steps: '8', opt_model_file: 'turbo.safetensors', opt_grain: true, opt_boost_on: false, opt_boost_strength: '0.8', opt_lora: true, opt_lora_strength: '1' },
+    'each option by its name in the form, as Reset sets it; a role is chosen elsewhere');
+  run(`workflowLists.image = { workflows: [
+    { name: 'image_A.json', label: 'A', family: 'flux3', family_label: 'FLUX.3', takes: { options: ${JSON.stringify(options)} } },
+    { name: 'image_B.json', label: 'B', family: 'flux3', family_label: 'FLUX.3', takes: { options: [] } },
+    { name: 'image_C.json', label: 'C', problem: "Can't run" }] }`);
+  run(`presets.image = [{ name: 'Look', family_default: 'flux3', values: { workflow: 'image_B.json', count: '6', opt_steps: '30', opt_grain: false, opt_lora_strength: '0.5' } }]`);
+  const a = JSON.parse(run(`JSON.stringify(workflowDefault('image', 'image_A.json'))`));
+  assert.deepStrictEqual([a.name, a.auto, a.from_family], ['A', true, 'Look']);
+  assert.deepStrictEqual([a.values.workflow, a.values.count, a.values.opt_grain, a.values.opt_steps, a.values.opt_lora_strength],
+    ['image_A.json', '6', false, '8', '1'], "the family's count and grain; its own steps and turbo LoRA");
+  assert.deepStrictEqual(JSON.parse(run(`JSON.stringify(workflowPresets('image').map(p => p.name))`)), ['A', 'B'], "one that can't run has none");
+  run(`presets.image.push({ name: 'A mine', workflow_default: 'image_A.json', values: { workflow: 'image_A.json', opt_steps: '12' } }, { name: 'Gone', workflow_default: 'image_Z.json', values: {} })`);
+  assert.strictEqual(run(`workflowDefault('image', 'image_A.json').name`), 'A mine', 'one saved for it wins');
+  assert.deepStrictEqual(JSON.parse(run(`JSON.stringify(workflowPresets('image').map(p => p.name))`)), ['A mine', 'B', 'Gone'], "and one for a workflow ComfyUI no longer has is still listed");
+  assert.deepStrictEqual(JSON.parse(run(`JSON.stringify(allPresets('image').map(p => p.name))`)), ['Look', 'A mine', 'Gone', 'B'], 'the saved, then those made here');
+  run(`presets.image.push({ name: 'B', values: {} })`);
+  assert.strictEqual(run(`workflowDefault('image', 'image_B.json').name`), 'B (workflow)', 'a preset of the same name keeps its own');
+  assert(run("sameShown({ a: '1', hidden: 'x' }, { a: '1' })") === true && run("sameShown({ a: '1' }, { a: '2' })") === false,
+    "what the form doesn't show is no difference to a workflow's default");
+  assert.strictEqual(run(`workflowDefault('image', '')`), null, 'the built-in has none');
+  run(`for (const key of Object.keys(workflowLists)) delete workflowLists[key]; Object.assign(workflowLists, ${keptLists}); presets = ${keptPresets}`);
+}
+assert(/document\.addEventListener\('change', e => \{\s*if \(!e\.isTrusted \|\| SETTINGS\.workflow_switch === 'last'/.test(script),
+  "a workflow's default comes with a tap only, never with a run reopened, and not when Settings says to keep what was set");
 assert(/presetPicked\[side\] = \{ name, values: presetValues\(side\) \};\s*syncPresets\(side\);\s*\}/.test(script), 'the preset picked stays in the box, even where it could not set a field');
 
 // Pinching the picture in Inpaint reads the fingers on it: a name that isn't there threw at the second finger, so it never zoomed.
@@ -2785,7 +2834,7 @@ assert(!/[^\w.]pointers\.values\(\)/.test(script) && (script.match(/\[\.\.\.pain
 assert(/id="paintDialogTitle">Inpaint<\/div>/.test(html) && !html.includes('One colour is one change'));
 assert(/id="paintPrompts" class="panel-dialog"[\s\S]*?id="paintAreaList"/.test(html), 'the colour prompts open over a blurred painting');
 assert(/id="paintCancel">Close<\/button>\s*<button type="button" class="panel-close paint-save" id="paintDone">Save<\/button>\s*<\/div>\s*<\/dialog>/.test(html));
-assert(/const PRESET_SKIP = \['prompt', 'narration', 'seed', 'topic', 'output', 'review'\];/.test(script), 'what each run is about stays out of a preset');
+assert.deepStrictEqual(valueOf('PRESET_SKIP'), ['prompt', 'narration', 'seed', 'topic', 'output', 'review'], 'what each run is about stays out of a preset');
 
 // Try one first; add to pending or the top of the queue; no note when something ends.
 assert((html.match(/<input type="checkbox" name="try_first" id="previewRun">/g) || []).length === 1, 'one Preview run, in Other, for whichever form it is in');
@@ -2990,7 +3039,7 @@ assert(!html.includes('>Prompt source<') && !html.includes('>Model<') && (html.m
 assert(!html.includes('Write prompt uses the text only') && !script.includes('call it '), 'writer and reference naming hints removed');
 assert(/<details class="h3-help"><summary>OpenH3-IR<\/summary><div class="hint">Before review/.test(html), 'OpenH3 explanation opens from its heading');
 assert(/\.count-stepper \{[^}]*align-items: stretch/.test(html) && /\.count-stepper button \{[^}]*width: 48px;/.test(html), 'stepper buttons are wider and stretch to the input height');
-assert(script.includes("const ROLE_LABELS = { image_to_prompt: 'Image to prompt', prompt_enhancer: 'Prompt enhancer' };"));
+assert.deepStrictEqual(valueOf('ROLE_LABELS'), { image_to_prompt: 'Image to prompt', prompt_enhancer: 'Prompt enhancer' }, "a workflow's own ways to write the prompt");
 assert.strictEqual(run("roleLabel({id: 'prompt_enhancer', label: 'Enhance group'})"), 'Prompt enhancer', 'the usual name');
 assert.strictEqual(run("roleLabel({id: 'prompt_enhancer', label: 'Prompt enhancer H3', named: true})"), 'Prompt enhancer H3', "one with its own name keeps it");
 assert(!script.includes("select.value = 'prompt_enhancer'"), 'a workflow with a prompt enhancer offers it, and never picks it by itself');
@@ -3044,8 +3093,8 @@ for (const n of [1, 2, 20]) {
 assert(!html.includes('body.typing .stick'), 'the footer never steps off the screen');
 
 const base = fs.readFileSync(require('path').join(__dirname, '..', 'panel', 'templates', 'base.html'), 'utf8');
-assert(/maximum-scale=1, user-scalable=no/.test(base) && /html \{ overflow-x: clip; touch-action: manipulation; \}/.test(base), 'no zooming the page out from under the footer');
-assert(/html \{ overflow-x: clip;/.test(base) && /input, select, textarea \{ max-width: 100%; \}/.test(base) && /\.row > \* \{ flex: 1; min-width: 0; \}/.test(base),
+assert(/maximum-scale=1, user-scalable=no/.test(base) && /html \{ overflow-x: clip; touch-action: manipulation; \}/.test(html), 'no zooming the page out from under the footer');
+assert(/html \{ overflow-x: clip;/.test(html) && /input, select, textarea \{ max-width: 100%; \}/.test(html) && /\.row > \* \{ flex: 1; min-width: 0; \}/.test(html),
   'nothing makes a phone page wider than its screen, so the footer stays put');
 assert(/\.check > span \{ min-width: 0; overflow-wrap: anywhere; \}/.test(html) && /\.option-choice \{[^}]*max-width: 100%/.test(html), 'options wrap rather than widen it');
 assert(/JUMPS\.filter\(a => top\(a\) <= line\)\.sort\(/.test(script), 'by position, not the footer order');
@@ -3099,8 +3148,44 @@ assert(/\.switch button\.active \{[^}]*color: var\(--accent\)/.test(html) && /bo
 // The side switch is Generate's, at its top; the header has no title, only the progress bars and the gear; shut down is in the settings box.
 assert(html.indexOf('id="switchShorts"') > html.indexOf('id="optionsCard"') && !/<h1>/.test(html.slice(0, html.indexOf('<script>'))));
 assert(/id="settingsBtn"[^>]*aria-label="Settings"/.test(html) && !/Sign out/.test(html));
-assert(/<dialog id="settingsDialog"[\s\S]*id="themePicker"[\s\S]*id="poweroff"[\s\S]*id="localLlmModel"[\s\S]*id="h3Model"[\s\S]*id="defaultShorts"[\s\S]*id="reserveTitle"[\s\S]*id="lowPriority"[\s\S]*id="gpuGuard"[\s\S]*id="diskBox"[\s\S]*class="copy-url"[\s\S]*id="settingsClose"/.test(html)
-  && /<div class="settings-actions power-row" id="powerRow">[\s\S]*id="restartPanel"[\s\S]*id="restartComfy"[\s\S]*id="forceRestartComfy"[\s\S]*class="settings-power"[\s\S]*id="shutdown"[\s\S]*id="shutdownMenu"[\s\S]*href="\/logout" id="logout"[\s\S]*id="topIconsRow"/.test(html)
+// Each setting in its section: which tab holds it, not the order of every control in the dialog.
+const settingsSectionOf = id => {
+  const at = html.indexOf(`id="${id}"`), opened = [...html.slice(0, at).matchAll(/data-settings-section="([a-z]+)"/g)].pop();
+  return at >= 0 && opened ? opened[1] : null;
+};
+const SETTINGS_PLACES = { privateMode: 'general', titleSource: 'models', poweroff: 'general', themePicker: 'theme', themeBoxes: 'theme',
+  topProgress: 'theme', pinProgress: 'theme', statusProgress: 'theme', pageSwipe: 'theme', pageAnimation: 'theme', pageSpeed: 'theme',
+  localLlmModel: 'models', h3Model: 'models', defaultShorts: 'models', editPreset: 'models', workflowSwitch: 'models', loraRange: 'workflows',
+  workflowCheck: 'workflows', workflowCheckRefresh: 'workflows', workflowFamilies: 'workflows',
+  reserveTitle: 'machine', lowPriority: 'machine', gpuGuard: 'machine' };
+for (const [id, section] of Object.entries(SETTINGS_PLACES)) assert.strictEqual(settingsSectionOf(id), section, `#${id} is under Settings, ${section}`);
+assert(html.indexOf('id="settingsClose"') > html.indexOf('class="copy-url"'), 'Close comes last');
+// Swiping through Settings goes round: on from the last section is the first, back from the first the last.
+{
+  const swipe = (from, to) => {
+    els.settingsDialog.listeners.touchstart({ target: { closest: () => null }, touches: [{ clientX: from, clientY: 10 }] });
+    els.settingsDialog.listeners.touchend({ changedTouches: [{ clientX: to, clientY: 10 }] });
+    return run('settingsSection');
+  };
+  const kept = run('settingsSection');
+  run("settingsSection = SETTINGS_SECTIONS[SETTINGS_SECTIONS.length - 1]");
+  assert.strictEqual(swipe(300, 100), 'general', 'on from the last: the first');
+  assert.strictEqual(swipe(100, 300), run('SETTINGS_SECTIONS[SETTINGS_SECTIONS.length - 1]'), 'back from the first: the last');
+  context.keptSection = kept;
+  run('settingsSection = keptSection');
+}
+// Resolution's menu says a size as its pickers do.
+assert.strictEqual(run(`sizeWords('image', { aspect: 'custom', megapixels: '2', size: '1920x1080' })`), '1920x1080', 'an exact size as typed');
+assert.strictEqual(run(`sizeWords('image', { aspect: 'nothing-listed', megapixels: '2.5', size: '' })`), 'nothing-listed · 2.5 MP', 'a shape and its megapixels');
+assert.strictEqual(run(`sizeWords('image', { aspect: 'image', megapixels: 'image', size: '' })`), 'image', 'the image\'s own: no megapixels to say');
+// Storage is System information's (the temperatures box), with the temperatures; their table opens in a box of its own.
+{
+  const info = html.slice(html.indexOf('<dialog id="tempDialog"'), html.indexOf('</dialog>', html.indexOf('<dialog id="tempDialog"')));
+  assert(info.includes('>System information</div>') && info.includes('id="diskBox"') && info.includes('id="tempTableOpen"') && !info.includes('id="tempTable"'),
+    'System information: temperatures and storage, the table behind a button');
+  assert(/<dialog id="tempTableDialog"[\s\S]*?id="tempTable"/.test(html), 'the table in its own box');
+}
+assert(/<div class="settings-actions power-row" id="powerRow">[\s\S]*id="restartPanel"[\s\S]*id="restartComfy"[\s\S]*id="forceRestartComfy"[\s\S]*class="settings-power"[\s\S]*id="shutdown"[\s\S]*id="shutdownMenu"[\s\S]*href="\/logout" id="logout"[\s\S]*id="topIconsRow"/.test(html)
   && /id="settingsTabs"[\s\S]*data-settings-tab="general"[\s\S]*data-settings-tab="models"[\s\S]*data-settings-tab="machine"[\s\S]*data-settings-tab="connection"/.test(html)
   && ['General', 'Models', 'Machine', 'Connection'].every(name => html.includes(`id="settingsSection${name}"`))
   && /\.settings-dialog select, \.settings-dialog input\[type=number\] \{ height: 28px;[^}]*font-size: \.75rem;/.test(html),
@@ -3108,8 +3193,8 @@ assert(/<dialog id="settingsDialog"[\s\S]*id="themePicker"[\s\S]*id="poweroff"[\
 assert(/\.settings-actions \{ display: flex; gap: 6px; flex: none;/.test(html), 'the buttons stay at the foot, smaller');
 assert(/<div class="go-bar" id="goBar" hidden>[\s\S]*?id="goStickTop" aria-label="Add to top of queue"[\s\S]*?id="goStickLater" aria-label="Add to pending"[\s\S]*?id="goStick">/.test(html)
   && script.includes("$('goStickTop').addEventListener('click', () => $('goTop').click());") && script.includes("$('goStickLater').addEventListener('click', () => $('goLater').click());")
-  && script.includes("function queueSaves() { return !!queueEdit; }")
-  && script.includes("const GO_EXTRA_LABELS = { goTop: ['Add to top of queue', 'Save to top of queue'], goLater: ['Add to pending', 'Save to pending'] };")
+  && run('(() => { const kept = queueEdit; queueEdit = null; const plain = queueSaves(); queueEdit = { id: 1 }; const editing = queueSaves(); queueEdit = kept; return !plain && editing; })()')
+  && JSON.stringify(valueOf('GO_EXTRA_LABELS')) === JSON.stringify({ goTop: ['Add to top of queue', 'Save to top of queue'], goLater: ['Add to pending', 'Save to pending'] })
   && script.includes("fresh: true, continued: null") && script.includes('data.continued.image ? await sameAgain(data.continued.id) : await sameAgainFilm(data.continued.id)'),
   'the footer bar has symbol buttons for top of queue and pending, beside Add to queue, and while editing a queued job they save it there (Save keeps its place); a continued run reopens in full as a new run, with them');
 assert(/\.tile-cover::after \{\s*content: ""; position: absolute; inset: 0; z-index: 1; border: 2px dotted var\(--accent\)/.test(html), 'a collection being moved: its outline over the picture');
@@ -4791,24 +4876,40 @@ assert(html.includes('.pill.comparison { --pill: var(--shared);') && run("pillsH
   assert.strictEqual(run(`loraRange('Krea2\\\\Krea2_KNPV3_1_NSFW.safetensors').ours`), '0.5–1.5', 'found by its file name, folder and case aside');
   assert.strictEqual(JSON.stringify(run(`loraRange('other.safetensors')`)), '{}', 'none for a LoRA it knows nothing of');
   assert.deepStrictEqual([...run(`rangeBounds('0.5–1.5')`)], [0.5, 1.5]);
-  // Ours over the author's, where there is one.
+  // The author's over ours (Settings' LoRA strength range, author by default), where there is one.
+  const savedRange = run('SETTINGS.lora_range');
+  run(`SETTINGS.lora_range = 'author'`);
   const out = { innerHTML: '', title: '' }, select = { value: 'Krea2_ultra_real_v1_NSFW.safetensors', tagName: 'SELECT' };
   const strength = { value: '1.8', dispatched: 0, dispatchEvent() { this.dispatched++; } };
   const line = { parentNode: null, querySelector: selector => selector === 'select' ? select : selector === '.lora-range' ? out : selector === '.option-strength' ? strength : null };
   context.testLoraRoot = line.parentNode = { querySelectorAll: () => [line] };
   run('syncLoraRanges(testLoraRoot)');
-  assert.deepStrictEqual([out.innerHTML, out.title], ['<span class="lora-range-ours">0.5–1</span><span class="lora-range-author">0.7–0.8</span>', "Worth using: 0.5–1\nIts author's: 0.7–0.8"]);
-  // Swapped to it, a strength over our range for it comes down to its top; one under, up to its bottom.
+  assert.deepStrictEqual([out.innerHTML, out.title], ['<span class="lora-range-main">0.7–0.8</span><span class="lora-range-other">0.5–1</span>',
+    "Held to. Its author's: 0.7–0.8\nKept in our comparisons: 0.5–1"]);
+  // Swapped to it, a strength over the range it's held to comes down to its top; one under, up to its bottom.
   select.closest = () => line;
   const swapped = documentListeners.change.find(fn => String(fn).includes('rangeBounds('));
   swapped({ target: select });
-  assert.deepStrictEqual([strength.value, strength.dispatched], ['1', 1], 'over: brought down to 1');
+  assert.deepStrictEqual([strength.value, strength.dispatched], ['0.8', 1], 'over: brought down to 0.8');
   strength.value = '0.2';
   swapped({ target: select });
-  assert.strictEqual(strength.value, '0.5', 'under: brought up to 0.5');
-  strength.value = '0.7';
+  assert.strictEqual(strength.value, '0.7', 'under: brought up to 0.7');
+  strength.value = '0.75';
   swapped({ target: select });
-  assert.deepStrictEqual([strength.value, strength.dispatched], ['0.7', 2], 'within: left as it is');
+  assert.deepStrictEqual([strength.value, strength.dispatched], ['0.75', 2], 'within: left as it is');
+  // Held to ours instead: ours first, and a strength brought within it.
+  run(`SETTINGS.lora_range = 'tested'`);
+  run('syncLoraRanges(testLoraRoot)');
+  assert.strictEqual(out.innerHTML, '<span class="lora-range-main">0.5–1</span><span class="lora-range-other">0.7–0.8</span>', 'tested: ours first');
+  strength.value = '0.2';
+  swapped({ target: select });
+  assert.strictEqual(strength.value, '0.5', 'tested: brought up to the bottom of ours');
+  // A LoRA with only one range is held to it, whichever is preferred.
+  assert.strictEqual(run(`preferredRange('krea2_knpv3_1_nsfw')`), '0.5–1.5');
+  run(`SETTINGS.lora_range = 'author'`);
+  assert.strictEqual(run(`preferredRange('krea2_knpv3_1_nsfw')`), '0.5–1.5', 'no author range: ours');
+  context.savedLoraRange = savedRange;
+  run('SETTINGS.lora_range = savedLoraRange');
   context.savedLoraRanges = savedRanges;
   run('PANEL_CONFIG.lora_ranges = savedLoraRanges');
   const main = run(`imageOptionHtml({ id: 'lora', kind: 'switch', below: true, label: 'Use LoRA', default: '1' }, [{ id: 'lora', kind: 'switch', below: true }, { id: 'lora_name', kind: 'choice', parent: 'lora', label: 'LoRA', choices: ['a'], default: 'a' }, { id: 'lora_strength', kind: 'number', parent: 'lora', label: 'Strength', min: 0, max: 2, step: 0.1, default: '1' }])`);

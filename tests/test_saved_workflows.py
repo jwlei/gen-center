@@ -950,7 +950,7 @@ class PrepareTest(unittest.TestCase):
         import tempfile
         from unittest import mock
         with tempfile.TemporaryDirectory() as folder, mock.patch.dict(saved_workflows.REFERENCE_FILE_LIMITS, {"ReferenceToVideo": 12}):
-            path, found = _prepare("r2v.json", reference_workflow(), OBJECT_INFO, folder, "video")
+            path, found, _ = _prepare("r2v.json", reference_workflow(), OBJECT_INFO, folder, "video")
             with open(path[:-len(".json")] + ".map.json", encoding="utf-8") as f:
                 written = json.load(f)
         self.assertEqual((written["_most_references"], written["_pipeline"]), (12, "video"))
@@ -1417,6 +1417,143 @@ class LoraFamilyTest(unittest.TestCase):
         with self.assertRaisesRegex(Unusable, "can't be used"):
             workflow_options.convert(ui, info, {"switch_lightning_lora": "1",
                                                 "switch_lightning_lora_name": "krea_turbo_8step.safetensors"}, "video")
+
+
+class TagsTest(unittest.TestCase):
+    """gc: in a node's title says what it is, over what the guesses would find."""
+
+    def api(self):
+        return to_api(saved_workflow(), OBJECT_INFO)
+
+    def titled(self, api, node_id, title):
+        api[node_id]["_meta"]["title"] = title
+        return api
+
+    def test_a_tagged_prompt_wins_over_the_guess(self):
+        api = self.api()
+        api["50"] = {"class_type": "PrimitiveStringMultiline", "inputs": {"value": "mine"}, "_meta": {"title": "Story [gc:prompt]"}}
+        fields = find_fields(api, OBJECT_INFO)
+        self.assertEqual(fields["prompt"], ["50", "value"], "the only string input it has")
+        self.assertEqual(fields["_tagged"], ["prompt"], "and the report can say it was tagged")
+        self.assertNotIn("_tagged", find_fields(self.api(), OBJECT_INFO), "no tags, nothing said")
+
+    def test_an_input_can_be_named_where_a_node_has_several(self):
+        api = self.api()
+        api["50"] = {"class_type": "TwoTexts", "inputs": {"a": "x", "b": "y"}, "_meta": {"title": "gc:prompt"}}
+        with self.assertRaisesRegex(Unusable, r"more than one input .* gc:prompt\.a"):
+            find_fields(api, OBJECT_INFO)
+        api["50"]["_meta"]["title"] = "gc:prompt.b"
+        self.assertEqual(find_fields(api, OBJECT_INFO)["prompt"], ["50", "b"])
+        api["50"]["_meta"]["title"] = "gc:prompt.c"
+        with self.assertRaisesRegex(Unusable, "no input c"):
+            find_fields(api, OBJECT_INFO)
+
+    def test_a_tag_that_isnt_one_or_two_nodes_saying_the_same_are_refused(self):
+        with self.assertRaisesRegex(Unusable, "gc:promt, which isn't a tag"):
+            find_fields(self.titled(self.api(), "2", "gc:promt"), OBJECT_INFO)
+        api = self.titled(self.titled(self.api(), "2", "gc:prompt"), "3", "gc:prompt")
+        with self.assertRaisesRegex(Unusable, "both tagged"):
+            find_fields(api, OBJECT_INFO)
+
+    def test_tagged_images_are_numbered_by_their_tags_and_kept_ones_left_out(self):
+        api = self.api()
+        api["40"] = {"class_type": "LoadImageFromPath", "inputs": {"image": "b.png"}, "_meta": {"title": "gc:image 1"}}
+        api["5"]["inputs"]["end_image"] = ["40", 0]
+        fields = find_fields(api, OBJECT_INFO)
+        self.assertEqual((fields["image"], fields["image_2"]), (["40", "image"], ["4", "image"]), "any loader, tagged first")
+        self.assertIn("image", fields["_tagged"])
+        self.titled(api, "4", "gc:keep")
+        fields = find_fields(api, OBJECT_INFO)
+        self.assertEqual(fields["image"], ["40", "image"])
+        self.assertNotIn("image_2", fields, "a Load Image tagged gc:keep stays as saved")
+
+    def test_a_tagged_length_replaces_the_guessed_one(self):
+        api = self.api()
+        api["40"] = {"class_type": "INTConstant", "inputs": {"value": 5}, "_meta": {"title": "Clip [gc:seconds]"}}
+        fields = find_fields(api, OBJECT_INFO)
+        self.assertEqual(fields["seconds"], ["40", "value"])
+        self.assertNotIn("frames", fields, "seconds or frames, not both")
+        api["40"]["_meta"]["title"] = "gc:frames"
+        self.assertEqual(find_fields(api, OBJECT_INFO)["frames"], ["40", "value"], "the frame rate found as before goes with it")
+
+    def test_the_image_side_reads_tags_too(self):
+        api = to_api(text_to_image_workflow(), OBJECT_INFO, images=True)
+        size = next(node_id for node_id, node in api.items() if "width" in node["inputs"])
+        api["60"] = {"class_type": "PrimitiveInt", "inputs": {"value": 640}, "_meta": {"title": "gc:width"}}
+        fields = find_image_fields(api, OBJECT_INFO)
+        self.assertEqual(fields["width"], ["60", "value"])
+        self.assertEqual(fields["height"], [size, "height"], "what isn't tagged is guessed as before")
+
+    def test_a_tagged_negative_prompt_is_the_one_offered(self):
+        api = self.api()
+        api["50"] = {"class_type": "PrimitiveStringMultiline", "inputs": {"value": "blurry"}, "_meta": {"title": "gc:negative"}}
+        self.assertEqual(workflow_options._negatives(api), ["50", "value"])
+        self.assertEqual(workflow_options._negatives(self.api()), ["3", "text"], "untagged: found as before")
+
+
+class ModelFamilyTest(unittest.TestCase):
+    """Which model family a workflow runs, from the workflow alone (core/model_families.py)."""
+
+    def test_by_the_model_file_its_nodes_its_text_encoder_then_its_name(self):
+        from core import model_families as mf
+        api = to_api(saved_workflow(), OBJECT_INFO)
+        api["1"]["inputs"]["ckpt_name"] = "wan2.2_t2v_high_noise_14B_fp8.safetensors"
+        self.assertEqual(mf.family_of(api), "wan", "its model file")
+        api["1"]["inputs"]["ckpt_name"] = "flux-2-klein.safetensors"
+        self.assertEqual(mf.family_of(api), "flux2", "the longest name wins: flux 2 over flux")
+        api["1"]["inputs"]["ckpt_name"] = "mystery.safetensors"
+        self.assertIsNone(mf.family_of(api), "nothing says")
+        api["9"] = {"class_type": "CLIPLoader", "inputs": {"clip_name": "qwen3.safetensors", "type": "flux3"}, "_meta": {"title": "Load CLIP"}}
+        self.assertEqual(mf.family_of(api), "flux3", "the type its text encoder is loaded as")
+        api["9"]["inputs"]["type"] = "boogu"
+        self.assertEqual((mf.family_of(api), mf.label("boogu")), ("boogu", "Boogu"), "one ComfyUI knows and the table doesn't: by its type")
+        del api["9"]
+        self.assertEqual(mf.family_of(api, "video_Hunyuan_Video_I2V.json"), "hunyuan_video", "last, the workflow's name")
+        api["12"] = {"class_type": "UpscaleModelLoader", "inputs": {"model_name": "ltx-2-upscaler.safetensors"}, "_meta": {"title": "u"}}
+        self.assertIsNone(mf.family_of(api), "an upscaler's file isn't the model's")
+
+    def test_the_image_side_names_the_model_where_it_knows_it(self):
+        from core import model_families as mf
+        self.assertEqual(mf.family_for({}, "x", "qwen_image_21_edit"), "qwen_image_21", "edit and make: one model")
+        self.assertEqual(mf.family_label("qwen_image_21"), "Qwen-Image 2.1")
+        self.assertEqual(mf.family_label("flux3"), "FLUX.3")
+
+    def test_a_new_familys_loras_are_known_by_name_but_not_by_ordinary_words(self):
+        from core import lora_check
+        self.assertEqual(lora_check._families("wan22_motion.safetensors"), {"wan"})
+        self.assertEqual(lora_check._families("krea2_style.safetensors"), {"krea"}, "the families it knew are as they were")
+        self.assertEqual(lora_check._families("chroma_glow.safetensors"), set(), "chroma, a style word in a LoRA's name")
+
+    def test_the_family_is_written_into_the_map_and_listed(self):
+        import json
+        import tempfile
+        with tempfile.TemporaryDirectory() as folder:
+            # Its model file says nothing (model.safetensors): its name does.
+            path, _, family = _prepare("video_LTX23_x.json", saved_workflow(), OBJECT_INFO, folder, "video")
+            with open(path[:-len(".json")] + ".map.json", encoding="utf-8") as f:
+                self.assertEqual((family, json.load(f)["_family"]), ("ltx", "ltx"))
+            self.assertEqual(_from_earlier(folder)[0]["family"], "ltx", "ComfyUI off: from the map")
+
+
+class ReportTest(unittest.TestCase):
+    """Settings' Workflows: what the panel made of each workflow, and how."""
+
+    def test_says_where_each_input_was_found_and_why_one_isnt_offered(self):
+        with tempfile.TemporaryDirectory() as folder:
+            ui = saved_workflow()
+            next(node for node in ui["nodes"] if node["id"] == 2)["title"] = "Positive gc:prompt"
+            path, _, family = _prepare("video_x.json", ui, OBJECT_INFO, folder, "video")
+            found = saved_workflows.report([{"name": "video_x.json", "label": "video_x", "pipeline": "video", "path": path, "family": "ltx"},
+                                            {"name": "image_y.json", "label": "image_y", "pipeline": "image", "problem": "Needs the node Z."}])
+        ready, stuck = found
+        self.assertEqual((ready["label"], ready["family_label"]), ("x", "LTX Video"))
+        inputs = {i["field"]: i for i in ready["inputs"]}
+        self.assertEqual((inputs["prompt"]["node"], inputs["prompt"]["tagged"], inputs["prompt"]["title"]), ("2", True, "Positive gc:prompt"))
+        self.assertEqual((inputs["image"]["type"], inputs["image"]["tagged"]), ("LoadImage", False))
+        self.assertEqual(inputs["negative"]["node"], "3")
+        self.assertNotIn("image_link", inputs, "how an image is unplugged isn't an input")
+        self.assertEqual(stuck, {"name": "image_y.json", "label": "y", "pipeline": "image", "family": "", "family_label": "", "problem": "Needs the node Z."})
+
 
 if __name__ == "__main__":
     unittest.main()

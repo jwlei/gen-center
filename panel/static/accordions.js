@@ -73,13 +73,15 @@ function animateAccordionSections(sections, change, onFinish = null) {
   before.filter(item => item.generation).forEach(({ section }) => updateSectionFade(section));
   if (!remaining && onFinish) onFinish();
 }
+// Keep sections open: on Shorts and Video only. Image doesn't offer the pin, so it always folds the others away.
+function keepsOpen(form) { return keepSectionsOpen && form.id !== 'formImage'; }
 function setGenerationSection(section, open) {
   const form = section.closest('.pipeline-form');
   animateAccordionSections([...form.querySelectorAll('details.section')], () => {
     section.open = open;
     if (!open) return;
     form._activeSection = section;
-    if (!keepSectionsOpen) {
+    if (!keepsOpen(form)) {
       for (const other of form.querySelectorAll('details.section')) if (other !== section) other.open = false;
     }
   });
@@ -139,7 +141,7 @@ function foldDetails(details) {
 function closeOtherSections(current) {
   const form = current.closest('.pipeline-form');
   form._activeSection = current;
-  if (keepSectionsOpen) return;
+  if (keepsOpen(form)) return;
   if ([...form.querySelectorAll('details.section')].some(section => section !== current && section.open)) {
     setGenerationSection(current, true);
   }

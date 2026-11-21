@@ -49,9 +49,10 @@ async function loadImageWorkflows(fresh) {
     `<option value="${esc(w.name)}"${w.problem ? ' disabled' : ''}>${esc(w.label)}${w.problem ? ' (can\'t run)' : ''}</option>`).join('');
   if (usable.some(w => w.name === wanted)) select.value = wanted;
   // Each knows its name, so what you set for it is remembered under it, Automatic's pick too.
-  imageWorkflows = Object.fromEntries(usable.map(w => [w.name, { ...w.takes, name: w.name }]));
-  imageWorkflowList = usable.map(w => ({ ...w.takes, name: w.name }));
+  imageWorkflows = Object.fromEntries(usable.map(w => [w.name, { ...w.takes, name: w.name, family: w.family }]));
+  imageWorkflowList = usable.map(w => ({ ...w.takes, name: w.name, family: w.family }));
   imageWorkflowLabels = Object.fromEntries(data.workflows.map(w => [w.name, w.label]));
+  imageFamilyLabels = Object.fromEntries(data.workflows.filter(w => w.family).map(w => [w.family, w.family_label || w.family]));
   drawImageModels();
   setGuides('image', data);
   const notes = stuck.map(w => `${w.label}: ${w.problem}`);
@@ -77,20 +78,20 @@ $('imageWorkflow').addEventListener('focus', loadImageWorkflows);
 $('imageModel').addEventListener('focus', loadImageWorkflows);
 
 // --- Model and Mode: the saved workflows by the model they run, and what it does ---
-// Workflows of one model, by the model each runs: MiniMax H3's and Qwen-Image 2.1's text and edit ones are one model.
-// Another model is its own, and a workflow whose model isn't known, its own too.
-const IMAGE_FAMILIES = { minimax_h3_image_edit: 'minimax_h3_image', qwen_image_21_edit: 'qwen_image_21' };
+// Workflows of one model, by the family the server finds each runs (core/model_families.py): MiniMax H3's and
+// Qwen-Image 2.1's text and edit ones are one model, and a FLUX.3 workflow is FLUX.3 with no code here. A workflow whose
+// family isn't found is its own.
 // T2I, I2I and the workflow's own Inpaint; Edit, R2I (a new picture from references), the painted Inpaint and Expand
 // are what the form does with the images (image_mode), where the model does them.
 const MODE_ORDER = ['text', 'image2image', 'inpaint', 'edit', 'compose', 'areas', 'expand'];
 const MODE_LABELS = { text: 'T2I', image2image: 'I2I', inpaint: 'Inpaint', edit: 'Edit', compose: 'R2I', areas: 'Inpaint', expand: 'Expand' };
 const IMAGE_MODE_OF = { edit: 'edit', compose: 'compose', areas: 'areas', expand: 'expand' };
 const FAMILY_KEY = 'comfyui-auto-gen.image-family.v1';
-let imageWorkflowLabels = {};
-function familyOf(takes) { return takes.model ? (IMAGE_FAMILIES[takes.model] || takes.model) : `workflow:${takes.name}`; }
+let imageWorkflowLabels = {}, imageFamilyLabels = {};
+function familyOf(takes) { return takes.family || takes.model || `workflow:${takes.name}`; }
 function familyLabel(family) {
   if (family.startsWith('workflow:')) return imageWorkflowLabels[family.slice(9)] || family.slice(9);
-  return (IMAGE_MODELS[family] && IMAGE_MODELS[family].label) || family;
+  return (IMAGE_MODELS[family] && IMAGE_MODELS[family].label) || imageFamilyLabels[family] || family;
 }
 // What a workflow does: its own way of working where it has one (text2image, image2image, inpaint), else by the images
 // it takes: none, text; one it must have, an edit; one it may have (Fibo 2.0), both.

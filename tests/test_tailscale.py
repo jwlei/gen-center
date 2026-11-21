@@ -4,8 +4,10 @@ isn't something a test can do. The panel's side uses the real routes.
 """
 import json
 import os
+import shutil
 import subprocess
 import sys
+import tempfile
 import unittest
 from unittest import mock
 
@@ -17,7 +19,7 @@ import fakes  # noqa: F401  (keeps the real .env out of the tests)
 
 from panel import app as _both_pipelines  # noqa: F401
 from panel import server as webapp
-from panel import tailscale
+from panel import app_link, tailscale
 
 RUNNING = {"BackendState": "Running", "TailscaleIPs": ["100.64.0.7", "fd7a:115c:a1e0::7"]}
 
@@ -150,8 +152,81 @@ class StartupTest(unittest.TestCase):
     def test_listening_to_other_devices_starts_tailscale(self):
         self.run_main("--host", "0.0.0.0", "--port", "8800").assert_called_once_with(8800)
 
+    def test_connected_it_also_serves_https_for_the_app(self):
+        with mock.patch.object(webapp.tailscale, "connect", return_value=("http://100.64.0.7:8800", None)),                 mock.patch.object(webapp.app_link, "start", return_value="https://pc.tail.ts.net:9443") as start:
+            webapp.connect_tailscale(8800, 9443)
+            start.assert_called_once_with(webapp.app, 9443)
+            start.reset_mock()
+            webapp.connect_tailscale(8800, 0)
+            start.assert_not_called()
+
     def test_this_pc_only_leaves_it_alone(self):
         self.run_main().assert_not_called()
+
+
+class CertificateTest(unittest.TestCase):
+    """The tailnet's HTTPS certificate, against a fake `tailscale cert`."""
+
+    def setUp(self):
+        self.temp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.temp, ignore_errors=True)
+        for patcher in (mock.patch.object(tailscale, "program", lambda name: f"C:/ts/{name}.exe"),
+                        mock.patch.object(app_link, "CERT_DIR", self.temp)):
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        app_link.state.update(url=None, problem=None)
+
+    def cli(self, said="", works=True, name="pc.tail.ts.net."):
+        def run(argv, **kwargs):
+            if argv[1:] == ["status", "--json"]:
+                return subprocess.CompletedProcess(argv, 0, json.dumps({**RUNNING, "Self": {"DNSName": name}}))
+            if works:
+                for flag in ("--cert-file", "--key-file"):
+                    with open(argv[argv.index(flag) + 1], "w") as f:
+                        f.write("pem")
+            return subprocess.CompletedProcess(argv, 0 if works else 1, "", said)
+        patcher = mock.patch.object(tailscale.subprocess, "run", side_effect=run)
+        self.addCleanup(patcher.stop)
+        return patcher.start()
+
+    def test_its_name_has_no_trailing_dot(self):
+        self.cli()
+        self.assertEqual(tailscale.dns_name(), "pc.tail.ts.net")
+
+    def test_made_into_the_files_asked_for(self):
+        run = self.cli()
+        cert, key = os.path.join(self.temp, "a.crt"), os.path.join(self.temp, "a.key")
+        self.assertIsNone(tailscale.cert("pc.tail.ts.net", cert, key))
+        self.assertEqual(run.call_args[0][0][1:], ["cert", "--cert-file", cert, "--key-file", key, "pc.tail.ts.net"])
+
+    def test_https_off_in_the_tailnet_says_where_to_turn_it_on(self):
+        self.cli(said="500 Internal Server Error: your Tailscale account does not support getting TLS certs", works=False)
+        self.assertEqual(tailscale.cert("pc.tail.ts.net", "a", "b"), tailscale.HTTPS_OFF)
+
+    def test_another_failure_says_what_tailscale_said(self):
+        self.cli(said="Access denied: cert access denied", works=False)
+        self.assertIn("Access denied", tailscale.cert("pc.tail.ts.net", "a", "b"))
+
+    def test_started_on_every_address_with_the_certificate(self):
+        self.cli()
+        context = mock.Mock()
+        with mock.patch.object(app_link.ssl, "SSLContext", return_value=context),                 mock.patch("werkzeug.serving.make_server") as make_server,                 mock.patch.object(app_link.threading, "Thread") as thread:
+            self.assertEqual(app_link.start(webapp.app, 9443), "https://pc.tail.ts.net:9443")
+        context.load_cert_chain.assert_called_once_with(os.path.join(self.temp, "pc.tail.ts.net.crt"),
+                                                        os.path.join(self.temp, "pc.tail.ts.net.key"))
+        make_server.assert_called_once_with("0.0.0.0", 9443, webapp.app, threaded=True, ssl_context=context)  # The home network too
+        self.assertEqual(thread.call_count, 2, "the server, and its daily renewal")
+        self.assertEqual((app_link.url(), app_link.problem()), ("https://pc.tail.ts.net:9443", None))
+
+    def test_without_magicdns_there_is_no_name_to_certify(self):
+        self.cli(name="")
+        self.assertIsNone(app_link.start(webapp.app, 9443))
+        self.assertEqual(app_link.problem(), app_link.NO_NAME)
+
+    def test_a_refused_certificate_is_the_problem_shown(self):
+        self.cli(said="does not support getting TLS certs", works=False)
+        self.assertIsNone(app_link.start(webapp.app, 9443))
+        self.assertEqual(app_link.problem(), tailscale.HTTPS_OFF)
 
 
 if __name__ == "__main__":

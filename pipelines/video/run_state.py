@@ -8,6 +8,7 @@ from datetime import datetime
 
 from core.paths import SAVED_WORKFLOWS_DIR, WORKFLOWS_DIR, moved
 from core import run_checkpoint
+from core.saved_run import SavedRun
 from pipelines.video import paths, roles
 from pipelines.video.media import on_grid
 
@@ -17,7 +18,7 @@ UPSCALED = re.compile(r"_upscaled(?:_\d+)?\.mp4$")
 
 
 @dataclass
-class RunState:
+class RunState(SavedRun):
     """
     What one film's run has finished so far, saved after the plan and after every
     accepted clip, so a run that was stopped, failed or cut off by a crash can
@@ -91,36 +92,21 @@ class RunState:
         return cls(id=f"run_{datetime.now():%Y%m%d_%H%M%S}", brief=brief, seconds=seconds, start=start,
                    width=width, height=height, llm=llm, workflow=workflow, image_count=image_count)
 
+    # Loading (core/saved_run.py): what its checkpoint must hold, and what to mend once loaded.
+    RUN_ID = RUN_ID
+    SCHEMA = {"brief": str, "seconds": int, "start": str, "width": int, "height": int, "shots": list, "clips": dict,
+              "options": dict, "provenance": dict}
+
     @classmethod
-    def load(cls, run_id):
-        """The saved run, with anything whose files have gone marked as still to do. None if there isn't one."""
-        if not RUN_ID.fullmatch(str(run_id)):
-            return None
-        path = os.path.join(paths.RUNS_DIR, run_id, "state.json")
-        saved = run_checkpoint.load(path, run_id)
-        if saved is None:
-            return None
-        run_checkpoint.validate(saved, path, {"brief": str, "seconds": int, "start": str, "width": int,
-                                             "height": int, "shots": list, "clips": dict, "options": dict,
-                                             "provenance": dict})
-        try:
-            # Runs made before uploads moved to Shorts say where to upload to.
-            state = cls(**{name: value for name, value in saved.items() if name in cls.__dataclass_fields__})
-            state.clips = {int(index): name for index, name in state.clips.items()}
-            state._forget_missing()
-        except (ValueError, TypeError, AttributeError, KeyError) as error:
-            raise run_checkpoint.invalid(path, error) from error
-        return state
+    def runs_dir(cls):
+        return paths.RUNS_DIR
+
+    def loaded(self):
+        """Its clips by number again (JSON keeps them as text), and anything whose files have gone marked as still to do."""
+        self.clips = {int(index): name for index, name in self.clips.items()}
+        self._forget_missing()
 
     # --- Where its files go ---
-
-    @property
-    def folder(self):
-        return os.path.join(paths.RUNS_DIR, self.id)
-
-    @property
-    def path(self):
-        return os.path.join(self.folder, "state.json")
 
     @property
     def image_path(self):
@@ -159,11 +145,6 @@ class RunState:
         return os.path.join(self.clips_dir, self.clips[index])
 
     # --- Saving ---
-
-    def update(self, **fields):
-        for name, value in fields.items():
-            setattr(self, name, value)
-        self.save()
 
     def adopt(self, flags, form=None):
         """Takes the options chosen now, for Generate to continue this run. The plan stays: it's what was paid for."""

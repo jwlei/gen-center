@@ -52,8 +52,19 @@ On a phone, one section shows at a time, and you swipe between them:
 - **Works with your own ComfyUI workflows.** The panel reads the workflows you save in ComfyUI and builds its form from
   their settings: sampler, resolution, LoRAs, model files and so on. New model files show up in the pickers as soon as
   you drop them into ComfyUI's folders.
+- **Model families found by themselves.** Each workflow's model family (Krea-2, Qwen-Image, FLUX.3, Wan, LTX and
+  about 30 more) is read from its model file, its nodes, or the type its text encoder loads as, so a new workflow is
+  grouped and labelled with no code. Each family is a file in [core/models/](core/models/), or a line in its
+  others.py. **Refresh from ComfyUI** in Settings, Workflows reads again which families ComfyUI can load.
+- **Tags for when a guess is wrong.** Settings, Workflows shows which node each input was found on. Where one is wrong,
+  put a tag in that node's title in ComfyUI: `gc:prompt`, `gc:negative`, `gc:image 2`, `gc:width`, `gc:height`,
+  `gc:seconds`, `gc:frames`, `gc:fps`, `gc:audio`, `gc:text_to_video`, or `gc:keep` to leave a Load Image as saved.
+  `gc:prompt.text` names the input as well.
 - **Presets** save any combination of settings and can be favourited. Each finished run remembers exactly what it was
   made with, so you can open it again or continue it.
+- **Workflow defaults.** Every workflow is a preset of its own, under Workflow defaults in the preset dialog: its
+  settings as saved in ComfyUI, with its model family's default preset on top (its sampling and model files stay its
+  own). Choosing a workflow applies it. Save over it to change it; delete it to go back to ComfyUI's.
 
 ### Queue and reliability
 
@@ -72,7 +83,7 @@ On a phone, one section shows at a time, and you swipe between them:
 ### The panel
 
 - **Desktop and phone.** A responsive layout with swipe navigation, pinch-to-zoom image viewer, and instant feedback
-  when you delete or move something.
+  when you delete or move something. Installable as an app on a phone over Tailscale's HTTPS.
 - **Reachable anywhere** through Tailscale, with password sign-in.
 - **Gallery** with collections, drag-to-arrange batches, downloads, and generated titles.
 - **Live status** over a compressed event stream: progress, ETA, and a log grouped by stage.
@@ -130,15 +141,30 @@ Add `-Startup` to the shortcut script to start the panel when you sign in to Win
 **From your phone, anywhere:** install [Tailscale](https://tailscale.com/download) on this PC and your phone and sign
 in to the same account on both. Settings shows the address to open on your phone (`http://100.x.y.z:8800`).
 
+**As an app on your phone:** in Tailscale's admin console, DNS page, turn on MagicDNS and HTTPS Certificates, then
+restart the panel. It gets this PC a certificate from Tailscale and also serves itself over HTTPS on the tailnet, at
+`https://your-pc.your-tailnet.ts.net:8443` (Settings, Connection, App). Open that in Chrome on your phone and choose
+**Install app**: the panel gets its own icon, opens full screen, and long-pressing the icon goes straight to a side.
+`--https-port` changes the port, `--https-port 0` turns it off.
+To use the same app at home with Tailscale off, give the PC a fixed address on your router (a DHCP reservation)
+and add a local DNS entry there from the tailnet name to that address; the panel answers HTTPS on the home network
+too. A certificate puts the PC's tailnet name in public
+certificate logs; Tailscale says so when you turn HTTPS on.
+
 Each pipeline also runs on its own from the command line: `python -m pipelines.shorts.main --help`,
 `python -m pipelines.video.main --help` and `python -m pipelines.image.main --help`.
 
 ## Layout
 
 ```
-core/         shared by the pipelines: Gemini calls, API usage and quota, voice, saved workflows
+core/         shared by the pipelines: Gemini calls, API usage and quota, voice, saved workflows,
+              and what every run's checkpoint (saved_run.py) and ETA (staged_eta.py) share
+core/models/  everything known about each model, one family to a file: how a workflow of it is recognised,
+              its limits, its guide, its LoRAs. others.py lists the families known only by name
 pipelines/    shorts/, video/ and image/, each with its own command line, runs and ETA
-panel/        the web app: server.py, one module per side, and the frontend in static/ and templates/
+panel/        the web app: server.py (the queue, ComfyUI, status), one module per side, routes/ (a
+              Blueprint per kind of request: queue, presets, settings, workflows, files, system), and
+              the frontend in static/ (scripts, and css/ by area) and templates/
 workflows/    the built-in workflows
 docs/         each pipeline in detail
 logs/         usage, errors, topics and timings

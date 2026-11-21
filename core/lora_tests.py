@@ -12,7 +12,11 @@ def requested(form):
     return any(form.get(key) not in (None, "", "0") for key in ("lora_strength_test", "lora_style_test"))
 
 
-def variations(form, options, private=False):
+def variations(form, options, private=False, prefer=lora_hints.AUTHOR):
+    """
+    The run settings of a LoRA comparison asked for in form, one per image. prefer: which of a LoRA's strength ranges
+    a strength test runs over (core/lora_hints.py), as Settings says.
+    """
     if not requested(form):
         return []
     name = next((option for option in options if option["id"] == workflow_options.LORA_NAME), None)
@@ -43,10 +47,10 @@ def variations(form, options, private=False):
         found = []
         for name in names:
             if testing:
-                # Over its range (core/lora_hints.py: ours, else the author's), from its bottom to its top, past which
+                # Over its range (core/lora_hints.py: the author's or ours, as prefer says), from its bottom to its top, past which
                 # it was seldom kept; from the increment up to 2 for one with none. At least its first strength, so a
                 # LoRA is never left out.
-                bounds = lora_hints.bounds_of(name)
+                bounds = lora_hints.bounds_of(name, prefer)
                 start = max(low, Decimal(str(bounds[0]))) if bounds else step
                 stop = min(high, Decimal(str(bounds[1]))) if bounds else high
                 values = [start + step * index for index in range(max(1, int((stop - start) // step) + 1))]

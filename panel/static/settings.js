@@ -27,6 +27,10 @@ function themeNote(text, bad) {
 }
 function syncTheme() {
   document.documentElement.dataset.theme = SETTINGS.theme;
+  // The phone's bars (and the installed app's) in the theme's background too.
+  const bar = document.querySelector('meta[name="theme-color"]');
+  const background = typeof getComputedStyle === 'function' ? getComputedStyle(document.documentElement).getPropertyValue('--bg').trim() : '';
+  if (bar && bar.setAttribute && background) bar.setAttribute('content', background);
   for (const choice of themeDialog.querySelectorAll('.theme-choice')) {
     const selected = choice.dataset.theme === SETTINGS.theme;
     choice.setAttribute('aria-pressed', String(selected));
@@ -110,6 +114,8 @@ async function fillSettings() {
   $('themeBoxes').checked = SETTINGS.theme_boxes !== false;
   $('pageSwipe').checked = SETTINGS.page_swipe !== false;
   $('pageAnimation').value = SETTINGS.page_animation || 'push';
+  $('workflowSwitch').value = SETTINGS.workflow_switch || 'default';
+  $('loraRange').value = SETTINGS.lora_range || 'author';
   syncPageSwipe();
   $('pageSpeed').value = SETTINGS.page_speed || 'normal';
   showGpuGuard();
@@ -141,12 +147,6 @@ async function fillSettings() {
       if (select.value !== chosen) select.add(new Option(chosen, chosen, false, true));
     }).catch(() => {});
   }
-  try {
-    const { disk } = await (await fetch('/api/settings')).json();
-    $('diskBox').innerHTML = !disk ? '<div class="hint">The disk could not be read.</div>' : `
-      <div class="bar"><div style="width:${Math.round((1 - disk.free / disk.total) * 100)}%"></div></div>
-      <div class="disk-line"><span><b>${formatBytes(disk.free)}</b> free of ${formatBytes(disk.total)} (${esc(disk.drive)})</span><span>Outputs take ${formatBytes(disk.outputs)}</span></div>`;
-  } catch (e) { $('diskBox').innerHTML = '<div class="hint">The disk could not be read.</div>'; }
 }
 $('settingsBtn').addEventListener('click', e => {
   e.preventDefault();
@@ -157,10 +157,10 @@ $('settingsBtn').addEventListener('click', e => {
   $('settingsTabGlider').dataset.place = '';
   showSettingsSection(settingsSection, 0);
 });
-// --- Its sections: General, Models, Machine, Connection, one at a time ---
-// A tap on one's name shows it; a swipe left or right goes to the next or the one before. It comes in from the side
+// --- Its sections: General, Theme, Models, Workflows, Machine, Connection, one at a time ---
+// A tap on one's name shows it; a swipe left or right goes to the next or the one before, round in a loop. It comes in from the side
 // it's on, as Generate's sections do, and the line under the names glides to it. Kept for this browser.
-const SETTINGS_SECTIONS = ['general', 'models', 'machine', 'connection'], SETTINGS_SECTION_KEY = 'gen-center.settings-section';
+const SETTINGS_SECTIONS = ['general', 'theme', 'models', 'workflows', 'machine', 'connection'], SETTINGS_SECTION_KEY = 'gen-center.settings-section';
 let settingsSection = 'general';
 try { if (SETTINGS_SECTIONS.includes(localStorage.getItem(SETTINGS_SECTION_KEY))) settingsSection = localStorage.getItem(SETTINGS_SECTION_KEY); }
 catch (e) {}
@@ -174,6 +174,7 @@ function showSettingsSection(name, direction) {
   if (typeof placeUnderline === 'function') placeUnderline($('settingsTabGlider'), buttons.find(b => b.dataset.settingsTab === name), $('settingsTabs'));
   const shown = document.querySelector(`[data-settings-section="${name}"]`), body = shown && shown.parentNode;
   if (body) body.scrollTop = 0;
+  if (name === 'workflows') showWorkflowCheck();
   if (direction && shown && shown.animate && !window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
     shown.animate([{ transform: `translateX(${direction > 0 ? '24%' : '-24%'})`, opacity: 0 }, { transform: 'none', opacity: 1 }],
                   { duration: 260, easing: 'cubic-bezier(.3, .7, .3, 1)' });
@@ -197,8 +198,8 @@ settingsDialog.addEventListener('touchend', e => {
   if (!start || !end) return;
   const dx = end.clientX - start.x, dy = end.clientY - start.y;
   if (Math.abs(dx) < 60 || Math.abs(dx) < Math.abs(dy) * 1.5) return;
-  const at = SETTINGS_SECTIONS.indexOf(settingsSection), next = at + (dx < 0 ? 1 : -1);
-  if (next < 0 || next >= SETTINGS_SECTIONS.length) return;
+  // Round in a loop: on from the last is the first, back from the first the last.
+  const count = SETTINGS_SECTIONS.length, next = (SETTINGS_SECTIONS.indexOf(settingsSection) + (dx < 0 ? 1 : -1) + count) % count;
   showSettingsSection(SETTINGS_SECTIONS[next], dx < 0 ? 1 : -1);
 });
 window.addEventListener('resize', () => { if (settingsDialog.open) { $('settingsTabGlider').dataset.place = ''; showSettingsSection(settingsSection, 0); } });
@@ -207,6 +208,55 @@ settingsDialog.addEventListener('click', e => { if (e.target === settingsDialog)
 $('lowPriority').addEventListener('change', () => saveSettings({ low_priority: $('lowPriority').checked }));
 $('pageSwipe').addEventListener('change', async () => { await saveSettings({ page_swipe: $('pageSwipe').checked }); syncPageSwipe(); });
 $('pageAnimation').addEventListener('change', () => saveSettings({ page_animation: $('pageAnimation').value }));
+$('workflowSwitch').addEventListener('change', () => saveSettings({ workflow_switch: $('workflowSwitch').value }));
+// The ranges beside each LoRA follow at once.
+$('loraRange').addEventListener('change', async () => {
+  if (await saveSettings({ lora_range: $('loraRange').value })) Object.values(OPTION_BOXES).forEach(box => syncLoraRanges($(box)));
+});
+// --- Workflows: what the panel made of each workflow saved in ComfyUI (/api/workflow-check) ---
+// Each a line: its name, its model family, and whether it's offered; tapped, the node each input was found on, so a
+// wrong guess is seen and a tag (gc:prompt...) put on the right node in ComfyUI. Asked for each time the tab opens.
+const FIELD_NAMES = { prompt: 'Prompt', negative: 'Negative prompt', width: 'Width', height: 'Height', seconds: 'Clip length (s)',
+                      frames: 'Frames', fps: 'Frame rate', audio: 'Audio', text_to_video: 'Text-to-video switch' };
+const fieldName = field => FIELD_NAMES[field] || field.replace(/^image(?:_(\d+))?$/, (_, n) => `Image ${n || 1}`)
+  .replace(/^ref_(video|audio)(?:_(\d+))?$/, (_, kind, n) => `Reference ${kind} ${n || 1}`);
+function workflowCheckHtml(w) {
+  const family = w.family_label ? `<span class="workflow-check-family">${esc(w.family_label)}</span>` : '<span class="workflow-check-family unknown">Family unknown</span>';
+  const head = `<summary><span class="workflow-check-name">${esc(w.label)}</span><span class="workflow-check-side">${esc(w.pipeline)}</span>${family}`
+    + `<span class="workflow-check-state" data-ok="${!w.problem}">${w.problem ? "Can't run" : 'Ready'}</span></summary>`;
+  if (w.problem) return `<details class="workflow-check-item">${head}<div class="workflow-check-problem">${esc(w.problem)}</div></details>`;
+  const rows = (w.inputs || []).map(i => `<tr><th>${esc(fieldName(i.field))}</th><td>${esc(i.title || i.type)} <span class="workflow-check-node">#${esc(i.node)}.${esc(i.input)}</span></td>`
+    + `<td>${i.tagged ? '<span class="workflow-check-tag">tag</span>' : 'guess'}</td></tr>`).join('');
+  return `<details class="workflow-check-item">${head}<table class="workflow-check-inputs">${rows}</table>`
+    + `<div class="hint">${w.options} setting${w.options === 1 ? '' : 's'} on the form.</div></details>`;
+}
+// Refresh reads them from ComfyUI there and then, with the model families it can load now, and the forms follow.
+async function showWorkflowCheck(refresh = false) {
+  const box = $('workflowCheck');
+  if (!box.innerHTML || refresh) box.innerHTML = `<div class="hint">${refresh ? 'Reading them from ComfyUI...' : 'Reading the workflows...'}</div>`;
+  $('workflowCheckRefresh').disabled = true;
+  try {
+    const data = await (await fetch('/api/workflow-check' + (refresh ? '?refresh=1' : ''))).json();
+    if (!data.ok) throw new Error(data.error || 'Could not read the workflows.');
+    $('workflowCheckTags').textContent = (data.tags || []).join(', ');
+    if (refresh) {
+      $('workflowCheckWhen').textContent = `Read at ${new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
+      $('workflowFamilies').innerHTML = data.families ? data.families.map(f => `<span class="family-chip" data-known="${f.known}" title="${esc(f.kind || 'new')}">${esc(f.label)}${f.known ? '' : ' (new)'}</span>`).join('')
+        : `<span class="hint">${esc(data.families_problem || 'ComfyUI is off: start it, then refresh.')}</span>`;
+      loadImageWorkflows();
+      loadVideoWorkflows();
+      loadWorkflows();
+    }
+    const offline = data.online ? '' : '<div class="hint">ComfyUI is off: these are the workflows it had last time.</div>';
+    box.innerHTML = offline + (data.workflows.length ? data.workflows.map(workflowCheckHtml).join('')
+      : '<div class="hint">No workflows are saved in ComfyUI yet. Save one there and it appears here.</div>');
+  } catch (e) {
+    box.innerHTML = `<div class="hint" data-error="true">${esc(e.message || 'Could not read the workflows.')}</div>`;
+  } finally {
+    $('workflowCheckRefresh').disabled = false;
+  }
+}
+$('workflowCheckRefresh').addEventListener('click', () => showWorkflowCheck(true));
 $('pageSpeed').addEventListener('change', () => saveSettings({ page_speed: $('pageSpeed').value }));
 $('titleSource').addEventListener('change', () => saveSettings({ title_source: $('titleSource').value }));
 $('pinProgress').addEventListener('change', async () => { await saveSettings({ pin_progress: $('pinProgress').checked }); syncPin(); });

@@ -323,6 +323,7 @@ function applyStatus(data, askedAt, editAtRequest, upscaleAtRequest) {
       if (moved) { viewing.position = moved.position; picture = moved; }
     }
     if (picture) pictureMetadata(set, picture);
+    showViewerDelete(set);
   }
   safely(() => renderVideos());
   safely(() => renderImageSets());

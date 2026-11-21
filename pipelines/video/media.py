@@ -1,3 +1,4 @@
+from core.models import VIDEO_MODELS
 import hashlib
 import io
 import math
@@ -18,7 +19,7 @@ SIZE_STEP = 32
 SIZE_PRESETS = (("360p", 640, 352), ("480p", 864, 480), ("540p", 960, 544), ("720p", 1280, 736))
 # The most pixels a model makes a clip of in a sensible time on this card: 960x544 (0.52 megapixels). A model left out
 # takes any size up to RENDER_AREA.
-MOST_PIXELS = {"minimax_h3": 960 * 544}
+MOST_PIXELS = {model: entry.most_pixels for model, entry in VIDEO_MODELS.items() if entry.most_pixels}
 MAX_INPUT_EDGE = 2048
 # Enough for the planner to see what's there, and small enough to send inline.
 PREVIEW_EDGE = 1280

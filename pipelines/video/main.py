@@ -16,7 +16,7 @@ from dotenv import load_dotenv
 from core import director, h3_refiner, run_checkpoint, run_form, seeds
 from core import lora_tests, pills, prompt_words, titles, variety, workflow_options
 from core.audio import AudioEngine
-from core.paths import LOGS_DIR
+from core.paths import LOGS_DIR, comfyui_url
 from core.saved_workflows import shorthand, title_words, unique_name
 from panel import settings as panel_settings
 from pipelines.video import h3_infinite, h3_multishot, h3_prompt, media, paths, planner, roles
@@ -470,7 +470,7 @@ def refine_review(state):
     if not pending:
         return
     approved = state.approved_prompt_key == state.prompt_key()
-    url = (os.getenv("COMFYUI_URL") or "http://127.0.0.1:8188").rstrip("/")
+    url = comfyui_url()
     with h3_refiner.Refiner(url) as refiner:
         workflow = ComfyClient().workflow
         for shot in pending:

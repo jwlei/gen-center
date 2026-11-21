@@ -874,6 +874,14 @@ function pictureMetadata(set, picture) {
   if (pills) pills.sort((a, b) => pillPlace(a.kind) - pillPlace(b.kind));
   viewerMetadata({ ...set, upscaled: picture.upscaled || null, pills }, 'image');
 }
+// Delete in the viewer, grey while the picture's batch is still in the queue or being made: deleting from it then would
+// race the run still writing into it. A film is always done.
+function showViewerDelete(set) {
+  const button = $('viewerDelete'), busy = !!set && !!(set.queued || set.generating);
+  if (busy) disarm(button);
+  button.disabled = busy;
+  button.title = busy ? 'Still in the queue: it can be deleted once its batch is done' : 'Delete';
+}
 function viewerMetadata(item, side = 'video') {
   // Its pills, all of them, when it has them; else the lines it had before pills.
   const pills = item.pills && item.pills.length ? item.pills : null;
@@ -1011,6 +1019,7 @@ function openFilm(name, filmFolder = folder) {
   $('viewerRes').textContent = sizeText(film.resolution);
   $('viewerCount').textContent = films.length > 1 ? `${at + 1} of ${films.length}` : '';
   viewerMetadata(film);
+  showViewerDelete(null);
   $('viewerVideo').src = url;
   setViewerTitle(film.title || film.topic || film.name);
   $('viewerDownload').href = `/download/${filmFolder}/${encodeURIComponent(name)}`;
@@ -1054,6 +1063,7 @@ function openViewer(id, position) {
   $('viewerCount').textContent = album.length > 1 && place >= 0 ? `${place + 1} of ${album.length}` : '';
   // This picture's own upscale, not another of the set's.
   pictureMetadata(set, picture);
+  showViewerDelete(set);
   $('viewerUpscaled').hidden = !picture.upscaled;
   if (picture.upscaled) {
     $('viewerUpscaled').innerHTML = ICONS.upscale;

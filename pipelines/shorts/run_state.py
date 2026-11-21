@@ -5,6 +5,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 
 from core import run_checkpoint
+from core.saved_run import SavedRun
 from core.paths import WORKFLOWS_DIR
 from pipelines.shorts.paths import RUNS_DIR
 
@@ -24,7 +25,7 @@ def option(argv, name, default=None):
 
 
 @dataclass
-class RunState:
+class RunState(SavedRun):
     """
     What one video's run has finished so far, saved after every step and every
     accepted clip, so a run that was stopped, failed or cut off by a crash can
@@ -58,36 +59,22 @@ class RunState:
                    env={name: os.environ[name] for name in RUN_ENV if os.environ.get(name)},
                    number=number, videos_after=videos_after)
 
+    # Loading (core/saved_run.py): what its checkpoint must hold, and what to mend once loaded.
+    RUN_ID = RUN_ID
+    SCHEMA = {"argv": list, "env": dict, "number": int, "videos_after": int, "script": list, "avatar_clips": dict,
+              "avatar_prompts": dict, "provenance": dict}
+
     @classmethod
-    def load(cls, run_id):
-        """The saved run, with anything whose files have gone marked as still to do. None if there isn't one."""
-        if not RUN_ID.fullmatch(str(run_id)):
-            return None
-        path = os.path.join(RUNS_DIR, run_id, "state.json")
-        saved = run_checkpoint.load(path, run_id)
-        if saved is None:
-            return None
-        run_checkpoint.validate(saved, path, {"argv": list, "env": dict, "number": int, "videos_after": int,
-                                             "script": list, "avatar_clips": dict, "avatar_prompts": dict,
-                                             "provenance": dict})
-        try:
-            state = cls(**{name: value for name, value in saved.items() if name in cls.__dataclass_fields__})
-            state.avatar_clips = {int(index): path for index, path in state.avatar_clips.items()}
-            state.avatar_prompts = {int(index): prompt for index, prompt in state.avatar_prompts.items()}
-            state._forget_missing()
-        except (ValueError, TypeError, AttributeError, KeyError) as error:
-            raise run_checkpoint.invalid(path, error) from error
-        return state
+    def runs_dir(cls):
+        return RUNS_DIR
+
+    def loaded(self):
+        """Its clips and prompts by number again (JSON keeps them as text), and anything whose files have gone marked as still to do."""
+        self.avatar_clips = {int(index): path for index, path in self.avatar_clips.items()}
+        self.avatar_prompts = {int(index): prompt for index, prompt in self.avatar_prompts.items()}
+        self._forget_missing()
 
     # --- Where its files go ---
-
-    @property
-    def folder(self):
-        return os.path.join(RUNS_DIR, self.id)
-
-    @property
-    def path(self):
-        return os.path.join(self.folder, "state.json")
 
     @property
     def audio_dir(self):
@@ -102,11 +89,6 @@ class RunState:
         return os.path.join(self.folder, "temp")
 
     # --- Saving ---
-
-    def update(self, **fields):
-        for name, value in fields.items():
-            setattr(self, name, value)
-        self.save()
 
     def keep_clip(self, index, path):
         self.avatar_clips[index] = path

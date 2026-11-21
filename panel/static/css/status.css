@@ -1,0 +1,282 @@
+/* The page under the header, Status: the run, the queue, Pending and Failed, the log. Linked from templates/index.html in this order, which the cascade depends on. */
+/* Under the header, not over it (--top-h, the header's height, kept by navigation.js). */
+.connection-notice { position: fixed; top: calc(var(--top-h, 0px) + 4px); left: 0; right: 0; z-index: 999; display: flex; align-items: center; justify-content: center; gap: 12px; padding: 8px 16px; background: var(--panel-2); color: var(--warn); font-size: .8rem; box-shadow: 0 6px 18px #0005; opacity: 1; transform: translateY(0); visibility: visible; transition: opacity .25s ease, transform .25s ease, visibility 0s; }
+.connection-notice[hidden] { display: flex; opacity: 0; transform: translateY(-100%); visibility: hidden; pointer-events: none; transition: opacity .25s ease, transform .25s ease, visibility 0s .25s; }
+.connection-notice > span { min-width: 0; overflow-wrap: anywhere; }
+.connection-notice button { width: auto; flex: none; padding: 4px 8px; margin: 0; font-size: inherit; }
+.action-notice { z-index: 1000; color: var(--err); }
+/* Retry pressed: it pulses in the notice's yellow while it asks, so it is plain it is trying. */
+.connection-notice button.retrying, .connection-notice button.retrying:disabled { opacity: 1; color: var(--warn); border-color: var(--warn);
+  animation: busy-pulse .9s ease-in-out infinite; }
+.status { display: flex; align-items: center; gap: 9px; font-size: .9rem; margin-bottom: 12px; }
+.dot { width: 9px; height: 9px; border-radius: 50%; background: var(--muted); flex: none; }
+.dot.on { background: var(--ok); animation: pulse 1.4s infinite; }
+.dot.ok { background: var(--ok); }
+.dot.fail { background: var(--err); }
+.dot.warn { background: var(--warn); }
+@keyframes pulse { 0%,100% { opacity: 1 } 50% { opacity: .3 } }
+.log {
+  background: #0a0b0f;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 8px 9px;
+  max-height: 340px;
+  overflow: auto;
+  font-size: .78rem;
+  line-height: 1.5;
+  /* Plain lines are quiet grey: the headers (violet stages and runs, white groups) and problems stand out. */
+  color: var(--muted);
+}
+.log .empty-log { color: var(--muted); }
+.estimate { margin-top: 10px; font-size: .9rem; }
+/* One quiet line: the estimate on the left, what it's made of on the right. */
+.estimate-line { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; font-size: .78rem; color: var(--muted); }
+.estimate-line b { color: var(--text); font-weight: 600; }
+#estimateDetail { text-align: right; }
+.estimate .err { margin: 0; }
+/* The time left says how far the estimate moved; tapped, the first estimate, and why, show under it at the right. */
+#runProgressRight.eta-moved { cursor: pointer; }
+.eta-detail { margin: 2px 0 0; text-align: right; font-size: .78rem; color: var(--muted); }
+.eta-detail .changes { text-align: left; }
+.eta-detail .changes { max-height: 7.5em; overflow-y: auto; margin-top: 4px; }
+#uploadBox .status { margin-bottom: 8px; }
+#stopUpload { width: auto; margin: 0 0 0 auto; padding: 4px 10px; font-size: .8rem; }
+.queue { margin-top: 12px; font-size: .84rem; }
+/* A line between what's going now and what's waiting, there only when something is. */
+/* Wider than the rest, out into the card's own margin, with room inside as before. */
+.status-queue:has(> :not([hidden])) { margin: 14px -10px 0; padding: 2px 12px 12px; background: var(--bg); border: 1px solid var(--line); border-radius: 12px; }
+/* The queue, Pending and Failed, each under a thin line from the one above (only between those showing). */
+.status-queue > .queue:not([hidden]) ~ .queue:not([hidden]) { margin-top: 10px; padding-top: 4px; border-top: 1px solid var(--line); }
+/* What is on its way to the queue: there from the tap until the panel has taken it. */
+.queue-pending { margin-top: 12px; padding: 8px 11px; border: 1px dashed var(--line); border-radius: 10px; font-size: .84rem; animation: work-arrive .3s ease; }
+.queue-pending[hidden] { display: none; }
+.queue-pending-head { display: flex; justify-content: space-between; gap: 10px; }
+.queue-pending-head b { font-weight: 600; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.queue-pending-head span { color: var(--muted); font-variant-numeric: tabular-nums; }
+.queue-pending .bar { height: 3px; margin-top: 6px; }
+.queue-pending .bar > div { transition: width .2s ease; }
+.queue-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 4px 10px; margin-bottom: 4px; }
+.queue-head b { font-weight: 600; }
+.queue-foot { display: flex; justify-content: flex-end; margin-top: 8px; }
+.queue-head .when { color: var(--muted); font-size: .78rem; }
+.queue-head.run-queue-head { display: grid; grid-template-columns: minmax(0, 1fr) auto 26px 26px 20px; }
+.run-queue-head .when { grid-column: 2; min-width: 0; }
+.run-queue-head [data-queue-toggle] { grid-column: 3; }
+/* Its own column beside play/pause: placed by the grid instead, it fell to a second row under "All done around". */
+.run-queue-head [data-sort-queue] { grid-column: 4; }
+.queue-head .queue-fold-toggle { padding: 2px 0; border: 0; background: transparent; text-align: left; }
+.queue-head .queue-fold-title { grid-column: 1; min-width: 0; }
+.queue-head .queue-fold-arrow { grid-column: 5; width: 20px; height: 30px; display: flex; align-items: center; justify-content: flex-end; }
+.queue-fold-toggle .chev { width: 8px; height: 8px; border-right: 2px solid var(--muted); border-bottom: 2px solid var(--muted); transform: rotate(45deg); transition: transform .25s ease; margin-right: 4px; }
+.queue-fold-toggle[aria-expanded="true"] .chev { transform: rotate(-135deg); }
+.queue-list, .stopped-body { position: relative; max-height: min(var(--three-rows, 55dvh), 55dvh); overflow-y: auto; }
+.queue-item { display: flex; align-items: center; gap: 10px; padding: 6px 0; border-top: 1px solid var(--line); }
+.queue-item .what { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.queue-item.run-card { position: relative; display: block; margin-top: 6px; padding: 9px 11px; background: var(--panel-2); border: 1px solid var(--line); border-radius: 10px; }
+.queue-item.run-card .queue-item-top { display: flex; align-items: center; gap: 10px; padding-right: 28px; }
+.queue-item.run-card .what { font-weight: 600; }
+.queue-item.run-card .hint { margin-top: 2px; font-weight: 400; }
+.stopped-run { position: relative; }
+.work-privacy { position: absolute; top: 8px; right: 10px; z-index: 1; display: flex; justify-content: flex-start; margin: 0; }
+.work-privacy:empty, body:not(.private-mode) .work-privacy.private-only { display: none; }
+.stopped-run .run-head, .stopped-run > .what { padding-right: 28px; }
+.work-private-pill { display: inline-flex; align-items: center; padding: 2px 6px; border-radius: 999px;
+  color: #9864bd; background: color-mix(in srgb, #9864bd 15%, transparent); border: 1px solid #9864bd; }
+.work-private-pill svg { width: 12px; height: 12px; }
+.work-privacy .work-private-tag { width: 24px; height: 20px; margin: 0; padding: 2px; }
+/* Every title in the queues: two lines at most, "…" where it is cut. */
+.queue-title { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; overflow: hidden; overflow-wrap: anywhere; }
+/* Its place in the queue, quietly: the title is what matters. */
+.queue-pos { color: var(--muted); font-weight: 500; }
+.queue .queue-item.run-card .queue-item-actions button { background: var(--panel); }
+.queue-item.selected { outline: 2px dotted var(--ok); outline-offset: -2px; cursor: grab; touch-action: none; }
+/* Held, its dotted outline turns solid: the same line, no second one. */
+.queue-item.dragging { position: relative; z-index: 2; background: var(--panel-2); border-radius: 8px; outline-style: solid;
+  box-shadow: 0 8px 22px rgba(0, 0, 0, .5); }
+.queue-item { transition: background .15s ease; }
+.queue-item:hover { background: color-mix(in srgb, var(--panel-2) 60%, transparent); }
+.stopped-fold > summary { display: flex; align-items: center; justify-content: space-between; gap: 10px; cursor: pointer; list-style: none; padding: 2px 0; font-size: .84rem; }
+.stopped-fold > summary b { font-weight: 600; }
+#warningRuns .stopped-fold > summary, .prompt-warning { color: #ef5350; }
+.queue .icon-btn.prompt-warning { color: #ef5350; border-color: #ef5350; }
+.stopped-fold[open] > summary { padding-bottom: 6px; border-bottom: 1px solid var(--line); }
+.run-status, .run-tabs { display: contents; }
+.stopped-fold > summary::-webkit-details-marker { display: none; }
+.stopped-fold .chev { width: 8px; height: 8px; border-right: 2px solid var(--muted); border-bottom: 2px solid var(--muted);
+  transform: rotate(45deg); transition: transform .25s ease; margin-right: 4px; }
+.stopped-fold[open] .chev { transform: rotate(-135deg); }
+.stopped-fold[open] .stopped-body, .queue-list:not([hidden]) { animation: fold-open .25s ease; }
+@keyframes fold-open { from { opacity: 0; transform: translateY(-6px); } to { opacity: 1; transform: none; } }
+details.fold-opening > :not(summary) { animation: fold-open .25s ease; }
+@media (prefers-reduced-motion: reduce) { .stopped-fold[open] .stopped-body, .queue-list:not([hidden]) { animation: none; } .queue-fold-toggle .chev { transition: none; } .queue-item.dragging { transform: none; scale: none; } }
+.queue-item.dragging { cursor: grabbing; scale: 1.02; }
+.queue-item.selected, .queue-item.selected * { user-select: none; -webkit-user-select: none; }
+.queue-item .hint { margin-top: 0; }
+/* A comparison in a queued job's line: an icon before what it compares, in the theme's colour. */
+.detail-comparison { color: var(--shared); white-space: nowrap; }
+.detail-comparison .detail-icon { vertical-align: -1px; margin-right: 3px; }
+.queue-item .when { color: var(--muted); font-size: .78rem; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.queue button { width: auto; margin: 0; padding: 4px 10px; font-size: .78rem; background: var(--panel-2); border: 1px solid var(--line); color: var(--text); }
+.queue .queue-head .queue-fold-toggle { padding: 2px 0; border: 0; background: transparent; }
+.queue .queue-head .queue-fold-arrow { width: 20px; }
+/* Play or pause for the whole queue: small, its icon in the middle of it. */
+.queue .queue-head button[data-queue-toggle] { width: 26px; height: 26px; padding: 0; display: inline-flex; align-items: center;
+  justify-content: center; line-height: 1; font-size: .62rem; }
+.queue .queue-head button[data-queue-toggle] svg { display: block; width: 12px; height: 12px; }
+/* Sort, beside it: the same box, its icon in the middle. */
+.queue .queue-head button[data-sort-queue] { width: 26px; height: 26px; padding: 0; display: inline-flex; align-items: center;
+  justify-content: center; }
+.queue .queue-head button[data-sort-queue] svg { display: block; width: 14px; height: 14px; }
+.queue-item .what[role="button"] { cursor: pointer; }
+.queue .results { margin-top: 6px; }
+/* A stopped run in a box of its own: what it is, how far it got, then what you can do with it. */
+.queue .stopped-actions .continue-item, .queue .queue-item-actions .continue-item { color: var(--shared); border-color: color-mix(in srgb, var(--shared) 45%, transparent); }
+.queue .run-item { flex: none; display: inline-flex; align-items: center; justify-content: center; width: 30px; height: 30px; padding: 5px; color: var(--text); }
+.queue .run-item svg { width: 16px; height: 16px; }
+button.queue-request { opacity: .75; cursor: wait; }
+button.queue-request-done { color: var(--accent); }
+.queue-item.leaving { overflow: hidden; animation: queue-leave .38s ease forwards; pointer-events: none; }
+@keyframes queue-leave {
+  45% { opacity: 0; transform: translateY(-10px); }
+  100% { opacity: 0; transform: translateY(-10px); height: 0; padding-top: 0; padding-bottom: 0; margin-top: 0; margin-bottom: 0; border-width: 0; }
+}
+#currentWork.arrive { animation: work-arrive .45s ease; }
+@keyframes work-arrive { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: none; } }
+@media (prefers-reduced-motion: reduce) { .queue-item.leaving, #currentWork.arrive { animation: none; } }
+.stopped-run { margin-top: 6px; padding: 9px 11px; background: var(--panel-2); border: 1px solid var(--line); border-radius: 10px; }
+.stopped-run.highlight { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent); }
+.stopped-run .what { overflow-wrap: anywhere; font-weight: 600; }
+.stopped-run .hint { margin-top: 2px; }
+/* A job's buttons: what moves it on the left, how long it takes in the middle, the rest on the right. */
+.stopped-actions, .queue-item.run-card .queue-item-actions { display: grid; grid-template-columns: minmax(max-content, 1fr) auto minmax(max-content, 1fr);
+  align-items: center; gap: 6px; margin-top: 8px; }
+/* Each side's buttons on one line: a side with more of them takes the room it needs. */
+.acts-side { display: flex; flex-wrap: nowrap; align-items: center; gap: 6px; }
+.acts-side.acts-end { justify-content: flex-end; }
+.stopped-actions .when, .queue-item-actions .when { color: var(--muted); font-size: .78rem; white-space: nowrap; font-variant-numeric: tabular-nums; text-align: center; }
+.stopped-actions.unsaved-actions { display: flex; justify-content: flex-end; }
+.queue .stopped-run button { background: var(--panel); }
+.queue .stopped-actions .icon-btn:not(.continue-item) { color: var(--muted); }
+.queue .queue-item-actions button, .queue .stopped-actions button {
+  flex: none; width: 34px; height: 28px; padding: 0; display: inline-flex; align-items: center; justify-content: center;
+}
+.queue .failed { color: var(--err); }
+/* One row per line: a muted timestamp gutter, then the text colour-coded by kind. */
+/* The time is to the minute: a narrow column, and the text has the room. */
+.ln { display: grid; grid-template-columns: 3.3em minmax(0, 1fr); gap: 8px; padding: 1px 0; }
+.ln .t { color: #5d6376; font: .7rem/1.9 ui-monospace, "Cascadia Mono", Consolas, monospace; user-select: none; }
+.ln .x { white-space: pre-wrap; word-break: break-word; }
+.ln.err .x { color: var(--err); }
+.ln.warn .x { color: #f2b84b; }
+.ln.ok .x { color: var(--ok); }
+.ln.dim .x { color: var(--muted); }
+.ln.comfy .x { color: #7fb4d9; }
+.log-panes.hide-comfy .ln.comfy { display: none; }
+.log-panes.problems-only .ln:not(.err):not(.warn):not(.stage) { display: none; }
+.log-tools { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 6px; }
+/* How much to show on the left; ComfyUI and Errors, which add or narrow, on the right. */
+.log-tools .log-filters { margin-left: auto; }
+.log-chip { width: auto; margin: 0; padding: 2px 10px; font-size: .78rem; font-weight: 400; border-radius: 999px; border: 1px solid var(--line); background: transparent; color: var(--muted); cursor: pointer; }
+.log-chip[aria-pressed="true"] { color: var(--accent); border-color: var(--accent); }
+/* Summary and Detailed are one switch: two halves of a pill. */
+.log-seg { display: inline-flex; }
+.log-seg .log-chip:first-child { border-radius: 999px 0 0 999px; }
+.log-seg .log-chip:last-child { border-radius: 0 999px 999px 0; margin-left: -1px; }
+/* The half chosen is filled, as a switch: a filter on the right only gets its outline and a tick. */
+.log-seg .log-chip[aria-pressed="true"] { position: relative; background: var(--accent); color: #fff; }
+.log-filters { display: inline-flex; align-items: center; gap: 6px; }
+.log-filters-label { color: var(--muted); font-size: .72rem; }
+.log-filters .log-chip[aria-pressed="true"]::before { content: "✓ "; }
+/* A stage is a section: its heading says how it went, and closed it keeps only what went wrong. */
+.stage-sec { margin-top: 8px; padding-top: 7px; border-top: 1px solid var(--line); }
+.stage-sec:first-child { margin-top: 0; padding-top: 1px; border-top: 0; }
+.stage-sec > .ln.stage { margin-top: 0; padding-top: 1px; border-top: 0; }
+.stage-sec:not(.open) .stage-body .ln:not(.err):not(.warn) { display: none; }
+.log-fold { width: auto; margin: 0; padding: 0; background: none; border: 0; border-radius: 0; font: inherit; font-weight: inherit; color: inherit; text-align: left; cursor: pointer; display: inline; }
+.log-fold:hover .grp-text, .log-fold:hover .stage-text { text-decoration: underline; text-decoration-color: var(--muted); }
+.log-chev { display: inline-block; width: 6px; height: 6px; margin: 0 0 2px 8px; border-right: 2px solid var(--muted); border-bottom: 2px solid var(--muted); transform: rotate(-45deg); transition: transform .2s ease; }
+.log-fold[aria-expanded="true"] .log-chev { transform: rotate(45deg); }
+.stage-sec .stage-text .bad { color: var(--err); }
+.stage-sec .stage-text .caution { color: #f2b84b; }
+/* One line that stands for several: a tap shows them. */
+.log-grp .grp-body { display: none; margin: 1px 0 3px; padding-left: 8px; border-left: 2px solid var(--line); }
+.log-grp.open .grp-body { display: block; }
+.ln.child .x { color: var(--muted); font-size: .92em; }
+/* A group (an image, a clip, a prompt) is the second header: white, under the violet stage. */
+.log-grp > .ln:not(.err):not(.warn) .x { color: var(--text); }
+/* The next job in the queue starting: "New run, 20 images" in violet, its title in white under it. */
+.ln.run-start .run-start-head { display: block; color: var(--shared); font-weight: 700; }
+.ln.run-start .run-start-title { display: block; color: var(--text); font-weight: 600; }
+.ln.child.err .x { color: var(--err); }
+.ln.child.comfy .x { color: #7fb4d9; }
+.ln.long .x-full, .ln.long.expanded .x-short { display: none; }
+.ln.long.expanded .x-full { display: inline; }
+.ln-more { width: auto; margin: 0 0 0 6px; padding: 0; background: none; border: 0; border-radius: 0; font: inherit; font-size: .9em; font-weight: 400; color: var(--accent); cursor: pointer; white-space: nowrap; }
+.ln-more:hover { text-decoration: underline; }
+@media (prefers-reduced-motion: reduce) { .log-chev { transition: none; } }
+dialog.workflow-view { width: min(760px, calc(100vw - 24px)); }
+.workflow-nodes { max-height: 52dvh; overflow: auto; font-size: .82rem; }
+.workflow-nodes details { border-top: 1px solid var(--line); padding: 3px 0; }
+.workflow-nodes summary { cursor: pointer; }
+.workflow-nodes summary small { color: var(--muted); margin-left: 6px; }
+.workflow-nodes dl { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 2px 12px; margin: 4px 0 6px 14px; }
+.workflow-nodes dt { color: var(--muted); }
+.workflow-nodes dd { margin: 0; overflow-wrap: anywhere; white-space: pre-wrap; }
+.workflow-tools { display: flex; gap: 8px; margin: 8px 0; flex-wrap: wrap; }
+.ln.stage { margin-top: 8px; padding-top: 7px; border-top: 1px solid var(--line); }
+.ln.stage:first-child { margin-top: 0; padding-top: 1px; border-top: 0; }
+.ln.stage .x { font-weight: 700; }
+.hint { color: var(--muted); font-size: .78rem; margin-top: 5px; line-height: 1.4; }
+.hint b { color: var(--text); font-weight: 600; }
+.centred-hint { text-align: center; }
+/* Two range inputs on one track: only their thumbs take the pointer. */
+.range-head { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; }
+.range-head label { margin-bottom: 0; }
+.range-head output { font-size: .85rem; font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.clip-length-actions { display: flex; align-items: center; gap: 8px; }
+.clip-fixed { width: 26px; height: 26px; margin: 0; padding: 5px; background: transparent; color: var(--muted); border: 1px solid var(--line); }
+.clip-fixed svg { display: block; width: 100%; height: 100%; }
+.clip-fixed[aria-pressed="true"] { color: var(--accent); border-color: var(--accent); }
+.range { position: relative; height: 26px; margin-top: 2px; }
+.range::before, .range .fill { content: ""; position: absolute; top: 11px; height: 4px; border-radius: 2px; }
+.range::before { left: 0; right: 0; background: var(--line); }
+.range .fill { background: var(--accent); }
+.pipeline-form .range input[type=range] {
+  position: absolute; inset: 0; width: 100%; height: 26px; margin: 0; padding: 0;
+  background: none; border: 0; outline: 0; appearance: none; -webkit-appearance: none; pointer-events: none;
+}
+.range input::-webkit-slider-runnable-track { background: none; }
+.range input::-moz-range-track { background: none; }
+.range input::-webkit-slider-thumb {
+  -webkit-appearance: none; pointer-events: auto; cursor: pointer;
+  width: 20px; height: 20px; border-radius: 50%; background: var(--accent); border: 3px solid var(--panel);
+}
+.range input::-moz-range-thumb {
+  pointer-events: auto; cursor: pointer; box-sizing: border-box;
+  width: 20px; height: 20px; border-radius: 50%; background: var(--accent); border: 3px solid var(--panel);
+}
+.range input:focus-visible::-webkit-slider-thumb { outline: 2px solid var(--text); }
+.range input:focus-visible::-moz-range-thumb { outline: 2px solid var(--text); }
+h2 { font-size: .95rem; margin: 0 0 4px; }
+.section { border-top: 1px solid var(--line); margin-top: 18px; padding-top: 4px; }
+.workflow-in > label:first-child { margin-top: 4px; }
+.generation-header { display: flex; flex-direction: column; align-items: center; gap: 6px; margin-bottom: 10px; }
+.preset-controls { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 4px; min-width: 0; max-width: 100%; }
+.preset-editor { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 4px; flex-basis: 100%; }
+.preset-editor[hidden] { display: none; }
+.preset-editor input { width: 10rem; padding: 4px 6px; font-size: .75rem; }
+.preset-controls .preset-editor button { width: auto; font-size: .75rem; white-space: nowrap; }
+.preset-feedback { flex-basis: 100%; font-size: .7rem; font-weight: normal; text-align: center; color: var(--muted); }
+.preset-feedback:empty { display: none; }
+.preset-feedback[data-error="true"] { color: var(--err); }
+.preset-controls label { flex: none; margin: 0 2px 0 0; font-size: .65rem; }
+.preset-controls select { flex: 0 1 9rem; width: 9rem; min-width: 0; height: 28px; padding: 3px 6px; font-size: .75rem; text-overflow: ellipsis; }
+.preset-controls button { display: inline-flex; align-items: center; justify-content: center; flex: none; width: 28px; height: 28px; margin: 0; padding: 6px; background: transparent; border: 0; color: var(--muted); }
+.preset-controls button[hidden] { display: none; }
+.preset-controls button:hover, .preset-controls button:focus-visible { color: var(--text); background: var(--panel-2); }
+.preset-controls button svg { width: 14px; height: 14px; }
+.preset-controls .preset-save { color: var(--accent); }
+.preset-default[aria-pressed="true"] svg { fill: currentColor; }
+.preset-controls .preset-default[aria-pressed="true"] { color: var(--accent); }
+.section-title { font-size: .72rem; letter-spacing: .08em; text-transform: uppercase; color: var(--accent); margin: 14px 0 0; font-weight: 700; }
+.options-advanced { margin-top: 12px; padding-top: 8px; border-top: 1px solid var(--line); }

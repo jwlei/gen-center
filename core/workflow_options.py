@@ -1147,7 +1147,10 @@ def _drop_idle_loras(api):
 
 
 def _negatives(api):
-    """Where a negative prompt is typed, if one node has it: [node id, input]. Or None."""
+    """Where a negative prompt is typed, if one node has it: [node id, input]. Or None. A node tagged gc:negative is it."""
+    tagged = sw.tags(api).get("negative")
+    if tagged:
+        return tagged
     positive = {value[0] for node in api.values() for name, value in node["inputs"].items() if name == "positive" and isinstance(value, list)}
     found = [[node_id, "text"] for node_id, node in api.items() if node["class_type"] in NEGATIVE_TEXT and node_id not in positive
              and isinstance(node["inputs"].get("text"), str)

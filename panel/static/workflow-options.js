@@ -66,26 +66,33 @@ function loraRange(name) {
   const key = String(name || '').replace(/\\/g, '/').split('/').pop().replace(/\.safetensors$/i, '').toLowerCase();
   return (PANEL_CONFIG.lora_ranges || {})[key] || {};
 }
+// The range a LoRA is held to, as Settings' LoRA strength range says: its author's, else ours; or ours, else its author's.
+function preferredRange(name) {
+  const { ours, author } = loraRange(name);
+  return SETTINGS.lora_range === 'tested' ? ours || author : author || ours;
+}
 // "0.5–1.5" as [0.5, 1.5].
 function rangeBounds(range) {
   const [low, high] = String(range || '').split('–').map(Number);
   return Number.isFinite(low) && Number.isFinite(high) ? [low, high] : null;
 }
-// Beside each LoRA line's strength: our range for the LoRA chosen on it, and the author's under it.
+// Beside each LoRA line's strength: the range it's held to (preferredRange), and the other one under it.
 function syncLoraRanges(root) {
   for (const line of root && root.querySelectorAll ? root.querySelectorAll('.lora-line') : []) {
     const select = line.querySelector('select'), out = line.querySelector('.lora-range');
     if (!out) continue;
     const { ours, author } = select ? loraRange(select.value) : {};
-    out.innerHTML = (ours ? `<span class="lora-range-ours">${esc(ours)}</span>` : '') + (author ? `<span class="lora-range-author">${esc(author)}</span>` : '');
-    out.title = [ours && `Worth using: ${ours}`, author && `Its author's: ${author}`].filter(Boolean).join('\n');
+    const main = select ? preferredRange(select.value) : '', other = main === author ? ours : author;
+    const said = range => range === author ? `Its author's: ${range}` : `Kept in our comparisons: ${range}`;
+    out.innerHTML = (main ? `<span class="lora-range-main">${esc(main)}</span>` : '') + (other && other !== main ? `<span class="lora-range-other">${esc(other)}</span>` : '');
+    out.title = [main && `Held to. ${said(main)}`, other && other !== main && said(other)].filter(Boolean).join('\n');
   }
 }
-// Another LoRA chosen: its strength brought within our range for it, and the ranges beside it shown.
+// Another LoRA chosen: its strength brought within the range it's held to, and the ranges beside it shown.
 document.addEventListener('change', e => {
   const line = e.target && e.target.closest && e.target.tagName === 'SELECT' && e.target.closest('.lora-line');
   if (!line) return;
-  const bounds = rangeBounds(loraRange(e.target.value).ours), strength = line.querySelector('.option-strength');
+  const bounds = rangeBounds(preferredRange(e.target.value)), strength = line.querySelector('.option-strength');
   if (bounds && strength && strength.value !== '') {
     const value = Number(strength.value), within = Math.min(bounds[1], Math.max(bounds[0], value));
     if (within !== value) {
@@ -197,12 +204,11 @@ function loraSelected(names, side = 'image') {
   const box = form && form.querySelector && form.querySelector('[name="opt_lora_name"]');
   return (box && box.value) || (names && names.default) || '';
 }
-// How many images a strength test makes over these LoRAs, as the server makes them (core/lora_tests.py): each from the
-// increment up to the top of our range for it (core/lora_hints.py), the author's where there's none of ours, or the most
-// a strength goes where neither is known.
+// How many images a strength test makes over these LoRAs, as the server makes them (core/lora_tests.py): each over the
+// range it's held to (preferredRange), or from the increment to the most a strength goes where none is known.
 function strengthImages(names, step, most) {
   return names.reduce((sum, name) => {
-    const range = loraRange(name), bounds = rangeBounds(range.ours) || rangeBounds(range.author);
+    const bounds = rangeBounds(preferredRange(name));
     // From the bottom of its range to its top; from the increment to the most a strength goes where it has none.
     const start = bounds ? bounds[0] : step, top = bounds ? Math.min(most, bounds[1]) : most;
     return sum + Math.max(1, Math.floor((top - start) / step + 1e-9) + 1);
@@ -497,9 +503,14 @@ function useDefaultOptions(box) {
   delete all[box.dataset.workflow];
   try { draftWrite(OPTIONS_KEY, JSON.stringify(all)); } catch (e) {}
 }
+// The reset beside the workflow: as saved in ComfyUI, then its default preset over that (presets.js workflowDefault),
+// which is the same unless you saved one for it or its model family.
 document.addEventListener('click', e => {
   const button = e.target.closest && e.target.closest('[data-defaults]');
-  if (button) useDefaultOptions($(button.dataset.defaults));
+  if (!button) return;
+  useDefaultOptions($(button.dataset.defaults));
+  const side = Object.keys(OPTION_BOXES).find(side => OPTION_BOXES[side] === button.dataset.defaults);
+  if (side) applyWorkflowDefault(side);
 });
 // A turbo switch has its own step count, so Steps shows the one that goes with it once it's switched.
 function followSwitch(box, changed) {

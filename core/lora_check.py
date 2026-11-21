@@ -8,6 +8,9 @@ import os
 import re
 import struct
 
+from core import model_families
+from core import models as known_models
+
 QWEN_21, QWEN_EARLIER = "qwen_image_21", "qwen_image_earlier"
 MOST_HEADER = 64 * 1024 * 1024
 FAMILY_TOKENS = {
@@ -18,18 +21,14 @@ FAMILY_TOKENS = {
     "ltx": {"ltx", "ltxv"},
     "fibo": {"fibo", "fibo2"},
 }
+# Every other family core/model_families.py knows, by the words in its name, so a LoRA for one isn't hidden as unknown.
+for _family, _words in model_families.lora_tokens().items():
+    FAMILY_TOKENS.setdefault(_family, set()).update(_words)
 _found = {}
-# Each family's own tensor names, as trainers save them: "diffusion_model.blocks.0..." or kohya's "lora_unet_blocks_0_...".
-SIGNATURES = {
-    "krea": re.compile(r"(?:^|[._])txtfusion[._]", re.I),
-    "minimax_h3": re.compile(r"(?:^|[._])token_refiner[._]", re.I),
-    "fibo": re.compile(r"(?:^|[._])(?:perceiver[._]|layers[._]\d+[._]cross_attention[._]to_kv)", re.I),
-    "moss": re.compile(r"(?:^|[._])layers[._]\d+[._]proj[._](?:qkv|ffn_down|ffn_up_gate)(?:[._]|$)", re.I),
-    "qwen": re.compile(r"(?:^|[._])transformer_blocks[._]\d+[._](?:img|txt)_mlp[._]", re.I),
-    # Not ones the workflows here run: named, so a LoRA for them is told apart rather than taken by its filename.
-    "sdxl": re.compile(r"(?:^|[._])(?:input_blocks|output_blocks|middle_block|conditioner[._]embedders)[._]", re.I),
-    "flux": re.compile(r"(?:^|[._])(?:double_blocks|single_blocks|single_transformer_blocks)[._]", re.I),
-}
+# Each family's own tensor names, as trainers save them ("diffusion_model.blocks.0..." or kohya's "lora_unet_blocks_0_..."):
+# its lora_signature in core/models/. SDXL's and FLUX.1's are there too, though the workflows here don't run them, so a
+# LoRA for them is told apart rather than taken by its filename.
+SIGNATURES = {family: re.compile(pattern, re.I) for family, pattern in known_models.lora_signatures().items()}
 # Metadata trainers write that names the base model (kohya, modelspec, ComfyUI's own).
 FAMILY_METADATA = ("ss_base_model_version", "modelspec.architecture", "base_model", "ss_sd_model_name")
 # What only a LoRA (or LoKr, LoHa, DoRA) holds: a file with none of these is a whole model.

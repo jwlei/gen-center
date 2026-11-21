@@ -1,0 +1,541 @@
+/* The page's layout on phones and desktops: header, footer, sections, and what fades at their edges. Linked from templates/index.html in this order, which the cascade depends on. */
+/* Phones: the page is one long column, so this stays at the bottom to get around it. */
+.stick {
+  position: fixed; left: 0; right: 0; bottom: 0; z-index: 10;
+  display: flex; flex-direction: column;
+  padding-bottom: env(safe-area-inset-bottom);
+  background: var(--bg); border-top: 1px solid var(--line);
+  /* A layer of its own, painted once: scrolled fast, a phone's browser otherwise showed it half drawn.
+     No paint containment: that clipped the side menu that grows up out of it. */
+  transform: translateZ(0); will-change: transform; backface-visibility: hidden;
+}
+/* The progress bars sit in the header, left of its icons: one line each, and a tap grows the one tapped down over the
+   page. They float, so neither showing nor growing moves the page. */
+.top-main { position: relative; flex: 1; min-width: 0; min-height: 26px; display: flex; align-items: center; }
+.head-strips { position: absolute; top: 0; left: 0; right: 0; z-index: 30; display: flex; flex-direction: column; gap: 4px;
+  border-bottom: 1px solid transparent; border-radius: 0 0 12px 12px;
+  transition: left .32s cubic-bezier(.2, .8, .2, 1), right .32s cubic-bezier(.2, .8, .2, 1), padding .32s cubic-bezier(.2, .8, .2, 1), background-color .25s ease, border-color .32s ease, box-shadow .25s ease, opacity .25s ease, transform .25s ease, visibility .25s; }
+.head-strips .strip { padding: 4px 0; overflow: hidden; cursor: pointer; -webkit-tap-highlight-color: transparent; }
+.head-strips .strip[hidden] { display: none; }
+/* Folded in the header, a quarter shorter than the room it has, in the middle of it; opened, the screen's full width
+   (syncOpened), square, its words kept off the edges; pinned, full width already. */
+body:not(.strips-out) .head-strips:not(.opened) { left: 12.5%; right: 12.5%; }
+.head-strips.opened { border-radius: 0; padding-left: 16px; padding-right: 16px; }
+/* Folded: a thicker bar and its percentage; opened, the percentage gives way to the whole line, time left with it. */
+.head-strips .strip .bar { height: 6px; border-radius: 3px; }
+/* Folded, exactly the header line's height (4 + 18 + 4 = .top-main's 26px), so the bar sits level with the icons. */
+.head-strips .strip-line { height: 18px; line-height: 18px; }
+/* Opening swaps the percentage for the whole line by easing one narrow and out, the other wide and in: no jump. */
+.head-strips .strip-line span { overflow: hidden; transition: max-width .32s cubic-bezier(.2, .8, .2, 1), opacity .22s ease; }
+.head-strips .strip .strip-right { max-width: 0; opacity: 0; }
+.head-strips .strip.open .strip-right { max-width: 70%; opacity: 1; }
+.head-strips .strip .strip-pct { max-width: 5em; opacity: 1; }
+.head-strips .strip.open .strip-pct, .strip-pct:empty { max-width: 0; opacity: 0; }
+.head-strips .strip-line { gap: 0; }
+.head-strips .strip-line .bar { margin-right: 10px; }
+/* The details grow from nothing to their own height (rows 0fr to 1fr), not to a guessed maximum, so it eases all the way. */
+.head-strips .strip-more { display: grid; grid-template-rows: 0fr; max-height: none; opacity: 0;
+  transition: grid-template-rows .32s cubic-bezier(.2, .8, .2, 1), opacity .25s ease; }
+.head-strips .strip.open .strip-more { grid-template-rows: 1fr; max-height: none; opacity: 1; }
+.head-strips .strip-more-in { min-height: 0; overflow: hidden; }
+/* Changing place (syncPin): its own transitions wait, one animation moves it. */
+.head-strips.pinning, .head-strips.pinning * { transition: none !important; }
+/* Opened: no box of its own; the page's own background behind it, and a soft shadow under, so it reads over the page. */
+.head-strips.opened { background: var(--bg); box-shadow: 0 12px 24px rgba(0, 0, 0, .5); }
+/* Nothing going, or on Status: it eases away, and back when there is something to show (on going to another page). */
+.head-strips.empty { opacity: 0; transform: translateY(-6px); visibility: hidden; pointer-events: none; }
+/* Pinned and scrolled away from the top: along the top of the screen, the page's full width (syncPin eases it there). */
+body.strips-out .head-strips { position: fixed; top: 0; left: 0; right: 0; padding: calc(4px + env(safe-area-inset-top)) 16px 4px;
+  background: var(--bg); border-bottom-color: var(--line); border-radius: 0; }
+@media (prefers-reduced-motion: reduce) { .head-strips { transition: none; } }
+/* Folded, a bar is one line: how far along, and when it ends. Tapped, it says what is going on for a moment. */
+.strip-line { display: flex; align-items: center; gap: 10px; }
+.strip-line .bar { flex: 1; min-width: 0; margin-top: 0; }
+.strip-line span { color: var(--muted); white-space: nowrap; font-variant-numeric: tabular-nums; }
+.strip-more { max-height: 0; opacity: 0; overflow: hidden; transition: max-height .28s ease, opacity .22s ease; }
+.strip.open .strip-more { max-height: 6em; opacity: 1; }
+.strip-more .strip-head { margin-top: 5px; }
+.strip-total:empty { display: none; }
+/* Opened: two lines. What it is and which of how many; then what it is doing, and when it ends. */
+.strip-sub { display: flex; justify-content: space-between; gap: 10px; }
+.strip-sub span:first-child { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.strip-sub span:last-child { flex: none; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.wrap { padding-bottom: calc(var(--head, 130px) + var(--page-gap)); }
+.stick { transition: opacity .2s ease, transform .2s ease; }
+/* Low, to leave the page as much of the screen as it can. */
+/* Low and quiet: the page's name in small text, a short line under the one shown (placeJumpGlider). */
+.jump { position: relative; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)) 28px; gap: 0; padding: 2px 12px 5px; }
+.jump-glider { position: absolute; height: 2px; border-radius: 1px; background: var(--shared); pointer-events: none; z-index: 1;
+  transition: left .28s cubic-bezier(.3, .7, .3, 1), width .28s cubic-bezier(.3, .7, .3, 1), background-color .28s ease; }
+.jump-glider.still { transition: none; }
+.jump-glider[data-at="generate"] { background: var(--side); }
+body.on-shorts .jump-glider[data-at="output"] { background: var(--c-shorts); }
+@media (prefers-reduced-motion: reduce) { .jump-glider { transition: none; } }
+.jump-more { position: relative; display: flex; align-items: center; justify-content: center; width: 28px; min-height: 14px;
+  margin: 0; padding: 0; background: none; border: 0; color: var(--muted); }
+.jump-more svg { width: 14px; height: 14px; }
+.jump-more[aria-expanded="true"] { color: var(--text); }
+/* On a phone, the generation sections over Generate: one shown at a time, the same quiet buttons and line. */
+/* Over Add to queue, at the bottom of the screen. */
+.section-bar { position: relative; order: -2; padding: 4px 12px 5px; border-top: 1px solid var(--line); }
+.section-bar[hidden] { display: none; }
+.section-tabs { display: flex; gap: 0; }
+.section-tabs button { flex: 1 1 0; min-width: 0; min-height: 17px; margin: 0; padding: 0 4px; background: none; border: 0; color: var(--muted);
+  font-size: .64rem; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; transition: color .2s ease; }
+.section-tabs button[aria-selected="true"] { color: var(--text); }
+.section-glider { background: var(--side); }
+body.section-tabs-on #optionsCard details.section.tab-hidden { display: none; }
+/* The bar names them: a header keeps only its buttons (Shorts' Clear), and doesn't fold. */
+body.section-tabs-on #optionsCard details.section { border-top: 0; }
+body.section-tabs-on #optionsCard summary.section-title { min-height: 0; padding: 0; font-size: 0; pointer-events: none; }
+body.section-tabs-on #optionsCard summary.section-title::after { display: none; }
+body.section-tabs-on #optionsCard summary.section-title .clear-prompt { font-size: .7rem; pointer-events: auto; }
+/* How many in Finished failed, while its icon is tucked away: nothing when none did. */
+.jump-more::after { content: attr(data-count); position: absolute; top: -5px; right: -5px; min-width: 15px; height: 15px; padding: 0 3px;
+  border-radius: 8px; background: var(--err, #d9534f); color: #fff; font-size: .62rem; font-weight: 700; line-height: 15px; text-align: center; }
+.jump-more:not([data-count])::after, .jump-more[data-count=""]::after { display: none; }
+.jump a {
+  display: flex; align-items: center; justify-content: center; gap: 6px; min-height: 14px;
+  background: none; border: 0; border-radius: 4px; overflow: hidden;
+  color: var(--muted); font-size: .66rem; font-weight: 500; text-decoration: none; white-space: nowrap;
+}
+.jump a.active { background: none; color: var(--text); }
+/* Progress in the Status button (Settings): it fills from the left as the run goes, its percentage small in the corner. */
+.jump a.filling { position: relative; background: linear-gradient(to right,
+  color-mix(in srgb, var(--ok) 30%, transparent) var(--fill, 0%), transparent var(--fill, 0%)) transparent; }
+.jump a.filling.active { background-color: transparent; }
+.jump a.filling::after { content: attr(data-pct); position: absolute; right: 5px; bottom: 1px;
+  color: var(--muted); font-size: .5rem; font-weight: 600; line-height: 1; }
+/* Tap the page you're on again: the same page on the other sides, growing down out of its button. */
+.side-menu { position: absolute; z-index: 13; display: flex; flex-direction: column; gap: 4px; padding: 5px;
+  background: var(--panel); border: 1px solid var(--line); border-radius: 12px; box-shadow: 0 8px 24px rgba(0, 0, 0, .45);
+  transform-origin: top center; animation: side-menu-in .2s ease; }
+@keyframes side-menu-in { from { opacity: 0; transform: translateY(-8px) scale(.94); } to { opacity: 1; transform: none; } }
+@keyframes side-menu-out { to { opacity: 0; transform: translateY(-6px) scale(.96); } }
+.side-menu[hidden] { display: none; }
+.side-menu.closing { animation: side-menu-out .15s ease forwards; pointer-events: none; }
+.side-menu button { width: 100%; margin: 0; padding: 9px 14px; font-size: .85rem; font-weight: 600; text-align: left;
+  background: var(--panel-2); border: 1px solid var(--line); border-radius: 9px; color: var(--text); }
+.side-menu button .side-dot { display: inline-block; width: 8px; height: 8px; margin-right: 8px; border-radius: 50%; }
+@keyframes menu-in { from { opacity: 0; transform: translateY(8px) scale(.94); } to { opacity: 1; transform: none; } }
+@keyframes menu-out { to { opacity: 0; transform: translateY(6px) scale(.96); } }
+@media (prefers-reduced-motion: reduce) { .side-menu, .side-menu.closing { animation: none; } }
+.strip { padding: 0 16px 7px; font-size: .78rem; }
+.strip-head { display: flex; justify-content: space-between; gap: 10px; }
+.strip-head b { font-weight: 600; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.strip-head span { color: var(--muted); white-space: nowrap; font-variant-numeric: tabular-nums; }
+.strip .bar { height: 3px; margin-top: 4px; }
+.strip .hint { margin-top: 3px; font-size: .72rem; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+/* How far along can't be told: it says it's working, not how much is done. */
+.bar.busy > div { animation: slide 1.4s ease-in-out infinite; }
+@keyframes slide { from { margin-left: -30%; } to { margin-left: 100%; } }
+/* Work going on: a soft light passes slowly along what is done, then rests. Like the running dot, but quieter.
+   Only the live bars and the stage under way: a finished stage or the disk meter stays still. */
+#runProgressBar, #runStripBar, #comfyBar, #uploadProgressBar, #uploadStripBar, #queuePendingBar { position: relative; overflow: hidden; }
+#runProgressBar::after, #runStripBar::after, #comfyBar::after, #uploadProgressBar::after, #uploadStripBar::after, #queuePendingBar::after {
+  content: ""; position: absolute; top: 0; bottom: 0; left: 0; width: 40%; pointer-events: none;
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, .38), transparent); transform: translateX(-100%);
+  animation: bar-sheen 3.6s ease-in-out infinite; }
+@keyframes bar-sheen { 0% { transform: translateX(-100%); } 55%, 100% { transform: translateX(250%); } }
+/* The prompt being written: the same light passing along its bar. */
+.prompt-progress { overflow: clip; }
+.prompt-progress::after { content: ""; position: absolute; top: 0; bottom: 0; left: 0; width: 40%; pointer-events: none;
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, .38), transparent); transform: translateX(-100%);
+  animation: bar-sheen 3.6s ease-in-out infinite; }
+.step { position: relative; }
+.step.now::before { content: ""; position: absolute; top: -3px; left: 0; right: 0; height: 3px; pointer-events: none;
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, .5), transparent) no-repeat; background-size: 40% 100%;
+  animation: step-sheen 3.6s ease-in-out infinite; }
+@keyframes step-sheen { 0% { background-position: -70% 0; } 55%, 100% { background-position: 170% 0; } }
+@media (prefers-reduced-motion: reduce) {
+  #runProgressBar::after, #runStripBar::after, #comfyBar::after, #uploadProgressBar::after, #uploadStripBar::after,
+  #queuePendingBar::after, .step.now::before, .prompt-progress::after { animation: none; display: none; } }
+.dashboard .card { scroll-margin-top: 8px; }
+/* Brought to the top when the preview closes (revealViewedBatch): a little room above it. */
+.output-batch { scroll-margin-top: 8px; }
+/* A little room inside each batch on the sides and between them, so the highlight below never hugs the text. */
+#imageSets > .output-batch { padding: 6px 8px; }
+#imageSets > .output-batch + .output-batch { margin-top: 6px; }
+/* The batch the preview was on, lit when it closes and fading out over 4 seconds (glowViewedBatch). */
+/* Its tint is one animated amount (--glow), so the pills' "+N", which covers the pills under it with a solid
+   background, fades in step with the batch around it. */
+@property --glow { syntax: '<percentage>'; inherits: true; initial-value: 0%; }
+.output-batch.viewed-glow { border-radius: 8px; animation: viewed-glow 4s ease-out forwards;
+  background: color-mix(in srgb, var(--accent) var(--glow), transparent); }
+.output-batch.viewed-glow .pills.more:not(.open)::after { background: color-mix(in srgb, var(--accent) var(--glow), var(--panel)); }
+@keyframes viewed-glow {
+  from { --glow: 10%; box-shadow: 0 0 0 1px var(--accent), 0 0 12px color-mix(in srgb, var(--accent) 35%, transparent); }
+  to { --glow: 0%; box-shadow: 0 0 0 1px transparent, 0 0 12px transparent; }
+}
+.options-col { min-width: 0; }
+.form-actions { margin-top: 16px; }
+.form-actions[hidden] { display: none; }
+.form-actions .btns { margin-top: 0; }
+.form-actions #go { margin-top: 0; }
+/* Add to top of queue and Add to pending: quiet, either side under the button. */
+.go-under { display: flex; justify-content: space-between; align-items: center; gap: 10px; margin-top: 8px; }
+.start-later { width: auto; margin: 0; padding: 2px 8px; background: none; border: 0; color: var(--muted); font-size: .8rem; font-weight: 600; }
+/* Under the button, centred: leaving an edit puts the job back where it was. */
+/* Over everything else in the footer: what's being edited, and Cancel editing at its right. */
+.edit-row { order: -3; display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 4px 16px;
+  border-bottom: 1px solid var(--line); color: var(--muted); font-size: .72rem; }
+.edit-row[hidden] { display: none; }
+.edit-row #cancelQueueEdit { display: inline-block; margin: 0; padding: 2px 10px; font-size: .72rem; }
+#cancelQueueEdit { display: block; margin: 6px auto 0; }
+#cancelQueueEdit[hidden] { display: none; }
+body.on-shorts .not-shorts { display: none !important; }
+.log-box { margin-top: 8px; font-size: .85rem; }
+/* One line, cut with ... where it's longer: a tap shows all of it, and what it renders with (runFacts). */
+.current-work { display: block; box-sizing: border-box; width: 100%; max-width: 100%; margin: 0 0 8px; padding: 0; background: none; border: 0; border-radius: 0; color: var(--text);
+  font-size: .95rem; font-weight: 600; text-align: left; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: pointer; }
+.current-work[hidden] { display: none; }
+.current-work-wrap { position: relative; }
+.current-work-wrap .work-privacy { top: 0; right: 0; }
+.current-work-wrap .current-work { padding-right: 30px; }
+.current-work-size { margin: -5px 0 8px; color: var(--muted); font-size: .75rem; }
+/* Under the running job's title: the workflow it renders with on the left, its size on the right. */
+#currentWorkSize { display: flex; justify-content: space-between; gap: 10px; }
+#currentWorkSize[hidden] { display: none; }
+#currentWorkflow { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+#currentResolution { margin-left: auto; white-space: nowrap; font-variant-numeric: tabular-nums; }
+/* What the run renders with: a small box over the blurred page. */
+dialog.run-facts { width: min(360px, calc(100vw - 24px)); }
+.run-facts-list { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 6px 14px; margin: 0; font-size: .88rem; min-height: 0; overflow: auto; align-content: start; }
+.run-facts-list dt { color: var(--muted); }
+.run-facts-list dd { margin: 0; overflow-wrap: anywhere; }
+.run-card .btns:empty { display: none; }
+.status-head { display: flex; align-items: center; gap: 10px; }
+.status-head .section-title { margin: 0; }
+.status-head .status { margin: 0; font-size: .78rem; gap: 6px; white-space: nowrap; }
+.status-times { display: flex; gap: 8px; font-size: .78rem; white-space: nowrap; font-variant-numeric: tabular-nums; color: var(--muted); }
+.status-times[hidden] { display: none; }
+/* The status light is here, in Status's own header; the side switch at the top has none. While it runs, the
+   light says it: no empty word holding the timers away from it. */
+.status-head #statusText:empty { display: none; }
+.status-head .status + .status-times { margin-left: -4px; }
+.switch button .dot { display: none; }
+/* Status is shared by every side, so it is violet; its bars and steps take the colour of the job they show (--job,
+   set while one runs: Shorts red, Video blue, Image green). Uploads are Shorts'. */
+#runCard { --accent: var(--shared); }
+#runCard .bar > div { background: var(--job, var(--shared)); }
+/* The header's bar is Status's own violet, whichever job it shows. */
+#runStrip .bar > div { background: var(--shared); }
+#uploadBox, #uploadStrip { --job: var(--c-shorts); }
+#runCard .step.now { border-color: var(--job, var(--shared)); }
+#runCard .step.done { border-color: var(--job, var(--shared)); }
+/* The side's own colour, for the log's highlights. */
+body { --side-accent: var(--side); }
+/* The log, and Status in the bottom bar, say what kind of job it is: its colour while one runs, else the side's. */
+#runCard .log-chip[aria-pressed="true"] { color: var(--job, var(--side-accent)); border-color: var(--job, var(--side-accent)); }
+#runCard .log-seg .log-chip[aria-pressed="true"] { color: #fff; background: var(--job, var(--side-accent)); }
+#runCard .ln-more { color: var(--job, var(--side-accent)); }
+/* The log is shared too: its stage headers are the shared violet. */
+.ln.stage .x { color: var(--shared); }
+/* Status and Output belong to no one side: a soft violet that sits with the blue and the green (Output on Shorts:
+   Shorts' red). Status's button is violet always, whatever is running. */
+.side-menu button[data-output-kind="both"] { border-color: var(--shared); }
+.jump a.run.active { border-color: var(--shared); }
+body:not(.on-shorts) .jump a#jumpResults.active { border-color: var(--shared); }
+/* ComfyUI as an icon with a dot for its state; a tap shows the rest. */
+.comfy-status { position: relative; display: inline-flex; align-items: center; justify-content: center; width: 36px; height: 36px; padding: 0;
+  margin: -6px -6px -6px auto; background: none; border: 0; border-radius: 8px; color: var(--muted); cursor: pointer; }
+.comfy-status:hover, .comfy-status:focus-visible { color: var(--text); background: var(--line); }
+.comfy-status .dot { position: absolute; right: 5px; bottom: 5px; width: 9px; height: 9px; margin: 0; box-shadow: 0 0 0 2px var(--panel); }
+/* Small and quiet, centred: there when wanted, not the first thing you see. */
+.run-actions { display: flex; justify-content: center; gap: 8px; margin: 12px 0 8px; }
+.run-actions[hidden] { display: none; }
+/* The running part's foot, apart from the queue under it, in the queue box's own line: solid along the bottom and
+   round its corners, then dotted up the sides, fading out at about the top of Cancel and Stop. Two layers, so both
+   sides are drawn alike (one border, dotted and solid together, came out uneven at the corners). Drawn over, never
+   in the way: it takes no room and changes no width. */
+#runActions { position: relative; --foot-corner: 12px; }
+#runActions::before, #runActions::after { content: ""; position: absolute; left: -10px; right: -10px; top: -10px; pointer-events: none; }
+#runActions::after { bottom: -10px; border: 1px solid var(--line); border-top: 0; border-radius: 0 0 var(--foot-corner) var(--foot-corner);
+  -webkit-mask-image: linear-gradient(to top, #000 var(--foot-corner), transparent var(--foot-corner));
+  mask-image: linear-gradient(to top, #000 var(--foot-corner), transparent var(--foot-corner)); }
+#runActions::before { bottom: calc(var(--foot-corner) - 10px); border-left: 1px dotted var(--line); border-right: 1px dotted var(--line);
+  -webkit-mask-image: linear-gradient(to top, #000 15%, transparent); mask-image: linear-gradient(to top, #000 15%, transparent); }
+.run-actions button { flex: none; width: auto; min-width: 84px; margin: 0; padding: 6px 16px; font-size: .82rem; font-weight: 600;
+  background: transparent; border: 1px solid var(--line); border-radius: 999px; color: var(--muted); }
+.run-actions button[hidden] { display: none; }
+@media (max-width: 1279px) {
+  .run-actions { position: relative; min-height: 36px; align-items: center; }
+  .run-actions:not(:has(#skip:not([hidden]))) { display: none; }
+  #finishedCount { font-size: .75rem; }
+  /* In the header, Finished and the log are icons as the key and the gear are: the same quiet grey, no box of their own.
+     Finished only while there is something in it. */
+  .top-icons .panel-icon { width: auto; height: auto; padding: 0; gap: 3px; color: var(--muted); opacity: .7; border-radius: 0; }
+  .top-icons .panel-icon svg { width: 18px; height: 18px; }
+  .top-icons .panel-icon:hover:not(:disabled), .top-icons .panel-icon:focus-visible { opacity: 1; color: var(--text); background: none; }
+  .top-icons #finishedToggle.empty { display: none; }
+  .top-icons #finishedToggle.failed, .top-icons #finishedToggle.failed:hover { color: var(--err); opacity: 1; }
+}
+.run-actions #stop { color: var(--err); border-color: color-mix(in srgb, var(--err) 45%, transparent); }
+.card > .section-title:first-child { margin-top: 0; }
+/* Each heading folds what's under it away. */
+summary.section-title { min-width: 0; overflow-wrap: anywhere; list-style: none; display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 4px 0; user-select: none; }
+summary.section-title::-webkit-details-marker { display: none; }
+summary.section-title .clear-prompt[hidden] { display: none; }
+summary.section-title .clear-prompt { width: auto; margin: 0 0 0 auto; padding: 3px 8px; border: 1px solid var(--line); background: transparent;
+  color: var(--muted); font-size: .7rem; font-weight: 600; text-transform: none; letter-spacing: normal; }
+summary.section-title::after { content: "\203A"; font-size: 1.2rem; line-height: 1; color: var(--muted); transform: rotate(90deg); transition: transform .15s; }
+details.section:not([open]) > summary.section-title::after { transform: none; }
+details.section:not([open]) { padding-bottom: 4px; }
+/* The run and the upload in Status: how far along, in full. */
+.progress { margin: 4px 0 12px; font-size: .85rem; }
+.progress .bar { height: 8px; margin-top: 6px; }
+.progress .strip-head { flex-wrap: wrap; gap: 2px 10px; }
+.progress .strip-head span { white-space: normal; }
+.progress .hint { margin-top: 4px; }
+#uploadBox .progress { margin-bottom: 8px; }
+/* On Generate, the button and its estimate stay at the bottom. */
+.go-bar { order: -1; display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; padding: 6px 16px 2px; }
+.go-bar { max-height: 240px; opacity: 1; overflow: hidden; transition: max-height .28s ease, opacity .22s ease, padding .28s ease; }
+.go-bar[hidden] { display: flex; max-height: 0; opacity: 0; padding-top: 0; padding-bottom: 0; pointer-events: none; }
+@media (max-width: 999px) {
+  /* The footer is drawn whole at once, so what sizes itself to it (Generate's box) does so once, not as it grows. */
+  .go-bar { transition: none; }
+  /* Every page as far from the header and the footer (--page-gap): no switch row over Generate's box (it has no
+     switch on a phone), no card's own margin under the last one. */
+  .generation-header { display: none; }
+  .dashboard > [data-page], .dashboard > [data-page] > .card:last-child { margin-bottom: 0; }
+}
+.go-bar > .hint { flex-basis: 100%; margin: 0; max-height: 4em; overflow: auto; }
+/* Small, quick movements as you get around: pages slide up into place, and what's chosen fades across. */
+.jump a, .switch button, .tabs button { transition: background-color .2s ease, color .2s ease, border-color .2s ease, box-shadow .2s ease; }
+.jump a:active { transform: scale(.97); }
+@keyframes page-in { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+@media (prefers-reduced-motion: reduce) {
+  .head-strips .strip, .strip-more, .go-bar, .jump a, .switch button, .tabs button { transition: none; }
+  .dashboard > [data-page] { animation: none !important; }
+}
+/* Phones: one section at a time, chosen in the footer. */
+@media (max-width: 999px) {
+  .dashboard > [data-page] { display: none; }
+  body[data-page="status"] .dashboard > [data-page="status"], body[data-page="generate"] .dashboard > [data-page="generate"],
+  body[data-page="quota"] .dashboard > [data-page="quota"], body[data-page="output"] .dashboard > [data-page="output"] {
+    display: block; animation: page-in .24s ease-out;
+  }
+  /* Swiped to another page (showPage): it comes in as Settings says, from the side it was swiped from (--page-dir, 1
+     from the right), over --page-time; a tap or a reload, as page-in above. Nothing is wider than the screen meanwhile,
+     and with swiping on, the page only scrolls up and down, leaving a sideways swipe to the panel. */
+  body { overflow-x: clip; }
+  body.page-swipe { touch-action: pan-y pinch-zoom; }
+  body.page-turn .dashboard > [data-page] { animation-duration: var(--page-time, .3s); animation-timing-function: cubic-bezier(.25, .8, .3, 1); }
+  body.page-turn[data-page-anim="slide"] .dashboard > [data-page] { animation-name: page-slide; }
+  body.page-turn[data-page-anim="push"] .dashboard > [data-page] { animation-name: page-push; }
+  body.page-turn[data-page-anim="fade"] .dashboard > [data-page] { animation-name: page-fade; }
+  body.page-turn[data-page-anim="zoom"] .dashboard > [data-page] { animation-name: page-zoom; }
+  body.page-turn[data-page-anim="flip"] .dashboard > [data-page] { animation-name: page-flip; transform-origin: calc(50% - var(--page-dir, 1) * 50%) 50%; }
+  body.page-turn[data-page-anim="off"] .dashboard > [data-page] { animation: none; }
+}
+@keyframes page-slide { from { transform: translateX(calc(var(--page-dir, 1) * 100%)); } to { transform: none; } }
+@keyframes page-push { from { opacity: 0; transform: translateX(calc(var(--page-dir, 1) * 28%)); } to { opacity: 1; transform: none; } }
+@keyframes page-fade { from { opacity: 0; } to { opacity: 1; } }
+@keyframes page-zoom { from { opacity: 0; transform: scale(.92); } to { opacity: 1; transform: none; } }
+@keyframes page-flip { from { opacity: 0; transform: perspective(900px) rotateY(calc(var(--page-dir, 1) * -65deg)); } to { opacity: 1; transform: none; } }
+.page-animation-row { display: flex; gap: 8px; }
+.page-animation-row select { flex: 1; min-width: 0; }
+.go-eta { flex: 1; min-width: 0; font-size: .8rem; color: var(--muted); }
+/* Why it wasn't added, beside the button you pressed: the form's own message may be off the screen. */
+.go-error { flex: 1; min-width: 0; font-size: .78rem; line-height: 1.3; color: var(--err); overflow-wrap: anywhere; }
+.go-error:not([hidden]) + .go-eta { display: none; }
+.go-eta b { display: block; color: var(--text); }
+.go-eta.with-count { display: flex; align-items: stretch; gap: 7px; }
+/* No box: the icon over the number, both from the left, 4px out of the bar's 16px edge to the 12px of the buttons
+   under it, so the count starts where Status does. */
+.go-count { flex: none; display: inline-flex; flex-direction: column; align-items: flex-start; justify-content: center; gap: 2px; margin-left: -4px;
+  color: var(--text); font-size: .72rem; font-weight: 600; line-height: 1; font-variant-numeric: tabular-nums; }
+.go-count svg { width: 13px; height: 13px; color: var(--muted); }
+.go-count.one-digit { align-items: center; }  /* One digit sits centred under the image; two or more start at the edge */
+.go-eta-lines { min-width: 0; }
+.go-bar button { width: auto; flex: none; margin: 0; padding: 5px 12px; font-size: .85rem; }
+/* Add to top of queue and Add to pending, as symbols beside the main button; they go as the form's own do. */
+.go-bar #goStick { width: 9.5em; white-space: nowrap; text-align: center; }
+.go-bar .go-icon { display: inline-flex; align-items: center; justify-content: center; padding: 5px; background: var(--panel-2); border: 1px solid var(--line); color: var(--muted); }
+.go-bar .go-icon[hidden] { display: none; }
+.go-bar .go-icon:hover, .go-bar .go-icon:focus-visible { color: var(--text); }
+.go-bar .go-icon:disabled { opacity: .5; }
+/* Desktop: options (two columns), the run, queue, log and
+   quota cards and, from 1280px, the portrait videos on the far right, all on one
+   screen. Narrower desktops put the videos underneath. Phones keep one column. */
+@media (min-width: 1000px) {
+  .stick { display: flex; }
+  .jump { display: none; }
+  .go-bar { padding: 8px 20px; }
+  .go-count { margin-left: 0; }  /* No buttons under it to line up with */
+  .wrap { padding-bottom: calc(var(--head, 60px) + 20px); }
+  /* Status stays in sight above the rest, half what's running and half its log. */
+  .run-card {
+    grid-column: 1 / -1; position: sticky; top: 0; z-index: 5; max-height: 50vh; overflow: auto;
+    display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); grid-template-rows: auto auto auto auto 1fr; gap: 0 24px;
+  }
+  .run-status > .status-head { grid-column: 1 / -1; grid-row: 1; margin-bottom: 8px; }
+  .run-status > .status-main { grid-column: 1; grid-row: 2; }
+  .run-tabs > .status-queue { grid-column: 1; grid-row: 3; }
+  .run-tabs > .status-toggles { grid-column: 1; grid-row: 4; }
+  .run-tabs > .status-foot { grid-column: 1; grid-row: 5; }
+  .run-tabs > .log-box { grid-column: 2; grid-row: 2 / 6; position: relative; min-height: 240px; margin-top: 0; }
+  #logToggle, #quotaToggle { visibility: hidden; }
+  .run-actions { margin-bottom: 0; }
+  /* Always open here, and as tall as what's beside it: it scrolls rather than stretching the card. */
+  .log-panes { position: absolute; inset: 0; display: flex; flex-direction: column; }
+  .log-panes .q-group:first-child { margin-top: 0; }
+  .log-panes .log { flex: 2 1 0; min-height: 0; max-height: none; }
+  .log-panes #uploadLog { flex-grow: 1; }
+  .options-col > .card { margin-bottom: 0; }
+  /* However far down the options go, Generate stays in reach. */
+  .form-actions {
+    grid-column: 1 / -1; position: sticky; bottom: -16px; z-index: 4;
+    margin: 12px -16px -16px; padding: 12px 16px 16px;
+    background: var(--panel); border-top: 1px solid var(--line); border-radius: 0 0 14px 14px;
+  }
+  .form-actions #formNote, .form-actions .err { margin-top: 8px; }
+  #formVideo, #formImage { display: block; }
+  .wrap { max-width: 1880px; padding: 14px 20px calc(var(--head, 60px) + 20px); }
+  .dashboard {
+    display: grid;
+    grid-template-columns: minmax(0, 1.5fr) minmax(340px, 1fr);
+    align-items: start;
+    gap: 16px;
+  }
+  .dashboard > .card { margin-bottom: 0; min-width: 0; }
+  .side { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+  .side > .card { margin-bottom: 0; }
+  .videos-card { grid-column: 1 / -1; }
+  .vid { flex-basis: 260px; }
+  .pipeline-form { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 22px; }
+  .pipeline-form input:not([type=checkbox]):not([type=file]), .pipeline-form select { padding: 9px 11px; font-size: .95rem; }
+  .pipeline-form label { margin: 9px 0 4px; }
+  .pipeline-form .section { margin-top: 12px; }
+  .pipeline-form .section-title { margin-top: 10px; }
+}
+@media (min-width: 1280px) {
+  .wrap { height: 100vh; display: flex; flex-direction: column; }
+  .dashboard {
+    flex: 1;
+    min-height: 540px;
+    grid-template-columns: minmax(500px, 1.7fr) minmax(280px, .7fr) minmax(300px, .9fr);
+    grid-template-rows: auto minmax(0, 1fr);
+    align-items: stretch;
+  }
+  .dashboard > .card { overflow: auto; }
+  .side, .options-col { overflow: auto; min-height: 0; }
+  .run-card { position: static; max-height: 45vh; }
+  body.on-video .vid video { flex: none; }
+  .side > .card { flex: none; }
+  .videos-card { grid-column: auto; display: flex; flex-direction: column; overflow: hidden !important; }
+  .carousel { flex: 1; min-height: 0; }
+  #imageSets { flex: 1; min-height: 0; overflow: auto; }
+  .vid { flex-basis: 100%; }
+  .vid video { flex: 1 1 0; min-height: 0; aspect-ratio: auto; max-height: none; }
+  /* One screen, no scrolling: Status with Queue/Log/Finished/Quota under it | Generate | Output. */
+  .dashboard { grid-template-columns: minmax(340px, .95fr) minmax(440px, 1.35fr) minmax(280px, .85fr); grid-template-rows: auto minmax(0, 1fr); min-height: 0; align-items: stretch; }
+  .run-card { display: contents; }
+  .run-status, .run-tabs { display: flex; flex-direction: column; min-width: 0; min-height: 0; padding: 14px 16px; background: var(--panel); border: 1px solid var(--line); border-radius: 14px; }
+  .run-status { grid-column: 1; grid-row: 1; max-height: 42vh; overflow: auto; }
+  .run-tabs { grid-column: 1; grid-row: 2; overflow: hidden; }
+  .run-status > .status-main { display: block; }
+  .dashboard > .options-col { grid-column: 2; grid-row: 1 / 3; height: 100%; }
+  .dashboard > .videos-card { grid-column: 3; grid-row: 1 / 3; height: 100%; }
+  .run-tabs .status-toggle::after { content: none; }
+  .side { display: none; }
+  .run-tabs > .status-queue, .run-tabs > .log-box, .run-tabs > .status-foot, .run-tabs > .run-quota { display: none; flex: 1 1 0; min-height: 0; overflow: auto; margin-top: 8px; order: 2; }
+  body[data-runtab="queue"] .run-tabs > .status-queue, body[data-runtab="log"] .run-tabs > .log-box,
+  body[data-runtab="finished"] .run-tabs > .status-foot, body[data-runtab="quota"] .run-tabs > .run-quota { display: block; }
+  .run-tabs > .status-queue:has(> :not([hidden])) { margin: 8px 0 0; padding: 2px 10px 10px; }
+  .run-tabs > .log-box { position: relative; }
+  .run-tabs > .status-queue::after { content: "Nothing queued."; display: block; padding: 10px 2px; color: var(--muted); font-size: .85rem; }
+  .run-tabs > .status-queue:has(> :not([hidden]))::after { content: none; }
+  #finished[hidden] { display: block; }
+  #runQuota .card { margin: 0; padding: 0; background: none; border: 0; box-shadow: none; }
+  #runQuota .section-title { display: none; }
+  .run-tabs > .status-toggles { order: 1; flex: none; display: flex; gap: 4px; margin-top: 0; padding: 3px; background: var(--bg); border: 1px solid var(--line); border-radius: 10px; }
+  .run-tabs > .status-toggles .status-toggle { flex: 1 1 0; justify-self: auto; padding: 6px 4px; border-radius: 8px; visibility: visible; text-align: center; }
+  .run-tabs > .status-toggles .status-toggle.on { background: var(--panel-2); color: var(--text); }
+  .run-tabs > .status-toggles #queueToggle { display: block; }
+  .run-status .run-actions { margin-top: 8px; }
+  .run-status .status { margin: 0; }
+}
+.top-icons a#privateToggle:not(.on), #keepSectionsOpen { color: var(--muted); opacity: .65; }
+.wrap { max-width: none; padding-left: 8px; padding-right: 8px; }
+@media (min-width: 1000px) { .dashboard { gap: 10px; } }
+#keepSectionsOpen { flex: none; display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; margin: 0; padding: 5px; background: none; border: 0; }
+#keepSectionsOpen[aria-pressed="true"] { color: var(--side); opacity: 1; }
+.go-bar:has(#cancelQueueEdit:not([hidden])) #goStick { order: 2; }
+#optionsCard { display: flex; flex-direction: column; min-height: 0; height: calc(100dvh - var(--head, 60px) - var(--generate-top, 36px) - var(--page-gap)); overflow: hidden; }
+.generation-header { flex: none; flex-direction: row; justify-content: space-between; margin-bottom: 6px; }
+.generation-header .generate-switch { flex: 1; }
+#optionsCard > .pipeline-form { display: flex; flex-direction: column; flex: 1; min-height: 0; margin: 0; padding: 8px 12px 0; overflow: hidden; }
+#formShorts > .form-col { display: contents; }
+/* A quiet line under the model and preset part, between it and the sections. */
+#optionsCard .workflow-in { flex: none; margin: 0 0 6px; padding-bottom: 8px; border-bottom: 1px solid color-mix(in srgb, var(--line) 60%, transparent); }
+#optionsCard details.section { position: relative; flex: none; margin: 0; padding: 0; border-top: 1px solid var(--line); overflow: hidden; }
+#optionsCard details.section[open], #optionsCard details.section.section-closing { flex: 1 1 0; min-height: 0; display: flex; flex-direction: column; }
+#optionsCard details.section::details-content { display: contents; }
+#optionsCard summary.section-title { flex: none; min-height: 34px; margin: 0; padding: 6px 0; cursor: pointer; }
+.section-body { flex: 1 1 0; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 0 2px 8px; }
+details:not([open]) > .section-body { display: none; }
+#optionsCard details.section.section-closing > .section-body { display: block; }
+/* What scrolls past the top or the bottom of a section fades out there: the content itself, not a band over it. */
+#optionsCard details.section > .section-body {
+  -webkit-mask-image: linear-gradient(to bottom, transparent 0, #000 var(--fade-top, 0px), #000 calc(100% - var(--fade-bottom, 0px)), transparent 100%);
+  mask-image: linear-gradient(to bottom, transparent 0, #000 var(--fade-top, 0px), #000 calc(100% - var(--fade-bottom, 0px)), transparent 100%); }
+#optionsCard details.section.scroll-above > .section-body { --fade-top: 24px; }
+#optionsCard details.section.scroll-below > .section-body { --fade-bottom: 28px; }
+#optionsCard .pipeline-form select, #optionsCard .pipeline-form input:not([type=checkbox]):not([type=range]):not([type=file]) { height: 28px; padding: 3px 6px; font-size: .75rem; border-radius: 7px; }
+#optionsCard .pipeline-form label { margin: 7px 0 3px; font-size: .7rem; }
+#optionsCard .pipeline-form .check { align-items: center; font-size: .78rem; }
+#optionsCard .pipeline-form .check input[type=checkbox] { width: 16px; height: 16px; margin: 0; }
+#optionsCard .count-stepper button, #optionsCard .seed-line button { height: 28px; width: 28px; min-width: 28px; padding: 2px 7px; font-size: .8rem; }
+#optionsCard .count-stepper input, #optionsCard .count-stepper .mp-field { height: 28px; padding: 3px 6px; font-size: .75rem; }
+#optionsCard .option-row > label, #optionsCard .lora-line .check { margin: 0; }
+#optionsCard .option-row > label, #optionsCard .option-line > .option-sub { flex: 0 0 6.5rem; }
+#optionsCard .option-row > select { flex: 1; min-width: 0; max-width: 13rem; }
+#optionsCard .lora-line { display: flex; flex-wrap: nowrap; gap: 6px; align-items: center; margin-top: 6px; }
+#optionsCard .lora-line select { flex: 1; min-width: 0; width: 0; margin: 0; }
+#optionsCard .lora-line .option-strength { flex: 0 0 4.5em; width: 4.5em; margin: 0; }
+/* The strength worth using for the LoRA chosen (core/lora_hints.py); the first line keeps the trash's room, so the
+   strengths line up under each other. */
+#optionsCard .lora-line .lora-range { flex: 0 0 3.4em; display: flex; flex-direction: column; justify-content: center; gap: 1px;
+  font-size: .62rem; line-height: 1.1; color: var(--muted); white-space: nowrap; font-variant-numeric: tabular-nums; }
+#optionsCard .lora-line .lora-range-main { color: var(--text); }
+#optionsCard .lora-line .lora-range-other { font-size: .56rem; opacity: .8; }
+#optionsCard .lora-line .lora-gap { flex: none; width: 28px; }
+/* Off, its LoRA and strength are greyed: they do nothing. So too what a LoRA comparison sets in their place. */
+#optionsCard .lora-line:has(> .check input[type=checkbox]:not(:checked)) :is(select, .option-strength, .lora-range) { opacity: .45; }
+body.on-image:has(#imageLoraStyleTest:checked) #imageOptionsBox .lora-line:not(.lora-extra) select,
+body.on-image:has(#imageLoraStrengthTest:checked) #imageOptionsBox .lora-line:not(.lora-extra) :is(.option-strength, .lora-range),
+body.on-video:has(#videoLoraStyleTest:checked) #videoOptionsBox .lora-line:not(.lora-extra) select,
+body.on-video:has(#videoLoraStrengthTest:checked) #videoOptionsBox .lora-line:not(.lora-extra) :is(.option-strength, .lora-range) { opacity: .45; }
+#optionsCard .lora-line .icon-btn, #optionsCard [data-add-lora] { flex: none; width: 28px; min-width: 28px; padding: 3px; margin: 4px 0; }
+/* The + to add one, centred under the ticks of the lines above it (16px wide). */
+#optionsCard [data-add-lora] { display: block; width: 22px; min-width: 22px; height: 22px; margin: 6px 0 2px -3px; padding: 0; line-height: 1; }
+.audio-line { display: flex; align-items: center; gap: 8px; margin-top: 6px; }
+#optionsCard .audio-line .field-heading, #optionsCard .audio-line label { margin: 0; }
+.audio-line select { flex: 1; min-width: 0; }
+#queueBox { display: flex; flex-direction: column; overflow: hidden; min-height: 0; max-height: 60dvh; }
+/* As tall as what's in it, up to its most (60dvh): a section of one or two waits isn't stretched to fill it. */
+#queueBox > .queue { flex: none; min-height: 0; margin-top: 4px; padding-top: 0; }
+#queueBox > .queue.queue-open, #queueBox > .queue.queue-closing { display: flex; flex-direction: column; flex: 0 1 auto; min-height: 0; overflow: hidden; }
+#queueBox .stopped-fold[open], #queueBox .queue-closing > .stopped-fold { display: flex; flex-direction: column; flex: 0 1 auto; min-height: 0; overflow: hidden; }
+#queueBox .stopped-fold::details-content { display: contents; }
+#queueBox .stopped-fold:not([open]) > .stopped-body { display: none; }
+#queueBox .queue-closing .stopped-fold:not([open]) > .stopped-body, #queueBox .queue-closing > .queue-list[hidden] { display: block; }
+#queueBox .queue-head, #queueBox summary, #queueBox .queue-foot { flex: none; }
+#queueBox .queue-list, #queueBox .stopped-body { flex: 0 1 auto; min-height: 0; max-height: none; overflow-y: auto; overscroll-behavior: auto; }
+@media (max-width: 999px) {
+  .dashboard > #optionsCard { display: none; }
+  body[data-page="generate"] .dashboard > #optionsCard { display: flex; }
+}
+@media (min-width: 1280px) {
+  body[data-runtab="queue"] .run-tabs > #queueBox { display: flex; max-height: none; }
+}
+@media (prefers-reduced-motion: reduce) { .connection-notice, .connection-notice[hidden] { transition: none; } }
+/* Any other box that scrolls up and down (scroll-fade.js): what goes past its top or bottom fades out there, as
+   Generate's sections do. */
+.scroll-fade {
+  -webkit-mask-image: linear-gradient(to bottom, transparent 0, #000 var(--fade-top, 0px), #000 calc(100% - var(--fade-bottom, 0px)), transparent 100%);
+  mask-image: linear-gradient(to bottom, transparent 0, #000 var(--fade-top, 0px), #000 calc(100% - var(--fade-bottom, 0px)), transparent 100%); }
+.scroll-fade.fade-above { --fade-top: 20px; }
+.scroll-fade.fade-below { --fade-bottom: 24px; }

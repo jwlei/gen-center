@@ -654,6 +654,9 @@ function fitChat() {
   box.style.top = `${Math.round(view.offsetTop)}px`;
   box.style.height = `${Math.round(view.height)}px`;
 }
+// The first time the chat opens on this page, it starts a new, blank chat: the last one is kept under Sessions. Opened
+// again on the same page, it is where you left it. (An empty chat is used as it is, not another made.)
+let chatFresh = true;
 async function openChat() {
   if (typeof closePanel === 'function') closePanel();
   chatNoteError = false;
@@ -666,7 +669,12 @@ async function openChat() {
   chatSyncTimer = setInterval(syncChat, 1000);
   syncChat();
   try {
-    const data = await loadChat();
+    let data = null;
+    if (chatFresh && !chatReply) {
+      // Refused while a reply is still being written (from another tab): that chat opens as it is instead.
+      try { data = await chatRequest('/api/chat/new', { method: 'POST' }); chatFresh = false; } catch (e) { data = null; }
+    }
+    if (!data) data = await loadChat();
     await fillChatModels(data.model);
   } catch (e) { showChatError(e.message); }
   syncChat();

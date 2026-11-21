@@ -1,62 +1,48 @@
 """
-What sets each image model apart: how big it can make an image well, and how many prompts an LLM can
-write for it in one reply. core/saved_workflows.py says which model a workflow runs.
-
-    Fibo 2.0 (Bria), edit turbo: trained at about 1 megapixel, every size within 10% of it. Above that
-        the coordinates it was trained on run out from the top left corner, so the prompt leaks into
-        that corner and it stops following it. Its prompts are long JSON captions, written in fibo2_prompt.py.
-    Krea-2 Turbo: makes 1K to 2K images, up to 2048x2048, in 8 steps.
-    MiniMax H3 Image: one checkpoint that makes and edits images, in 6 steps without CFG. Works from about 4 to
-        20 megapixels, best at about 16 (where the form starts), and poorly below 4. Its prompt enhancer, a small
-        LLM in the workflow, rewrites the prompt into a long caption first.
-    MOSS Image: 0.25 to 4.2 megapixels here, starting at 2. Qwen-Image-Edit 2511: up to 2560x2560, starting at 1024x1024.
-    Qwen-Image 2.1 Turbo: native 2K, but on this 12 GB card less. Kokon measured what fits: about 12,600 of the
-        model's tokens (16 x 16 pixels each) on 12 GB, about 3.2 megapixels, which an edit shares between the image
-        it makes and the one it's shown at the same size. So 3.2 to make one, half that to edit one.
-
-Sources: the notes in ComfyUI's Fibo 2.0, Krea-2 and Qwen-Image 2.1 templates, its TextEncodeFibo2 node, the
-model cards at huggingface.co/briaai/Fibo-2.0-edit-turbo and huggingface.co/Comfy-Org/Krea-2, and Kokon's planner
-(token_budget in github.com/GabrieleLozupone/kokon, crates/qls-core/src/planner.rs).
+What sets each image model apart: how big it can make an image well, how many prompts an LLM can write for it in one
+reply, what it calls its images. Each model's own figures, and where they come from, are in its family's file in
+core/models/ (krea2.py, qwen_image.py...); these are the tables made from them that the image side reads.
+core/saved_workflows.py says which model a workflow runs.
 """
+from core.models import IMAGE_MODELS
 from pipelines.image.media import PIXELS_PER_MEGAPIXEL
 
 FIBO2, KREA2, MOSS_IMAGE, QWEN_IMAGE_EDIT = "fibo2", "krea2", "moss_image", "qwen_image_edit"
 QWEN_IMAGE_21, QWEN_IMAGE_21_EDIT = "qwen_image_21", "qwen_image_21_edit"
 MINIMAX_H3_IMAGE, MINIMAX_H3_IMAGE_EDIT = "minimax_h3_image", "minimax_h3_image_edit"
-LABELS = {FIBO2: "Fibo 2.0", KREA2: "Krea-2", MOSS_IMAGE: "MOSS Image", QWEN_IMAGE_EDIT: "Qwen-Image-Edit", QWEN_IMAGE_21: "Qwen-Image 2.1",
-          QWEN_IMAGE_21_EDIT: "Qwen-Image 2.1 (edit)", MINIMAX_H3_IMAGE: "MiniMax H3 Image", MINIMAX_H3_IMAGE_EDIT: "MiniMax H3 Image (edit)"}
+
+
+def _each(field):
+    """{model: its value of field}, for the models that have one."""
+    return {model: getattr(entry, field) for model, entry in IMAGE_MODELS.items() if getattr(entry, field)}
+
+
+LABELS = _each("label")
 # One model, as the Model picker lists it: its edit workflows are the same model as its text ones.
-FAMILIES = {MINIMAX_H3_IMAGE_EDIT: MINIMAX_H3_IMAGE, QWEN_IMAGE_21_EDIT: QWEN_IMAGE_21}
+FAMILIES = _each("same_as")
 # The most megapixels each makes (before any upscale; a preset size above it is made at its shape within it). A model
-# left out takes what the form offers. Qwen-Image-Edit's is 2560x2560, MOSS Image's 4.2 (about 2K x 2K), MiniMax H3 Image's 20.
-MOST_MEGAPIXELS = {FIBO2: 1.1, KREA2: 4.2, MOSS_IMAGE: 4.2, QWEN_IMAGE_EDIT: 2560 * 2560 / PIXELS_PER_MEGAPIXEL, QWEN_IMAGE_21: 3.2,
-                   QWEN_IMAGE_21_EDIT: 1.6, MINIMAX_H3_IMAGE: 20, MINIMAX_H3_IMAGE_EDIT: 20}
-# Where the form starts for each, when it has no size of its own to start from.
-DEFAULT_MEGAPIXELS = {MOSS_IMAGE: 2, QWEN_IMAGE_EDIT: 1, MINIMAX_H3_IMAGE: 16, MINIMAX_H3_IMAGE_EDIT: 16}
-# Below which the form starts at the default instead: MiniMax H3 Image does poorly under 4 MP (its template's note).
-LEAST_MEGAPIXELS = {MINIMAX_H3_IMAGE: 4, MINIMAX_H3_IMAGE_EDIT: 4}
-# One reply can only hold so many of Fibo 2.0's captions, each a few hundred words of JSON.
-MOST_WRITTEN = {FIBO2: 30}
-# How many images it takes at most, where that's fewer than its workflow has room for. Qwen-Image 2.1 shows the model
-# every image it's given beside the one it makes, so on 12 GB each one more leaves less for the rest.
-MOST_IMAGES = {QWEN_IMAGE_21_EDIT: 4}
-# The model's tokens a job has room for on this card, image made and images shown together, in megapixels (Kokon's
-# token_budget for 12 GB). References are shrunk to share what's left: see reference_sizes().
-TOKEN_BUDGET = {QWEN_IMAGE_21: 3.2, QWEN_IMAGE_21_EDIT: 3.2}
-# What it calls the images it's given, in a prompt. Qwen-Image 2.1's encoder labels them <image1>, <image2>...; MiniMax
-# H3 Image's prompt enhancer <Picture 1>, <Picture 2>...
-IMAGE_NAMES = {QWEN_IMAGE_21_EDIT: "<image{}>", QWEN_IMAGE_EDIT: "Picture {}", MINIMAX_H3_IMAGE_EDIT: "<Picture {}>"}
+# left out takes what the form offers.
+MOST_MEGAPIXELS = _each("most_megapixels")
+# Where the form starts for each, when it has no size of its own to start from; below which it starts there instead.
+DEFAULT_MEGAPIXELS = _each("default_megapixels")
+LEAST_MEGAPIXELS = _each("least_megapixels")
+# How many prompts one reply can hold, where they are long.
+MOST_WRITTEN = _each("most_written")
+# How many images it takes at most, where that's fewer than its workflow has room for.
+MOST_IMAGES = _each("most_images")
+# The model's tokens a job has room for on this card, image made and images shown together, in megapixels. References
+# are shrunk to share what's left: see reference_sizes().
+TOKEN_BUDGET = _each("token_budget")
+# What it calls the images it's given, in a prompt.
+IMAGE_NAMES = _each("image_name")
 # Models that can make a new picture from images used as references, rather than edit image 1, by the workflow option
-# that gives it a size of its own: on Qwen-Image 2.1's template, Custom size.
-COMPOSE_SWITCH = {QWEN_IMAGE_21_EDIT: "face_custom_size"}
-# A new picture from references has the references beside it: about one 1 MP reference's room less.
-MOST_MEGAPIXELS_COMPOSE = {QWEN_IMAGE_21_EDIT: 2.2}
+# that gives it a size of its own; and the most megapixels they make so.
+COMPOSE_SWITCH = _each("compose_switch")
+MOST_MEGAPIXELS_COMPOSE = _each("most_megapixels_compose")
 # Models that can work on part of an image: one marked in a colour on a second image it's shown (see regions.py).
-REGION_EDITS = (QWEN_IMAGE_21_EDIT,)
-# Models that make an image with a transparent background when the prompt says so, and how to say it (ComfyUI's
-# Qwen-Image 2.1 template).
-TRANSPARENT = {QWEN_IMAGE_21: "This is an RGBA format image with transparency. {} The image has an alpha channel and a transparent background.",
-               QWEN_IMAGE_21_EDIT: "This is an RGBA format image with transparency. {} The image has an alpha channel and a transparent background."}
+REGION_EDITS = tuple(_each("regions"))
+# Models that make an image with a transparent background when the prompt says so, and how to say it.
+TRANSPARENT = _each("transparent")
 # Standard reference detail: images shown to the model besides the one it edits, at about a megapixel each.
 REFERENCE_MEGAPIXELS = 1.0
 

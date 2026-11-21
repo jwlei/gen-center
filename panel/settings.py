@@ -5,6 +5,7 @@ import math
 import os
 import re
 import threading
+from typing import Callable, NamedTuple
 
 from core.paths import LOGS_DIR, PROJECT_ROOT
 
@@ -257,22 +258,26 @@ THEMES = {
     "ember": ("Ember", "#1a100d", "#281b16", "#38271f", "#513c30", "#f4e8db", "#c3a99a", "#b45c2f"),
     "slate": ("Slate", "#111518", "#1b2227", "#273137", "#3b4a51", "#e3ecec", "#a3b5b7", "#387f86"),
 }
-# local_llm_model writes the prompts when the local model is chosen; h3_model is OpenH3-IR's, which reviews and
-# renders them. Apart, so one can be the vision model and the other the text one.
 # Free RAM ComfyUI keeps, in GB: 3 unless set (0, from before, meant ComfyUI's own, which had no floor).
 DEFAULT_RESERVE_GB = 3
-DEFAULTS = {"low_priority": False, "reserve_ram_gb": DEFAULT_RESERVE_GB, "h3_model": H3_MODELS[0], "local_llm_model": H3_MODELS[0],
-            "default_workflow": {side: "" for side in SIDES}, "title_source": "off", "pin_progress": False,
-            "top_progress": True, "status_progress": False, "theme": "standard", "theme_boxes": True,
-            "page_swipe": True, "page_animation": "push", "page_speed": "normal"}
 # A phone's swipe from one page to the next (Status, Generate, Output): on or off, how the page comes in, how quickly.
 PAGE_ANIMATIONS = ("slide", "push", "fade", "zoom", "flip", "off")
 PAGE_SPEEDS = ("slow", "normal", "fast")
-_lock = threading.Lock()
+# Which strength range a style LoRA is held to when it's chosen, and a strength test runs over (core/lora_hints.py): its
+# author's, else the one this panel's comparisons kept; or the other way round.
+LORA_RANGES = ("author", "tested")
+# What choosing another workflow does to its settings: its default preset (its own, else its model family's, else as
+# saved in ComfyUI), or as they were last left in this browser.
+WORKFLOW_SWITCHES = ("default", "last")
 # GPU heat guard (panel/gpu_guard.py): MSI Afterburner restarted above gpu_restart_above C, with profile gpu_profile,
 # and again only once the GPU has cooled to gpu_rearm_at C.
 GPU_GUARD_DEFAULTS = {"gpu_guard": True, "gpu_restart_above": 78, "gpu_rearm_at": 75, "gpu_profile": 3}
 GPU_LOWEST_C, GPU_HIGHEST_C = 40, 95
+# A default size per model family and mode (the pin beside Resolution): {side: {"krea2|text": {field: value}}}.
+SIZE_SIDES = ("image", "video")
+SIZE_FIELDS = ("aspect", "megapixels", "size", "preset")
+MOST_SIZES = 200
+_lock = threading.Lock()
 
 
 def _names(value):
@@ -287,15 +292,6 @@ def _whole(value, low, high):
     except (TypeError, ValueError):
         return None
     return int(number) if number == int(number) and low <= number <= high else None
-
-
-def _gpu_guard(saved):
-    above = _whole(saved.get("gpu_restart_above"), GPU_LOWEST_C, GPU_HIGHEST_C) or GPU_GUARD_DEFAULTS["gpu_restart_above"]
-    rearm = _whole(saved.get("gpu_rearm_at"), GPU_LOWEST_C, GPU_HIGHEST_C) or GPU_GUARD_DEFAULTS["gpu_rearm_at"]
-    if rearm >= above:
-        above, rearm = GPU_GUARD_DEFAULTS["gpu_restart_above"], GPU_GUARD_DEFAULTS["gpu_rearm_at"]
-    return {"gpu_guard": bool(saved.get("gpu_guard", True)), "gpu_restart_above": above, "gpu_rearm_at": rearm,
-            "gpu_profile": _whole(saved.get("gpu_profile"), 1, 5) or GPU_GUARD_DEFAULTS["gpu_profile"]}
 
 
 def _gigabytes(value):
@@ -316,125 +312,202 @@ def _saved():
     return saved if isinstance(saved, dict) else {}
 
 
-def load():
-    saved = _saved()
-    workflows = saved.get("default_workflow") if isinstance(saved.get("default_workflow"), dict) else {}
-    theme = saved.get("theme")
-    model = saved.get("h3_model", DEFAULTS["h3_model"])
+# --- Each setting, declared once: its default, how it's read from the file, and how a change to it is checked ---
+#
+# read(saved): the value from the settings file as saved (the whole file, so a setting can follow another or an older
+# name for it); never raises for a value it can mend, falls back to its default. check(value, current): a change sent
+# from the page, checked; returns what to keep, or raises ValueError saying why it can't be. Adding a setting is adding
+# a line to SETTINGS, with the page's control in panel/static/settings.js.
+
+class Setting(NamedTuple):
+    default: object
+    read: Callable
+    check: Callable
+
+
+def _flag(key, default=False):
+    return Setting(default, lambda saved: bool(saved.get(key, default)), lambda value, current: bool(value))
+
+
+def _choice(key, allowed, default, what):
+    def check(value, current):
+        if value not in allowed:
+            raise ValueError(f"Unknown {what}.")
+        return value
+    return Setting(default, lambda saved: saved.get(key) if saved.get(key) in allowed else default, check)
+
+
+def _text(key, limit=200):
+    clean = lambda value: str(value or "")[:limit]
+    return Setting("", lambda saved: clean(saved.get(key)), lambda value, current: clean(value))
+
+
+def _known_model(value, what):
+    if value not in {model["id"] for model in local_models()}:
+        raise ValueError(f"Unknown {what} model.")
+    return value
+
+
+def _read_h3_model(saved):
+    model = saved.get("h3_model", H3_MODELS[0])
     model_family(model)
+    return model
+
+
+def _read_local_model(saved):
     # Before it had a setting of its own, the local model was OpenH3-IR's: kept so until it is chosen.
-    local = saved.get("local_llm_model") or model
+    local = saved.get("local_llm_model") or _read_h3_model(saved)
     try:
         model_family(local)
     except ValueError:
-        local = DEFAULTS["local_llm_model"]
-    return {"low_priority": bool(saved.get("low_priority")),
-            "reserve_ram_gb": _gigabytes(saved.get("reserve_ram_gb")) or DEFAULT_RESERVE_GB,
-            "h3_model": model,
-            "local_llm_model": local,
-            "default_workflow": {side: str(workflows.get(side) or "") for side in SIDES},
-            # The image preset the viewer's Edit (pen) opens Generate with; empty: the Qwen-Image 2.1 edit workflow.
-            "edit_preset": str(saved.get("edit_preset") or "")[:200],
-            # The video preset the viewer's Edit menu opens Video with, its image in image 1 (an image-to-video one).
-            "edit_video_preset": str(saved.get("edit_video_preset") or "")[:200],
-            # Private mode: what is made is tagged NSFW, and Output opens on the NSFW filter. Kept over restarts.
-            "private_mode": bool(saved.get("private_mode")),
-            # Saved workflows the picker leaves out, as another stands for them (the Krea-2 ones the merged one does,
-            # their looks kept as presets): still there for those presets and to open or continue what they made.
-            "retired_workflows": _names(saved.get("retired_workflows")),
-            # Titles: who titles a new film or set from its prompt (core/titles.py). Before it was a choice, Gemini titles
-            # on meant "gemini".
-            "title_source": saved["title_source"] if saved.get("title_source") in TITLE_SOURCES else "gemini" if saved.get("gemini_titles") else "off",
-            # Pin the progress bar: scrolled away from the top, the header's progress bar stays, along the top of the screen.
-            "pin_progress": bool(saved.get("pin_progress")),
-            # The progress bar in the header at the top (on unless turned off), and the footer's Status button filling
-            # as the run goes, with its percentage in the corner.
-            "top_progress": bool(saved.get("top_progress", True)),
-            "status_progress": bool(saved.get("status_progress")),
-            # Each section in a box of its own (the theme's panel colour), or straight on the background.
-            "theme_boxes": bool(saved.get("theme_boxes", True)),
-            "page_swipe": bool(saved.get("page_swipe", True)),
-            "page_animation": saved.get("page_animation") if saved.get("page_animation") in PAGE_ANIMATIONS else DEFAULTS["page_animation"],
-            "page_speed": saved.get("page_speed") if saved.get("page_speed") in PAGE_SPEEDS else DEFAULTS["page_speed"],
-            "output_order": saved.get("output_order", []),
-            **_gpu_guard(saved),
-            "theme": theme if isinstance(theme, str) and theme in THEMES else DEFAULTS["theme"]}
+        return H3_MODELS[0]
+    return local
+
+
+def _read_default_workflow(saved):
+    workflows = saved.get("default_workflow") if isinstance(saved.get("default_workflow"), dict) else {}
+    return {side: str(workflows.get(side) or "") for side in SIDES}
+
+
+def _check_default_workflow(value, current):
+    # Only the sides it names change; anything but a dict is let go, as before.
+    merged = dict(current["default_workflow"])
+    if isinstance(value, dict):
+        merged.update({side: str(value[side] or "") for side in SIDES if side in value})
+    return merged
+
+
+def _check_retired(value, current):
+    if not isinstance(value, list):
+        raise ValueError("Retired workflows are a list of workflow names.")
+    return _names(value)
+
+
+def _read_title_source(saved):
+    # Before it was a choice, Gemini titles on meant "gemini".
+    return saved["title_source"] if saved.get("title_source") in TITLE_SOURCES else "gemini" if saved.get("gemini_titles") else "off"
+
+
+def _check_output_order(ids, current):
+    if (not isinstance(ids, list) or any(not isinstance(key, str) or not key.startswith(("image:", "film:"))
+                                         or not key.split(":", 1)[1] for key in ids)
+            or len(ids) != len(set(ids))):
+        raise ValueError("Output order must list each image batch or film once.")
+    # Only shown items trade places; a hidden filter's items keep their slots.
+    order = current["output_order"]
+    known = set(order)
+    order = [key for key in ids if key not in known] + order
+    selected = set(ids)
+    slots = iter(ids)
+    return [next(slots) if key in selected else key for key in order]
+
+
+def _read_gpu(key):
+    def read(saved):
+        above = _whole(saved.get("gpu_restart_above"), GPU_LOWEST_C, GPU_HIGHEST_C) or GPU_GUARD_DEFAULTS["gpu_restart_above"]
+        rearm = _whole(saved.get("gpu_rearm_at"), GPU_LOWEST_C, GPU_HIGHEST_C) or GPU_GUARD_DEFAULTS["gpu_rearm_at"]
+        if rearm >= above:
+            above, rearm = GPU_GUARD_DEFAULTS["gpu_restart_above"], GPU_GUARD_DEFAULTS["gpu_rearm_at"]
+        return {"gpu_restart_above": above, "gpu_rearm_at": rearm}[key]
+    return read
+
+
+def _check_temperature(value, current):
+    found = _whole(value, GPU_LOWEST_C, GPU_HIGHEST_C)
+    if found is None:
+        raise ValueError(f"Temperatures are whole degrees from {GPU_LOWEST_C} to {GPU_HIGHEST_C} C.")
+    return found
+
+
+def _check_profile(value, current):
+    found = _whole(value, 1, 5)
+    if found is None:
+        raise ValueError("The Afterburner profile is 1 to 5.")
+    return found
+
+
+def _sizes(value, strict):
+    """default_sizes as kept: only sides, keys and fields it knows, each value a short text. strict: raise on a bad one."""
+    if not isinstance(value, dict):
+        if strict:
+            raise ValueError("Default sizes are given per side.")
+        return {side: {} for side in SIZE_SIDES}
+    found = {}
+    for side in SIZE_SIDES:
+        entries = value.get(side) if isinstance(value.get(side), dict) else {}
+        kept = {}
+        for key, size in list(entries.items())[:MOST_SIZES]:
+            good = isinstance(key, str) and 0 < len(key) <= 120 and isinstance(size, dict)
+            fields = {field: str(size[field])[:40] for field in SIZE_FIELDS if good and isinstance(size.get(field), (str, int, float))}
+            if good and fields:
+                kept[key] = fields
+            elif strict:
+                raise ValueError("A default size is its family and mode, and the size's fields.")
+        found[side] = kept
+    return found
+
+
+SETTINGS = {
+    "low_priority": _flag("low_priority"),
+    "reserve_ram_gb": Setting(DEFAULT_RESERVE_GB, lambda saved: _gigabytes(saved.get("reserve_ram_gb")) or DEFAULT_RESERVE_GB,
+                              lambda value, current: _gigabytes(value)),
+    # local_llm_model writes the prompts when the local model is chosen; h3_model is OpenH3-IR's, which reviews and
+    # renders them. Apart, so one can be the vision model and the other the text one.
+    "h3_model": Setting(H3_MODELS[0], _read_h3_model, lambda value, current: _known_model(value, "OpenH3-IR")),
+    "local_llm_model": Setting(H3_MODELS[0], _read_local_model, lambda value, current: _known_model(value, "local LLM")),
+    "default_workflow": Setting({side: "" for side in SIDES}, _read_default_workflow, _check_default_workflow),
+    # The image preset the viewer's Edit (pen) opens Generate with; empty: the Qwen-Image 2.1 edit workflow.
+    "edit_preset": _text("edit_preset"),
+    # The video preset the viewer's Edit menu opens Video with, its image in image 1 (an image-to-video one).
+    "edit_video_preset": _text("edit_video_preset"),
+    # Private mode: what is made is tagged NSFW, and Output opens on the NSFW filter. Kept over restarts.
+    "private_mode": _flag("private_mode"),
+    # Saved workflows the picker leaves out, as another stands for them (the Krea-2 ones the merged one does, their
+    # looks kept as presets): still there for those presets and to open or continue what they made.
+    "retired_workflows": Setting([], lambda saved: _names(saved.get("retired_workflows")), _check_retired),
+    # Titles: who titles a new film or set from its prompt (core/titles.py).
+    "title_source": Setting("off", _read_title_source, _choice("title_source", TITLE_SOURCES, "off", "title source").check),
+    # Pin the progress bar: scrolled away from the top, the header's progress bar stays, along the top of the screen.
+    "pin_progress": _flag("pin_progress"),
+    # The progress bar in the header at the top (on unless turned off), and the footer's Status button filling as the
+    # run goes, with its percentage in the corner.
+    "top_progress": _flag("top_progress", True),
+    "status_progress": _flag("status_progress"),
+    # Each section in a box of its own (the theme's panel colour), or straight on the background.
+    "theme_boxes": _flag("theme_boxes", True),
+    "page_swipe": _flag("page_swipe", True),
+    "page_animation": _choice("page_animation", PAGE_ANIMATIONS, "push", "page animation"),
+    "page_speed": _choice("page_speed", PAGE_SPEEDS, "normal", "page animation speed"),
+    "lora_range": _choice("lora_range", LORA_RANGES, "author", "LoRA strength range"),
+    "workflow_switch": _choice("workflow_switch", WORKFLOW_SWITCHES, "default", "workflow switch"),
+    "default_sizes": Setting({side: {} for side in SIZE_SIDES}, lambda saved: _sizes(saved.get("default_sizes"), False),
+                             lambda value, current: _sizes(value, True)),
+    "output_order": Setting([], lambda saved: saved.get("output_order", []), _check_output_order),
+    "gpu_guard": _flag("gpu_guard", True),
+    "gpu_restart_above": Setting(GPU_GUARD_DEFAULTS["gpu_restart_above"], _read_gpu("gpu_restart_above"), _check_temperature),
+    "gpu_rearm_at": Setting(GPU_GUARD_DEFAULTS["gpu_rearm_at"], _read_gpu("gpu_rearm_at"), _check_temperature),
+    "gpu_profile": Setting(GPU_GUARD_DEFAULTS["gpu_profile"],
+                           lambda saved: _whole(saved.get("gpu_profile"), 1, 5) or GPU_GUARD_DEFAULTS["gpu_profile"], _check_profile),
+    "theme": _choice("theme", tuple(THEMES), "standard", "theme"),
+}
+DEFAULTS = {key: setting.default for key, setting in SETTINGS.items()}
+
+
+def load():
+    """Every setting, as saved or else its default (SETTINGS)."""
+    saved = _saved()
+    return {key: setting.read(saved) for key, setting in SETTINGS.items()}
 
 
 def update(changes):
-    """Applies the settings in changes (the ones it knows, valid ones only) and returns them all."""
+    """Applies the settings in changes (the ones it knows, valid ones only) and returns them all. Raises ValueError."""
     with _lock:
         current = load()
-        if "low_priority" in changes:
-            current["low_priority"] = bool(changes["low_priority"])
-        if "reserve_ram_gb" in changes:
-            current["reserve_ram_gb"] = _gigabytes(changes["reserve_ram_gb"])
-        if "h3_model" in changes:
-            if changes["h3_model"] not in {model["id"] for model in local_models()}:
-                raise ValueError("Unknown OpenH3-IR model.")
-            current["h3_model"] = changes["h3_model"]
-        if "local_llm_model" in changes:
-            if changes["local_llm_model"] not in {model["id"] for model in local_models()}:
-                raise ValueError("Unknown local LLM model.")
-            current["local_llm_model"] = changes["local_llm_model"]
-        if "private_mode" in changes:
-            current["private_mode"] = bool(changes["private_mode"])
-        if "retired_workflows" in changes:
-            if not isinstance(changes["retired_workflows"], list):
-                raise ValueError("Retired workflows are a list of workflow names.")
-            current["retired_workflows"] = _names(changes["retired_workflows"])
-        if "title_source" in changes:
-            if changes["title_source"] not in TITLE_SOURCES:
-                raise ValueError("Unknown title source.")
-            current["title_source"] = changes["title_source"]
-        for key in ("pin_progress", "top_progress", "status_progress", "theme_boxes", "page_swipe"):
-            if key in changes:
-                current[key] = bool(changes[key])
-        for key, allowed, what in (("page_animation", PAGE_ANIMATIONS, "page animation"), ("page_speed", PAGE_SPEEDS, "page animation speed")):
-            if key in changes:
-                if changes[key] not in allowed:
-                    raise ValueError(f"Unknown {what}.")
-                current[key] = changes[key]
-        if "output_order" in changes:
-            ids = changes["output_order"]
-            if (not isinstance(ids, list) or any(not isinstance(key, str) or not key.startswith(("image:", "film:"))
-                                                or not key.split(":", 1)[1] for key in ids)
-                    or len(ids) != len(set(ids))):
-                raise ValueError("Output order must list each image batch or film once.")
-            # Only shown items trade places; a hidden filter's items keep their slots.
-            order = current["output_order"]
-            known = set(order)
-            order = [key for key in ids if key not in known] + order
-            selected = set(ids)
-            slots = iter(ids)
-            current["output_order"] = [next(slots) if key in selected else key for key in order]
-        if "theme" in changes:
-            if not isinstance(changes["theme"], str) or changes["theme"] not in THEMES:
-                raise ValueError("Unknown theme.")
-            current["theme"] = changes["theme"]
-        if "gpu_guard" in changes:
-            current["gpu_guard"] = bool(changes["gpu_guard"])
-        for key in ("gpu_restart_above", "gpu_rearm_at"):
-            if key in changes:
-                value = _whole(changes[key], GPU_LOWEST_C, GPU_HIGHEST_C)
-                if value is None:
-                    raise ValueError(f"Temperatures are whole degrees from {GPU_LOWEST_C} to {GPU_HIGHEST_C} C.")
-                current[key] = value
+        for key, value in changes.items():
+            if key in SETTINGS:
+                current[key] = SETTINGS[key].check(value, current)
         if current["gpu_rearm_at"] >= current["gpu_restart_above"]:
             raise ValueError("The cool-down temperature must be below the restart temperature.")
-        if "gpu_profile" in changes:
-            profile = _whole(changes["gpu_profile"], 1, 5)
-            if profile is None:
-                raise ValueError("The Afterburner profile is 1 to 5.")
-            current["gpu_profile"] = profile
-        if "edit_preset" in changes:
-            current["edit_preset"] = str(changes["edit_preset"] or "")[:200]
-        if "edit_video_preset" in changes:
-            current["edit_video_preset"] = str(changes["edit_video_preset"] or "")[:200]
-        if isinstance(changes.get("default_workflow"), dict):
-            for side in SIDES:
-                if side in changes["default_workflow"]:
-                    current["default_workflow"][side] = str(changes["default_workflow"][side] or "")
         # Never chosen, the local LLM's model follows OpenH3-IR's: saved only once it is chosen.
         if "local_llm_model" not in changes and not _saved().get("local_llm_model"):
             current.pop("local_llm_model")

@@ -19,6 +19,7 @@ import time
 from flask import Response, abort, request, send_file, stream_with_context
 from PIL import Image, ImageOps, UnidentifiedImageError
 
+from core.paths import comfyui_url
 from core import h3_refiner
 from panel import settings
 from panel import server
@@ -529,7 +530,7 @@ def chat_send():
                 refiner._release_comfy_models()
             else:
                 yield line(status="loading")
-                url = (os.getenv("COMFYUI_URL") or "http://127.0.0.1:8188").rstrip("/")
+                url = comfyui_url()
                 starting = h3_refiner.Refiner(url, require_compiler=False, model_id=model, vision=sees)
                 starting.__enter__()  # Closes itself if it fails to start
                 refiner = starting

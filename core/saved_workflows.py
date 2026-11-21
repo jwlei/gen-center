@@ -19,6 +19,7 @@ from urllib.parse import quote
 import requests
 
 from core import director
+from core import models as known_models
 
 # Only in the editor: nothing of these reaches ComfyUI's API.
 NOTES = ("Note", "MarkdownNote")
@@ -59,8 +60,11 @@ SYSTEM_PROMPT = re.compile(r"system", re.I)
 VIDEO_SAVES = ("SaveVideo", "VHS_VideoCombine", "CreateVideo", "SaveWEBM", "SaveAnimatedWEBP", "SaveAnimatedPNG")
 # The image models whose prompts or limits are their own (pipelines/image/models.py), by the node that says which it is,
 # or else by the type its text encoder is loaded as.
-IMAGE_MODEL_NODES = {"TextEncodeFibo2": "fibo2", "TextEncodeQwenImageEditPlus": "qwen_image_edit"}
-IMAGE_MODEL_ENCODERS = ("fibo2", "krea2", "moss_image")
+# (core/models/: each image model's node, encoder and make_or_edit_node.)
+IMAGE_MODEL_NODES = {entry.node: model for model, entry in known_models.IMAGE_MODELS.items() if entry.node}
+IMAGE_MODEL_ENCODERS = tuple(entry.encoder for entry in known_models.IMAGE_MODELS.values() if entry.encoder)
+# Nodes of models that make an image, or edit one when given one: {node: the make model}; the edit model is it + _edit.
+MAKE_OR_EDIT_NODES = {entry.make_or_edit_node: model for model, entry in known_models.IMAGE_MODELS.items() if entry.make_or_edit_node}
 # Qwen-Image 2.1's encoder, for making images and editing them: which it does depends on whether it's given an image.
 QWEN_IMAGE_21_ENCODER = "TextEncodeQwenImage21"
 MINIMAX_H3_IMAGE_ENCODER = "MiniMaxH3ImageConditioning"
@@ -536,6 +540,87 @@ def to_api(ui, info, images=False, enhance=False):
     return api
 
 
+# What a node's title can say it is, in ComfyUI, where the guesses below would get it wrong: "gc:prompt", or within a
+# title ("Positive [gc:prompt]"). "gc:image 2" is the second image; "gc:prompt.text" names the input as well, where a node
+# has more than one that could be meant. "gc:keep" leaves a Load Image or Load Audio as saved, rather than filled.
+TAG = re.compile(r"(?<![\w])gc:([a-z_]+)(?:[ _]?(\d+))?(?:\.([A-Za-z_][\w.]*))?", re.I)
+# Each tag, and the kinds of value its input holds.
+TAGS = {"prompt": (str,), "negative": (str,), "image": (str,), "audio": (str,), "width": (int,), "height": (int,),
+        "seconds": (int, float), "frames": (int,), "fps": (int, float), "text_to_video": (bool,), "keep": ()}
+# The input a loader's file is in, where it has other inputs too.
+TAG_INPUTS = {"image": ("image",), "audio": ("audio",), "prompt": PROMPT_INPUTS, "negative": ("text", "negative_prompt")}
+
+
+def tag_help():
+    """The tags, as the panel lists them."""
+    return [f"gc:{name}" + (" 2" if name == "image" else "") for name in TAGS]
+
+
+def tags(api):
+    """
+    {field: [node id, input]} for each node tagged in its title (TAG), image 1 as "image", image 2 as "image_2", and
+    "keep": [node ids]. Raises Unusable where a tag can't be followed: two nodes saying they're the prompt, or one whose
+    input can't be told.
+    """
+    found, keep = {}, []
+    for node_id, node in api.items():
+        for match in TAG.finditer(node.get("_meta", {}).get("title", "")):
+            name, number, wanted = match.group(1).lower(), match.group(2), match.group(3)
+            if name not in TAGS:
+                raise Unusable(f"Node {node_id}'s title has gc:{name}, which isn't a tag. The tags are: {', '.join(tag_help())}.")
+            if name == "keep":
+                keep.append(node_id)
+                continue
+            field = f"image_{number}" if name == "image" and number and number != "1" else name
+            inputs = node.get("inputs", {})
+            if wanted:
+                if wanted not in inputs:
+                    raise Unusable(f"Node {node_id} is tagged gc:{name}.{wanted}, but has no input {wanted}.")
+                chosen = wanted
+            else:
+                kinds = TAGS[name]
+                usual = [input_name for input_name in TAG_INPUTS.get(name, ()) if input_name in inputs]
+                fits = [input_name for input_name, value in inputs.items() if type(value) in kinds]
+                if usual:
+                    chosen = usual[0]
+                elif len(fits) == 1:
+                    chosen = fits[0]
+                else:
+                    raise Unusable(f"Node {node_id} is tagged gc:{name}, but {'has no input' if not fits else 'has more than one input'} it "
+                                   f"could mean: name it, as gc:{name}.{fits[0] if fits else 'input'}.")
+            if field in found and found[field][0] != node_id:
+                raise Unusable(f"Nodes {found[field][0]} and {node_id} are both tagged gc:{match.group(0)[3:]}: tag one.")
+            found[field] = [node_id, chosen]
+    if keep:
+        found["keep"] = keep
+    return found
+
+
+# Tags read where they're found rather than put over the guesses: the images and audio with their loaders (_image_fields,
+# find_fields), the negative prompt with the options (core/workflow_options.py), keep by both.
+TAGGED_ELSEWHERE = re.compile(r"image(_\d+)?|audio|negative|keep")
+
+
+def _with_tags(fields, found):
+    """The fields found by guessing, with what the workflow's tags say put over them, and which those were (_tagged)."""
+    for field, value in found.items():
+        if not TAGGED_ELSEWHERE.fullmatch(field):
+            fields[field] = value
+    # A clip's length is in seconds or in frames: the one tagged, not both.
+    if "seconds" in found:
+        for field in ("frames", "fps"):
+            if field not in found:
+                fields.pop(field, None)
+    elif "frames" in found:
+        fields.pop("seconds", None)
+        if "fps" not in fields:
+            raise Unusable("It's tagged gc:frames, but has no frame rate to go with it: tag that gc:fps.")
+    tagged = sorted(field for field in found if field in fields)
+    if tagged:
+        fields["_tagged"] = tagged
+    return fields
+
+
 def _titled(api, pattern, kinds):
     """The node with this title holding one value of these kinds, as [node id, input]."""
     for node_id, node in api.items():
@@ -588,22 +673,28 @@ def _in_number_order(name):
     return [int(part) if part.isdigit() else part for part in re.split(r"(\d+)", name)]
 
 
-def _image_fields(api, info):
+def _image_fields(api, info, tagged=None):
     """
     image, image_2... for each Load Image, in the order the node using them numbers
     them. image_link is where one is plugged in, if the workflow also runs without it.
+    tagged (tags()): a node tagged gc:image N is image N, whatever loads it, ahead of the rest; one tagged gc:keep isn't one.
     """
+    tagged = tagged or {}
+    keep = set(tagged.get("keep", []))
+    by_tag = {value[0]: (_in_number_order(field), value[1]) for field, value in tagged.items() if re.fullmatch(r"image(_\d+)?", field)}
     found = []
     for node_id, node in api.items():
-        if node["class_type"] != "LoadImage":
+        if node_id not in by_tag and (node["class_type"] != "LoadImage" or node_id in keep):
             continue
         users = [(user_id, name) for user_id, user in api.items() for name, value in user["inputs"].items()
                  if isinstance(value, list) and value[0] == node_id]
-        found.append((users[0][1] if users else "", int(node_id), users))
+        found.append((users[0][1] if users else "", node_id, users))
+    # Tagged first, by their numbers; then the rest, by how the node using them numbers them, then by id.
+    order = lambda entry: (entry[1] not in by_tag, by_tag.get(entry[1], ([],))[0], _in_number_order(entry[0]), _in_number_order(entry[1]))
     fields = {}
-    for number, (_, node_id, users) in enumerate(sorted(found, key=lambda entry: (_in_number_order(entry[0]), entry[1])), 1):
+    for number, (_, node_id, users) in enumerate(sorted(found, key=order), 1):
         slot = "image" if number == 1 else f"image_{number}"
-        fields[slot] = [str(node_id), "image"]
+        fields[slot] = [str(node_id), by_tag[node_id][1] if node_id in by_tag else "image"]
         # One left empty comes out of everything it's plugged into, as Qwen-Image 2.1's go to its encoder and to what its
         # prompt enhancer looks at: only if each of them runs without it.
         if users and all(api[user_id]["class_type"] == director.ASSETS or
@@ -711,16 +802,22 @@ def takes(fields):
 
 
 def find_fields(api, info, needs_audio=False):
-    """Which inputs the pipeline fills: {field: [node id, input]}. Raises Unusable."""
+    """Which inputs the pipeline fills: {field: [node id, input]}, by the workflow's tags, else by guessing. Raises Unusable."""
+    tagged = tags(api)
+    return _with_tags(_guessed_fields(api, info, needs_audio, tagged), tagged)
+
+
+def _guessed_fields(api, info, needs_audio, tagged):
     media = _media_fields(api)
-    fields = {"prompt": _prompt_input(api), **_image_fields(api, info), **media}
+    fields = {"prompt": tagged.get("prompt") or _prompt_input(api), **_image_fields(api, info, tagged), **media}
     if not fields["prompt"]:
-        raise Unusable("Couldn't find its prompt: nothing feeds the sampler's positive input, or a prompt input.")
+        raise Unusable("Couldn't find its prompt: nothing feeds the sampler's positive input, or a prompt input. "
+                       "In ComfyUI, add gc:prompt to the title of the node the prompt is typed in.")
     limit = next((REFERENCE_FILE_LIMITS[node["class_type"]] for node in api.values() if node["class_type"] in REFERENCE_FILE_LIMITS), None)
     if limit:
         fields[MOST_REFERENCES_FIELD] = limit
     references = {node_id for node_id, _ in (media[slot] for slot in media_slots(media, "audio"))}
-    audio = _one_input(api, "LoadAudio", "audio", "audio", besides=references)
+    audio = tagged.get("audio") or _one_input(api, "LoadAudio", "audio", "audio", besides=references | set(tagged.get("keep", [])))
     if audio:
         fields["audio"] = audio
     elif needs_audio:
@@ -756,10 +853,16 @@ def find_fields(api, info, needs_audio=False):
 
 
 def find_image_fields(api, info):
-    """Which inputs the pipeline fills in a workflow that makes an image. Raises Unusable."""
-    fields = {"prompt": _prompt_input(api), **_image_fields(api, info)}
+    """Which inputs the pipeline fills in a workflow that makes an image, by its tags, else by guessing. Raises Unusable."""
+    tagged = tags(api)
+    return _with_tags(_guessed_image_fields(api, info, tagged), tagged)
+
+
+def _guessed_image_fields(api, info, tagged):
+    fields = {"prompt": tagged.get("prompt") or _prompt_input(api), **_image_fields(api, info, tagged)}
     if not fields["prompt"]:
-        raise Unusable("Couldn't find its prompt: nothing feeds the sampler's positive input, or a prompt input.")
+        raise Unusable("Couldn't find its prompt: nothing feeds the sampler's positive input, or a prompt input. "
+                       "In ComfyUI, add gc:prompt to the title of the node the prompt is typed in.")
     width, height = _titled(api, r"^width$", (int,)), _titled(api, r"^height$", (int,))
     if width and height:
         fields["width"], fields["height"] = width, height
@@ -803,14 +906,14 @@ def image_model(api):
             return IMAGE_MODEL_NODES[node["class_type"]]
     for node in api.values():
         # Both make images, and edit them when given one: which it is depends on whether it's given an image.
-        if node["class_type"] in (QWEN_IMAGE_21_ENCODER, MINIMAX_H3_IMAGE_ENCODER):
+        if node["class_type"] in MAKE_OR_EDIT_NODES:
             # An edit shows the model its image as well as making one that size, so it holds less: models.py.
             edits = any(name.startswith("images.") and isinstance(value, list) for name, value in node["inputs"].items())
-            model = "qwen_image_21" if node["class_type"] == QWEN_IMAGE_21_ENCODER else "minimax_h3_image"
+            model = MAKE_OR_EDIT_NODES[node["class_type"]]
             return f"{model}_edit" if edits else model
     for node in api.values():
         if node["class_type"] == "CLIPLoader" and node["inputs"].get("type") in IMAGE_MODEL_ENCODERS:
-            return node["inputs"]["type"]
+            return next(model for model, entry in known_models.IMAGE_MODELS.items() if entry.encoder == node["inputs"]["type"])
     return None
 
 
@@ -1053,11 +1156,12 @@ def _node_kinds(ui):
 
 
 def _prepare(name, ui, info, folder, pipeline):
-    """Writes what the pipeline runs. Returns its path, and how many images it takes."""
+    """Writes what the pipeline runs. Returns its path, how many images it takes, and its model family."""
     stem = os.path.join(folder, _file_stem(name))
     # Here and not at the top: it builds on this module.
-    from core import workflow_options
+    from core import model_families, workflow_options
     api, fields, model, _ = workflow_options.convert(ui, info, pipeline=pipeline)
+    family = model_families.family_for(api, name, model)
     options = workflow_options.offered(ui, info, pipeline)
     if options:
         # A run with other options makes its workflow again from these, with what the pipeline adds to it.
@@ -1066,9 +1170,10 @@ def _prepare(name, ui, info, folder, pipeline):
         _write_json(stem + ".info.json", {kind: info[kind] for kind in kinds if kind in info})
     _write_json(stem + ".json", api)
     _write_json(stem + ".map.json", {"_saved_as": name, "_pipeline": pipeline, **({"_model": model} if model else {}),
+                                     **({"_family": family} if family else {}),
                                      **({"_options": options} if options else {}),
                                      **{field: value if field.startswith("_") else f"{value[0]}.{value[1]}" for field, value in fields.items()}})
-    return stem + ".json", image_takes(fields, model, options) if pipeline == "image" else with_options(takes(fields), options)
+    return stem + ".json", image_takes(fields, model, options) if pipeline == "image" else with_options(takes(fields), options), family
 
 
 # What _prepare made of each workflow, by everything it was made from: the workflow as saved, the ComfyUI nodes it uses
@@ -1123,7 +1228,7 @@ def _from_comfyui(url, folder):
             if "nodes" not in ui:
                 raise Unusable("It's in API format, which has no way to tell which inputs to fill. Save it from the editor.")
             entry["pipeline"] = pipeline_of(name, ui)
-            entry["path"], entry["takes"] = _prepared_once(name, response.content, ui, info, models, folder, entry["pipeline"])
+            entry["path"], entry["takes"], entry["family"] = _prepared_once(name, response.content, ui, info, models, folder, entry["pipeline"])
         except Unusable as e:
             entry["problem"] = str(e)
         except (KeyError, IndexError, TypeError, AttributeError, ValueError, requests.RequestException) as e:
@@ -1146,6 +1251,16 @@ def _forget_deleted(folder, names):
                     os.remove(os.path.join(folder, stale))
 
 
+def _family_from_file(path, name, model):
+    """The family of a workflow listed before maps said it (core/model_families.py), from what it runs."""
+    from core import model_families
+    try:
+        with open(path, encoding="utf-8") as f:
+            return model_families.family_for(json.load(f), name, model)
+    except (OSError, ValueError, AttributeError, TypeError):
+        return None
+
+
 def _from_earlier(folder):
     """With ComfyUI off: the ones it had last time. A run starts it, so they can still be chosen."""
     found = []
@@ -1162,7 +1277,7 @@ def _from_earlier(folder):
                 continue
             pipeline = fields.get("_pipeline") or pipeline_of(name)
             if os.path.exists(path) and ("audio" in fields or not is_for_shorts(name)):
-                found.append({"name": name, "label": _label(name), "pipeline": pipeline, "path": path,
+                found.append({"name": name, "label": _label(name), "pipeline": pipeline, "path": path, "family": fields.get("_family") or _family_from_file(path, name, fields.get("_model")),
                               "takes": image_takes(fields, fields.get("_model"), fields.get("_options")) if pipeline == "image"
                               else with_options(takes(fields), fields.get("_options"))})
     return found
@@ -1174,3 +1289,49 @@ def list_saved(url, folder):
         return _from_comfyui(url, folder)
     except (OSError, ValueError, requests.RequestException):
         return _from_earlier(folder)
+
+
+# --- What the panel made of each workflow, for Settings' Workflows ---
+
+# The inputs the report lists: what's filled, not how (where an image is unplugged, or a video split).
+HELPER_FIELD = re.compile(r".+_(link|also|split|sound)$")
+
+
+def _found_input(api, field, where, tagged):
+    node_id, name = where
+    node = api.get(str(node_id), {})
+    return {"field": field, "node": str(node_id), "input": name, "title": node.get("_meta", {}).get("title", ""),
+            "type": node.get("class_type", ""), "tagged": field in tagged}
+
+
+def report(entries):
+    """
+    For each workflow list_saved() found: {name, label, pipeline, family, family_label} with either problem (why it isn't
+    offered, and what a tag would fix) or inputs: which node each input the pipeline fills was found on, and whether a
+    tag (gc:...) or a guess found it. So a guess that's wrong is seen, and a tag put right, without reading code.
+    """
+    from core import model_families, workflow_options
+    found = []
+    for entry in entries:
+        line = {"name": entry["name"], "label": display_label(entry.get("label") or entry["name"]),
+                "pipeline": entry.get("pipeline") or pipeline_of(entry["name"]), "family": entry.get("family") or "",
+                "family_label": model_families.family_label(entry.get("family"))}
+        if entry.get("problem"):
+            found.append({**line, "problem": entry["problem"]})
+            continue
+        try:
+            with open(entry["path"], encoding="utf-8") as f:
+                api = json.load(f)
+            with open(entry["path"][:-len(".json")] + ".map.json", encoding="utf-8") as f:
+                fields = json.load(f)
+        except (OSError, ValueError, KeyError, TypeError):
+            found.append({**line, "problem": "Its files are gone: list the workflows again."})
+            continue
+        tagged = set(fields.get("_tagged") or [])
+        inputs = [_found_input(api, field, str(value).split(".", 1), tagged) for field, value in fields.items()
+                  if not field.startswith("_") and not HELPER_FIELD.fullmatch(field) and "." in str(value)]
+        negative = workflow_options._negatives(api)
+        if negative:
+            inputs.append(_found_input(api, "negative", negative, {"negative"} if tags(api).get("negative") else set()))
+        found.append({**line, "inputs": inputs, "options": len(fields.get("_options") or [])})
+    return found

@@ -25,3 +25,8 @@ def moved(path, folder):
         return path
     here = os.path.join(folder, os.path.basename(path.replace("\\", os.sep)))
     return here if os.path.exists(here) else path
+
+
+def comfyui_url():
+    """Where ComfyUI listens: COMFYUI_URL in .env, else its own default, without a trailing slash."""
+    return (os.getenv("COMFYUI_URL") or "http://127.0.0.1:8188").rstrip("/")

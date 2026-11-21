@@ -7,6 +7,7 @@ from datetime import datetime
 
 from core.paths import SAVED_WORKFLOWS_DIR, moved
 from core import run_checkpoint
+from core.saved_run import SavedRun
 from pipelines.image import paths
 
 STAGES = ("Prompts", "Images")
@@ -14,7 +15,7 @@ RUN_ID = re.compile(r"image_\d{8}_\d{6}")
 
 
 @dataclass
-class RunState:
+class RunState(SavedRun):
     """
     What one set of images has finished, saved after the prompts and after every accepted
     image, so a run that was stopped, failed or cut off can continue without making them again.
@@ -50,37 +51,23 @@ class RunState:
         return cls(id=f"image_{datetime.now():%Y%m%d_%H%M%S}", brief=brief, count=count, direct=direct, width=width, height=height,
                    llm=llm, workflow=workflow, image_count=image_count)
 
+    # Loading (core/saved_run.py): what its checkpoint must hold, and what to mend once loaded.
+    RUN_ID = RUN_ID
+    SCHEMA = {"brief": str, "count": int, "width": int, "height": int, "shots": list, "options": dict, "provenance": dict, "local_model": str}
+
     @classmethod
-    def load(cls, run_id):
-        """The saved run, with anything whose file has gone marked as still to do. None if there isn't one."""
-        if not RUN_ID.fullmatch(str(run_id)):
-            return None
-        path = os.path.join(paths.RUNS_DIR, run_id, "state.json")
-        saved = run_checkpoint.load(path, run_id)
-        if saved is None:
-            return None
-        run_checkpoint.validate(saved, path, {"brief": str, "count": int, "width": int, "height": int,
-                                             "shots": list, "options": dict, "provenance": dict, "local_model": str})
-        try:
-            state = cls(**{name: value for name, value in saved.items() if name in cls.__dataclass_fields__})
-            # Saved with the project's folder in it: moved or renamed, the workflow is found where it is now.
-            state.workflow = moved(state.workflow, SAVED_WORKFLOWS_DIR)
-            for shot in state.shots or []:
-                if shot.get("file") and not os.path.exists(state.image_path(shot)):
-                    shot["file"] = None
-        except (ValueError, TypeError, AttributeError, KeyError) as error:
-            raise run_checkpoint.invalid(path, error) from error
-        return state
+    def runs_dir(cls):
+        return paths.RUNS_DIR
+
+    def loaded(self):
+        """Anything whose file has gone is marked as still to do."""
+        # Saved with the project's folder in it: moved or renamed, the workflow is found where it is now.
+        self.workflow = moved(self.workflow, SAVED_WORKFLOWS_DIR)
+        for shot in self.shots or []:
+            if shot.get("file") and not os.path.exists(self.image_path(shot)):
+                shot["file"] = None
 
     # --- Where its files go ---
-
-    @property
-    def folder(self):
-        return os.path.join(paths.RUNS_DIR, self.id)
-
-    @property
-    def path(self):
-        return os.path.join(self.folder, "state.json")
 
     @property
     def input_paths(self):
@@ -130,11 +117,6 @@ class RunState:
         return shot.get("setup") or self.setup()
 
     # --- Saving ---
-
-    def update(self, **fields):
-        for name, value in fields.items():
-            setattr(self, name, value)
-        self.save()
 
     def save(self):
         settings = {name: getattr(self, name) for name in

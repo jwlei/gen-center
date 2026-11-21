@@ -43,6 +43,16 @@ from core import variety, workflow_options
 from pipelines.video.run_state import RunState, list_runs
 
 
+def with_styles(page):
+    """A page with the stylesheets it links (panel/static/css) after it, so a check on a style finds it there."""
+    names = re.findall(r'<link rel="stylesheet" href="/static/(css/[^"?]+)', page)
+    styles = []
+    for name in names:
+        with open(os.path.join(ROOT, "panel", "static", *name.split("/")), encoding="utf-8") as f:
+            styles.append(f.read())
+    return page + "\n<style>\n" + "\n".join(styles) + "\n</style>\n"
+
+
 def make_clip_audio(path, seconds):
     ffmpeg.input(f"sine=f=440:d={seconds}", f="lavfi").output(path).run(overwrite_output=True, quiet=True)
 
@@ -323,11 +333,16 @@ class QueueTopTest(unittest.TestCase):
         strengths = lambda name: [t["lora_strength"] for t in tests if t["lora_name"] == name]
         self.assertEqual(strengths(known), ["0.50", "0.75", "1.00"], "PornMaster's range is 0.5-1: from 0.5 up to 1")
         self.assertEqual(strengths(unknown)[-1], "2.00", "one with no range: up to 2, as before")
-        # Ours first; where there's none of ours, the author's.
-        with mock.patch.dict(lora_tests.lora_hints.RANGES, {"krea_b": {"ours": None, "author": "0.6-0.8"}}):
-            tests = lora_tests.variations({"lora_strength_test": "1", "lora_style_test": "1", "lora_test_step": "0.25"}, options, True)
-            self.assertEqual(strengths(unknown), ["0.60"], "the author's 0.6-0.8, where we have no range: 0.85 is past it")
-            self.assertEqual(strengths(known)[-1], "1.00", "ours, though the author has one too")
+        # The author's range first (Settings' LoRA strength range), else ours; or ours first, when it says tested.
+        asked = {"lora_strength_test": "1", "lora_style_test": "1", "lora_test_step": "0.25"}
+        with mock.patch.dict(lora_tests.lora_hints.RANGES, {"krea_b": {"ours": "0.5-1.5", "author": "0.6-0.8"}}):
+            tests = lora_tests.variations(asked, options, True)
+            self.assertEqual(strengths(unknown), ["0.60"], "the author's 0.6-0.8: 0.85 is past it")
+            tests = lora_tests.variations(asked, options, True, "tested")
+            self.assertEqual(strengths(unknown), ["0.50", "0.75", "1.00", "1.25", "1.50"], "ours, 0.5-1.5")
+        with mock.patch.dict(lora_tests.lora_hints.RANGES, {"krea_b": {"ours": "0.5-1.5", "author": None}}):
+            tests = lora_tests.variations(asked, options, True)
+            self.assertEqual(strengths(unknown)[-1], "1.50", "no author's range: ours")
         # An increment past a LoRA's range still tests it once, at the bottom of it.
         tests = lora_tests.variations({"lora_strength_test": "1", "lora_test_step": "1.5", "opt_lora_name": known}, options, True)
         self.assertEqual([t["lora_strength"] for t in tests], ["0.5"])
@@ -811,6 +826,55 @@ class WorkPrivacyTest(unittest.TestCase):
             response = self.mark("job", 2)
         self.assertEqual(response.status_code, 500)
         self.assertNotIn("private", self.queue.current)
+
+
+class InstallTest(unittest.TestCase):
+    """The panel as a phone app: what the browser fetches to install it opens without signing in."""
+
+    def setUp(self):
+        patcher = mock.patch.dict(os.environ, {"APP_PASSWORD": "open sesame"})
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        self.client = webapp.app.test_client()
+
+    def test_the_manifest_opens_without_signing_in(self):
+        reply = self.client.get("/manifest.webmanifest")
+        self.assertEqual((reply.status_code, reply.mimetype), (200, "application/manifest+json"))
+        body = reply.get_json(force=True)
+        self.assertEqual((body["start_url"], body["scope"], body["display"]), ("/", "/", "standalone"))
+        self.assertEqual({icon["purpose"] for icon in body["icons"]}, {"any", "maskable"})
+        self.assertIn("512x512", {icon["sizes"] for icon in body["icons"]}, "Android wants a 512 icon to install")
+        for icon in body["icons"]:
+            with self.client.get(icon["src"]) as reply:
+                self.assertEqual(reply.status_code, 200, icon["src"])
+        self.assertEqual([s["url"] for s in body["shortcuts"]], ["/shorts", "/video", "/image"])
+
+    def test_the_manifest_takes_the_themes_colours(self):
+        with mock.patch.object(webapp.settings, "load", return_value={**webapp.settings.DEFAULTS, "theme": "nord"}):
+            body = self.client.get("/manifest.webmanifest").get_json(force=True)
+        self.assertEqual((body["background_color"], body["theme_color"]), (webapp.settings.THEMES["nord"][1],) * 2)
+
+    def test_the_service_worker_is_at_the_root_and_never_kept(self):
+        reply = self.client.get("/sw.js")
+        self.assertEqual((reply.status_code, reply.mimetype), (200, "text/javascript"))
+        self.assertEqual(reply.headers["Cache-Control"], "no-cache")
+        reply.close()
+        offline = self.client.get("/offline")
+        self.assertEqual(offline.status_code, 200)
+        page = offline.get_data(as_text=True)
+        offline.close()
+        self.assertIn("can't be reached", page)
+        self.assertIn('id="retry"', page)
+        self.assertIn("fetch('/manifest.webmanifest', { cache: 'no-store'", page, "tries what answers without signing in")
+        self.assertIn("location.reload()", page, "then the page that was asked for, not the home page")
+        self.assertIn("intent:#Intent;package=com.tailscale.ipn;", page, "opens the Tailscale app")
+        self.assertIn("addEventListener('visibilitychange'", page, "back from Tailscale, it tries by itself")
+
+    def test_the_sign_in_page_is_installable_too(self):
+        page = self.client.get("/login").get_data(as_text=True)
+        self.assertIn('<link rel="manifest" href="/manifest.webmanifest">', page)
+        self.assertRegex(page, r'<script defer src="/static/install\.js(\?v=\d+)?"></script>')
+        self.assertIn('<meta name="theme-color" content="#0e0f13">', page)
 
 
 class PanelTest(unittest.TestCase):
@@ -2201,6 +2265,65 @@ class PanelTest(unittest.TestCase):
         self.assertEqual(defaults(), [])
         self.assertEqual(post({"side": "image", "name": "Nothing", "default": True}).status_code, 404)
 
+    def test_a_workflow_and_a_model_family_have_one_default_preset_each(self):
+        if os.path.exists(webapp.PRESETS_PATH):
+            os.remove(webapp.PRESETS_PATH)
+        self.addCleanup(lambda: os.path.exists(webapp.PRESETS_PATH) and os.remove(webapp.PRESETS_PATH))
+        post = lambda body: self.client.post("/api/presets", json=body)
+        image = lambda: {p["name"]: p for p in self.client.get("/api/presets").get_json()["presets"]["image"]}
+        # Saved as a workflow's own default: it says which workflow, and keeps saying so when saved over.
+        post({"side": "image", "name": "Krea2", "values": {"workflow": "image_Krea2.json", "opt_steps": "8"}, "workflow_default": "image_Krea2.json"})
+        post({"side": "image", "name": "Krea2", "values": {"workflow": "image_Krea2.json", "opt_steps": "10"}})
+        self.assertEqual((image()["Krea2"]["workflow_default"], image()["Krea2"]["values"]["opt_steps"]), ("image_Krea2.json", "10"))
+        # Another saved as that workflow's default takes it over.
+        post({"side": "image", "name": "Krea2 mine", "values": {"workflow": "image_Krea2.json"}, "workflow_default": "image_Krea2.json"})
+        self.assertNotIn("workflow_default", image()["Krea2"])
+        self.assertEqual(image()["Krea2 mine"]["workflow_default"], "image_Krea2.json")
+        # A family's default: one per family, and taken away with an empty one.
+        post({"side": "image", "name": "Wallpaper", "values": {"aspect": "16:9"}})
+        post({"side": "image", "name": "Krea2", "family_default": "krea2"})
+        post({"side": "image", "name": "Wallpaper", "family_default": "krea2"})
+        self.assertEqual([name for name, p in image().items() if p.get("family_default") == "krea2"], ["Wallpaper"])
+        post({"side": "image", "name": "Krea2", "family_default": "flux3"})
+        self.assertEqual((image()["Krea2"]["family_default"], image()["Wallpaper"]["family_default"]), ("flux3", "krea2"), "families apart")
+        post({"side": "image", "name": "Wallpaper", "values": {"aspect": "21:9"}})
+        self.assertEqual(image()["Wallpaper"]["family_default"], "krea2", "saved over, it stays the family's")
+        post({"side": "image", "name": "Wallpaper", "family_default": ""})
+        self.assertNotIn("family_default", image()["Wallpaper"])
+        self.assertEqual(post({"side": "image", "name": "Nothing", "family_default": "krea2"}).status_code, 404)
+        self.assertEqual(post({"side": "image", "name": "Krea2", "family_default": 5}).status_code, 400)
+        self.assertEqual(post({"side": "image", "name": "X", "values": {}, "workflow_default": " "}).status_code, 400)
+
+    def test_settings_hold_the_lora_range_and_what_choosing_a_workflow_does(self):
+        current = self.client.get("/api/settings").get_json()["settings"]
+        self.addCleanup(lambda: self.client.post("/api/settings", json={key: current[key] for key in ("lora_range", "workflow_switch")}))
+        self.assertEqual((current["lora_range"], current["workflow_switch"]), ("author", "default"), "the author's range; its default preset")
+        saved = self.client.post("/api/settings", json={"lora_range": "tested", "workflow_switch": "last"}).get_json()["settings"]
+        self.assertEqual((saved["lora_range"], saved["workflow_switch"]), ("tested", "last"))
+        self.assertEqual(webapp.lora_range(), "tested", "what LoRA comparisons are run over")
+        self.assertEqual(self.client.post("/api/settings", json={"lora_range": "mine"}).status_code, 400)
+        self.assertEqual(self.client.post("/api/settings", json={"workflow_switch": "random"}).status_code, 400)
+
+    def test_a_default_size_is_kept_per_model_family_and_mode(self):
+        current = self.client.get("/api/settings").get_json()["settings"]
+        self.addCleanup(lambda: self.client.post("/api/settings", json={"default_sizes": current["default_sizes"]}))
+        self.assertEqual(current["default_sizes"], {"image": {}, "video": {}}, "none until one is pinned")
+        sizes = {"image": {"krea2|text": {"aspect": "3:2", "megapixels": "2", "size": "", "junk": "x"}}, "video": {"ltx|any": {"preset": "16:9", "size": ""}}}
+        saved = self.client.post("/api/settings", json={"default_sizes": sizes}).get_json()["settings"]["default_sizes"]
+        self.assertEqual(saved["image"], {"krea2|text": {"aspect": "3:2", "megapixels": "2", "size": ""}}, "only the size's own fields")
+        self.assertEqual(saved["video"], {"ltx|any": {"preset": "16:9", "size": ""}})
+        for bad in ("big", {"image": {"krea2|text": "3:2"}}, {"image": {"": {"aspect": "1:1"}}}):
+            self.assertEqual(self.client.post("/api/settings", json={"default_sizes": bad}).status_code, 400, bad)
+
+    def test_the_workflow_check_says_what_each_workflow_was_made_into(self):
+        listed = [{"name": "image_y.json", "label": "image_y", "pipeline": "image", "problem": "Needs the node Z.", "family": "flux3"}]
+        with mock.patch.object(webapp, "saved_workflows", return_value=listed):
+            data = self.client.get("/api/workflow-check").get_json()
+        self.assertTrue(data["ok"])
+        self.assertIn("gc:prompt", data["tags"])
+        self.assertEqual(data["workflows"][0]["family_label"], "FLUX.3")
+        self.assertEqual(data["workflows"][0]["problem"], "Needs the node Z.")
+
     def test_a_job_started_later_waits_at_the_end_until_it_is_started(self):
         self.assertTrue(self.generate(start_later="1").get_json()["queued"], "it waits, though nothing is running")
         waiting = self.status()["queue"]["items"]
@@ -2565,8 +2688,8 @@ class PanelTest(unittest.TestCase):
         self.assertEqual(reply["workflows"], [
             {"name": "r2v.json", "label": "r2v", "takes": {"min_images": 0, "max_images": 20}, "clip_seconds": [5, 10, 8], "openh3": False, "h3_multishot": False, "h3_director": False},
             {"name": "t2v.json", "label": "t2v", "takes": {"min_images": 0, "max_images": 0, "options": SAVED_OPTIONS}, "clip_seconds": [5, 10, 8], "openh3": False, "h3_multishot": False, "h3_director": False},
-            {"name": "wan.json", "label": "wan", "takes": {"min_images": 0, "max_images": 1, "options": SAVED_OPTIONS}, "clip_seconds": [5, 10, 8], "openh3": False, "h3_multishot": False, "h3_director": False}],
-            "each with the workflow's own options: a KSampler's steps here")
+            {"name": "wan.json", "label": "wan", "family": "wan", "family_label": "Wan", "takes": {"min_images": 0, "max_images": 1, "options": SAVED_OPTIONS}, "clip_seconds": [5, 10, 8], "openh3": False, "h3_multishot": False, "h3_director": False}],
+            "each with the workflow's own options: a KSampler's steps here; and its model family, here by its name")
 
     def test_a_films_workflow_options_are_used_and_kept(self):
         self.save_workflows()
@@ -2737,7 +2860,7 @@ class PanelTest(unittest.TestCase):
             self.assertEqual(reply["workflows"], [
                 {"name": "r2v.json", "label": "r2v", "takes": {"min_images": 0, "max_images": 20}, "clip_seconds": [5, 10, 8], "openh3": False, "h3_multishot": False, "h3_director": False},
                 {"name": "t2v.json", "label": "t2v", "takes": {"min_images": 0, "max_images": 0, "options": SAVED_OPTIONS}, "clip_seconds": [5, 10, 8], "openh3": False, "h3_multishot": False, "h3_director": False},
-                {"name": "wan.json", "label": "wan", "takes": {"min_images": 0, "max_images": 1, "options": SAVED_OPTIONS}, "clip_seconds": [5, 10, 8], "openh3": False, "h3_multishot": False, "h3_director": False}])
+                {"name": "wan.json", "label": "wan", "family": "wan", "family_label": "Wan", "takes": {"min_images": 0, "max_images": 1, "options": SAVED_OPTIONS}, "clip_seconds": [5, 10, 8], "openh3": False, "h3_multishot": False, "h3_director": False}])
             self.assertEqual(os.path.basename(video_panel.chosen_workflow({"workflow": "wan.json"})[0]["COMFYUI_WORKFLOW"]), "wan.json")
         webapp._comfyui_cache.update(at=0.0)
 
@@ -2876,16 +2999,40 @@ class PanelTest(unittest.TestCase):
 
     # --- Sign in and restarts ---
 
+    def test_other_themes_colours_reach_the_page(self):
+        """In the page's head: base.css is static, where a theme's template code would never run."""
+        with open(os.path.join(ROOT, "panel", "static", "css", "base.css"), encoding="utf-8") as f:
+            self.assertNotRegex(f.read(), r"\{\{|\{%", "no template code in a static stylesheet")
+        nord = webapp.settings.THEMES["nord"]
+        with mock.patch.dict(os.environ, {"APP_PASSWORD": ""}),                 mock.patch.object(webapp.settings, "load", return_value={**webapp.settings.DEFAULTS, "theme": "nord"}):
+            page = self.client.get("/").get_data(as_text=True)
+        self.assertIn(f':root[data-theme="nord"] {{\n  --bg: {nord[1]}; --panel: {nord[2]};', page)
+        self.assertIn(f'<meta name="theme-color" content="{nord[1]}">', page)
+        self.assertIn('<html lang="en" data-theme="nord"', page)
+
+    def test_page_shows_only_once_styled_and_scripted(self):
+        """No flash of every section and button as it opens: an installed app opens afresh each time."""
+        with mock.patch.dict(os.environ, {"APP_PASSWORD": ""}):
+            page = self.client.get("/").get_data(as_text=True)
+        head, body = page.split("</head>", 1)
+        self.assertEqual(len(re.findall(r'<link rel="stylesheet"', head)), 9, "base.css and the page's 8, all in the head")
+        self.assertNotIn('rel="stylesheet"', body)
+        with open(os.path.join(ROOT, "panel", "static", "bootstrap.js"), encoding="utf-8") as f:
+            bootstrap = f.read()
+        self.assertIn("'starting'", bootstrap)
+        self.assertIn("document.addEventListener('DOMContentLoaded'", bootstrap,
+                      "shown once the scripts have run, even if one of them throws")
+
     def test_password(self):
         with mock.patch.dict(os.environ, {"APP_PASSWORD": "open sesame"}):
             client = webapp.app.test_client()
             self.assertEqual(client.get("/").status_code, 302)
             self.assertEqual(client.get("/api/status").status_code, 302)
             self.assertEqual(client.post("/generate/video").status_code, 302)
-            page = client.get("/login").get_data(as_text=True)
+            page = with_styles(client.get("/login").get_data(as_text=True))
             self.assertIn(":root { --accent: var(--neutral); }", page, "the way in is Status's silver")
             self.assertIn('<span class="spinner" aria-hidden="true"></span><span id="loginLabel">Sign in</span>', page)
-            self.assertIn('<script defer src="/static/login.js"></script>', page)
+            self.assertRegex(page, r'<script defer src="/static/login\.js(\?v=\d+)?"></script>', "its script, versioned as the page's are")
             with open(os.path.join(ROOT, "panel", "static", "login.js"), encoding="utf-8") as f:
                 self.assertIn("form.classList.add('busy');", f.read(), "sent, it shows it is signing in")
             self.assertNotIn('class="card wrong"', page)

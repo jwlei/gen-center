@@ -32,7 +32,7 @@ def made_for(kind, takes, images=0):
     return 1 <= takes["min_images"] <= images <= takes["max_images"]
 
 
-def variations(kind, entries, images=0, form=None, private=False):
+def variations(kind, entries, images=0, form=None, private=False, prefer=lora_tests.lora_hints.AUTHOR):
     """
     Each usable image workflow of that kind, in name order, as the set's images: [{"kind", "workflow", "label"}], each
     with its "lora_test" when the form asks for a LoRA comparison and that workflow has a style LoRA to compare.
@@ -49,7 +49,7 @@ def variations(kind, entries, images=0, form=None, private=False):
         # Named as Generate's picker names it, as each image's title and its pill in the viewer.
         workflow = {"kind": kind, "workflow": entry["path"], "label": picker_label(entry["path"], "image")}
         try:
-            loras = lora_tests.variations(asked, entry["takes"].get("options") or [], private)
+            loras = lora_tests.variations(asked, entry["takes"].get("options") or [], private, prefer)
         except ValueError:
             loras = []  # No style LoRA it can compare (or not at that increment): it runs once, at its defaults
         found += [{**workflow, "lora_test": lora} for lora in loras] or [workflow]

@@ -2,6 +2,7 @@ import re
 import time
 from core import llm_tests, lora_tests, workflow_tests
 
+from core.staged_eta import SMALL_DRIFT_SECONDS, StagedEta, option as _option  # noqa: F401, SMALL_DRIFT_SECONDS as it was reached here
 from core.eta_keys import SEPARATOR, LocalModelTimer, Timings, llm_keys, options_in, render_keys
 from pipelines.image.media import FROM_IMAGE, PIXELS_PER_MEGAPIXEL, parse_size
 from pipelines.image.run_state import STAGES, RunState
@@ -13,7 +14,6 @@ DEFAULT_PROMPTS_SECONDS = 45
 # enhancer even writes them one by one). Until it is timed, this per prompt.
 DEFAULT_SECONDS_PER_PROMPT = 15
 DEFAULT_IMAGE_SECONDS = 120
-SMALL_DRIFT_SECONDS = 60
 # Upscale under Resolution, per megapixel it ends at, until timed: the image is made, then upscaled in the same render.
 # It is timed apart from making the image, per method and model, so a new end size or method starts from its nearest.
 UPSCALE_RATES = {"UltraSharp": 4, "Ultimate SD": 25, "SeedVR2": 45}
@@ -27,10 +27,6 @@ def _upscale_in(options):
     if not method or method == "Off" or not size:
         return None, 0
     return method, int(size.group(1)) * int(size.group(2)) / 1e6
-
-
-def _option(argv, name, default=None):
-    return argv[argv.index(name) + 1] if name in argv[:-1] else default
 
 
 def _size_label(argv):
@@ -51,7 +47,7 @@ def _size_share(argv):
     return 1 if megapixels == FROM_IMAGE or not re.fullmatch(r"\d+(\.\d+)?", megapixels) else float(megapixels)
 
 
-class RunEta:
+class RunEta(StagedEta):
     """As the Video side's: estimates what is left from how long each step took before, and learns as it goes."""
 
     def __init__(self, argv, env, path):
@@ -141,13 +137,6 @@ class RunEta:
             self.timings.save()
 
     # --- What the run reports ---
-
-    def stage(self, number, total, name):
-        if self.number and number == self.number + 1:
-            self._finish_stage()
-        self.number, self.total, self.name = number, total, name
-        self.stage_started = time.time()
-        self.local_mark = self.local.spent
 
     def image(self, number, total):
         self._finish_image(time.time())
@@ -239,26 +228,5 @@ class RunEta:
         if not self.number:
             return None
         now = time.time()
-        steps = []
-        left = 0
-        for number, name in enumerate(STAGES[:self.total], 1):
-            if name == "Prompts" and self.prompts_kept:
-                steps.append({"state": "kept", "seconds": 0})
-            elif number < self.number:
-                steps.append({"state": "done", "seconds": round(self.finished.get(number, 0))})
-            elif number == self.number:
-                current = self._current_left(now)
-                left += current
-                steps.append({"state": "now", "seconds": round(current)})
-            else:
-                seconds = self._stage_seconds(name)
-                left += seconds
-                steps.append({"state": "next", "seconds": round(seconds)})
-        elapsed = now - self.started
-        adjusted = elapsed + left
-        changes = list(self.changes)
-        drift = adjusted - self.original_total - sum(change["seconds"] for change in changes)
-        if abs(drift) >= SMALL_DRIFT_SECONDS:
-            changes.append({"text": f"Running {'slower' if drift > 0 else 'faster'} than estimated", "seconds": round(drift)})
-        return {"steps": steps, "total_left": round(left), "original_total": self.original_total,
-                "original_left": round(self.original_total - elapsed), "adjusted_total": round(adjusted), "changes": changes}
+        steps, left = self._steps(STAGES[:self.total], now, lambda name: name == "Prompts" and self.prompts_kept, self._stage_seconds)
+        return self._summary(steps, left, now)

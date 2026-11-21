@@ -1,0 +1,149 @@
+/* The settings box: its sections, Free RAM, the GPU guard, its buttons. Linked from templates/index.html in this order, which the cascade depends on. */
+/* Its sections: one shown at a time, named in a bar over them (the section bar's quiet buttons and line). */
+/* A comparison's hint says something only once it's ticked: empty, it takes no room. */
+.tests-group .hint:empty { display: none; }
+.settings-tabs { position: relative; display: flex; flex: none; padding: 2px 0 6px; border-bottom: 1px solid var(--line); }
+.settings-tabs button { flex: 1 1 0; min-width: 0; margin: 0; padding: 4px 2px; background: none; border: 0; color: var(--muted);
+  font-size: .74rem; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; transition: color .2s ease; }
+.settings-tabs button[aria-selected="true"] { color: var(--text); }
+.settings-tabs .section-glider { background: var(--accent); }
+.settings-section { display: flex; flex-direction: column; gap: 10px; touch-action: pan-y; }
+.settings-section[hidden] { display: none; }
+/* Free RAM: the stepper centred, as Generate's; Set to its left, there only while a change waits to be set. */
+.reserve-row { position: relative; display: flex; justify-content: center; }
+.reserve-row .mp-field { min-width: 80px; font-variant-numeric: tabular-nums; }
+#reserveSet { position: absolute; left: 0; top: 50%; transform: translateY(-50%); width: auto; margin: 0; padding: 6px 12px; font-size: .78rem;
+  background: transparent; border: 1px solid var(--accent); color: var(--accent); }
+#reserveSet[hidden] { display: none; }
+/* Asking for a restart: the same yellow as Restart panel's while it restarts (--warn). */
+#restartComfy.pulse { border-color: var(--warn); color: var(--warn); background: color-mix(in srgb, var(--warn) 14%, transparent); animation: pulse 1.2s ease-in-out infinite; }
+@keyframes pulse { 50% { box-shadow: 0 0 0 4px color-mix(in srgb, var(--warn) 35%, transparent); } }
+.settings-actions #shutdown { background: rgba(229, 83, 75, .14); border-color: var(--err); color: var(--err); }
+.settings-actions #shutdown.armed { background: var(--err); color: #fff; }
+.settings-actions button { position: relative; }
+.settings-actions button[data-taps]::after { content: attr(data-taps); position: absolute; top: 2px; right: 5px; font-size: .68rem; font-weight: 700; }
+/* The action labels stay visible below their icons. */
+.settings-actions button { justify-content: center; }
+.settings-actions svg { width: 20px; height: 20px; }
+.settings-actions button > span { font-size: .62rem; line-height: 1; white-space: nowrap; }
+.settings-note { margin: 0; }
+.settings-group { margin-top: 6px; padding-top: 10px; border-top: 1px solid var(--line); font-size: .78rem; text-transform: uppercase; letter-spacing: .04em; color: var(--neutral); font-weight: 600; }
+.settings-check { display: flex; align-items: flex-start; gap: 10px; margin: 0; text-transform: none; letter-spacing: 0; font-size: .9rem; color: var(--text); cursor: pointer; }
+.settings-check input { width: auto; margin: 3px 0 0; }
+.settings-check small { display: block; margin-top: 2px; color: var(--muted); font-size: .78rem; }
+.settings-row { display: flex; align-items: center; gap: 10px; }
+/* Settings, Workflows: a line per workflow, its inputs and where each was found folded under it. */
+.workflow-check { display: flex; flex-direction: column; gap: 6px; }
+.workflow-check-item { border: 1px solid var(--line); border-radius: 10px; padding: 6px 10px; }
+.workflow-check-item > summary { display: flex; align-items: center; gap: 8px; cursor: pointer; font-size: .82rem; }
+.workflow-check-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.workflow-check-side, .workflow-check-family { flex: none; color: var(--muted); font-size: .68rem; }
+.workflow-check-family.unknown { font-style: italic; }
+.workflow-check-state { flex: none; font-size: .68rem; color: var(--ok, var(--accent)); }
+.workflow-check-state[data-ok="false"] { color: var(--err); }
+.workflow-check-problem { margin-top: 6px; color: var(--err); font-size: .75rem; }
+.workflow-check-inputs { width: 100%; margin-top: 6px; border-collapse: collapse; font-size: .75rem; }
+.workflow-check-inputs th { text-align: left; font-weight: 600; padding: 2px 8px 2px 0; white-space: nowrap; }
+.workflow-check-inputs td { padding: 2px 4px; color: var(--muted); }
+.workflow-check-node { opacity: .7; font-family: ui-monospace, monospace; font-size: .68rem; }
+.workflow-check-tag { color: var(--accent); font-weight: 600; }
+.workflow-families { display: flex; flex-wrap: wrap; gap: 4px; }
+.workflow-families .family-chip { padding: 2px 8px; border: 1px solid var(--line); border-radius: 999px; font-size: .7rem; color: var(--muted); }
+.workflow-families .family-chip[data-known="false"] { border-color: var(--accent); color: var(--accent); }
+.settings-row > label { flex: 0 0 64px; margin: 0; }
+.settings-row select { margin: 0; }
+/* Its drop-downs as small as Generate's. */
+.settings-dialog select, .settings-dialog input[type=number] { height: 28px; padding: 3px 6px; font-size: .75rem; border-radius: 7px; }
+.gpu-guard-grid { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: 8px 12px; }
+.gpu-guard-grid > label { margin: 0; text-transform: none; letter-spacing: 0; font-size: .9rem; color: var(--text); }
+.gpu-guard-grid select { margin: 0; }
+.gpu-temp { display: flex; align-items: center; gap: 6px; }
+.gpu-temp input { width: 5.5em; margin: 0; font-variant-numeric: tabular-nums; }
+.gpu-temp span { color: var(--muted); }
+/* Restart Afterburner: small and quiet, under the guard's settings. */
+.gpu-guard-actions { gap: 8px; }
+.gpu-guard-actions button, .settings-action { width: auto; margin: 0; padding: 5px 12px; font-size: .78rem; font-weight: 500; background: transparent;
+  border: 1px solid var(--line); color: var(--muted); }
+.gpu-guard-actions button:hover:not(:disabled), .settings-action:hover:not(:disabled) { color: var(--text); border-color: var(--muted); }
+/* Whether Afterburner is running, left of Restart Afterburner: green, red when it isn't, grey until known. */
+.gpu-guard-actions { justify-content: space-between; align-items: center; }
+.afterburner-state { display: inline-flex; align-items: center; gap: 6px; font-size: .78rem; color: var(--muted); }
+.afterburner-state.off { color: var(--err); }
+.afterburner-buttons { display: inline-flex; gap: 8px; }
+/* Not running: Start stands out, in the accent colour. */
+.gpu-guard-actions #startAfterburner:not(:disabled) { color: var(--accent); border-color: var(--accent); }
+/* First tap: it asks for a second, in the warning colour. */
+.gpu-guard-actions button.armed { color: var(--warn); border-color: var(--warn); }
+/* Temperatures: GPU green, CPU blue, dark steps validated for the dark surfaces; the direct labels carry them for tritan. */
+.temp-dialog { --temp-gpu: #0ca30c; --temp-cpu: #3987e5; width: min(760px, calc(100vw - 32px)); }
+.temp-ranges { display: flex; gap: 6px; margin: 4px 0 12px; }
+.temp-ranges button { flex: 1; margin: 0; padding: 6px 0; background: var(--panel-2); border: 1px solid var(--line); color: var(--muted); }
+.temp-ranges button[aria-pressed="true"] { color: var(--text); border-color: var(--accent); }
+/* GPU and CPU side by side, on a phone too. */
+.temp-tiles { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+.temp-tile { padding: 8px 10px; background: var(--panel-2); border: 1px solid var(--line); border-radius: 10px; }
+.temp-tile-head { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: .8rem; }
+/* The temperature now, and beside it its lowest, average and highest, three small lines as tall as it is. */
+.temp-reading { display: flex; align-items: center; gap: 10px; margin-top: 2px; }
+.temp-now { font-size: 1.4rem; font-weight: 600; color: var(--text); font-variant-numeric: tabular-nums; line-height: 1.95rem; white-space: nowrap; }
+.temp-stats { display: flex; flex-direction: column; color: var(--muted); font-size: .6rem; line-height: .65rem; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.temp-stats b { color: var(--text); font-weight: 600; }
+.temp-legend { display: flex; flex-wrap: wrap; gap: 6px 14px; margin: 12px 0 4px; color: var(--muted); font-size: .78rem; }
+.temp-legend span { display: inline-flex; align-items: center; gap: 6px; }
+.temp-key { display: inline-block; width: 14px; height: 3px; border-radius: 2px; }
+.temp-key-gpu { background: var(--temp-gpu); }
+.temp-key-cpu { background: var(--temp-cpu); }
+.temp-key-band { height: 10px; background: color-mix(in srgb, var(--muted) 30%, transparent); }
+.temp-key-guard { height: 0; border-top: 1.5px dashed var(--muted); }
+.temp-chart { position: relative; min-height: 240px; touch-action: pan-y; }
+.temp-chart svg { display: block; width: 100%; height: 240px; overflow: visible; }
+.temp-chart text { fill: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
+.temp-chart .temp-label { fill: var(--text); font-weight: 600; }
+.temp-tip { position: fixed; z-index: 10; pointer-events: none; padding: 7px 10px; background: var(--panel-2); border: 1px solid var(--line); border-radius: 8px; color: var(--text); font-size: .78rem; font-variant-numeric: tabular-nums; box-shadow: 0 6px 18px #0006; white-space: nowrap; }
+.temp-tip .temp-tip-time { color: var(--muted); margin-bottom: 3px; }
+.temp-tip .temp-tip-row { display: flex; align-items: center; gap: 6px; }
+/* A row of quiet action buttons in a box: what they say on the left, the buttons on the right. */
+.settings-actions-row { justify-content: space-between; align-items: center; gap: 8px; }
+.settings-action:disabled { opacity: .5; }
+/* System information: its parts under quiet headings; the table in a box of its own. */
+.temp-section-title { margin: 14px 0 6px; font-size: .72rem; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); font-weight: 600; }
+.temp-section-title:first-child { margin-top: 0; }
+.temp-table-row { justify-content: flex-end; margin-top: 8px; }
+.temp-table-dialog { width: min(560px, calc(100vw - 32px)); font-size: .82rem; }
+.temp-table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+.temp-table th, .temp-table td { padding: 3px 8px; text-align: right; border-bottom: 1px solid var(--line); }
+.temp-table th:first-child, .temp-table td:first-child { text-align: left; }
+/* The body scrolls; Close stays in sight under it, centred as in the other boxes. */
+.temp-dialog .panel-dialog-body { display: flex; flex-direction: column; }
+.theme-picker { margin: 0; padding: 11px 12px; text-align: left; background: var(--panel-2); border: 1px solid var(--line); color: var(--text); }
+.theme-list { display: flex; flex-direction: column; gap: 6px; }
+.theme-choice { display: flex; align-items: center; gap: 10px; margin: 0; padding: 9px 10px; text-align: left; background: var(--panel-2); border: 1px solid var(--line); color: var(--text); font-size: .9rem; }
+.theme-choice[aria-pressed="true"] { border-color: var(--accent); }
+.theme-choice:focus-visible, .theme-picker:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.theme-name { flex: 1; }
+.theme-swatches { display: flex; flex: none; }
+.theme-swatches i { width: 20px; height: 20px; border: 1px solid rgba(255,255,255,.25); border-radius: 50%; margin-left: -3px; }
+.url-row .url-name { flex: 0 0 auto; font-size: .8rem; color: var(--muted); }
+.url-row code { flex: 1 1 0; min-width: 0; overflow-wrap: anywhere; color: var(--text); background: var(--panel-2); padding: 4px 8px; border-radius: 6px; font-size: .8rem; user-select: all; }
+.url-row button { width: auto; flex: none; margin: 0; padding: 4px 10px; font-size: .78rem; background: var(--panel-2); border: 1px solid var(--line); color: var(--text); }
+.disk .bar { height: 6px; }
+.disk .bar > div { background: var(--shared); }
+.disk-line { display: flex; justify-content: space-between; gap: 10px; margin-top: 6px; font-size: .84rem; }
+.disk-line span:last-child { color: var(--muted); }
+.vhead { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
+.tabs { display: flex; gap: 6px; flex: 1 1 auto; }
+.tabs button, .vhead > button { margin: 0; padding: 8px 10px; font-size: .82rem; white-space: nowrap; }
+.tabs button { background: var(--panel-2); color: var(--muted); border: 1px solid var(--line); }
+.tabs button.active { background: var(--panel); color: var(--text); border-color: var(--accent); }
+.vhead > button { width: auto; flex: 1 0 auto; }
+/* One portrait video per slide; swipe, or use the arrows below. */
+.carousel {
+  position: relative;
+  display: flex;
+  gap: 12px;
+  overflow-x: auto;
+  scroll-snap-type: x mandatory;
+  scrollbar-width: none;
+}
+.carousel::-webkit-scrollbar { display: none; }
+.carousel.as-list { display: block; overflow: visible; }

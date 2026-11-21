@@ -1,6 +1,7 @@
 import re
 import time
 
+from core.staged_eta import SMALL_DRIFT_SECONDS, StagedEta, option as _option  # noqa: F401, SMALL_DRIFT_SECONDS as it was reached here
 from core.eta_keys import SEPARATOR, LocalModelTimer, Timings, llm_keys, options_in_env, render_keys
 from pipelines.video.media import RENDER_AREA, default_area
 from pipelines.video.comfy import DEFAULT_WORKFLOW, workflow_model
@@ -21,8 +22,6 @@ MULTISHOT_STEPS = 20
 # Render time per second of film at full size, measured on this GPU in yt-auto-shorts. Each model, workflow, set of
 # options and size learns its own (core/eta_keys.py).
 DEFAULT_RENDER_SECONDS = 31
-# Unexplained drift from the original estimate below this isn't worth a line in the panel.
-SMALL_DRIFT_SECONDS = 60
 # Latent upscale (core/workflow_options.py): the clip made at its size, then its latent enlarged and refined at the size
 # it ends at. The refine is timed apart, per second of film at full size where it ends, per preset and model; until
 # timed, from how many refine steps the preset takes.
@@ -48,10 +47,6 @@ def _latent_in(options):
     return preset, steps, megapixels
 
 
-def _option(argv, name, default):
-    return argv[argv.index(name) + 1] if name in argv[:-1] else default
-
-
 def _size_share(argv, video_model=None):
     """
     How much of a full-size render this size is. Render time follows the pixel count, near enough. With no size
@@ -63,7 +58,7 @@ def _size_share(argv, video_model=None):
     return default_area(video_model) / RENDER_AREA
 
 
-class RunEta:
+class RunEta(StagedEta):
     """
     Estimates what is left of a run from how long each step took before. Steps are
     timed as they finish and saved to `path`, so estimates improve with every run.
@@ -183,13 +178,6 @@ class RunEta:
 
     # --- What the run reports ---
 
-    def stage(self, number, total, name):
-        if self.number and number == self.number + 1:
-            self._finish_stage()
-        self.number, self.total, self.name = number, total, name
-        self.stage_started = time.time()
-        self.local_mark = self.local.spent
-
     def event(self, kind):
         """A line of the run's log (panel/server.py Job.EVENTS): what the local model did, and where planning ends."""
         now = time.time()
@@ -236,18 +224,6 @@ class RunEta:
             self._finish_stage()
 
     # --- Why the ETA moved ---
-
-    def _note(self, text, seconds):
-        self.changes.append({"text": text, "seconds": round(seconds)})
-
-    def _all_changes(self, adjusted):
-        """The noted changes, plus whatever they don't explain, so they add up to the adjusted ETA."""
-        changes = list(self.changes)
-        drift = adjusted - self.original_total - sum(change["seconds"] for change in changes)
-        if abs(drift) >= SMALL_DRIFT_SECONDS:
-            pace = "slower" if drift > 0 else "faster"
-            changes.append({"text": f"Running {pace} than estimated", "seconds": round(drift)})
-        return changes
 
     # --- Learning ---
 
@@ -395,24 +371,5 @@ class RunEta:
         if not self.number:
             return None
         now = time.time()
-        steps = []
-        left = 0
-        for number, name in enumerate(STAGES[:self.total], 1):
-            if name in self.kept_stages:
-                steps.append({"state": "kept", "seconds": 0})
-            elif number < self.number:
-                steps.append({"state": "done", "seconds": round(self.finished.get(number, 0))})
-            elif number == self.number:
-                current = self._current_left(now)
-                left += current
-                steps.append({"state": "now", "seconds": round(current)})
-            else:
-                seconds = self._stage_seconds(name)
-                left += seconds
-                steps.append({"state": "next", "seconds": round(seconds)})
-
-        elapsed = now - self.started
-        adjusted = elapsed + left
-        return {"steps": steps, "total_left": round(left),
-                "original_total": self.original_total, "original_left": round(self.original_total - elapsed),
-                "adjusted_total": round(adjusted), "changes": self._all_changes(adjusted)}
+        steps, left = self._steps(STAGES[:self.total], now, lambda name: name in self.kept_stages, self._stage_seconds)
+        return self._summary(steps, left, now)

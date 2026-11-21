@@ -1,0 +1,172 @@
+/* The boxes that open over the page: Finished, Log, Quota, Edit, Power and Restart. Linked from templates/index.html in this order, which the cascade depends on. */
+/* Finished, Log and Quota open over a blurred page, like the viewer, with a quiet Close under them. */
+dialog.panel-dialog { width: min(620px, calc(100vw - 24px)); max-height: calc(100dvh - 48px); padding: 14px 14px 12px;
+  display: none; flex-direction: column; gap: 10px; animation: menu-in .2s ease; }
+dialog.panel-dialog[open] { display: flex; }
+/* While a box is open over the page, the page under it stays put: a swipe in the box never scrolls it. */
+html:has(dialog[open]), html:has(dialog[open]) body { overflow: hidden; }
+dialog, dialog * { overscroll-behavior: contain; }
+dialog.panel-dialog::backdrop { background: rgba(0, 0, 0, .55); -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px); }
+.panel-dialog-title { font-size: .95rem; font-weight: 600; }
+.panel-dialog-body { min-height: 0; overflow: auto; }
+.panel-dialog-body .card { margin: 0; padding: 0; background: none; border: 0; box-shadow: none; }
+.panel-dialog-body .card > .section-title:first-child { display: none; }
+.panel-dialog-body .log-panes { display: flex; flex-direction: column; }
+.panel-dialog-body .log { max-height: none; height: 55dvh; }
+.panel-dialog-body #uploadLog { height: 22dvh; }
+.panel-dialog-body .results .result { font-size: .85rem; }
+.panel-close { align-self: center; width: auto; min-width: 96px; margin: 0; padding: 6px 18px; font-size: .82rem; font-weight: 600;
+  background: transparent; border: 1px solid var(--line); border-radius: 999px; color: var(--muted); }
+/* The log takes the whole screen: its lines are what's being read, so no title and next to no margin. */
+dialog.panel-dialog.log-open { width: calc(100vw - 8px); height: calc(100dvh - 8px); max-width: none; max-height: none; padding: 4px; gap: 4px; }
+dialog.log-open .panel-dialog-title { display: none; }
+dialog.log-open .panel-dialog-body { flex: 1 1 0; display: flex; flex-direction: column; overflow: hidden; }
+dialog.log-open .log-panes { flex: 1 1 0; min-height: 0; position: static; }
+dialog.log-open .log-tools { margin: 0 0 4px; }
+dialog.log-open .q-group { margin: 4px 2px 2px; }
+dialog.log-open .log { flex: 1 1 0; height: auto; min-height: 0; padding: 6px 8px; border-radius: 8px; font-size: .9rem; line-height: 1.55; }
+dialog.log-open .log.only-shorts { flex: 0 1 28%; }
+dialog.log-open .ln { grid-template-columns: 3.3em minmax(0, 1fr); gap: 8px; padding: 2px 0; }
+dialog.log-open .ln .t { font-size: .8rem; line-height: 1.95; }
+dialog.log-open .panel-close { padding: 4px 18px; }
+@media (prefers-reduced-motion: reduce) { dialog.panel-dialog { animation: none; } }
+dialog.upscale-dialog { position: fixed; margin: 0; padding: 8px 10px; gap: 6px; flex-direction: column; align-items: stretch; justify-content: space-between;
+    overflow: visible; max-height: none; max-width: none; box-sizing: border-box; background: var(--panel-2); border: 1px solid var(--line); border-radius: 12px; box-shadow: 0 6px 20px rgba(0, 0, 0, .5); animation: none; }
+  dialog.upscale-dialog::backdrop { background: rgba(0, 0, 0, .25); -webkit-backdrop-filter: none; backdrop-filter: none; }
+  .upscale-row { display: flex; gap: 8px; align-items: center; justify-content: center; }
+  .upscale-dialog button, .upscale-dialog select { width: auto; margin: 0; padding: 5px 14px; font-size: .78rem; font-weight: 600; border-radius: 999px;
+    background: transparent; border: 1px solid var(--line); color: #ddd; }
+  .upscale-dialog select { padding-right: 8px; }
+  .upscale-note { color: #aaa; font-size: .72rem; font-variant-numeric: tabular-nums; }
+.upscale-head { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; font-size: .78rem; font-weight: 600; }
+.upscale-dialog #upscaleGo { background: var(--accent); border-color: var(--accent); color: #fff; }
+.upscale-dialog .upscale-row button { flex: 1 1 0; min-width: 0; }
+.upscale-dialog select[hidden], .upscale-row[hidden], .upscale-methods button[hidden] { display: none; }
+/* The method list grows up out of the Upscale button, as the footer's side menu does. */
+dialog#viewerUpscaleBar, dialog#moveSheet, dialog#pillsMenu, dialog#editMenu, dialog#queuedDelete { padding: 5px; gap: 4px; transform-origin: bottom center; animation: menu-in .2s ease; box-shadow: 0 8px 24px rgba(0, 0, 0, .45); }
+dialog#viewerUpscaleBar::backdrop, dialog#moveSheet::backdrop, dialog#pillsMenu::backdrop, dialog#editMenu::backdrop, dialog#queuedDelete::backdrop { background: transparent; }
+dialog#viewerUpscaleBar.closing, dialog#moveSheet.closing, dialog#pillsMenu.closing, dialog#editMenu.closing, dialog#queuedDelete.closing { animation: menu-out .15s ease forwards; pointer-events: none; }
+/* A set's trash when the queue still has it: grows up out of the trash, Delete in red above Keep. */
+dialog#queuedDelete { transform-origin: bottom right; }
+dialog#queuedDelete .upscale-head, dialog#queuedDelete .upscale-note { padding: 4px 6px 0; }
+dialog#queuedDelete .upscale-note { overflow-wrap: anywhere; max-height: 30vh; overflow-y: auto; }
+dialog#queuedDelete .upscale-methods button { text-align: center; }
+dialog#queuedDelete .queued-delete-go { color: var(--err); border-color: color-mix(in srgb, var(--err) 55%, transparent); }
+dialog#moveSheet { --accent: var(--shared); border-color: var(--line); }
+/* Its options' text in the middle, + New's icon with it. */
+dialog#moveSheet .upscale-methods button { text-align: center; }
+dialog#moveSheet .upscale-methods button.move-new-pick { display: inline-flex; align-items: center; justify-content: center; gap: 6px; color: var(--accent); }
+dialog#moveSheet .upscale-methods button.move-new-pick svg { width: 14px; height: 14px; }
+dialog#moveSheet .err { margin: 2px 4px; }
+/* Edit's choices, centred, each bordered in its page's colour: green for Image, blue for Video. */
+dialog#editMenu .upscale-methods button { text-align: center; border: 1px solid var(--side); }
+/* All of its pills, wrapped and centred: the preview's line stays one line, so its buttons never move. */
+/* Its heading, quiet: the pills are what it shows. */
+dialog#pillsMenu .pills-menu-head { justify-content: center; font-size: .68rem; font-weight: 500; color: var(--muted); opacity: .8; letter-spacing: .02em; }
+dialog#pillsMenu #pillsMenuBody { justify-content: center; padding: 4px 2px 6px; margin: 0; }
+/* Plain borders, the box's and each collection's; the one tapped keeps its neutral fill, and its border flashes once it has moved. */
+dialog#moveSheet .upscale-methods button { border: 1px solid var(--line); transition: opacity .15s, border-color .15s, transform .1s; }
+dialog#moveSheet .upscale-methods button.picked { background: var(--panel-2); border-color: var(--accent); color: var(--accent); transform: scale(.98); }
+dialog#moveSheet .upscale-methods button.moved { animation: move-flash .38s ease; }
+@keyframes move-flash { 0%, 100% { box-shadow: 0 0 0 0 transparent; } 40% { box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 70%, transparent); } }
+@media (prefers-reduced-motion: reduce) { dialog#moveSheet .upscale-methods button.moved { animation: none; } }
+dialog#moveSheet.moving .upscale-methods button:not(.picked) { opacity: .4; pointer-events: none; }
+.upscale-methods { display: flex; flex-direction: column; gap: 4px; }
+.upscale-dialog .upscale-methods button { width: 100%; padding: 9px 14px; font-size: .85rem; text-align: left; border-radius: 9px; background: var(--panel-2); }
+.upscale-dialog .upscale-methods button:disabled { opacity: .4; cursor: not-allowed; }
+@media (prefers-reduced-motion: reduce) { dialog#viewerUpscaleBar, dialog#viewerUpscaleBar.closing, dialog#moveSheet, dialog#moveSheet.closing,
+  dialog#pillsMenu, dialog#pillsMenu.closing, dialog#editMenu, dialog#editMenu.closing { animation: none; } }
+dialog.upscale-settings { inset: 0; margin: auto; width: min(320px, 90vw); height: fit-content; }
+.viewer-head { position: relative; z-index: 0; width: 100%; }
+dialog.viewer #viewerImage { position: relative; z-index: 1; }
+/* The picture and its badge share one cell, so the badge sits on the picture's own bottom-right corner. */
+dialog.viewer #viewerImage, dialog.viewer #viewerVideo, dialog.viewer #viewerUpscaled { grid-area: 1 / 1; }
+dialog.viewer #viewerUpscaled { position: relative; z-index: 2; align-self: end; justify-self: end; margin: 8px; width: 26px; height: 26px; padding: 5px; }
+.viewer-head .viewer-title { padding: 0 72px; }
+.viewer-count, .viewer-res { position: absolute; top: 0; color: #999; font-size: .72rem; font-variant-numeric: tabular-nums; }
+.viewer-count { left: 0; }
+.viewer-res { right: 0; }
+/* Full width: centred in the bar, it shrank to its content, and the pills' 90% of that always wrapped the last one. */
+.viewer-meta { width: 100%; color: var(--muted); font-size: .72rem; text-align: center; overflow-wrap: anywhere; }
+dialog.viewer .viewer-meta button { width: auto; margin: 0; padding: 0; border: 0; background: transparent; color: inherit; font: inherit; }
+dialog.viewer .viewer-meta button:not(:disabled) { cursor: pointer; text-decoration: underline dotted; text-underline-offset: 3px; }
+.viewer-meta-details { white-space: pre-wrap; }
+.viewer-res:empty { display: none; }
+/* Each result a box outlined in how it ended, no fill: mark, type and title at the left, when quietly at the right. */
+/* Outlined in the colour of the page that made it (its --side); the mark carries how it ended. The list is moved into a dialog, outside .finished. */
+.results .result { display: flex; align-items: center; gap: 8px; width: 100%; margin: 0 0 6px; padding: 7px 10px; background: none;
+  border: 1px solid var(--side, var(--line)); border-radius: 10px; color: inherit; font: inherit; text-align: left; cursor: pointer;
+  touch-action: pan-y; }
+/* What it made, small, on the left; a job with nothing to show (an upload, a failure before its run) keeps the space. */
+.result-thumb { flex: none; width: 34px; height: 34px; border-radius: 6px; overflow: clip; background: var(--panel-2); }
+.result-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+/* A swipe to the right takes a result off the list: it follows the finger, slides out, then the gap closes. */
+/* clip, not hidden: hidden makes the list a scroll box of its own, and inside a dialog (overscroll contained) a
+   swipe up or down on it then scrolled nothing. */
+#finishedList { overflow-x: clip; }
+.finished-foot[hidden] { display: none; }
+/* In the box, Clear sits in the bottom-right corner, on Close's line (the same size of text, padding and border),
+   however far the list is scrolled. */
+dialog.panel-dialog > .finished-foot { position: absolute; right: 14px; bottom: 12px; margin: 0; }
+dialog.panel-dialog > .finished-foot .finished-clear { padding: 6px 10px; font-size: .82rem; line-height: normal; border: 1px solid transparent; }
+.results .result.swipe-back { transition: transform .2s ease, opacity .2s ease; }
+.results .result.swiped { transition: transform .22s ease, opacity .22s ease; transform: translateX(110%) !important; opacity: 0 !important; }
+.results .result.collapsing { overflow: hidden; transition: height .2s ease, margin .2s ease, padding .2s ease, border-width .2s ease;
+  height: 0 !important; margin: 0; padding-top: 0; padding-bottom: 0; border-width: 0; }
+@media (prefers-reduced-motion: reduce) { .results .result.swipe-back, .results .result.swiped, .results .result.collapsing { transition: none; } }
+.result .when, .result-mark { flex: none; white-space: nowrap; }
+.result .when { margin-left: auto; color: var(--muted); font-size: .7rem; opacity: .7; font-variant-numeric: tabular-nums; }
+.result-mark { font-size: .8rem; }
+.result.done .result-mark { color: var(--ok); }
+.result.failed .result-mark { color: var(--err); }
+.result.stopped .result-mark, .result.skipped .result-mark { color: var(--warn); }
+.results .result:hover .result-label { text-decoration: underline; }
+.finished-foot { display: flex; justify-content: flex-end; margin-top: 2px; }
+.finished-clear { width: 5.5em; margin: 0; padding: 3px 8px; background: none; border: 0; border-radius: 6px; color: var(--muted);
+  font-size: .74rem; font-weight: 500; opacity: .7; }
+.finished-clear:hover, .finished-clear:focus-visible { opacity: 1; color: var(--text); }
+.finished-clear.armed { opacity: 1; color: var(--err); }
+/* A batch: its main row says how many, with a chevron that turns as its items open under it, set in a little and
+   smaller, growing to their own height (rows 0fr to 1fr). */
+.batch-count { flex: none; padding: 0 6px; border-radius: 999px; background: var(--panel-2); color: var(--muted); font-size: .7rem; font-variant-numeric: tabular-nums; }
+.batch-chevron { flex: none; color: var(--muted); font-size: 1rem; line-height: 1; transition: transform .25s ease; }
+.result-batch.open .batch-chevron { transform: rotate(90deg); }
+.batch-kids { display: grid; grid-template-rows: 0fr; opacity: 0; transition: grid-template-rows .3s cubic-bezier(.2, .8, .2, 1), opacity .25s ease; }
+.result-batch.open .batch-kids { grid-template-rows: 1fr; opacity: 1; }
+/* clip, not hidden (as the thumbnail grid): hidden made the opened set a scroll box of its own, and in the dialog
+   (overscroll contained) a swipe up or down that started on it scrolled nothing. */
+.batch-kids-in { min-height: 0; overflow: clip; margin-left: 16px; padding-left: 8px; border-left: 2px solid var(--line); }
+.results .result.batch-kid { padding: 4px 8px; font-size: .8rem; border-style: dashed; }
+.result.batch-kid .result-thumb { width: 26px; height: 26px; }
+@media (prefers-reduced-motion: reduce) { .batch-kids, .batch-chevron { transition: none; } }
+.result-type { flex: none; padding: 0 6px; border: 1px solid var(--line); border-radius: 6px; font-size: .7rem; color: var(--text); }
+.result-label { flex: 1 1 0; min-width: 0; overflow-wrap: anywhere; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; overflow: hidden; text-align: left; }
+.finished .failed { color: var(--err); }
+/* The short action labels fit the fixed row; Power's menu grows above it. */
+.settings-actions { display: flex; gap: 6px; flex: none; margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--line); }
+.settings-actions svg { width: 16px; height: 16px; }
+.settings-actions button { flex: 1 1 0; display: flex; flex-direction: column; align-items: center; gap: 4px; margin: 0; padding: 7px 4px; font-size: .68rem;
+  background: var(--panel-2); border: 1px solid var(--line); color: var(--text); }
+.settings-actions button:disabled { opacity: .5; }
+/* Armed, it keeps its own shape here: icon over a label that wraps, not button.armed's one unwrapped line. */
+.settings-actions button.armed { border-color: var(--accent); color: var(--accent); flex: 1 1 0; display: flex; padding: 7px 4px; white-space: normal; overflow: visible; }
+.settings-actions button.restarting, .settings-actions button.restarting:disabled { opacity: 1; color: var(--warn); border-color: var(--warn); background: color-mix(in srgb, var(--warn) 12%, transparent); }
+.settings-power { position: relative; flex: 1 1 0; min-width: 0; }
+.settings-power > button { width: 100%; height: 100%; }
+/* Power's and Restart's menus: their options are buttons like the one they grow from, as wide and lined up with it,
+   stacked straight above it, and they slide straight up out of it. */
+.settings-menu { position: absolute; z-index: 12; left: 0; right: 0; bottom: calc(100% + 6px); display: flex; flex-direction: column; gap: 6px;
+  animation: settings-menu-up .2s ease; }
+.settings-menu[hidden] { display: none; }
+.settings-menu.closing { animation: settings-menu-down .15s ease forwards; pointer-events: none; }
+@keyframes settings-menu-up { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
+@keyframes settings-menu-down { to { opacity: 0; transform: translateY(10px); } }
+.settings-actions .settings-menu > a, .settings-actions .settings-menu > button { display: flex; flex-direction: column; align-items: center; gap: 4px;
+  width: 100%; margin: 0; padding: 7px 4px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel-2); color: var(--text);
+  font-size: .68rem; text-decoration: none; box-shadow: 0 6px 18px rgba(0, 0, 0, .4); }
+.settings-actions .settings-menu > a:hover, .settings-actions .settings-menu > a:focus-visible { border-color: var(--accent); }
+.settings-actions .settings-menu > a > span { font-size: .62rem; line-height: 1; white-space: nowrap; }
+/* Force restart: red, as Power is, since it stops what's going; solid over what's behind it. */
+.settings-actions .settings-menu > #forceRestartPanel { border-color: var(--err); color: var(--err); background: color-mix(in srgb, var(--err) 14%, var(--panel)); }
+.settings-actions .settings-menu > #forceRestartPanel.armed { background: var(--err); color: #fff; }
+.settings-body { display: flex; flex-direction: column; gap: 10px; }

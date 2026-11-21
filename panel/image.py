@@ -15,7 +15,7 @@ from core.upscale_eta import UpscaleEta
 from core.saved_workflows import display_label, map_field, picker_label, shorthand
 from panel import settings
 from panel.server import (read_outcome, IMAGE_TIMINGS, PIPELINES, _runs_cache, active_runs, app, busy_runs, form_options, job, password_required, run_queue, saved_at, queue_form_snapshot,
-                          saved_workflows, private_mode, CACHE_FOR_GOOD)
+                          saved_workflows, private_mode, lora_range, CACHE_FOR_GOOD)
 from panel.video import clean_inputs, queue_label, seed_fixed, shot_seeds, workflow_name
 from pipelines.image import media, models, regions
 from pipelines.image import planner as image_planner
@@ -344,7 +344,7 @@ def compared_workflows(form, image_count):
     entries = saved_workflows()
     try:
         # With a LoRA comparison asked for too, each workflow runs it with its own style LoRAs.
-        tests = workflow_tests.variations(kind, entries, image_count, form, private_mode())
+        tests = workflow_tests.variations(kind, entries, image_count, form, private_mode(), lora_range())
     except ValueError as error:
         return [], None, None, str(error)
     first = next(entry for entry in entries if entry.get("path") == tests[0]["workflow"])
@@ -482,7 +482,7 @@ def estimate():
         env = {**env, llm_tests.ENV: json.dumps(llms)}
     if not error and not compared:
         try:
-            tests = file_tests.combine(lora_tests.variations(request.form, takes.get("options") or [], private_mode()),
+            tests = file_tests.combine(lora_tests.variations(request.form, takes.get("options") or [], private_mode(), lora_range()),
                                        file_tests.variations(request.form, takes.get("options") or []))
             if tests:
                 env = {**env, lora_tests.ENV: json.dumps(tests)}
@@ -617,7 +617,7 @@ def generate():
         return {"ok": False, "error": problem}, 400
     try:
         # A LoRA comparison, a comparison of the files it runs (Model, Text encoder, VAE), or each in the other.
-        tests = [] if compared else file_tests.combine(lora_tests.variations(request.form, takes.get("options") or [], private_mode()),
+        tests = [] if compared else file_tests.combine(lora_tests.variations(request.form, takes.get("options") or [], private_mode(), lora_range()),
                                                        file_tests.variations(request.form, takes.get("options") or []))
     except ValueError as error:
         return {"ok": False, "error": str(error)}, 400

@@ -1,0 +1,442 @@
+/* Output: the viewer, the gallery, collections, sets, pills and albums. Linked from templates/index.html in this order, which the cascade depends on. */
+/* One column, as wide as the picture but never narrower than the buttons need: a tall wallpaper sits whole in the
+   middle of it on black, so the panel under it lines up with its edges and the buttons keep one size. */
+dialog.viewer[open] { display: grid; grid-template-columns: minmax(min(360px, calc(100vw - 44px)), max-content); justify-content: center; gap: 0;
+  padding: 10px; background: var(--panel); border: 1px solid var(--line); border-radius: 14px; animation: viewer-in .2s ease; }
+dialog.viewer[open] #viewerImage, dialog.viewer[open] #viewerVideo { width: 100%; max-width: calc(100vw - 44px); object-fit: contain; border-radius: 8px; }
+/* The page behind the preview: dimmed and out of focus, as behind Finished, Log and Quota. */
+dialog.viewer::backdrop { background: rgba(0, 0, 0, .55); -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px); }
+/* Its own display would otherwise beat [hidden]: after a film, the video showed under the next image. */
+#viewerImage[hidden], #viewerVideo[hidden] { display: none !important; }
+/* Room is kept for the title and both button rows: a portrait picture or film shrinks to fit rather than pushing them out. */
+#viewerImage, #viewerVideo { max-height: calc(100dvh - 190px); }
+#viewerImage { display: block; max-width: calc(100vw - 24px); object-fit: contain; border-radius: 8px; background: #000;
+  touch-action: none; user-select: none; -webkit-user-drag: none; transform-origin: center; }
+/* A layer of its own only while a finger moves it: kept for good, it was never drawn again sharper once zoomed. */
+#viewerImage.gesturing { will-change: transform; }
+#viewerImage.easing { transition: transform .2s ease; }
+/* The old frame fades away directionally, revealing the new one without moving either. */
+.viewer-out { position: fixed; z-index: 2; pointer-events: none; object-fit: contain; background: #000; border-radius: 8px; }
+.viewer-out.to-left, .viewer-out.to-right { mask-size: 300% 100%; animation: viewer-fade-x .25s ease forwards; }
+.viewer-out.to-up, .viewer-out.to-down { mask-size: 100% 300%; animation: viewer-fade-y .25s ease forwards; }
+.viewer-out.to-right, .viewer-out.to-down { animation-direction: reverse; animation-fill-mode: both; }
+.viewer-out.to-left { mask-image: linear-gradient(to right, transparent 33%, black 67%); }
+.viewer-out.to-right { mask-image: linear-gradient(to left, transparent 33%, black 67%); }
+.viewer-out.to-up { mask-image: linear-gradient(to bottom, transparent 33%, black 67%); }
+.viewer-out.to-down { mask-image: linear-gradient(to top, transparent 33%, black 67%); }
+/* Deleted or moved to a collection: it shrinks away, and the next fades in under it. */
+.viewer-out.removed { animation: viewer-removed .26s ease-in forwards; }
+@keyframes viewer-removed { to { opacity: 0; transform: scale(.9) translateY(12px); } }
+@keyframes viewer-fade-x { from { mask-position: 100% 0; } to { mask-position: 0 0; } }
+@keyframes viewer-fade-y { from { mask-position: 0 100%; } to { mask-position: 0 0; } }
+/* The whole preview is one rounded card: the picture, and under it its title and buttons. */
+.viewer-bar { width: 100%; min-width: 0; display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 10px 0 0; box-sizing: border-box; }
+/* One line, cut with an ellipsis so a long title can't push the buttons off the screen; a click shows all of it. */
+.viewer-title { color: #ddd; font-size: .85rem; text-align: center; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: pointer; }
+.viewer-title.full { white-space: normal; overflow-wrap: anywhere; }
+.viewer-title:empty { display: none; }
+.viewer-actions { display: flex; gap: 8px; }
+.viewer-actions { width: 100%; justify-content: center; }
+.viewer-tools { width: 100%; }
+dialog.viewer .viewer-actions > * { flex: 1 1 0; min-width: 0; max-width: 120px; height: 32px; margin: 0; padding: 0 14px; box-sizing: border-box;
+  display: inline-flex; align-items: center; justify-content: center; border: 1px solid var(--line); border-radius: 10px;
+  font-size: .82rem; font-weight: 600; white-space: nowrap; border-radius: 999px; }
+dialog.viewer .viewer-actions > a.button { background: var(--accent); border-color: var(--accent); color: #fff; text-decoration: none; }
+dialog.viewer .viewer-actions > button { background: var(--panel-2); color: var(--text); }
+dialog.viewer .viewer-actions > button.del { color: #ff6b6b; }
+/* As in the prompts view: what to do with it on the left, keeping it (download, delete) on the right. */
+.viewer-tools { display: flex; gap: 8px; justify-content: space-between; }
+.viewer-tools-left, .viewer-tools-right { display: flex; gap: 8px; }
+.viewer-tools a.icon-btn { width: 40px; height: 32px; margin: 0; padding: 0; display: inline-flex; align-items: center; justify-content: center;
+  border-radius: 999px; background: transparent; border: 1px solid var(--line); color: #ddd; }
+.viewer-tools .icon-btn.del { color: var(--muted); }
+.viewer-tools .icon-btn.del:disabled { opacity: .35; cursor: not-allowed; }
+/* Close, small and on its own, as the prompts view's. */
+dialog.viewer .viewer-actions > button.plain { flex: 0 1 auto; min-width: 96px; max-width: none; padding: 6px 18px; font-size: .82rem;
+  background: var(--panel-2); border: 1px solid var(--line); color: var(--text); }
+.viewer-tools[hidden] { display: none; }
+/* Choosing from Output: Use beside Close, the two sharing its room. */
+dialog.viewer .viewer-actions.choosing > button.plain { flex: 1 1 0; min-width: 0; max-width: none; padding-left: 8px; padding-right: 8px; }
+dialog.viewer .viewer-actions > button.viewer-use { background: var(--accent); border-color: var(--accent); color: #fff; }
+dialog.viewer .viewer-actions > button[hidden] { display: none; }
+/* The grid's button, left of Close: an icon, round as the tools above. */
+dialog.viewer .viewer-actions > button.viewer-grid { flex: none; width: 44px; padding: 0; background: transparent; color: #ddd; }
+dialog.viewer .viewer-actions > button.viewer-grid svg { width: 18px; height: 18px; }
+/* All of a set (or the films), small: as many across as fit, square, the one open now outlined. */
+/* As big as a pinch made them (--thumb-size, set on the dialog), as many to a row as fit. */
+.thumb-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(var(--thumb-size, 78px), 1fr)); gap: 6px; }
+/* Smooth to scroll through a hundred: a swipe on a picture scrolls (touch-action), and those out of sight aren't laid
+   out or painted until they come near (content-visibility). */
+/* clip, not hidden: hidden made each picture a scroll box of its own, and in a dialog (overscroll contained) a swipe
+   starting on one scrolled nothing; only the gaps between them scrolled the grid. */
+.thumb-grid button { position: relative; display: block; width: 100%; aspect-ratio: 1; margin: 0; padding: 0; overflow: clip;
+  border: 0; border-radius: 8px; background: #000; cursor: pointer; touch-action: pan-y; content-visibility: auto; contain-intrinsic-size: auto var(--thumb-size, 78px); }
+/* pan-y: a swipe scrolls it, and two fingers pinch the grid (the pictures' size), never zoom the page. */
+.thumb-grid-dialog .panel-dialog-body { overflow-y: auto; -webkit-overflow-scrolling: touch; touch-action: pan-y; overscroll-behavior: contain; }
+/* Pulled on past the top or bottom: which album comes next, over that edge, filling in until letting go moves to it. */
+.thumb-grid-pull { position: absolute; left: 50%; bottom: 58px; transform: translateX(-50%); max-width: calc(100% - 32px); padding: 6px 12px;
+    border-radius: 999px; background: var(--panel-2); border: 1px solid var(--line); color: var(--muted); font-size: .75rem; font-weight: 600;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; pointer-events: none; z-index: 2; box-shadow: 0 4px 14px rgba(0, 0, 0, .4); }
+.thumb-grid-pull.at-top { top: 52px; bottom: auto; }
+.thumb-grid-pull.ready { color: var(--accent); border-color: var(--accent); }
+.thumb-grid-pull[hidden] { display: none; }
+.thumb-grid-dialog .panel-dialog-body.grid-in-down { animation: grid-in-down .22s ease; }
+.thumb-grid-dialog .panel-dialog-body.grid-in-up { animation: grid-in-up .22s ease; }
+@keyframes grid-in-down { from { transform: translateY(24px); opacity: .3; } }
+@keyframes grid-in-up { from { transform: translateY(-24px); opacity: .3; } }
+@media (prefers-reduced-motion: reduce) { .thumb-grid-dialog .panel-dialog-body.grid-in-down, .thumb-grid-dialog .panel-dialog-body.grid-in-up { animation: none; } }
+/* The whole picture, letterboxed on black: a portrait or a wide one isn't cut to the square. */
+.thumb-grid button img { width: 100%; height: 100%; object-fit: contain; display: block; }
+/* Inside the picture, so the grid's edge never clips it. */
+.thumb-grid button.current { outline: 2px solid var(--accent); outline-offset: -2px; }
+/* Arrange, in the bottom-left corner on Close's line; lit while arranging. */
+.thumb-grid-foot { position: relative; display: flex; justify-content: center; }
+.thumb-grid-arrange { position: absolute; left: 0; top: 50%; transform: translateY(-50%); width: 36px; height: 30px; margin: 0; padding: 0;
+  display: inline-flex; align-items: center; justify-content: center; border: 1px solid var(--line); border-radius: 999px; background: transparent; color: var(--muted); }
+.thumb-grid-arrange svg { width: 16px; height: 16px; }
+.thumb-grid-arrange[hidden] { display: none; }
+.thumb-grid-arrange.on { color: var(--accent); border-color: var(--accent); }
+/* Arranging: a tap picks one (outlined), which is then dragged; the others glide aside. */
+/* The one picked up to arrange: a thin dotted outline, inside it as the one open is outlined. */
+.thumb-grid-dialog.arranging .thumb-grid button.selected { outline: 2px dotted var(--accent); outline-offset: -2px; touch-action: none; }
+/* While it is dragged, a copy of it floats under the finger; it stays where it will land, outlined. */
+.thumb-grid-dialog.arranging .thumb-grid button.dragging { outline: 2px dotted var(--accent); outline-offset: -2px; }
+/* Outside the grid, the copy would take a plain button's look (its colour and padding): none of it, only the picture
+   and a thin dotted outline, darker than the one it was copied from. */
+.grid-ghost { margin: 0; padding: 0; border: 0; background: #000; border-radius: 8px; overflow: clip; box-shadow: 0 8px 24px rgba(0, 0, 0, .5);
+  opacity: .95; outline: 2px dotted color-mix(in srgb, var(--accent) 55%, #000); outline-offset: -2px; }
+.grid-ghost .upscaled-badge { display: none; }
+.grid-ghost img { width: 100%; height: 100%; object-fit: contain; display: block; }
+.thumb-grid-section { margin: 4px 0 6px; font-size: .78rem; font-weight: 600; color: var(--muted); }
+.thumb-grid + .thumb-grid-section { margin-top: 12px; }
+/* Collections: your own batches, above the generated ones, under a header that folds them away. */
+.collections[hidden] { display: none; }
+/* Buttons and steppers are pressed, not read: tapping quickly (a stepper's + twice) never selects their text, so no
+   copy menu comes up. Text fields and what is meant to be read keep their selection. */
+button, [role="button"], .icon-btn, summary, .count-stepper, .count-stepper .mp-field, .pills, .pill {
+  -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
+/* A button whose request is on its way: it pulses, and can't be pressed again, until the answer is back. */
+.is-busy { animation: busy-pulse .9s ease-in-out infinite; pointer-events: none; }
+#viewerDelete.deleting, .icon-btn.deleting { color: var(--warn); opacity: 1; animation: busy-pulse .9s ease-in-out infinite; }
+@media (prefers-reduced-motion: reduce) { #viewerDelete.deleting, .icon-btn.deleting { animation: none; } }
+@keyframes busy-pulse { 0%, 100% { opacity: 1; } 50% { opacity: .4; } }
+@media (prefers-reduced-motion: reduce) { .is-busy { animation: none; opacity: .6; } }
+/* Until drawn from a fresh answer (holdOutput), Output's lists keep their place but show nothing: gone at once, and
+   back with a short fade, so the redraw isn't a jolt. */
+#videos, #imageSets, #collections, #cnav { transition: opacity .25s ease; }
+body.output-pending #videos, body.output-pending #imageSets, body.output-pending #collections,
+body.output-pending #cnav { visibility: hidden; opacity: 0; transition: none; }
+@media (prefers-reduced-motion: reduce) { #videos, #imageSets, #collections, #cnav { transition: none; } }
+/* While the page waits for its answer: a bar sweeping along the top, and Output's rows drawn faintly where its own
+   will come. Both wait a moment before showing, so a quick answer never flickers them. */
+.page-loader { position: fixed; top: 0; left: 0; right: 0; height: 3px; z-index: 1000; overflow: hidden; pointer-events: none;
+  display: none; animation: loader-in .3s ease .3s both; }
+.page-loader::before { content: ""; position: absolute; top: 0; bottom: 0; width: 38%; border-radius: 0 3px 3px 0;
+  background: linear-gradient(90deg, transparent, var(--page-accent) 40%, var(--page-accent)); box-shadow: 0 0 10px var(--page-accent);
+  animation: loader-sweep 1.15s cubic-bezier(.45, 0, .25, 1) infinite; }
+body.page-loading .page-loader, body.output-pending[data-page="output"] .page-loader { display: block; }
+.output-loader { display: none; flex-direction: column; gap: 12px; margin-top: 6px; animation: loader-in .3s ease .3s both; }
+body.output-pending .output-loader { display: flex; }
+.output-loader > div { display: flex; gap: 12px; align-items: stretch; }
+.output-loader > div:nth-child(2) i { animation-delay: .12s; }
+.output-loader > div:nth-child(3) i { animation-delay: .24s; }
+.output-loader i { display: block; border-radius: 10px; background: linear-gradient(100deg, var(--panel-2) 35%, #2b3040 50%, var(--panel-2) 65%);
+  background-size: 300% 100%; animation: loader-shimmer 1.5s ease-in-out infinite; }
+.output-loader .thumb { width: 96px; height: 72px; flex: none; }
+.output-loader .lines { flex: 1; display: flex; flex-direction: column; gap: 8px; justify-content: center; }
+.output-loader .lines i { height: 11px; border-radius: 6px; }
+.output-loader .lines i:first-child { width: 62%; height: 14px; }
+.output-loader .lines i:last-child { width: 38%; }
+/* Status, until the first answer: its lines drawn faintly where they will come (the same shimmer as Output's). */
+.status-loader { display: none; flex-direction: column; gap: 10px; margin-top: 10px; animation: loader-in .3s ease .3s both; }
+body.page-loading .status-loader { display: flex; }
+body.page-loading #runCard .status-main, body.page-loading #runCard .status-head .status { visibility: hidden; }
+.status-loader i { display: block; height: 11px; border-radius: 6px; background: linear-gradient(100deg, var(--panel-2) 35%, #2b3040 50%, var(--panel-2) 65%);
+  background-size: 300% 100%; animation: loader-shimmer 1.5s ease-in-out infinite; }
+.status-loader i:nth-child(1) { width: 46%; height: 14px; }
+.status-loader i:nth-child(2) { width: 72%; animation-delay: .1s; }
+.status-loader .bar-line { width: 100%; height: 8px; margin-top: 4px; animation-delay: .2s; }
+.status-loader i:nth-child(4) { width: 58%; animation-delay: .3s; }
+.status-loader i:nth-child(5) { width: 34%; animation-delay: .4s; }
+/* Nothing running or waiting: in Status, where the run's progress bar would be, a nudge to make something (a
+   different one each time it is idle again), in italics, a light passing over it now and then to catch the eye.
+   A tap makes it (makeFromNudge). */
+.nudge { margin: 12px 0 4px; cursor: pointer; -webkit-tap-highlight-color: transparent;
+  font-size: 1rem; font-style: italic; font-weight: 500; line-height: 1.35; letter-spacing: .01em; text-align: center;
+  background: linear-gradient(100deg, var(--muted) 35%, #fff 48%, var(--shared) 52%, var(--muted) 65%); background-size: 300% 100%;
+  -webkit-background-clip: text; background-clip: text; color: transparent;
+  animation: nudge-in 1.4s ease 1s both, nudge-shine 6s ease-in-out 2.4s infinite; }
+.nudge[hidden] { display: none; }
+@keyframes nudge-shine { 0% { background-position: 100% 0; } 30%, 100% { background-position: 0 0; } }
+/* Idle: after a second, it comes in slowly, rising a little as it does. */
+@keyframes nudge-in { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+/* A new stage: what it says eases in. The stages' marks change colour gently. */
+.stage-in { animation: stage-in .4s ease both; }
+@keyframes stage-in { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+#runCard .step { transition: border-color .4s ease, color .4s ease, background-color .4s ease; }
+@media (prefers-reduced-motion: reduce) { .stage-in { animation: none; } }
+@media (prefers-reduced-motion: reduce) { .nudge { animation: none; background-position: 100% 0; } }
+@keyframes loader-in { from { opacity: 0; } to { opacity: 1; } }
+@keyframes loader-sweep { from { left: -38%; } to { left: 100%; } }
+@keyframes loader-shimmer { from { background-position: 100% 0; } to { background-position: 0 0; } }
+@media (prefers-reduced-motion: reduce) {
+  .page-loader::before { animation: none; left: 0; width: 100%; opacity: .6; }
+  .output-loader i, .status-loader i { animation: none; }
+}
+/* Open, a box of their own where they are: another background and a border, apart from the sets under it. */
+.collections:not([hidden]) { margin: 0 -11px 12px; padding: 10px 10px 4px; background: var(--bg); border: 1px solid var(--line); border-radius: 12px; }
+/* Each a tile: its picture, with its name small beneath. Arranged like the thumbnail grid: tap one, then drag it. */
+.collection-tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(84px, 1fr)); gap: 10px 8px; }
+.collection-tile { position: relative; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.tile-cover { position: relative; display: block; width: 100%; aspect-ratio: 1; margin: 0; padding: 0; overflow: clip; border: 0; border-radius: 8px;
+  background: #000; cursor: pointer; touch-action: pan-y; }
+.tile-cover img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; display: block; }
+.tile-name { font-size: .7rem; line-height: 1.2; color: var(--muted); text-align: center; overflow-wrap: anywhere;
+  overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+.tile-edit { position: absolute; top: 3px; right: 3px; width: auto; height: auto; margin: 0; padding: 4px; display: inline-flex; align-items: center;
+  border: 0; border-radius: 999px; background: rgba(0, 0, 0, .55); color: #fff; opacity: .85; }
+.tile-edit svg { width: 13px; height: 13px; }
+.collections.arranging .tile-edit { display: none; }
+.collections.arranging .collection-tile.selected .tile-cover { touch-action: none; }
+/* Drawn over the picture: an outline on the button itself is painted under its image. */
+.collections.arranging .collection-tile.selected .tile-cover::after, .collections.arranging .collection-tile.dragging .tile-cover::after {
+  content: ""; position: absolute; inset: 0; z-index: 1; border: 2px dotted var(--accent); border-radius: inherit; pointer-events: none; }
+.collection-tile.grid-ghost { background: var(--bg); border-radius: 8px; }
+.collection-tile.grid-ghost .tile-edit { display: none; }
+/* Arrange, on a thin line of its own above the tiles when there are two or more; lit while arranging. */
+.collections-head { display: flex; align-items: center; justify-content: space-between; margin: -4px 0 4px; font-size: .72rem; color: var(--muted); }
+.collections-arrange { width: auto; margin: 0; padding: 3px 6px; display: inline-flex; align-items: center; border: 0; background: none; color: var(--neutral); }
+.collections-arrange svg { width: 15px; height: 15px; }
+.collections-arrange.on { color: var(--accent); }
+.output-arrange-line { display: flex; justify-content: flex-end; }
+#imageSets.arranging > [data-output-key] { cursor: grab; touch-action: pan-y; }
+#imageSets.arranging > .selected { outline: 1px dashed var(--accent); outline-offset: -2px; touch-action: none; }
+#imageSets > .dragging { opacity: .3; }
+.output-batch.grid-ghost { background: var(--panel); border-radius: 8px; }
+/* Edit: the name, then the picture it is shown by (any of its own). */
+.collection-edit-label { margin: 8px 0 4px; font-size: .78rem; font-weight: 600; color: var(--muted); }
+/* The picture choices: small pills, the shape of the Close button, each showing a crop of its picture. */
+.collection-edit .thumb-grid { grid-template-columns: repeat(auto-fill, minmax(56px, 1fr)); gap: 5px; }
+.collection-edit .thumb-grid button { aspect-ratio: auto; height: 28px; border: 1px solid var(--line); border-radius: 999px; contain-intrinsic-size: auto 56px 28px; }
+.collection-edit .thumb-grid button img { object-fit: cover; }
+.collection-edit .thumb-grid button.auto { display: flex; align-items: center; justify-content: center; background: transparent; color: var(--muted); font-size: .72rem; font-weight: 600; text-align: center; }
+.collection-edit .thumb-grid button.current { outline: 2px solid var(--accent); outline-offset: -2px; border-color: var(--accent); }
+.collection-edit-foot { display: flex; gap: 8px; align-items: center; justify-content: flex-end; margin-top: 8px; }
+.collection-edit-foot button { width: auto; margin: 0; }
+.collection-edit-foot #collectionEditDelete { margin-right: auto; }
+.move-new { display: flex; gap: 6px; }
+.move-new[hidden] { display: none; }
+.move-new input { flex: 1; min-width: 0; margin: 0; }
+.move-new button { width: auto; margin: 0; padding: 6px 14px; }
+.thumb-grid .upscaled-badge { right: 3px; bottom: 3px; width: 16px; height: 16px; padding: 3px; }
+.viewer-tools button { width: 40px; height: 32px; margin: 0; padding: 0; display: inline-flex; align-items: center; justify-content: center; font-size: .78rem; font-weight: 600; border-radius: 999px;
+  background: transparent; border: 1px solid var(--line); color: #ddd; }
+.viewer-tools button[hidden] { display: none; }
+@keyframes viewer-in { from { opacity: 0; transform: scale(.98); } to { opacity: 1; transform: none; } }
+@media (prefers-reduced-motion: reduce) { dialog.viewer[open] { animation: none; } }
+.shots-head { padding: 16px 16px 10px; border-bottom: 1px solid var(--line); }
+.shots-head h2 { margin: 0; font-size: 1.05rem; }
+.shots-list { padding: 4px 16px; }
+.shot { padding: 12px 0; border-top: 1px solid var(--line); }
+.shot:first-child { border-top: 0; }
+.shot-title { display: flex; justify-content: space-between; gap: 10px; font-size: .9rem; }
+.shot-title span { color: var(--muted); font-size: .78rem; white-space: nowrap; }
+.shot video { width: 100%; max-height: 46vh; margin-top: 8px; border-radius: 8px; background: #000; display: block; }
+.shot textarea { min-height: 96px; margin-top: 8px; font-size: .9rem; line-height: 1.4; resize: vertical; }
+.shot button { width: auto; margin: 8px 0 0; padding: 6px 12px; font-size: .8rem; background: var(--panel-2); border: 1px solid var(--line); color: var(--text); }
+.shots-foot { position: sticky; bottom: 0; display: flex; flex-wrap: wrap; gap: 8px; padding: 12px 16px; background: var(--panel); border-top: 1px solid var(--line); }
+.shots-foot button { flex: 1 1 28%; margin: 0; padding: 11px; font-size: .9rem; white-space: nowrap; }
+.shots-foot .plain { background: var(--panel-2); border: 1px solid var(--line); color: var(--text); }
+/* An image set's prompts: one image to a page, swiped through like the viewer. */
+.shots-list.carousel { display: flex; padding: 0; overflow-x: auto; scroll-snap-type: x mandatory; scrollbar-width: none; overscroll-behavior-x: contain; }
+.shots-list.carousel::-webkit-scrollbar { display: none; }
+.shots-list.carousel > .shot { flex: 0 0 100%; min-width: 0; padding: 12px 16px; border-top: 0; scroll-snap-align: center; scroll-snap-stop: always; }
+.shots-list.carousel .shot-image { margin: 8px auto 0; max-height: 46vh; touch-action: pan-x pan-y; }
+.shots-count { margin-top: 4px; color: var(--muted); font-size: .78rem; font-variant-numeric: tabular-nums; }
+.shots-foot.centred { justify-content: center; }
+.shots-foot.centred button { flex: 0 1 auto; padding: 10px 18px; }
+.shot-title .finished { color: var(--ok); }
+/* The set's head: its title opens the original prompt, where you are on the right. */
+.shots-head { position: relative; }
+.shots-head-line { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
+.shots-title { width: auto; min-width: 0; margin: 0; padding: 0; color: var(--text); font-size: 1.05rem; font-weight: 700; text-align: left;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.shots-head-line .shots-count { flex: none; margin: 0; }
+.copy-btn { flex: none; width: 28px; height: 26px; margin: 0; padding: 0; display: inline-flex; align-items: center; justify-content: center;
+  background: transparent; border: 1px solid var(--line); border-radius: 8px; color: var(--muted); }
+.copy-btn:hover { color: var(--text); }
+.copy-btn svg { width: 14px; height: 14px; }
+.copy-btn.done { color: var(--ok); border-color: var(--ok); }
+.copy-btn[aria-pressed="true"] { color: var(--accent); border-color: var(--accent); }
+.copy-btn[hidden] { display: none; }
+#paintClear svg { width: 18px; height: 18px; }
+dialog.prompt-detail { width: min(520px, calc(100vw - 24px)); max-height: min(75dvh, 640px); padding: 0; gap: 0; overflow: hidden; }
+.prompt-detail .panel-dialog-title { flex: none; padding: 14px 16px 0; }
+.prompt-detail-text { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 16px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.prompt-detail-actions { flex: none; display: flex; align-items: center; gap: 8px; padding: 10px 16px; border-top: 1px solid var(--line); background: var(--panel); }
+.prompt-detail-left { display: flex; align-items: center; gap: 8px; margin-right: auto; }
+.prompt-detail-actions .copy-btn { width: 48px; height: 48px; }
+#promptDetailYours { color: var(--shared); border-color: var(--shared); }
+.prompt-detail-stages { display: flex; flex-wrap: wrap; gap: 6px; padding: 0 16px 10px; }
+.prompt-detail-stages[hidden] { display: none; }
+.prompt-detail-stages button { width: auto; margin: 0; padding: 5px 9px; font-size: .78rem; }
+.prompt-detail-stages button[aria-pressed="true"] { color: var(--shared); border-color: var(--shared); }
+.prompt-detail-actions .panel-close { width: auto; margin: 0; }
+/* The model guide: short lines under headings that fold, so a phone reads it a part at a time. */
+dialog.model-guide { width: min(560px, calc(100vw - 16px)); max-height: min(86dvh, 780px); padding: 0; gap: 0; overflow: hidden; }
+.model-guide .panel-dialog-title { flex: none; padding: 14px 16px 0; font-size: 1.05rem; }
+.model-guide-body { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 6px 16px 12px; font-size: .88rem; line-height: 1.5; overflow-wrap: anywhere; -webkit-overflow-scrolling: touch; }
+.model-guide-lead { margin: 2px 0 10px; color: var(--muted); }
+.guide-facts { display: grid; grid-template-columns: minmax(78px, auto) minmax(0, 1fr); gap: 6px 12px; margin: 0 0 10px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 12px; background: var(--bg); }
+.guide-facts dt { color: var(--muted); }
+.guide-facts dd { margin: 0; }
+/* On a phone each fact is its name over its value, so the value has the whole width. */
+@media (max-width: 480px) { .guide-facts { grid-template-columns: minmax(0, 1fr); gap: 0; } .guide-facts dt { font-size: .74rem; margin-top: 8px; } .guide-facts dt:first-child { margin-top: 0; } }
+.model-guide details { border-top: 1px solid var(--line); }
+.model-guide summary { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 9px 0; font-weight: 600; cursor: pointer; list-style: none; }
+.model-guide summary::-webkit-details-marker { display: none; }
+.model-guide summary::after { content: ""; flex: none; width: 7px; height: 7px; border-right: 2px solid var(--muted); border-bottom: 2px solid var(--muted); transform: rotate(45deg); transition: transform .2s ease; }
+.model-guide details[open] > summary::after { transform: rotate(-135deg); }
+.model-guide ul { margin: 0 0 10px; padding-left: 18px; }
+.model-guide li { margin: 0 0 6px; }
+.model-guide details.guide-q { border-top: 0; margin: 0 0 4px; }
+.model-guide details.guide-q > summary { padding: 5px 0; font-weight: 500; color: var(--text); }
+.model-guide details.guide-q > p { margin: 0 0 8px; padding-left: 12px; border-left: 2px solid var(--line); color: var(--muted); }
+.model-guide .guide-sources a { color: var(--muted); }
+.model-guide-actions { flex: none; display: flex; justify-content: center; padding: 10px 16px; border-top: 1px solid var(--line); background: var(--panel); }
+/* Each image's icons: make again, save and delete; on the right what the enhancer wrote, and its seed. */
+.shot-actions { justify-content: space-between; }
+.shot-actions-left, .shot-actions-right { display: flex; gap: 6px; align-items: center; }
+.shot-actions .icon-btn { flex: none; width: 40px; height: 32px; margin: 0; padding: 0; display: inline-flex; align-items: center; justify-content: center;
+  background: var(--panel-2); border: 1px solid var(--line); color: var(--text); }
+.shot-actions .icon-btn.del { background: transparent; color: var(--muted); }
+.shot-actions .icon-btn[aria-expanded="true"] { border-color: var(--accent); color: var(--accent); }
+.shot-actions-right .seed-fold { right: 0; }
+/* A film's row: Render again centred, its seed on the right. */
+.shot-actions.shot-actions-centred { display: grid; grid-template-columns: 1fr auto 1fr; }
+.shot-actions-centred .shot-actions-right { justify-self: end; }
+.shot-actions-middle > button { width: auto; margin: 0; padding: 6px 12px; font-size: .8rem; background: var(--panel-2); border: 1px solid var(--line); color: var(--text); }
+/* A Generate seed: its icon and value as one quiet button; it opens the seed dialog. */
+.seed-pill { width: auto; margin: 0; padding: 6px 12px; display: inline-flex; align-items: center; gap: 8px; background: transparent;
+  border: 1px solid var(--line); border-radius: 999px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.seed-pill svg { width: 16px; height: 16px; }
+.seed-pill.pinned { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 45%, transparent); }
+dialog.seed-dialog { width: min(340px, calc(100vw - 24px)); }
+.seed-dialog-foot { justify-content: flex-end; }
+/* Buttons in every box over the page: small, as Quota's Close. */
+.shots-foot.small { gap: 8px; padding: 10px 16px; }
+.shots-foot.small button, .shots-foot button { flex: 0 1 auto; min-width: 96px; padding: 6px 18px; font-size: .82rem; font-weight: 600; border-radius: 999px; }
+/* Make again and Delete in the middle; the seed, quietly, on the right: it grows up out of its chevron when wanted. */
+.shot-actions { position: relative; display: flex; align-items: center; gap: 8px; margin-top: 8px; }
+.shot-actions > button:not(.seed-toggle) { width: auto; margin: 0; padding: 6px 12px; font-size: .8rem; background: var(--panel-2); border: 1px solid var(--line); color: var(--text); }
+.seed-fold { position: absolute; right: 0; bottom: calc(100% + 6px); z-index: 2; width: min(260px, 100%); padding: 8px; background: var(--panel);
+  border: 1px solid var(--line); border-radius: 10px; box-shadow: 0 8px 24px rgba(0, 0, 0, .45); transform-origin: bottom right; animation: menu-in .2s ease; }
+.seed-fold[hidden] { display: none; }
+.seed-fold .seed-line { margin: 0; }
+@media (prefers-reduced-motion: reduce) { .seed-fold { animation: none; } }
+/* A set of images: small pictures that open full size. */
+.image-set { padding-bottom: 8px; margin-bottom: 8px; border-bottom: 1px solid var(--line); }
+.image-set:last-child { border-bottom: 0; margin-bottom: 0; }
+.image-set h3 { margin: 0; font-size: .85rem; font-weight: 600; line-height: 1.3; overflow-wrap: anywhere; }
+.image-set-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; }
+.image-set-heading h3 { flex: 1; min-width: 0; }
+/* A set the queue still has (being made, or waiting to be): its title in a soft tint of the theme, as work in progress. */
+.image-set-heading h3.wip { color: color-mix(in srgb, var(--accent) 55%, currentColor); }
+/* Its tag button hangs over the line below rather than pushing it down: the details sit just under the title. */
+.image-set-heading .nsfw-button { flex: none; width: 34px; height: 24px; padding: 0; margin: 0 0 -8px; display: inline-flex; align-items: center; justify-content: center; background: var(--panel-2); color: var(--muted); }
+/* A run that made nothing: a small word at the end of its title's line, and why under a fold. */
+.run-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; min-width: 0; }
+.run-head .what { min-width: 0; }
+.run-tag { flex: none; font-size: .72rem; font-weight: 400; color: var(--err); letter-spacing: .02em; }
+.run-tag.stopped { color: var(--warn); }
+details.why { margin-top: 3px; font-size: .78rem; color: var(--muted); }
+details.why summary { cursor: pointer; width: max-content; }
+.why-text { margin-top: 3px; white-space: pre-line; overflow-wrap: anywhere; }
+.image-set .meta { color: var(--muted); font-size: .74rem; }
+.meta.loras { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: pointer; }
+.meta.loras.open { white-space: normal; overflow-wrap: anywhere; }
+/* Pills: what it was made with, on one line; those that tell it apart from its prompt's other runs come first,
+   in its side's colour. A line that holds more says how many, and opens on a tap. */
+.pills { position: relative; display: flex; flex-wrap: wrap; gap: 4px; max-height: 40px; overflow: hidden; margin-top: 4px; }
+.pills.more { cursor: pointer; padding-right: 30px; }
+.pills.open { max-height: none; padding-right: 0; }
+.pills:not(.open) .pill.spill { display: none; }
+.pills.video { --pill: var(--c-video); }
+.pills.image { --pill: var(--c-image); }
+.pill { flex: none; max-width: 100%; box-sizing: border-box; padding: 0 7px; border: 1px solid var(--line); border-radius: 999px; background: var(--panel-2);
+  color: var(--muted); font-size: .66rem; line-height: 16px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pill.diff { border-color: color-mix(in srgb, var(--pill) 60%, var(--panel)); background: color-mix(in srgb, var(--pill) 20%, var(--panel));
+  color: color-mix(in srgb, var(--pill) 35%, var(--text)); font-weight: 600; }
+.pills.more:not(.open)::after { content: attr(data-more); position: absolute; right: 0; top: 0; padding: 0 2px 0 6px; background: var(--panel);
+  color: var(--muted); font-size: .66rem; line-height: 18px; }
+/* The workflow in its kind's colour, always (image green, video blue): what made it, before what sets it apart. */
+.pill.workflow { border-color: color-mix(in srgb, var(--pill, var(--neutral)) 75%, var(--panel)); background: color-mix(in srgb, var(--pill, var(--neutral)) 30%, var(--panel));
+  color: color-mix(in srgb, var(--pill, var(--neutral)) 25%, var(--text)); font-weight: 600; }
+/* What a comparison compares (its workflow, or "All LLMs"): the theme's colour, as Generate is while one is set up. */
+.pill.comparison { --pill: var(--shared); border-color: color-mix(in srgb, var(--pill) 75%, var(--panel)); background: color-mix(in srgb, var(--pill) 30%, var(--panel));
+  color: color-mix(in srgb, var(--pill) 25%, var(--text)); font-weight: 600; }
+/* The preview: one line, 90% of the box, growing out from the middle; the rest behind a tap. */
+.viewer-meta-details .pills { width: 96%; max-height: 18px; margin: 2px auto 0; justify-content: center; }
+.viewer-meta-details .pills.open { max-height: none; }
+.viewer-meta-details .pills.more:not(.open)::after { content: attr(data-more) " ▾"; }
+.image-set-row { display: flex; align-items: center; gap: 8px; margin-top: 5px; }
+/* Pictures wrap beside the buttons, rather than hiding along a line: a set can be a hundred. */
+.image-grid { flex: 1; min-width: 0; display: flex; flex-wrap: wrap; gap: 4px; }
+.image-grid a { display: block; flex: none; }
+.image-grid img { width: 56px; height: 56px; object-fit: cover; border-radius: 6px; display: block; background: #000; }
+.image-set-actions { flex: none; display: flex; justify-content: flex-end; gap: 6px; margin-top: auto; }
+/* The grid's button at the left of the row, beside the cover; the others stay at the right. */
+.image-set-actions [data-grid-set], .image-set-actions [data-grid-collection] { margin-right: auto; }
+/* An album: the cover spans the strip and the buttons, so it sits like a single image beside its buttons. */
+.image-set-row.album { align-items: stretch; }
+/* Its picture fills the box rather than sizing it: a tall wallpaper would otherwise make the row as tall as itself. */
+.album-cover { position: relative; flex: none; display: block; width: 92px; height: 92px; overflow: hidden; border-radius: 8px; }
+.album-cover img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; display: block; background: #000; }
+.album-count { position: absolute; left: 4px; bottom: 4px; padding: 0 6px; border-radius: 999px; background: rgba(0, 0, 0, .7);
+  color: #fff; font-size: .7rem; font-weight: 600; line-height: 1.5; pointer-events: none; }
+.album-side { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 6px; }
+/* Beside the cover, above the buttons: its pills, up to three lines; the rest behind a tap, as elsewhere. */
+.album-side .pills { margin-top: 0; max-height: 62px; }
+.album-side .pills.open { max-height: none; }
+/* An upscaled picture says so in its bottom-right corner: in the album and in the preview. */
+.upscaled-badge { position: absolute; right: 4px; bottom: 4px; display: flex; width: 18px; height: 18px; padding: 3px; box-sizing: border-box;
+  border-radius: 999px; background: rgba(0, 0, 0, .7); color: #fff; pointer-events: none; }
+.upscaled-badge svg { width: 100%; height: 100%; }
+.upscaled-badge[hidden] { display: none; }
+/* Beside the cover the buttons share what width there is. */
+.image-set-actions button { width: auto; margin: 0; padding: 6px 10px; font-size: .78rem; background: var(--panel-2); border: 1px solid var(--line); color: var(--text); }
+.image-set-actions .del { background: transparent; color: var(--muted); }
+/* Icons, one size: they always fit, and line up from one set to the next. The words are in their labels. */
+.image-set-actions .icon-btn.working { animation: pulse 1.2s ease-in-out infinite; }
+@keyframes pulse { 50% { opacity: .45; } }
+.image-set-actions .icon-btn { flex: none; width: 40px; height: 32px; padding: 0; display: inline-flex; align-items: center; justify-content: center; }
+.icon-btn svg { width: 17px; height: 17px; pointer-events: none; }
+.pipeline-form .option-choice { display: inline-block; width: auto; max-width: 100%; margin: 4px 0 0 8px; padding: 3px 6px; font-size: .85rem; text-overflow: ellipsis; }
+.pipeline-form .option-strength { display: inline-block; width: 5.5em; margin-left: 8px; padding: 3px 6px; font-size: .85rem; }
+.pipeline-form .option-row { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; margin-top: 6px; }
+.pipeline-form .option-row[hidden] { display: none; }
+.pipeline-form .option-row > label { margin: 0; }
+.pipeline-form .option-row > input[type=number] { width: 6em; }
+.pipeline-form .option-row .option-choice, .pipeline-form .option-row .option-strength { margin: 0; }
+.option-sub { font-size: .8rem; opacity: .7; }
+/* Under its switch while it's on (the LoRA setting): the file as wide as it can be, its strength at the right. */
+.pipeline-form .option-below { flex-wrap: nowrap; margin: 4px 0 6px; }
+/* Ticked, its box grows open, its height and opacity easing in; unticked, it folds away the same way. clip, not
+   hidden: hidden made it a scroll box of its own. */
+.option-reveal { display: grid; grid-template-rows: 0fr; opacity: 0; transition: grid-template-rows .3s cubic-bezier(.2, .8, .2, 1), opacity .25s ease; }
+.option-reveal.open { grid-template-rows: 1fr; opacity: 1; }
+.option-reveal-in { min-height: 0; min-width: 0; overflow: clip; }
+/* A switch's settings in rows (Reduce harshness): under it, in from its tickbox, each name above the next. */
+.pipeline-form .option-rows .option-reveal-in { padding-left: 24px; }
+.pipeline-form .option-rows .option-row > input[type=checkbox] { width: 16px; height: 16px; margin: 0; }
+@media (prefers-reduced-motion: reduce) { .option-reveal { transition: none; } }
+.options-lora { min-width: 0; margin: 4px 0 10px; }
+.options-lora > .options-subtitle { margin-bottom: 0; }
+.options-speed select { max-width: 100%; min-width: 0; text-overflow: ellipsis; }
+.options-lora > .check { margin-top: 6px; }
+.options-subtitle-what { text-transform: none; letter-spacing: 0; font-weight: 400; }
+.pipeline-form .option-below select { flex: 1 1 auto; width: 0; min-width: 0; }
+.pipeline-form .option-below .option-strength { flex: none; width: 5.5em; }
+/* What goes with a setting (Sampler, Scheduler, CFG with Steps): each on a line of its own under it. */
+.pipeline-form .option-row .option-line { flex: 1 0 100%; display: flex; align-items: center; gap: 8px; }
+.shot-image { max-width: 100%; max-height: 300px; margin-top: 8px; border-radius: 8px; display: block; background: #000; }

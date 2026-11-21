@@ -1,6 +1,7 @@
 import math
 import os
 import re
+from core.models import VIDEO_MODELS
 from difflib import SequenceMatcher
 
 from pydantic import BaseModel, ValidationError
@@ -29,8 +30,8 @@ MAX_FILM_SECONDS = 600
 # - Wan 2.2: trained on 81 frames at 16 fps, so 5 s at most.
 CLIP_SECONDS = {
     None: (5, 10, 8),
-    h3_prompt.MODEL: (5, 15, 10),
-    wan_prompt.MODEL: (3, 5, 5),
+    # Each video model's own, from its family's file (core/models/): MiniMax H3's 5 to 15 s, Wan's 3 to 5.
+    **{model: entry.clip_seconds for model, entry in VIDEO_MODELS.items() if entry.clip_seconds},
 }
 MIN_SHOT_SECONDS, MAX_SHOT_SECONDS, AVERAGE_SHOT_SECONDS = CLIP_SECONDS[None]
 PLAN_ATTEMPTS = 3

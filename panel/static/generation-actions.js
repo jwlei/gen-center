@@ -468,6 +468,8 @@ function setPipeline(side, remember = true, preservePrompt = false) {
   $('formNote').hidden = true;
   $(SIDE_FORMS[side]).appendChild($('formActions'));
   document.querySelector(`[data-workflow-actions="${side}"]`).appendChild($('keepSectionsOpen'));
+  // Not offered on Image: its sections fold as they do by default (accordions.js keepsOpen).
+  $('keepSectionsOpen').hidden = side === 'image';
   // One Preview run, in the Other settings of whichever form is showing.
   if (side !== 'shorts') $(side === 'image' ? 'imageReviewBox' : 'videoReviewBox').after($('previewRunLabel'));
   // Shorts' films by its tab; the others' films are the made ones, whichever side Generate is on.

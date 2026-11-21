@@ -1,5 +1,6 @@
 # Secrets
 .env
+/certs
 client_secrets.json
 token.pickle
 
@@ -26,4 +27,4 @@ node_modules/
 .vscode/settings.json
 .DS_Store
 Thumbs.db
-models/
+/models/

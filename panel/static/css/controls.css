@@ -1,0 +1,549 @@
+/* Shared controls: switches, Variety's chips, the phone header, side colours, resolution, files, the prompt editor, presets. Linked from templates/index.html in this order, which the cascade depends on. */
+/* Centred, one size whatever is picked: a long workflow name is cut short rather than stretching it. */
+.output-filter-line { position: relative; display: flex; justify-content: center; margin-bottom: 10px; padding: 0 30px; }
+/* Images, Both, Videos: the lit one is a pill that slides to where you tap, taking that one's colour on the way. */
+.output-kinds { position: relative; --kind: var(--shared); }
+.output-kinds[data-kind="image"] { --kind: var(--c-image); }
+.output-kinds[data-kind="video"] { --kind: var(--c-video); }
+.output-kinds button { position: relative; z-index: 1; padding: 4px 12px; transition: color .3s ease; }
+/* .switch.output-kinds: stronger than .switch's own lit button, which would paint it the side's colour. */
+.switch.output-kinds button.active { background: transparent; border-color: transparent; color: var(--kind); }
+.kinds-thumb { position: absolute; top: 2px; bottom: 2px; left: 0; width: 0; border-radius: 999px; background: var(--panel-2);
+  border: 1px solid color-mix(in srgb, var(--kind) 45%, transparent); pointer-events: none;
+  transition: transform .32s cubic-bezier(.2, .8, .2, 1), width .32s cubic-bezier(.2, .8, .2, 1), border-color .32s ease; }
+.kinds-thumb.still { transition: none; }
+@media (prefers-reduced-motion: reduce) { .kinds-thumb, .output-kinds button { transition: none; } }
+/* A select shown as the same sliding pill: equal-width choices, so the lit one's place is plain CSS (--i of --n) and
+   needs no measuring while its section is folded. The select stays, hidden, as the value the rest reads. */
+select[data-segmented] { display: none; }
+/* Variety's chips: what changes (accent, ↻) and what stays (filled, =) from one image or clip to the next. */
+.variety-box { margin-top: 8px; }
+.words-box { margin-top: 8px; }
+.words-slider { position: relative; padding-bottom: 7px; }
+.words-slider input[type=range] { display: block; width: 100%; height: 16px; margin: 0; padding: 0; border: 0; background: none; -webkit-appearance: none; appearance: none; }
+.words-slider input::-webkit-slider-runnable-track { height: 4px; border-radius: 2px; background: var(--line); }
+.words-slider input::-moz-range-track { height: 4px; border-radius: 2px; background: var(--line); }
+.words-slider input::-webkit-slider-thumb { -webkit-appearance: none; width: 15px; height: 15px; margin-top: -5.5px; border-radius: 50%; background: var(--accent); border: 2px solid var(--panel); cursor: pointer; }
+.words-slider input::-moz-range-thumb { box-sizing: border-box; width: 15px; height: 15px; border-radius: 50%; background: var(--accent); border: 2px solid var(--panel); cursor: pointer; }
+.words-slider input:focus-visible::-webkit-slider-thumb { outline: 2px solid var(--text); }
+.words-band { position: absolute; left: var(--lo); width: calc(var(--hi) - var(--lo)); top: 13px; height: 9px; border-top: 2px solid var(--accent); opacity: .7; }
+.words-band span { display: block; text-align: center; font-size: .56rem; line-height: 8px; color: var(--muted); }
+.words-tokens { margin: 2px 0 3px; }
+.words-box.off-band [id$="WordsValue"] { color: var(--warn); }
+/* Its name is a label, in a sub-heading's line: inline, with what it does after it. */
+.variety-box > .options-subtitle { margin: 0 0 6px; }
+/* Its hint: the levels and each chip, a name and what it changes on each line. */
+.variety-help { margin: 0 0 8px; }
+.variety-terms { display: grid; grid-template-columns: max-content 1fr; gap: 2px 10px; margin: 4px 0 8px; font-size: .72rem; }
+.variety-terms dt { color: var(--text); font-weight: 600; }
+.variety-terms dd { margin: 0; color: var(--muted); }
+.variety-box > .options-subtitle label { display: inline; margin: 0; font: inherit; color: inherit; letter-spacing: inherit; }
+.variety-box[hidden] { display: none; }
+select[data-chip] { display: none; }
+.variety-chips { display: flex; flex-wrap: wrap; align-items: center; gap: 5px; margin-top: 8px; }
+.variety-chips + .variety-chips { margin-top: 6px; }
+.variety-chips-heading { flex: 0 0 100%; font-size: .6rem; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
+.variety-chip { width: auto; margin: 0; padding: 3px 10px; font-size: .72rem; font-weight: 500; line-height: 1.4; border-radius: 999px;
+  border: 1px solid var(--line); background: transparent; color: var(--muted); cursor: pointer; }
+.variety-chip.vary { color: var(--accent); border-color: var(--accent); }
+.variety-chip.keep { color: var(--text); border-color: var(--muted); background: var(--panel-2); }
+.variety-chip .chip-mark { display: inline-block; min-width: .9em; margin-right: 2px; text-align: center; }
+/* Explicit content: only in Private mode, and its text only while it is ticked. */
+.explicit-box { display: none; margin-top: 8px; }
+body.private-mode .explicit-box { display: block; }
+/* On the Prompt line, at its right end: the side's colour while it's on, grey while it's off. */
+.prompt-label-row > .prompt-actions { margin-left: auto; }
+.prompt-label-row > .explicit-box { flex: none; margin: 0; }
+.prompt-label-row > .explicit-box[hidden], .prompt-label-row > .explicit-box.hidden { display: none; }
+/* I2P, a little left of Explicit, as it looks: pushed right with it, or after Clear and Write when they show. */
+.prompt-label-row > .i2p-box { flex: none; margin-left: auto; }
+.prompt-label-row > .prompt-actions:not([hidden]) + .i2p-box { margin-left: 0; }
+.prompt-label-row > .i2p-box.hidden { display: none; }
+.prompt-label-row > .i2p-box + .explicit-box { margin-left: 4px; }
+#imageLookSlot { margin: 0 0 8px; }
+.explicit-box .check, .i2p-box .check, .prompt-source .check { position: relative; display: inline-flex; align-items: center; margin: 0; padding: 2px 0; border: 0; background: none;
+  color: var(--muted); font-size: .7rem; font-weight: 600; text-transform: none; letter-spacing: 0; cursor: pointer; transition: color .2s ease; }
+/* Brief / Detailed, opened from a preview: left of I2P (right to left: Explicit, I2P, it), in a box of its own as
+   I2P is, its words a <label> as I2P's are (the form's labels sit 2px low: 7px over, 3px under), so it sits on the
+   line as I2P does; its words by the rule above. The one in use in the side's colour. */
+.prompt-label-row > .prompt-source { flex: none; margin-left: auto; }
+.prompt-label-row > .prompt-source[hidden] { display: none; }
+.prompt-source .check { gap: 0; white-space: nowrap; }
+.prompt-label-row > .prompt-actions:not([hidden]) + .prompt-source { margin-left: 0; }
+.prompt-label-row > .prompt-actions:not([hidden]) ~ .i2p-box { margin-left: 0; }
+.prompt-label-row > .prompt-source:not([hidden]) + .i2p-box { margin-left: 6px; }
+.prompt-label-row > .prompt-source:not([hidden]) + .i2p-box.hidden + .explicit-box { margin-left: 6px; }
+.prompt-source [data-source] { transition: color .2s ease; }
+.prompt-source [data-source].on { color: var(--side); }
+.prompt-source .check:focus-visible { outline: 2px solid var(--side); outline-offset: 2px; border-radius: 4px; }
+/* Just the words: the box is still there for the form, out of sight; a tap on the words ticks it. */
+.explicit-box .check input[type=checkbox], .i2p-box .check input[type=checkbox] { position: absolute; width: 1px; height: 1px; margin: 0; opacity: 0; pointer-events: none; }
+.explicit-box .check:has(input:checked), .i2p-box .check:has(input:checked) { color: var(--side); }
+.explicit-box .check:has(input:focus-visible), .i2p-box .check:has(input:focus-visible) { outline: 2px solid var(--side); outline-offset: 2px; border-radius: 4px; }
+.switch.segmented { position: relative; display: grid; grid-auto-flow: column; grid-auto-columns: 1fr; gap: 0; width: 100%; margin: 4px 0 10px; --kind: var(--side, var(--shared)); }
+.switch.segmented button { position: relative; z-index: 1; padding: 6px 12px; transition: color .3s ease; }
+.switch.segmented button.active { background: transparent; border-color: transparent; color: var(--kind); }
+.switch.segmented.off { opacity: .5; pointer-events: none; }
+/* Variety's level tapped again: armed to clear the chips, in yellow, until the second tap or a few seconds pass. */
+.switch.segmented button.clearing { color: var(--warn); }
+.switch.segmented.clearing .seg-thumb { border-color: var(--warn); }
+.seg-thumb { position: absolute; top: 2px; bottom: 2px; left: 2px; width: calc((100% - 4px) / var(--n)); border-radius: 999px; background: var(--panel-2);
+  border: 1px solid color-mix(in srgb, var(--kind) 45%, transparent); pointer-events: none; transform: translateX(calc(var(--i) * 100%));
+  transition: transform .32s cubic-bezier(.2, .8, .2, 1), border-color .32s ease; }
+@media (prefers-reduced-motion: reduce) { .seg-thumb, .switch.segmented button { transition: none; } }
+/* Collections' icon: at the left of the line, lit while they are shown; a tap hides or shows them. */
+.collections-toggle { position: absolute; left: 0; top: 50%; transform: translateY(-50%); width: auto; margin: 0; padding: 4px 6px;
+  display: inline-flex; align-items: center; border: 0; background: none; color: var(--neutral); }
+.collections-toggle[hidden] { display: none; }
+.collections-toggle.on { color: var(--shared); }
+/* The other view's switch: at the right of the line, plain, saying nothing of what it shows. */
+.view-toggle { position: absolute; right: 0; top: 50%; transform: translateY(-50%); width: auto; margin: 0; padding: 4px 6px;
+  display: inline-flex; align-items: center; border: 0; background: none; color: var(--muted); opacity: .5; transition: color .25s ease, opacity .25s ease; }
+/* On: Output's violet, as the collections icon; off: a quiet grey. */
+.view-toggle.on { opacity: 1; color: var(--shared); }
+/* A film's poster says it plays. */
+.film-cover .play { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: #fff;
+  font-size: 1.4rem; text-shadow: 0 1px 6px rgba(0, 0, 0, .8); pointer-events: none; }
+#viewerVideo { display: block; max-width: calc(100vw - 24px); max-height: calc(100dvh - 180px); border-radius: 8px; background: #000; touch-action: none; }
+.vid { flex: 0 0 78%; min-width: 0; scroll-snap-align: center; display: flex; flex-direction: column; }
+.vid video { width: 100%; aspect-ratio: 9 / 16; max-height: 70vh; object-fit: contain; border-radius: 10px; background: #000; display: block; }
+.vid h3 { margin: 9px 0 2px; font-size: .9rem; font-weight: 600; line-height: 1.3; }
+.vid .meta { color: var(--muted); font-size: .74rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.acts { display: flex; gap: 8px; margin-top: 9px; }
+.acts a, .acts button {
+  flex: 1; margin: 0; padding: 10px; font-size: .85rem; text-align: center;
+  text-decoration: none; border-radius: 9px; font-weight: 600;
+}
+.acts a { background: var(--panel-2); color: var(--text); border: 1px solid var(--line); }
+.acts .del { flex: 0 0 34%; background: transparent; border: 1px solid var(--line); color: var(--muted); }
+.cnav { display: flex; align-items: center; justify-content: center; gap: 14px; margin-top: 10px; font-size: .8rem; color: var(--muted); font-variant-numeric: tabular-nums; }
+.cnav button { width: auto; margin: 0; padding: 5px 16px; font-size: 1rem; background: var(--panel-2); border: 1px solid var(--line); color: var(--text); }
+.empty { color: var(--muted); font-size: .88rem; text-align: center; padding: 22px 0; flex: 1; }
+.top { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; }
+.top a { color: var(--muted); font-size: .8rem; text-decoration: none; }
+/* The header: slim, one line of icons and the progress bar, close to the top and to what follows. */
+.top { align-items: center; justify-content: flex-end; margin-bottom: 8px; }
+.top-main[hidden] { display: none; }
+.wrap { padding-top: 10px; }
+.top-icons { display: flex; gap: 12px; align-items: center; }
+.top-icons a { display: flex; opacity: .7; }
+.top-icons a:hover { opacity: 1; color: var(--text); }
+/* Private mode's key: lit in the accent while it is on. */
+.top-icons a#privateToggle.on { opacity: 1; color: #9864bd; }
+.top .sub { margin-bottom: 6px; }
+/* Phones (below 1000px, where the footer's page buttons are): the header's icons are on demand (showHead), in a box
+   that grows up out of the footer's last button over the page. The header keeps only the progress bars, and no room
+   at all while there are none. */
+/* On a phone the header holds the pages (Status, Generate, Output) and the dots, pinned at the top of the screen:
+   the pages on a line of their own, the progress bars under them. The dots' icons grow down out of it. */
+@media (max-width: 999px) {
+  .top { position: sticky; top: 0; z-index: 12; flex-wrap: wrap; gap: 0; margin: -10px -8px var(--page-gap); padding: env(safe-area-inset-top) 8px 0;
+    background: var(--bg); border-bottom: 1px solid var(--line); }
+  .top > .jump { flex: 1 0 100%; order: -1; }
+  .top-icons { position: absolute; right: 12px; top: calc(100% + 6px); z-index: 12; gap: 20px;
+    padding: 10px 16px; background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, .4); transform-origin: top right;
+    opacity: 0; transform: translateY(-8px) scale(.6); visibility: hidden; pointer-events: none;
+    transition: opacity .18s ease, transform .22s cubic-bezier(.2, .8, .2, 1), visibility 0s .22s; }
+  /* Nothing at the bottom (no Add to queue off Generate): no line there either. */
+  .stick:not(:has(> .go-bar:not([hidden]), > .section-bar:not([hidden]))) { border-top: 0; }
+  body.head-shown .top-icons { opacity: 1; transform: none; visibility: visible; pointer-events: auto; transition-delay: 0s; }
+  .top-icons a, .top-icons button { opacity: .85; }
+}
+@media (max-width: 999px) and (prefers-reduced-motion: reduce) { .top-icons { transition: none; } }
+/* The box the dots open: the power buttons first, at their size (Restart, Comfy, Power, each with its menu), the
+   other icons under them, half as tall; and under those, what a power button last said. */
+.top-icons .power-row { flex: none; margin: 0; padding: 0; border-top: 0; }
+.top-icons .power-row .settings-power > button, .top-icons .power-row > button { min-width: 0; }
+.top-icons-row { display: flex; align-items: center; gap: 12px; }
+.top-icons .power-note { margin: 0; font-size: .72rem; }
+.top-icons .power-note[hidden] { display: none; }
+/* Their menus grow down out of them here, at the top of the screen. */
+.top-icons .settings-menu { top: calc(100% + 6px); bottom: auto; animation: power-menu-down .2s ease; }
+.top-icons .settings-menu.closing { animation: power-menu-up .15s ease forwards; }
+@keyframes power-menu-down { from { opacity: 0; transform: translateY(-10px); } to { opacity: 1; transform: none; } }
+@keyframes power-menu-up { to { opacity: 0; transform: translateY(-10px); } }
+/* Comfy's Force, red as the panel's is, since it stops what's going. */
+.settings-actions .settings-menu > #forceRestartComfy { border-color: var(--err); color: var(--err); background: color-mix(in srgb, var(--err) 14%, var(--panel)); }
+.settings-actions .settings-menu > #forceRestartComfy.armed { background: var(--err); color: #fff; }
+@media (max-width: 999px) {
+  .top-icons { flex-direction: column; align-items: stretch; gap: 8px; width: min(320px, calc(100vw - 24px)); box-sizing: border-box; padding: 10px; }
+  .top-icons .power-row { padding-bottom: 8px; border-bottom: 1px solid var(--line); }
+  /* Half the power buttons' height: the icons of the box's second row. */
+  .top-icons-row { justify-content: space-around; }
+  .top-icons-row > a, .top-icons-row > button { display: inline-flex; align-items: center; justify-content: center; height: 22px; min-width: 22px; padding: 0; }
+  .top-icons-row svg { width: 14px; height: 14px; }
+}
+@media (min-width: 1000px) {
+  /* In the header line: the power buttons compact, beside the other icons. */
+  .top-icons .power-row { gap: 4px; }
+  .top-icons .power-row button { flex: none; flex-direction: row; gap: 4px; padding: 3px 8px; font-size: .64rem; }
+  .top-icons .power-row svg { width: 12px; height: 12px; }
+  .top-icons .power-row .settings-power { flex: none; }
+  .top-icons .power-note { position: absolute; top: 100%; right: 0; }
+}
+details summary { cursor: pointer; font-size: .95rem; font-weight: 600; }
+.hidden { display: none !important; }
+.dashboard { display: flex; flex-direction: column; }
+.stepper { display: flex; gap: 4px; margin: 2px 0 12px; }
+.stepper[hidden], #stageDetail[hidden] { display: none; }
+.step { flex: 1; text-align: center; font-size: .66rem; color: var(--muted); padding-top: 7px; border-top: 3px solid var(--line); line-height: 1.25; }
+.step.done { border-color: var(--ok); color: var(--text); }
+.step.now { border-color: var(--accent); color: var(--text); font-weight: 700; }
+.step .eta { display: block; margin-top: 2px; color: var(--muted); font-weight: 400; font-variant-numeric: tabular-nums; }
+.now-line { font-size: .92rem; display: flex; flex-wrap: wrap; gap: 4px 8px; align-items: baseline; }
+.now-line .time { color: var(--muted); font-size: .8rem; font-variant-numeric: tabular-nums; }
+/* Every status line alike: what it is doing - to what, and how long that is; under it, which one of how many on
+   the left and how long it has taken on the right. */
+.status-lines:empty { display: none; }
+.status-first { overflow-wrap: anywhere; }
+.status-foot { display: flex; justify-content: space-between; gap: 10px; }
+.status-foot .time { margin-left: auto; font-variant-numeric: tabular-nums; white-space: nowrap; }
+/* Only a line of text, such as "Generating prompts", with no count or time beside it: centred. */
+.status-foot > .status-first:only-child { flex: 1; text-align: center; }
+.strip .status-lines .status-first { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.comfy-now { margin-top: 12px; padding: 10px 12px; background: var(--panel-2); border: 1px solid var(--line); border-radius: 10px; }
+.bar { height: 6px; background: #0a0b0f; border-radius: 4px; overflow: hidden; margin-top: 8px; }
+.bar > div { height: 100%; width: 0; background: var(--accent); transition: width .4s; }
+.gpu { margin: 10px 0 12px; padding-bottom: 12px; border-bottom: 1px solid var(--line); font-variant-numeric: tabular-nums; font-size: .72rem; white-space: nowrap; }
+.gpu .mi { width: 1.15em; height: 1.15em; vertical-align: -.22em; margin-right: 2px; }
+.gpu:empty, #stageDetail:empty { display: none; }
+#stageDetail { text-align: left; }
+.q-group { font-size: .72rem; color: var(--muted); margin: 9px 0 2px; }
+.q-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 2px 10px; font-size: .78rem; padding: 2px 0; }
+.q-name { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.q-val { color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.q-bar { grid-column: 1 / -1; height: 3px; background: #0a0b0f; border-radius: 2px; overflow: hidden; }
+.q-bar > div { height: 100%; background: var(--ok); }
+.q-row.low .q-val { color: #f2b84b; }
+.q-row.low .q-bar > div { background: #f2b84b; }
+.q-row.out .q-val { color: var(--err); }
+.q-row.out .q-bar > div { background: var(--err); }
+/* Each side only shows what applies to it. */
+body.on-video .only-shorts, body.on-shorts .only-video,
+body.on-image .only-shorts, body.on-image .only-video, body.on-image .not-image,
+body.on-shorts .only-image, body.on-video .only-image { display: none !important; }
+.switch { display: inline-flex; gap: 2px; padding: 2px; border: 1px solid var(--line); border-radius: 999px; }
+.switch button {
+  width: auto; display: flex; align-items: center; justify-content: center; gap: 6px; margin: 0; padding: 4px 12px; font-size: .78rem;
+  background: transparent; color: var(--muted); border: 1px solid transparent; border-radius: 999px; font-weight: 500;
+}
+.switch button.active { background: var(--panel-2); color: var(--accent); border-color: color-mix(in srgb, var(--accent) 45%, transparent); font-weight: 600; }
+/* One theme: Output, Status and the rest are violet; Generate is its side's colour (Shorts red, Video blue, Image
+   green). --side is the side's colour; --page-accent, for what sits above every page (the side switch, the key,
+   the loading bar), is the side's while you are in Generate and violet elsewhere. */
+/* The colours, once: each side's, and the theme's own colour (violet in Standard) that the rest shares. Everything else reads these. */
+:root { --c-shorts: #ff0033; --c-video: #4c8dff; --c-image: #2fbf71; --shared: var(--accent); }
+/* The room every page leaves under the header and over the footer, on a phone: Generate's box, Status and Output. */
+:root { --page-gap: 8px; }
+/* Held down, a stepper keeps stepping (shared.js): no text selection or callout on a long press. */
+.count-stepper button, button[data-lora-step] { touch-action: manipulation; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; }
+/* A hint scrolled into sight (revealHint) clears the header pinned at the top and the footer. */
+.hint, .res-hint, .option-hint, .field-help { scroll-margin-top: 64px; scroll-margin-bottom: calc(var(--head, 60px) + var(--page-gap)); }
+body { --accent: var(--shared); --page-accent: var(--shared); }
+body.on-shorts { --side: var(--c-shorts); }
+body.on-video { --side: var(--c-video); }
+body.on-image { --side: var(--c-image); }
+body.in-generate { --page-accent: var(--side); }
+#optionsCard, #goBar, .jump a[data-page="generate"] { --accent: var(--side); }
+/* Any comparison on (LoRA, model files, workflow or LLM): Generate in the theme's own colour, not the side's, so it isn't mistaken for a usual set. */
+body.on-image:has(#imageLoraStrengthTest:checked:not(:disabled), #imageLoraStyleTest:checked:not(:disabled), #imageWorkflowTestT2i:checked, #imageWorkflowTestEdit:checked, #imageLlmTest:checked, #imageModelTest:checked:not(:disabled), #imageEncoderTest:checked:not(:disabled), #imageVaeTest:checked:not(:disabled)) :is(#go, #goStick),
+body.on-video:has(#videoLoraStrengthTest:checked:not(:disabled), #videoLoraStyleTest:checked:not(:disabled)) :is(#go, #goStick) { --accent: var(--shared); }
+/* And it flashes, a glow coming and going, so a comparison isn't started for a usual set by mistake. */
+body.on-image:has(#imageLoraStrengthTest:checked:not(:disabled), #imageLoraStyleTest:checked:not(:disabled), #imageWorkflowTestT2i:checked, #imageWorkflowTestEdit:checked, #imageLlmTest:checked, #imageModelTest:checked:not(:disabled), #imageEncoderTest:checked:not(:disabled), #imageVaeTest:checked:not(:disabled)) :is(#go, #goStick):not(:disabled),
+body.on-video:has(#videoLoraStrengthTest:checked:not(:disabled), #videoLoraStyleTest:checked:not(:disabled)) :is(#go, #goStick):not(:disabled) { animation: test-flash 1.4s ease-in-out infinite; }
+@keyframes test-flash { 0%, 100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--shared) 0%, transparent); filter: none; }
+  50% { box-shadow: 0 0 0 4px color-mix(in srgb, var(--shared) 45%, transparent); filter: brightness(1.18); } }
+@media (prefers-reduced-motion: reduce) { #go, #goStick { animation: none !important; } }
+/* The preview and what opens over it (Upscale, its settings, Edit) in the colour of what it shows, as its pills. */
+body[data-viewing="image"] { --item: var(--c-image); }
+body[data-viewing="video"] { --item: var(--c-video); }
+body[data-viewing="shorts"] { --item: var(--c-shorts); }
+#imageViewer, #viewerUpscaleBar, #upscaleSettings, #editMenu { --accent: var(--item, var(--shared)); }
+/* The side switch is Generate's alone: at its top on a desktop; a phone picks the side from the footer. */
+.generate-switch { display: none; }
+@media (min-width: 1000px) { .generate-switch { display: flex; width: max-content; margin: 0; } }
+/* Output on Shorts is Shorts': red, as the preview of a Short is. */
+body.on-shorts #videosCard, body.on-shorts .jump a#jumpResults { --accent: var(--c-shorts); }
+body.on-shorts[data-page="output"] { --page-accent: var(--c-shorts); }
+.pipeline-form textarea { min-height: 84px; resize: vertical; }
+.prompt-label-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 12px 0 6px; }
+.prompt-label-row label { margin: 0; }
+.prompt-actions { display: flex; align-items: center; gap: 5px; }
+.prompt-actions[hidden] { display: none; }
+/* Resolution on one line: the shape, then megapixels a tenth at a time, then the size that makes. */
+.resolution-line { display: flex; align-items: center; gap: 8px; }
+.resolution-line select { flex: 1 1 auto; min-width: 0; margin: 0; }
+.count-stepper.mp-stepper { margin-top: 8px; }
+.count-stepper.mp-stepper.hidden { display: none; }
+/* The number as the box beside How many images shows it, with "MP" greyed after it. */
+.count-stepper .mp-field { width: 65px; margin: 0; padding: 13px 4px; background: var(--panel-2); border: 1px solid var(--line); border-radius: 10px;
+  color: var(--text); font-size: inherit; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.count-stepper .mp-field .mp-unit { margin-left: 2px; color: var(--muted); font-size: .8em; }
+span.mp-field { display: inline-flex; align-items: center; justify-content: center; box-sizing: border-box; }
+.count-stepper .mp-field[role="button"] { cursor: text; }
+.count-stepper .mp-field input { width: 100%; min-width: 0; margin: 0; padding: 0; border: 0; background: transparent; color: inherit;
+  font: inherit; text-align: center; outline: none; -moz-appearance: textfield; appearance: textfield; }
+/* Resolution, upscale and the megapixel stepper: one block. */
+.res-block { margin: 4px 0 12px; padding: 10px 12px 12px; border: 1px solid var(--line); border-radius: 12px; background: var(--bg); }
+.res-block[hidden], .res-block .hidden { display: none; }
+.res-block .range-head { margin-top: 0; }
+.res-block .res-sub { margin-top: 12px; }
+.res-block .count-stepper.mp-stepper { margin-top: 12px; }
+.res-info { width: auto; margin: 0; padding: 0; display: inline-flex; align-items: center; gap: 6px; background: transparent; border: 0;
+  color: var(--text); font: inherit; font-weight: 600; font-size: .85rem; }
+.res-info-mark { width: 12px; height: 12px; flex: none; border-radius: 50%; border: 1px solid var(--muted); color: var(--muted); display: inline-flex;
+  align-items: center; justify-content: center; font-size: .55rem; font-style: italic; font-weight: 700; line-height: 1; }
+.res-info[aria-expanded="true"] .res-info-mark { color: var(--accent); border-color: var(--accent); }
+.field-heading { display: flex; align-items: baseline; gap: 6px; }
+.hint-toggle { display: inline-flex; align-items: center; justify-content: center; flex: none; width: 24px; height: 24px; margin: 0; padding: 4px; background: transparent; border: 0; }
+.hint-toggle[aria-expanded="true"] .res-info-mark { color: var(--accent); border-color: var(--accent); }
+.field-help[hidden] { display: none; }
+.res-hint { margin: 6px 0 2px; padding: 8px 10px; border-radius: 8px; background: var(--panel-2); }
+.res-hint[hidden] { display: none; }
+.res-note { margin-top: 8px; color: var(--warn, #e0a84a); text-align: center; }
+.res-note[hidden] { display: none; }
+/* Latent upscale's own settings, for Custom: folded under its stepper. */
+.latent-custom { margin-top: 8px; border: 1px solid var(--line); border-radius: 10px; padding: 0 10px; }
+.latent-custom[hidden] { display: none; }
+.latent-custom-head { width: 100%; margin: 0; padding: 9px 0; background: transparent; border: 0; color: var(--muted); font-size: .85rem; text-align: left; }
+.latent-custom-head::before { content: "▸ "; }
+.latent-custom.open .latent-custom-head { color: var(--text); }
+.latent-custom.open .latent-custom-head::before { content: "▾ "; }
+.latent-custom:not(.open) .latent-custom-body { display: none; }
+.latent-custom .option-row { margin-bottom: 10px; }
+#videoLatentBox.unavailable .range-head, #videoLatentBox.unavailable select, #videoLatentBox.unavailable .count-stepper { opacity: .45; }
+.resolution-size { color: var(--muted); font-size: .78rem; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.resolution-size.would-be { opacity: .55; font-style: italic; }
+.would-tag { font-style: normal; font-weight: 600; font-size: .68rem; padding: 0 5px; margin-right: 5px;
+  border: 1px solid currentColor; border-radius: 999px; }
+/* The chosen shape, drawn: at most 22 by 22, outlined. */
+.aspect-box { flex: none; box-sizing: border-box; border: 1.5px solid var(--muted); border-radius: 2px; }
+.aspect-box.hidden { visibility: hidden; }
+.prompt-actions button { width: auto; height: 26px; margin: 0; padding: 3px 7px; background: transparent; border: 1px solid var(--line); color: var(--muted); font-size: .75rem; }
+.prompt-actions .prompt-write { width: 26px; padding: 5px; }
+.prompt-actions .prompt-write svg { display: block; width: 100%; height: 100%; }
+.prompt-actions button:disabled { opacity: .35; cursor: not-allowed; }
+.count-stepper { display: flex; align-items: stretch; justify-content: center; gap: 8px; }
+.count-stepper button { width: 48px; margin: 0; padding: 0; font-size: 1.1rem; background: var(--panel-2); border: 1px solid var(--line); color: var(--text); }
+.count-stepper input[type=number] { width: 65px; text-align: center; appearance: textfield; -moz-appearance: textfield; }
+.count-stepper input::-webkit-inner-spin-button, .count-stepper input::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
+.h3-help { margin-top: 12px; }
+.h3-help summary { color: var(--muted); font-size: .8rem; font-weight: 500; }
+.prompt-writing { position: relative; overflow: clip; border-radius: 10px; }
+.prompt-writing textarea { display: block; }
+.prompt-writing.busy textarea { opacity: .5; background: var(--panel-2); padding-top: 30px; }
+/* The bar runs inside the box's border, its ends following the box's inner corners: a track exactly the inside of
+   the textarea (1px in, corners 9px for its 10px) clips it. */
+.prompt-progress-track { position: absolute; inset: 1px; border-radius: 9px; overflow: clip; pointer-events: none; z-index: 1; }
+.prompt-progress { position: absolute; top: 0; left: 0; height: 3px; width: 0; background: var(--accent); transition: width 1s linear; }
+.prompt-eta { position: absolute; top: 6px; right: 10px; font-size: .7rem; color: var(--muted); pointer-events: none; }
+@media (prefers-reduced-motion: reduce) { .prompt-progress { transition: none; } }
+/* Side by side, the fields line up by their boxes, not their labels: a label that wraps doesn't push its box down. */
+.pipeline-form .row > div { display: flex; flex-direction: column; justify-content: flex-end; }
+/* A dashed box to drop into, with a real button in it rather than the browser's own. */
+.pipeline-form input[type=file] { padding: 6px; font-size: .84rem; color: var(--muted); background: transparent; border: 1px dashed var(--line); cursor: pointer; transition: border-color .15s; }
+.pipeline-form input[type=file]:hover { border-color: var(--accent); }
+.pipeline-form input[type=file]::file-selector-button {
+  margin-right: 10px; padding: 7px 14px; font: inherit; font-weight: 600; color: var(--text); cursor: pointer;
+  background: var(--panel-2); border: 1px solid var(--line); border-radius: 8px; transition: background .15s, border-color .15s, color .15s;
+}
+.pipeline-form input[type=file]:hover::file-selector-button { background: var(--accent); border-color: var(--accent); color: #fff; }
+/* One row per image: its thumbnail, the file, what it is, and Remove. */
+.image-box { min-width: 0; }
+.seed-line { display: flex; gap: 8px; align-items: center; }
+.seed-line input { flex: 1 1 0; min-width: 0; }
+.seed-line button { flex: none; width: auto; margin: 0; padding: 8px 12px; }
+/* A click on the icon is a click on its button. */
+.seed-line .icon { display: block; pointer-events: none; }
+.seed-line button[hidden] { display: none; }
+.seed-line button[aria-pressed="true"] { color: var(--accent); border-color: var(--accent); background: color-mix(in srgb, var(--accent) 14%, transparent); }
+/* Upscale on an image too big for SeedVR2 and Hires fix: greyed, but it still opens the ways that fit. */
+.icon-btn.dim { opacity: .4; }
+.shot .seed-line { margin: 6px 0; font-size: .85rem; }
+.shot .seed-line label { margin: 0; flex: none; }
+#addImage, #addMedia { width: auto; margin: 8px 0 0; padding: 4px 16px; font-size: 1.1rem; }
+.image-line { display: flex; align-items: center; gap: 8px; }
+.image-line input[type=file] { flex: 1 1 0; min-width: 0; }
+.pipeline-form .image-line select { flex: 1 1 0; min-width: 0; width: auto; padding-left: 8px; padding-right: 4px; }
+.image-line .thumb { display: contents; }
+.image-line .preview { flex: none; width: 44px; height: 44px; object-fit: cover; border-radius: 8px; background: #000; cursor: pointer; }
+/* Chosen, with a role to pick: the thumbnail changes it, so the role gets the room. */
+.image-box.compact input[type=file] { display: none; }
+.image-line button { flex: none; width: auto; margin: 0; padding: 6px 8px; font-size: .85rem; background: var(--panel-2); border: 1px solid var(--line); color: var(--text); }
+/* Films are as wide as the card; Shorts stand upright. */
+body.on-video .vid { flex-basis: 100%; }
+body.on-video .vid video { aspect-ratio: 16 / 9; max-height: none; }
+/* A film's prompts: read and change them before anything renders. */
+dialog { width: min(860px, calc(100vw - 24px)); max-height: calc(100vh - 24px); padding: 0; background: var(--panel); color: var(--text); border: 1px solid var(--line); border-radius: 14px; }
+dialog::backdrop { background: rgba(0, 0, 0, .7); }
+/* The Image side's images: one box, then + for the next; each from a file or from your own images. */
+#addSource { width: auto; margin: 8px 0 0; padding: 4px 16px; font-size: 1.1rem; }
+.image-line button.pick-output { padding: 6px 8px; }
+.image-line button.pick-output svg { width: 16px; height: 16px; display: block; }
+#expandUnits { margin-top: 8px; }
+/* Paint what to change: centred, and as low as the + buttons beside the images, its hint centred under it. */
+#paintAreas { display: block; width: auto; margin: 8px auto 0; padding: 4px 16px; }
+#areasHint { text-align: center; }
+/* Inpaint: the whole screen, the picture as large as fits and zoomable, its tools under it. */
+dialog.paint-dialog { width: 100vw; height: 100dvh; max-width: none; max-height: none; margin: 0; border: 0; border-radius: 0;
+  padding: max(10px, env(safe-area-inset-top)) 12px max(10px, env(safe-area-inset-bottom)); box-sizing: border-box;
+  display: none; flex-direction: column; gap: 10px; overflow: hidden; animation: viewer-in .2s ease; }
+dialog.paint-dialog[open] { display: flex; }
+.paint-title { flex: none; text-align: center; color: var(--muted); font-size: .82rem; font-weight: 600; letter-spacing: .02em; }
+.paint-error { flex: none; color: #ff6b6b; font-size: .85rem; text-align: center; }
+.paint-error[hidden] { display: none; }
+/* Choosing one of your images for a box: Output, with what you're choosing for over it. */
+.choose-banner { display: flex; align-items: center; gap: 10px; margin: 0 0 10px; padding: 8px 12px; border-radius: 8px;
+  background: var(--panel-2); border: 1px solid var(--accent); font-size: .88rem; }
+.choose-banner[hidden] { display: none; }
+.choose-banner span { flex: 1 1 auto; }
+.choose-banner button { width: auto; margin: 0; padding: 4px 12px; }
+.paint-stage { position: relative; flex: 1 1 auto; min-height: 0; overflow: hidden; border-radius: 8px; background: #000;
+  touch-action: none; user-select: none; -webkit-user-select: none; }
+.paint-board { position: absolute; left: 0; top: 0; transform-origin: 0 0; }
+.paint-board img { display: block; width: 100%; height: 100%; pointer-events: none; -webkit-user-drag: none; }
+.paint-board canvas { position: absolute; inset: 0; width: 100%; height: 100%; opacity: .55; cursor: crosshair; }
+.paint-stage.panning, .paint-stage.panning canvas { cursor: grab; }
+.paint-stage.busy canvas { cursor: progress; }
+.paint-fit { position: absolute; top: 8px; right: 8px; width: auto; margin: 0; padding: 4px 12px; font-size: .75rem; font-weight: 600;
+  border-radius: 999px; background: rgba(0, 0, 0, .6); border: 1px solid var(--line); color: #ddd; }
+.paint-fit[hidden] { display: none; }
+/* Colour on the left, the colour prompts in the middle, brush size on the right; under them the tools, then undo and clear. */
+.paint-bar { flex: none; display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.paint-bar-mid { display: grid; grid-template-columns: 1fr auto 1fr; }
+.paint-bar-mid > :last-child { justify-self: end; }
+.paint-group { display: flex; gap: 6px; }
+.paint-icon { flex: none; width: 40px; height: 36px; margin: 0; padding: 0; display: inline-flex; align-items: center; justify-content: center;
+  background: var(--panel-2); border: 1px solid var(--line); border-radius: 10px; color: var(--text); }
+.paint-icon.active { background: var(--accent); border-color: var(--accent); color: #fff; }
+.paint-icon[aria-expanded="true"] { border-color: var(--accent); }
+.paint-dot { width: 18px; height: 18px; border-radius: 50%; box-shadow: 0 0 0 2px var(--panel-2), 0 0 0 3px var(--line); }
+.paint-size-dot { border-radius: 50%; background: var(--text); }
+.paint-prompts { width: auto; margin: 0; padding: 6px 14px; display: inline-flex; align-items: center; gap: 6px; font-size: .82rem; font-weight: 600;
+  border-radius: 999px; background: transparent; border: 1px solid var(--line); color: var(--text); white-space: nowrap; }
+.paint-prompt-swatches { display: inline-flex; gap: 3px; }
+.paint-prompt-swatches:empty { display: none; }
+.paint-prompt-swatches i { width: 9px; height: 9px; border-radius: 50%; }
+/* The colours and the brush size grow out of their buttons. */
+.paint-pop-wrap { position: relative; }
+.paint-pop { position: absolute; bottom: calc(100% + 8px); z-index: 3; padding: 10px; background: var(--panel); border: 1px solid var(--line);
+  border-radius: 12px; box-shadow: 0 8px 24px rgba(0, 0, 0, .45); animation: paint-pop-in .18s ease; }
+.paint-pop[hidden] { display: none; }
+.paint-pop.left { left: 0; transform-origin: bottom left; }
+.paint-pop.right { right: 0; transform-origin: bottom right; }
+.prompt-writer-wrap { position: relative; }
+.prompt-writer-menu { width: min(270px, calc(100vw - 40px)); display: grid; grid-auto-rows: 32px; align-content: start; gap: 4px; max-height: 198px; box-sizing: border-box; overflow-y: auto; overscroll-behavior: contain; }
+.prompt-writer-menu button { width: 100%; min-width: 0; margin: 0; padding: 5px 8px; text-align: left; background: var(--panel-2); border: 1px solid var(--line); color: var(--text); font-size: .72rem; white-space: nowrap; overflow: clip; text-overflow: ellipsis; }
+.local-model-select { font-size: .75rem; min-width: 0; text-overflow: ellipsis; }
+@keyframes paint-pop-in { from { opacity: 0; transform: scale(.5); } to { opacity: 1; transform: none; } }
+@media (prefers-reduced-motion: reduce) { .paint-pop, dialog.paint-dialog { animation: none; } }
+.paint-colours { display: grid; grid-template-columns: repeat(4, 30px); gap: 8px; }
+.paint-colours button { width: 30px; height: 30px; margin: 0; padding: 0; border-radius: 50%; border: 2px solid transparent; }
+.paint-colours button.active { border-color: var(--text); }
+#paintSize { display: block; width: min(200px, calc(100vw - 60px)); margin: 4px 0; }
+/* What goes in each colour, in its own box over the blurred painting. */
+.paint-area { display: grid; grid-template-columns: 22px minmax(0, 1fr); gap: 8px; align-items: center; margin-top: 8px; }
+.paint-area:first-child { margin-top: 0; }
+.paint-area .swatch { width: 18px; height: 18px; border-radius: 50%; }
+.paint-area .fields { display: flex; gap: 6px; min-width: 0; }
+.paint-area select { flex: 0 0 auto; width: auto; }
+.paint-area input { flex: 1 1 auto; min-width: 0; }
+.paint-actions { flex: none; display: flex; justify-content: center; gap: 8px; }
+.paint-save { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 45%, transparent); }
+/* A prompt box shows two lines; a tap opens the whole of it in the prompt editor. */
+textarea[data-prompt] { height: calc(2.8em + 18px); min-height: 0; resize: none; overflow: hidden; cursor: pointer; line-height: 1.4; caret-color: transparent; }
+textarea[data-prompt].more { -webkit-mask-image: linear-gradient(to bottom, #000 55%, transparent 100%); mask-image: linear-gradient(to bottom, #000 55%, transparent 100%); }
+/* The prompt box: only its text fades out at the bottom, into the box's own colour, inside its border, so the box
+   itself keeps its edge and corners. */
+.prompt-writing > textarea[data-prompt].more { -webkit-mask-image: none; mask-image: none; }
+.prompt-writing:has(> textarea[data-prompt].more)::after { content: ""; position: absolute; left: 1px; right: 1px; bottom: 1px; height: 45%;
+  border-radius: 0 0 9px 9px; background: linear-gradient(to bottom, transparent, var(--panel-2) 85%); pointer-events: none; }
+.prompt-writing.busy textarea[data-prompt] { height: auto; min-height: 84px; }
+/* The editor fills what the keyboard leaves of the screen (sized from visualViewport), its buttons always in reach. */
+dialog.prompt-editor { position: fixed; inset: 8px 0 auto; margin: 0 auto; width: min(720px, calc(100vw - 16px)); height: calc(100dvh - 16px);
+  max-height: none; box-sizing: border-box; }
+.prompt-editor-box { position: relative; flex: 1 1 auto; min-height: 0; display: flex; }
+.prompt-editor-box textarea { flex: 1; width: 100%; min-height: 0; margin: 0; resize: none; padding: 10px 12px; font-size: 1rem; line-height: 1.45; box-sizing: border-box; }
+.prompt-editor-box textarea[readonly] { color: var(--muted); }
+.prompt-copy { flex: none; width: 32px; height: 32px; margin: 0; padding: 0; display: inline-flex; align-items: center;
+  justify-content: center; border-radius: 999px; background: var(--panel-2); border: 1px solid var(--line); color: var(--muted); opacity: .85; }
+.prompt-copy:hover, .prompt-copy:focus-visible { color: var(--text); opacity: 1; }
+.prompt-copy.copied { color: var(--accent); border-color: var(--accent); }
+.prompt-editor-foot { flex: none; display: flex; align-items: center; gap: 8px; }
+/* A run's generated prompts: one to a page in the editor, swiped through like a set's prompts. */
+.generated-prompts { width: auto; margin: 6px 0 0; padding: 6px 12px; font-size: .8rem; background: var(--panel-2); border: 1px solid var(--line); color: var(--text); }
+.generated-prompts[hidden] { display: none; }
+.prompt-editor-pages { flex: 1; min-width: 0; display: flex; overflow-x: auto; scroll-snap-type: x mandatory; scrollbar-width: none; overscroll-behavior-x: contain; scroll-behavior: smooth; }
+.prompt-editor-pages[hidden] { display: none; }
+.prompt-editor-pages::-webkit-scrollbar { display: none; }
+.prompt-page { flex: 0 0 100%; min-width: 0; display: flex; flex-direction: column; gap: 6px; scroll-snap-align: center; scroll-snap-stop: always; box-sizing: border-box; padding: 0 1px; }
+.prompt-page-title { flex: none; color: var(--muted); font-size: .78rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.prompt-page textarea { flex: 1; width: 100%; min-height: 0; margin: 0; resize: none; padding: 10px 12px; font-size: 1rem; line-height: 1.45; box-sizing: border-box; }
+.prompt-editor-turn { flex: none; display: flex; gap: 4px; }
+.prompt-editor-turn[hidden] { display: none; }
+.prompt-editor-turn button { width: 28px; height: 26px; margin: 0; padding: 0; background: transparent; border: 1px solid var(--line); border-radius: 8px; color: var(--muted); font-size: 1.1rem; line-height: 1; }
+.prompt-editor-turn button:disabled { opacity: .35; }
+@media (prefers-reduced-motion: reduce) { .prompt-editor-pages { scroll-behavior: auto; } }
+.prompt-editor-gap { flex: 1 1 auto; }
+.prompt-editor-head { display: flex; align-items: baseline; gap: 8px; }
+.prompt-editor-heading { flex: 1 1 auto; min-width: 0; display: flex; align-items: baseline; gap: 8px; }
+.prompt-editor-heading .panel-dialog-title { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.prompt-editor-thinking { flex: 1 1 auto; min-width: 0; display: inline-grid; position: relative; overflow: hidden; color: #9864bd; font-size: .82rem; font-weight: 600; white-space: nowrap; }
+#promptEditorTitle[hidden], #promptEditorReset[hidden] { display: none; }
+.prompt-editor-thinking[hidden] { display: none; }
+.prompt-thinking-line { grid-area: 1 / 1; }
+.prompt-thinking-line.exiting { animation: prompt-phrase-out .32s ease forwards; }
+.prompt-thinking-line.entering .prompt-thinking-letter { display: inline-block; animation: prompt-letter-in .36s ease both; }
+@keyframes prompt-phrase-out { to { opacity: 0; transform: translateX(7px); } }
+@keyframes prompt-letter-in { from { opacity: 0; transform: translateX(-3px); letter-spacing: .035em; } to { opacity: 1; transform: none; letter-spacing: 0; } }
+.prompt-editor-head .hint { flex: none; margin: 0; font-size: .72rem; opacity: .8; font-variant-numeric: tabular-nums; }
+/* Copy and Clear: quiet icons, no box of their own. */
+/* Write with the LLM, Copy and Clear: quiet icons in a row on the left, no box of their own. */
+#promptEditorEnhance, #promptEditorCopy, #promptEditorClear, #promptEditorReset { width: 26px; height: 26px; background: transparent; border: 0; padding: 3px; }
+#promptEditorEnhance svg, #promptEditorCopy svg, #promptEditorClear svg, #promptEditorReset svg { width: 18px; height: 18px; }
+#promptEditorReset { flex: none; color: var(--accent); }
+.prompt-writer-wrap.has-selection #promptEditorEnhance, .prompt-writer-wrap.has-selection #promptEditorEnhance.working { color: #9864bd; opacity: 1; }
+.prompt-writer-menu button.selected { color: #9864bd; border-color: #9864bd; box-shadow: 0 0 0 1px #9864bd; }
+/* The presets, a line each as Finished's are: the one in use outlined, the favourite starred. */
+.preset-list { display: flex; flex-direction: column; gap: 6px; margin-bottom: 10px; }
+.preset-list:empty::before { content: "No presets yet: set the form as you like it, then save it here."; color: var(--muted); font-size: .8rem; }
+.preset-row { display: flex; align-items: center; gap: 8px; width: 100%; margin: 0; padding: 7px 10px; background: none;
+  border: 1px solid var(--line); border-radius: 10px; color: inherit; font: inherit; font-size: .85rem; text-align: left; cursor: pointer; }
+.preset-row[aria-selected="true"] { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+.preset-row .preset-row-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.preset-row .preset-row-star { flex: none; color: var(--warn); font-size: .8rem; }
+.preset-row:hover .preset-row-name { text-decoration: underline; }
+/* Under a preset's name, where it came from; beside it, the model family it's the default for. */
+.preset-row .preset-row-note { flex: none; max-width: 45%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-size: .7rem; }
+.preset-row .preset-row-family { flex: none; padding: 1px 6px; border: 1px solid var(--accent); border-radius: 999px; color: var(--accent); font-size: .65rem; }
+/* Each workflow's own default, folded under the presets, by model family. */
+.preset-workflows { margin-top: 12px; border-top: 1px solid var(--line); padding-top: 8px; }
+.preset-workflows > summary { cursor: pointer; color: var(--muted); font-size: .8rem; margin-bottom: 6px; }
+.preset-workflows .preset-family { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 4px 0 -2px; color: var(--accent); font-size: .68rem; letter-spacing: .06em; text-transform: uppercase; }
+.preset-workflows .preset-family-default { flex: 0 1 auto; width: auto; max-width: 60%; height: 24px; padding: 1px 6px; font-size: .7rem; text-transform: none; letter-spacing: 0; }
+.preset-workflows .preset-list:empty::before { content: none; }
+/* Resolution's heading, a button that looks like the other headings: a tap opens its menu. A small filled pin after it
+   while the size shown is the one pinned for the model and mode. */
+.res-heading { display: inline-flex; align-items: center; gap: 4px; width: auto; margin: 0; padding: 0; background: none; border: 0; border-radius: 0;
+  color: inherit; font: inherit; font-weight: inherit; text-transform: inherit; letter-spacing: inherit; cursor: pointer; }
+.res-heading:hover, .res-heading:focus-visible { color: var(--text); }
+.res-heading .res-pinned { display: none; color: var(--accent); }
+.res-heading .res-pinned svg { width: 11px; height: 11px; fill: currentColor; }
+.res-heading[data-pinned="true"] .res-pinned { display: inline-flex; }
+.size-menu-now, .size-menu-pinned { font-size: .78rem; color: var(--muted); text-align: center; }
+.size-menu-pinned { color: var(--accent); }
+.size-menu-now[hidden], .size-menu-pinned[hidden] { display: none; }
+/* Every dropdown's list, as the Enhance menu: under (or over) the select it opens from (output.js openSelectMenu). */
+/* Inpaint's paint button: low, and it says itself whether something is painted. */
+#paintInpaint { min-height: 0; padding: 4px 12px; font-size: .78rem; }
+#paintInpaint.painted { color: var(--side); border-color: var(--side); }
+.paint-pop.select-menu { position: fixed; bottom: auto; min-width: 0; max-height: 320px; z-index: 60; transform-origin: top center; animation: select-menu-in .16s ease; }
+.paint-pop.select-menu.upward { transform-origin: bottom center; }
+/* It grows straight down from its select, or straight up. */
+@keyframes select-menu-in { from { opacity: 0; transform: scaleY(.4); } to { opacity: 1; transform: none; } }
+@media (prefers-reduced-motion: reduce) { .paint-pop.select-menu { animation: none; } }
+.select-menu button:disabled { opacity: .45; cursor: default; }
+.select-menu-group { align-self: end; padding: 0 4px; color: var(--muted); font-size: .66rem; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.prompt-copy[hidden] { display: none; }
+.prompt-editor-foot .panel-close { align-self: auto; }

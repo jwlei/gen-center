@@ -45,19 +45,29 @@ def author_range_of(name):
     return (RANGES.get(key(name)) or {}).get("author")
 
 
-def bounds_of(name):
+# Which range comes first (the Settings' LoRA strength range): its author's, or what this panel's comparisons kept.
+AUTHOR, TESTED = "author", "tested"
+
+
+def preferred_range(name, prefer=AUTHOR):
+    """The range a LoRA is held to: the one preferred, else the other; None where neither is known."""
+    ranges = (author_range_of(name), range_of(name))
+    return (ranges if prefer != TESTED else ranges[::-1])[0] or ranges[0] or ranges[1]
+
+
+def bounds_of(name, prefer=AUTHOR):
     """
-    The range a strength test of a LoRA runs over, as (low, high): ours (0.5, 1.5 for "0.5–1.5"), or where there's
-    none, the author's; None where neither is known.
+    The range a strength test of a LoRA runs over, and a strength is brought within, as (low, high): the author's
+    (0.6, 0.8 for "0.6–0.8") or ours, as prefer says, else the other; None where neither is known.
     """
-    found = re.split(r"[–-]", range_of(name) or author_range_of(name) or "")
+    found = re.split(r"[–-]", preferred_range(name, prefer) or "")
     try:
         return (float(found[0]), float(found[1])) if len(found) == 2 else None
     except ValueError:
         return None
 
 
-def top_of(name):
+def top_of(name, prefer=AUTHOR):
     """Where a strength test of a LoRA stops: the top of bounds_of, or None."""
-    bounds = bounds_of(name)
+    bounds = bounds_of(name, prefer)
     return bounds[1] if bounds else None

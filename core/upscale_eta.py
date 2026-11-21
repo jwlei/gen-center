@@ -9,6 +9,7 @@ import os
 import re
 import time
 
+from core.staged_eta import option as _option
 from core.eta_keys import SEPARATOR, Timings
 
 # Seconds per megapixel made, until timed: as measured on this 12 GB card for an image ending around 4 MP.
@@ -21,8 +22,6 @@ FAST_MOST_EDGE, SEEDVR2_MOST_EDGE = 8192, 2560
 SMALL_DRIFT_SECONDS = 30
 
 
-def _option(argv, name, default=None):
-    return argv[argv.index(name) + 1] if name in argv[:-1] else default
 
 
 def is_upscale(argv):

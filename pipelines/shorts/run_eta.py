@@ -3,6 +3,7 @@ import math
 import os
 import time
 
+from core.staged_eta import SMALL_DRIFT_SECONDS, StagedEta, option as _option  # noqa: F401, SMALL_DRIFT_SECONDS as it was reached here
 from core.eta_keys import LocalModelTimer, Timings, options_in_env, render_keys
 from pipelines.shorts.avatar_generator import DEFAULT_CLIP_RANGE, DEFAULT_ON_SCREEN_RANGE, DEFAULT_WORKFLOW, video_model
 from pipelines.shorts.run_state import STAGES, RunState
@@ -23,12 +24,6 @@ DEFAULT_RENDER_SECONDS = 50
 TYPICAL_SCENE_SECONDS = 5.5
 # A clip renders this much longer than she is on screen: rounded up, plus the overlap into the next scene.
 CLIP_EXTRA_SECONDS = 1
-# Unexplained drift from the original estimate below this isn't worth a line in the panel.
-SMALL_DRIFT_SECONDS = 60
-
-
-def _option(argv, name, default):
-    return argv[argv.index(name) + 1] if name in argv[:-1] else default
 
 
 def _slider(env, low_name, high_name, defaults):
@@ -56,7 +51,7 @@ FULL_SIZE_AREA = 1280 * 736
 DEFAULT_AVATAR_SIZE = "736x1280"
 
 
-class RunEta:
+class RunEta(StagedEta):
     """
     Estimates what is left of a run from how long each step took before. Steps are
     timed as they finish and saved to `path`, so estimates improve with every run.
@@ -205,15 +200,6 @@ class RunEta:
             self._note(f"{total} avatar {'clip' if total == 1 else 'clips'} instead of the {round(planned)} expected",
                        (total - planned) * self._render_seconds(self.planned_clip_seconds))
 
-    def _all_changes(self, adjusted):
-        """The noted changes, plus whatever they don't explain, so they add up to the adjusted ETA."""
-        changes = list(self.changes)
-        drift = adjusted - self.original_total - sum(change["seconds"] for change in changes)
-        if abs(drift) >= SMALL_DRIFT_SECONDS:
-            pace = "slower" if drift > 0 else "faster"
-            changes.append({"text": f"Running {pace} than estimated", "seconds": round(drift)})
-        return changes
-
     # --- Learning ---
 
     def _learn(self, key, seconds):
@@ -308,25 +294,7 @@ class RunEta:
         scenes = self.timings.step("scenes") if self.scene_count is None else self.scene_count
         names = STAGES[:self.total]
 
-        steps = []
-        left = 0
-        for number, name in enumerate(names, 1):
-            if name in self.kept_stages:
-                steps.append({"state": "kept", "seconds": 0})
-            elif number < self.number:
-                steps.append({"state": "done", "seconds": round(self.finished.get(number, 0))})
-            elif number == self.number:
-                left = self._current_left(now)
-                steps.append({"state": "now", "seconds": round(left)})
-            else:
-                seconds = self._still_to_do(name, scenes)
-                left += seconds
-                steps.append({"state": "next", "seconds": round(seconds)})
-
+        steps, left = self._steps(names, now, lambda name: name in self.kept_stages, lambda name: self._still_to_do(name, scenes))
+        # The videos still to make after this one, each a whole video's stages.
         video = sum(self._stage_seconds(name, clips, self.timings.step("scenes")) for name in names)
-        total_left = left + self.videos_left * video
-        elapsed = now - self.started
-        adjusted = elapsed + total_left
-        return {"steps": steps, "total_left": round(total_left),
-                "original_total": self.original_total, "original_left": round(self.original_total - elapsed),
-                "adjusted_total": round(adjusted), "changes": self._all_changes(adjusted)}
+        return self._summary(steps, left + self.videos_left * video, now)

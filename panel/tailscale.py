@@ -85,3 +85,38 @@ def connect(port):
             except (OSError, subprocess.SubprocessError):
                 pass
         time.sleep(1)
+
+
+# What `tailscale cert` says when the tailnet hasn't turned HTTPS on, and what to do about it.
+HTTPS_OFF = ("Turn on MagicDNS and HTTPS Certificates in Tailscale's admin console (DNS page), "
+             "then restart the panel.")
+CERT_WAIT = 120
+
+
+def dns_name():
+    """This PC's name on the tailnet (pc.tailnet-name.ts.net), or None without MagicDNS or a connection."""
+    name = ((status() or {}).get("Self") or {}).get("DNSName") or ""
+    return name.rstrip(".") or None
+
+
+def cert(name, cert_file, key_file):
+    """
+    Gets (or renews, when it's near its end) the tailnet's own HTTPS certificate for this PC, from Let's Encrypt
+    through Tailscale. None when it's done, else what went wrong. A certificate names the PC publicly (Certificate
+    Transparency logs); turning HTTPS on in the admin console is where the tailnet agreed to that.
+    """
+    cli = program("tailscale")
+    if not cli:
+        return NOT_CONNECTED
+    try:
+        done = subprocess.run([cli, "cert", "--cert-file", cert_file, "--key-file", key_file, name],
+                              capture_output=True, text=True, encoding="utf-8", errors="replace",
+                              timeout=CERT_WAIT, creationflags=NO_WINDOW)
+    except (OSError, subprocess.SubprocessError) as error:
+        return f"Tailscale couldn't make an HTTPS certificate: {error}"
+    if done.returncode == 0 and os.path.exists(cert_file) and os.path.exists(key_file):
+        return None
+    said = " ".join((done.stderr or done.stdout or "").split())[:300]
+    if "not enabled" in said.lower() or "does not support" in said.lower() or "https" in said.lower() and "disabled" in said.lower():
+        return HTTPS_OFF
+    return f"Tailscale couldn't make an HTTPS certificate: {said or 'it gave no reason'}"

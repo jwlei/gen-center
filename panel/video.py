@@ -12,7 +12,7 @@ from core import director, h3_refiner, lora_tests, pills, prompt_words, run_form
 from core.upscale_eta import UpscaleEta
 from panel import settings
 from panel.server import (OUTCOME_FILE, read_outcome, form_options, PIPELINES, VIDEO_TIMINGS, _runs_cache, active_runs, app, busy_runs, item_images, job,
-                          password_required, safe_video_path, saved_at, run_queue, saved_runs, saved_workflows, queue_form_snapshot, private_mode)
+                          password_required, safe_video_path, saved_at, run_queue, saved_runs, saved_workflows, queue_form_snapshot, private_mode, lora_range)
 from panel.shorts import VOICES
 from pipelines.image import media as image_media
 from pipelines.video import h3_infinite, h3_multishot, h3_prompt, media, output_metadata, paths, planner, roles
@@ -242,7 +242,7 @@ def estimate():
     if chosen:
         env = {**env, "COMFYUI_OPTIONS": json.dumps(chosen)}
     try:
-        tests = lora_tests.variations(request.form, takes.get("options") or [], private_mode())
+        tests = lora_tests.variations(request.form, takes.get("options") or [], private_mode(), lora_range())
     except ValueError as problem:
         return {"ok": False, "error": str(problem)}
     if tests:
@@ -378,7 +378,7 @@ def generate():
     if error:
         return {"ok": False, "error": error}, 400
     try:
-        tests = lora_tests.variations(request.form, takes.get("options") or [], private_mode())
+        tests = lora_tests.variations(request.form, takes.get("options") or [], private_mode(), lora_range())
     except ValueError as error:
         return {"ok": False, "error": str(error)}, 400
     if tests:
